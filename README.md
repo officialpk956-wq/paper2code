@@ -56,4 +56,14 @@ paper2code/
 └── README.md
 
 
+## About Data and Generated Files
+
+This repository intentionally does **not** include datasets, trained models, or generated outputs such as diagrams and schemas.
+
+Folders like `data/`, `outputs/`, `models/`, and experiment artifacts are **excluded** to:
+- keep the repository lightweight
+- avoid large or copyrighted files
+- encourage reproducibility through code
+
+All diagrams, schemas, and model representations can be regenerated locally using the provided scripts.
 
