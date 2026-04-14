@@ -35,6 +35,9 @@ from src.agents.types import (
 from src.agents.parsing_agent import ParsingAgent
 from src.agents.visualization_agent import VisualizationAgent
 from src.agents.explanation_agent import ExplanationAgent
+from src.agents.config_parser import ConfigParsingAgent
+from src.agents.visualization_agent_impl import DefaultVisualizationAgent
+from src.agents.explanation_agent_impl import DefaultExplanationAgent
 
 
 __all__ = [
@@ -59,4 +62,7 @@ __all__ = [
     "ParsingAgent",
     "VisualizationAgent",
     "ExplanationAgent",
+    "ConfigParsingAgent",
+    "DefaultVisualizationAgent",
+    "DefaultExplanationAgent",
 ]
