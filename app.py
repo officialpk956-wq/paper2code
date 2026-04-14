@@ -11,6 +11,7 @@ from src.comparators import (
     summarize_scaling_behavior,
     explain_architecture_comparison,
 )
+from src.orchestrator.pipeline import Paper2CodePipeline
 
 
 # Helper function to determine comparison-based styling
@@ -214,6 +215,50 @@ st.caption("Interactive visualization of deep learning architectures")
 # --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
+st.sidebar.title("Architecture Input")
+
+# RAG Mode: Text Input
+use_text_input = st.sidebar.checkbox("Use Text Input (RAG Mode)", value=False)
+
+if use_text_input:
+    st.sidebar.subheader("Architecture Description")
+    user_text = st.sidebar.text_area(
+        "Enter architecture description",
+        placeholder="e.g., ResNet with Conv layer, pooling, 3 residual blocks, and linear classifier",
+        height=100
+    )
+
+    # Process text input through pipeline
+    if user_text:
+        pipeline = Paper2CodePipeline()
+        result = pipeline.run_from_text(user_text)
+
+        graph = result["graph"]
+        visual = result["visual"]
+        explanation = result["explanation"]
+
+        # Show truncation warning if applicable
+        if result.get("metadata", {}).get("truncated"):
+            st.sidebar.warning(
+                f"⚠️ Input too large — truncated from "
+                f"{result['metadata']['original_layer_count']} to "
+                f"{result['metadata']['layer_count']} layers for performance"
+            )
+
+        # Render graph and explanation
+        st.subheader(f"Architecture: {graph.name}")
+        st.graphviz_chart(render_graph_with_comparison(graph), use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Explanation")
+        st.markdown(explanation)
+
+        st.stop()  # Stop here if using text input
+    else:
+        st.sidebar.info("Enter an architecture description above")
+        st.stop()
+
+# Standard Model Selection Mode
 st.sidebar.title("Model Selector")
 
 model_name = st.sidebar.selectbox(
