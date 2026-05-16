@@ -81,7 +81,7 @@ def summarize_spatial_behavior(graph: ArchitectureGraph) -> Dict[str, str]:
     
     # Check for convolutional layers
     has_conv = any(
-        node.type == "Conv2D"
+        node.type == "conv2d"
         for node in graph.nodes
     )
     
@@ -136,7 +136,7 @@ def summarize_scaling_behavior(graph: ArchitectureGraph) -> Dict[str, str]:
     )
     
     # Check for CNN dominance
-    conv_nodes = [n for n in graph.nodes if n.type == "Conv2D"]
+    conv_nodes = [n for n in graph.nodes if n.type == "conv2d"]
     total_nodes = len(graph.nodes)
     is_cnn_dominated = len(conv_nodes) > 0 and len(conv_nodes) >= total_nodes * 0.3
     

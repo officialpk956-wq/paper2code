@@ -57,6 +57,15 @@ class ConfigParsingAgent(ParsingAgent):
         "residual": {"skip_connection": "yes", "compute_role": "residual"},
         "residualblock": {"skip_connection": "yes", "compute_role": "residual"},
         "dropout": {"compute_role": "regularization"},
+        "patchembedding": {"semantic_role": "patch_embedding", "compute_role": "feature_extraction"},
+        "query_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
+        "key_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
+        "value_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
+        "attention_merge": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
+        "mhsa": {"semantic_role": "token_mixer", "compute_role": "attention", "flops": "very high", "attention": "quadratic"},
+        "feedforward": {"semantic_role": "sequence_encoder", "compute_role": "projection", "flops": "high"},
+        "residual_add": {"semantic_role": "residual", "compute_role": "residual", "skip_connection": "yes"},
+        "transformerblock": {"semantic_role": "sequence_encoder", "compute_role": "attention", "flops": "very high"},
     }
 
     # Default semantic_params for all nodes
@@ -204,9 +213,16 @@ class ConfigParsingAgent(ParsingAgent):
         # should be transferred to semantic_params for explanation/visualization
         params = layer.get("params", {})
         if isinstance(params, dict):
+            # Transfer repeat metadata
             for key in ["_repeat_group", "_repeat_index", "_repeat_total", "_repeat_truncated"]:
                 if key in params:
                     result[key] = params[key]
+            
+            # Transfer ViT specific metadata if this is a patch embedding
+            if type_lower == "patchembedding":
+                for key in ["patch_size", "num_patches", "embed_dim", "embedding_dim"]:
+                    if key in params:
+                        result[key] = params[key]
 
         # Step 4: Override with explicit config values (if present)
         if "semantic_params" in layer and isinstance(layer["semantic_params"], dict):

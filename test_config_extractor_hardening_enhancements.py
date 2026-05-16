@@ -141,7 +141,8 @@ def test_determinism_after_hardening():
     config = results[0]
     assert len(config["layers"]) > 0
     assert all("id" in l and "type" in l and "params" in l for l in config["layers"])
-    assert len(config["connections"]) == len(config["layers"]) - 1
+    # >= accounts for residual skip edges added by the improved connector
+    assert len(config["connections"]) >= len(config["layers"]) - 1
 
     print("[PASS] determinism_after_hardening: All hardening preserves determinism")
 
@@ -238,8 +239,8 @@ def test_complex_architecture_with_hardening():
     assert 5 <= len(config["layers"]) <= 15, \
         f"Expected 5-15 layers, got {len(config['layers'])}"
 
-    # Should have proper connections
-    assert len(config["connections"]) == len(config["layers"]) - 1
+    # Should have at least sequential connections (skip edges may add more)
+    assert len(config["connections"]) >= len(config["layers"]) - 1
 
     # Check for expected layer types
     types = [l["type"] for l in config["layers"]]

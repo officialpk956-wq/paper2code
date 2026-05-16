@@ -40,6 +40,8 @@ from src.agents.visualization_agent_impl import DefaultVisualizationAgent
 from src.agents.explanation_agent_impl import DefaultExplanationAgent
 
 
+from src.agents.parsing_agent_impl import ParsingAgentImpl
+
 __all__ = [
     # Types
     "ConfigDict",
@@ -63,6 +65,7 @@ __all__ = [
     "VisualizationAgent",
     "ExplanationAgent",
     "ConfigParsingAgent",
+    "ParsingAgentImpl",
     "DefaultVisualizationAgent",
     "DefaultExplanationAgent",
 ]

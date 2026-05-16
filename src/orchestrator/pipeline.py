@@ -17,12 +17,13 @@ Pure functions:
 from typing import Any, Dict, Optional
 
 from src.agents import (
-    ConfigParsingAgent,
+    ParsingAgentImpl,
     DefaultVisualizationAgent,
     DefaultExplanationAgent,
     ParsingSource,
     VisualizationOptions,
 )
+from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
 from src.comparators import (
     summarize_compute,
     summarize_spatial_behavior,
@@ -48,16 +49,15 @@ class Paper2CodePipeline:
 
     def __init__(
         self,
-        parsing_agent: Optional[ConfigParsingAgent] = None,
+        parsing_agent: Optional[ParsingAgentImpl] = None,
         visualization_agent: Optional[DefaultVisualizationAgent] = None,
         explanation_agent: Optional[DefaultExplanationAgent] = None,
-        extractor: Optional[ConfigExtractor] = None,
     ):
         """Initialize pipeline with agents (or create defaults)."""
-        self.parser = parsing_agent or ConfigParsingAgent()
+        self.parser = parsing_agent or ParsingAgentImpl()
         self.visualizer = visualization_agent or DefaultVisualizationAgent()
         self.explainer = explanation_agent or DefaultExplanationAgent()
-        self.extractor = extractor or ConfigExtractor(use_llm=False)
+        self.tensor_tracker = TensorTracker()
 
         # Optional caching for text-based inputs
         self._text_cache: Dict[str, Dict[str, Any]] = {}
@@ -104,6 +104,16 @@ class Paper2CodePipeline:
         was_truncated = capped_config.get("_truncated", False)
 
         graph = self.parser.parse(capped_config)
+        
+        # 1.5 Tensor Validation (Phase 1 Compiler Step)
+        try:
+            self.tensor_tracker.propagate_shapes(graph)
+        except TensorMismatchError as e:
+            # We embed the topological error into metadata for educational inspection
+            if not hasattr(graph, "metadata"):
+                graph.metadata = {}
+            graph.metadata["validation_warning"] = str(e)
+
         visual = self.visualizer.render(graph, mode="single", options=vis_options)
         explanation = self.explainer.explain_graph(graph)
 
@@ -295,35 +305,18 @@ class Paper2CodePipeline:
     ) -> Dict[str, Any]:
         """
         Run single architecture analysis from raw text.
-
-        Extracts config from text and reuses run_single() pipeline.
-        Includes stable caching (normalized text) for identical inputs.
-
-        Args:
-            text: Raw architecture description
-            vis_options: Optional visualization configuration
-
-        Returns:
-            Same as run_single() — includes graph, visual, explanation
         """
-        # Normalize text for stable cache key (handles whitespace/casing differences)
+        # Normalize text for stable cache key
         cache_key = preprocess_text(text)
-
-        # Check cache first
         if cache_key in self._text_cache:
             return self._text_cache[cache_key]
 
-        # Extract config from text
-        config = self.extractor.extract_from_text(text)
+        source: ParsingSource = {"type": "text", "content": text}
+        result = self.run_single(source, vis_options)
 
-        # Reuse existing single-run pipeline
-        result = self.run_single(config, vis_options)
-
-        # Check cache size before inserting (prevent unbounded growth)
         if len(self._text_cache) >= self.MAX_CACHE_SIZE:
             self._text_cache.clear()
 
-        # Cache result with normalized key
         self._text_cache[cache_key] = result
         return result
 
@@ -335,20 +328,7 @@ class Paper2CodePipeline:
     ) -> Dict[str, Any]:
         """
         Run comparative architecture analysis from raw text.
-
-        Extracts configs from both texts and reuses run_comparison() pipeline.
-
-        Args:
-            text_a: First architecture description
-            text_b: Second architecture description
-            vis_options: Optional visualization configuration
-
-        Returns:
-            Same as run_comparison() — includes both graphs, comparison, explanations
         """
-        # Extract configs from text
-        config_a = self.extractor.extract_from_text(text_a)
-        config_b = self.extractor.extract_from_text(text_b)
-
-        # Reuse existing comparison pipeline
-        return self.run_comparison(config_a, config_b, vis_options)
+        source_a: ParsingSource = {"type": "text", "content": text_a}
+        source_b: ParsingSource = {"type": "text", "content": text_b}
+        return self.run_comparison(source_a, source_b, vis_options)

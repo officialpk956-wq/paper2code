@@ -5,96 +5,47 @@ from src.architecture_graph import GraphNode, ArchitectureGraph
 
 def explain_node(node: GraphNode) -> str:
     """
-    Generate a human-readable explanation for a node based on its properties.
-    
-    Uses rule-based logic:
-    - semantic_params for compute/structure info
-    - node.type for operation category
-    - node.description for semantic purpose
-    - node.label as fallback
-    
-    Args:
-        node: GraphNode to explain
-        
-    Returns:
-        str: Human-readable explanation
+    Generate a human-readable explanation for a node.
+    Combines educational KAG-driven explanation with technical metrics.
     """
+    from src.rag.semantic_explainer import SemanticExplainer
     
-    lines = []
+    # 1. Educational Explanation (The "Why")
+    educational = SemanticExplainer.explain(
+        node.type, 
+        node.semantic_params.get("semantic_role") or node.semantic_params.get("compute_role"),
+        node.params
+    )
     
-    # Add description if available
-    if node.description:
-        lines.append(node.description)
+    # 2. Technical Context (The "What")
+    technical = []
     
     # Analyze semantic parameters
     if node.semantic_params:
-        semantic_info = []
-        
         # FLOPS / Compute intensity
-        if "flops" in node.semantic_params:
-            flops_val = node.semantic_params["flops"]
-            if flops_val == "high":
-                semantic_info.append("This block is compute-heavy")
-            elif flops_val == "very high":
-                semantic_info.append("This block performs very expensive computations (quadratic in complexity)")
-            elif flops_val == "medium":
-                semantic_info.append("This block has moderate computational cost")
-        
-        # Compute role
-        if "compute_role" in node.semantic_params:
-            role = node.semantic_params["compute_role"]
-            semantic_info.append(f"Role: {role}")
-        
-        # Feature map / spatial info
-        if "feature_map" in node.semantic_params:
-            feature_map = node.semantic_params["feature_map"]
-            if feature_map == "downsampling":
-                semantic_info.append("Reduces spatial resolution to capture contextual features")
-            elif feature_map == "upsampling":
-                semantic_info.append("Recovers spatial resolution while maintaining semantic information")
-            elif feature_map == "varies":
-                semantic_info.append("Spatial resolution varies depending on stage parameters")
-            elif feature_map != "constant":
-                semantic_info.append(f"Spatial resolution: {feature_map}")
-        
-        # Tokens (Vision Transformer)
-        if "tokens" in node.semantic_params:
-            tokens = node.semantic_params["tokens"]
-            if tokens == "constant":
-                semantic_info.append("Processes tokens without changing count")
-            elif tokens == "196":
-                semantic_info.append("Processes 196 tokens (14×14 patches)")
-            else:
-                semantic_info.append(f"Token count: {tokens}")
-        
+        flops_val = node.semantic_params.get("flops")
+        if flops_val == "high":
+            technical.append("• **High computational cost**")
+        elif flops_val == "very high":
+            technical.append("• **Very high cost** (Quadratic attention complexity)")
+            
         # Skip connections
-        if "skip_connection" in node.semantic_params:
-            if node.semantic_params["skip_connection"] == "yes":
-                semantic_info.append("Uses skip connections to preserve earlier features")
+        if node.semantic_params.get("skip_connection") == "yes":
+            technical.append("• **Skip connection enabled**")
+            
+        # Spatial info
+        fm = node.semantic_params.get("feature_map")
+        if fm == "downsampling":
+            technical.append("• **Downsampling layer** (Reduces resolution)")
+        elif fm == "upsampling":
+            technical.append("• **Upsampling layer** (Increases resolution)")
+
+    # Combine
+    result = educational
+    if technical:
+        result += "\n\n" + "\n".join(technical)
         
-        # Attention mechanism
-        if "attention" in node.semantic_params:
-            attention = node.semantic_params["attention"]
-            semantic_info.append(f"Attention complexity: {attention}")
-        
-        # Receptive field
-        if "receptive_field" in node.semantic_params:
-            rf = node.semantic_params["receptive_field"]
-            semantic_info.append(f"Receptive field: {rf}")
-        
-        # Patch size
-        if "patch_size" in node.semantic_params:
-            patch = node.semantic_params["patch_size"]
-            semantic_info.append(f"Patch size: {patch}")
-        
-        if semantic_info:
-            lines.extend(semantic_info)
-    
-    # Fallback: use label if no other info
-    if not lines:
-        lines.append(f"{node.label} ({node.type})")
-    
-    return "\n".join(lines)
+    return result
 
 
 def explain_graph(graph: ArchitectureGraph) -> str:

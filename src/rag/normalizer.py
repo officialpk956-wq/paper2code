@@ -13,15 +13,18 @@ from src.agents.types import ConfigDict
 
 # Canonical layer types (authoritative set)
 CANONICAL_TYPES = {
-    "conv1d", "conv2d", "conv3d",
+    "conv1d", "conv2d", "conv3d", "depthwise_conv2d", "convtranspose2d",
     "linear", "dense",
-    "maxpool2d", "avgpool2d",
+    "maxpool2d", "avgpool2d", "globalavgpool2d",
     "multiheadattention",
     "transformerblock",
-    "batchnorm2d", "layernorm",
-    "relu", "dropout",
+    "batchnorm2d", "layernorm", "groupnorm", "rmsnorm",
+    "relu", "leakyrelu", "gelu", "silu", "swish", "dropout",
     "upsample",
     "residualblock",
+    "ssm", "patchembedding", "clstoken", "positionalembedding", "flatten",
+    "query_projection", "key_projection", "value_projection", "attention_merge",
+    "residual_add", "feedforward"
 }
 
 # Comprehensive type synonym map: any variant → canonical type
@@ -31,12 +34,17 @@ _SYNONYM_MAP = {
     "conv": "conv2d",
     "conv1d": "conv1d",
     "conv2d": "conv2d",
+    "conv3d": "conv3d",
     "conv2dlayer": "conv2d",
     "convolution": "conv2d",
     "convolutionlayer": "conv2d",
     "convolutional": "conv2d",
     "convolutionallayer": "conv2d",
     "convlayer": "conv2d",
+    "depthwiseconv": "depthwise_conv2d",
+    "depthwiseconv2d": "depthwise_conv2d",
+    "depthwise_conv2d": "depthwise_conv2d",
+    "convtranspose2d": "convtranspose2d",
 
     # Linear variants
     "linear": "linear",
@@ -69,10 +77,11 @@ _SYNONYM_MAP = {
     "avg_pooling": "avgpool2d",
     "avg-pooling": "avgpool2d",
     "avgpoollayer": "avgpool2d",
+    "globalavgpool": "globalavgpool2d",
+    "globalavgpool2d": "globalavgpool2d",
 
     # Attention variants
     "attention": "multiheadattention",
-    "selfAttention": "multiheadattention",
     "selfattention": "multiheadattention",
     "self-attention": "multiheadattention",
     "self_attention": "multiheadattention",
@@ -81,11 +90,9 @@ _SYNONYM_MAP = {
     "multi-head-attention": "multiheadattention",
     "mha": "multiheadattention",
     "mhsa": "multiheadattention",
-    "multiheadselfAttention": "multiheadattention",
+    "multiheadselfattention": "multiheadattention",
 
     # Transformer variants
-    # Note: "transformer encoder" and "transformer decoder" semantically describe
-    # attention mechanisms, not distinct block types. Map to multiheadattention.
     "transformer": "transformerblock",
     "transformerblock": "transformerblock",
     "transformer_block": "transformerblock",
@@ -95,7 +102,7 @@ _SYNONYM_MAP = {
     "transformerdecoder": "multiheadattention",
     "transformer_decoder": "multiheadattention",
 
-    # BatchNorm variants
+    # Norm variants
     "batchnorm": "batchnorm2d",
     "batchnorm2d": "batchnorm2d",
     "batch_norm": "batchnorm2d",
@@ -104,20 +111,27 @@ _SYNONYM_MAP = {
     "batch_normalization": "batchnorm2d",
     "batch-normalization": "batchnorm2d",
     "batchnormlayer": "batchnorm2d",
-
-    # LayerNorm variants
     "layernorm": "layernorm",
     "layer_norm": "layernorm",
     "layer-norm": "layernorm",
     "layernormalization": "layernorm",
     "layer_normalization": "layernorm",
     "layer-normalization": "layernorm",
+    "groupnorm": "groupnorm",
+    "group_norm": "groupnorm",
+    "rmsnorm": "rmsnorm",
+    "rms_norm": "rmsnorm",
 
     # Activation variants
     "relu": "relu",
     "relulayer": "relu",
     "activation": "relu",
     "activationfunction": "relu",
+    "leakyrelu": "leakyrelu",
+    "leaky_relu": "leakyrelu",
+    "gelu": "gelu",
+    "silu": "silu",
+    "swish": "swish",
 
     # Dropout
     "dropout": "dropout",
@@ -135,6 +149,30 @@ _SYNONYM_MAP = {
     "residual_block": "residualblock",
     "residual-block": "residualblock",
     "residuallayer": "residualblock",
+
+    # Modern modules
+    "ssm": "ssm",
+    "selectivestatespace": "ssm",
+    "patchembedding": "patchembedding",
+    "patch_embedding": "patchembedding",
+    "clstoken": "clstoken",
+    "cls_token": "clstoken",
+    "positionalembedding": "positionalembedding",
+    "positional_embedding": "positionalembedding",
+    "pos_embed": "positionalembedding",
+    "flatten": "flatten",
+    "query_projection": "query_projection",
+    "key_projection": "key_projection",
+    "value_projection": "value_projection",
+    "q_proj": "query_projection",
+    "k_proj": "key_projection",
+    "v_proj": "value_projection",
+    "attention_merge": "attention_merge",
+    "attn_merge": "attention_merge",
+    "residual_add": "residual_add",
+    "res_add": "residual_add",
+    "feedforward": "feedforward",
+    "mlp": "feedforward",
 }
 
 # Parameter key normalization map
@@ -339,12 +377,26 @@ def _normalize_params(params: Any) -> Dict[str, Any]:
 
 
 def _build_sequential_connections(layers: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
-    """Build strictly sequential connections."""
+    """Build sequential connections with optional residual skip edges."""
     connections = []
+
+    # First, build sequential chain
     for i in range(len(layers) - 1):
         source = layers[i]["id"]
         target = layers[i + 1]["id"]
         connections.append((source, target))
+
+    # Then, add skip edges for residual blocks
+    # Scan for residualblock layers and inject skip edges (connect to layer after the block)
+    for i, layer in enumerate(layers):
+        if layer.get("type") == "residualblock" and i + 1 < len(layers):
+            # Residual block: add skip edge from layer before to layer after
+            if i > 0:
+                skip_source = layers[i - 1]["id"]
+                skip_target = layers[i + 1]["id"]
+                if (skip_source, skip_target) not in connections:
+                    connections.append((skip_source, skip_target))
+
     return connections
 
 
@@ -372,8 +424,8 @@ def _validate_config(name: str, layers: List[Dict[str, Any]], connections: List[
         assert source in valid_ids, f"Invalid source ID in connection: {source}"
         assert target in valid_ids, f"Invalid target ID in connection: {target}"
 
-    # Connections count must be correct for sequential
-    assert len(connections) == len(layers) - 1, "Incorrect number of connections"
+    # Connections count must be at least sequential (may include skip edges)
+    assert len(connections) >= len(layers) - 1, "Insufficient connections"
 
 
 # Validate synonym map at module load time

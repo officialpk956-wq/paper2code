@@ -29,6 +29,14 @@ _FLOPS_COLORS: Dict[str, Dict[str, str]] = {
     "medium":    {"color": "#FFA500", "penwidth": "2"},
 }
 
+_ROLE_COLORS: Dict[str, str] = {
+    "patch_embedding": "#9b59b6", # Purple
+    "attention":       "#e67e22", # Orange
+    "residual":        "#3498db", # Blue
+    "normalization":   "#95a5a6", # Gray
+    "projection":      "#2ecc71", # Green
+}
+
 _EDGE_STYLES: Dict[str, Dict[str, str]] = {
     "flow":     {"style": "solid",  "color": "black", "penwidth": "1.5"},
     "skip":     {"style": "dashed", "color": "blue",  "penwidth": "1.5"},
@@ -83,12 +91,16 @@ class DefaultVisualizationAgent(VisualizationAgent):
         # Nodes
         # ----------------------------------------------------------------
         for node in graph.nodes:
+            sp = node.semantic_params or {}
+            role = sp.get("semantic_role") or sp.get("compute_role", "unknown")
+            tooltip = f"Role: {role}\nInput: {node.input_shape}\nOutput: {node.output_shape}\n\n{node.get_explanation()}"
+            
             label = _build_label(node, mode, include_params)
             node_attrs: Dict[str, str] = {
                 "label":   label,
                 "shape":   "box",
                 "style":   "rounded",
-                "tooltip": node.description or node.label,
+                "tooltip": tooltip.strip(),
             }
 
             if mode == "compare" and comparison_ctx is not None:
@@ -114,7 +126,14 @@ class DefaultVisualizationAgent(VisualizationAgent):
         # Edges
         # ----------------------------------------------------------------
         for edge in graph.edges:
-            style = _EDGE_STYLES.get(edge.edge_type, _EDGE_STYLES["flow"])
+            style = dict(_EDGE_STYLES.get(edge.edge_type, _EDGE_STYLES["flow"]))
+            
+            # Show tensor shape on edge if available
+            if edge.tensor_shape:
+                style["label"] = str(edge.tensor_shape)
+                style["fontsize"] = "10"
+                style["fontcolor"] = "#666666"
+                
             dot.edge(edge.source, edge.target, **style)
 
         return {
@@ -140,30 +159,50 @@ class DefaultVisualizationAgent(VisualizationAgent):
 # ---------------------------------------------------------------------------
 
 def _build_label(node: GraphNode, mode: str, include_params: bool) -> str:
-    """Build node label string (extracted from app.py render logic)."""
-    label = f"{node.label}\n{node.type}"
+    """Build node label string with tensor shapes and parameters."""
+    header = f"{node.label}\n({node.type})"
+    
+    # Show shapes prominently
+    shape_str = ""
+    if node.input_shape and node.output_shape:
+        shape_str = f"\n{node.input_shape} → {node.output_shape}"
+    elif node.output_shape:
+        shape_str = f"\nOutput: {node.output_shape}"
+        
+    label = f"{header}{shape_str}"
 
     if include_params:
+        # Filter out internal repeat metadata for cleaner view
         for k, v in node.params.items():
-            label += f"\n{k}: {v}"
+            if not k.startswith("_"):
+                label += f"\n{k}: {v}"
 
     # Show semantic params in single mode only (reduces clutter in compare)
     if mode != "compare" and node.semantic_params:
         for k, v in node.semantic_params.items():
-            label += f"\n{k}: {v}"
+            if not k.startswith("_") and k not in ["compute_role", "flops", "semantic_role"]:
+                label += f"\n{k}: {v}"
 
     return label
 
 
 def _apply_single_styling(node: GraphNode):
     """
-    Apply FLOPs-based coloring for single mode.
-
-    Returns (NodeVisuals, cue_name | None).
+    Apply semantic role or FLOPs-based coloring for single mode.
     """
     sp = node.semantic_params or {}
+    role = sp.get("semantic_role") or sp.get("compute_role")
     flops = sp.get("flops")
 
+    # Priority 1: Semantic Role color
+    if role in _ROLE_COLORS:
+        return {
+            "color": _ROLE_COLORS[role],
+            "penwidth": 3.0,
+            "style": "rounded,bold"
+        }, "role_color"
+
+    # Priority 2: FLOPs-based color
     if flops in _FLOPS_COLORS:
         entry = _FLOPS_COLORS[flops]
         visuals: NodeVisuals = {
