@@ -45,31 +45,46 @@ def safe_parse_llm_output(raw_output: str, fallback_text: str):
     return "other", fallback_text
 
 
-def process_file(txt_path: Path):
-    print(f"Processing paper: {txt_path.name}")
+def process_text(text: str) -> dict:
+    """
+    Process raw text string through section classifier.
+    Returns {section_name: merged_content}.
+    No file I/O — accepts string input for PDF extraction (F4).
 
-    text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    Args:
+        text: Raw text string to process
+
+    Returns:
+        Dict mapping section names to merged content
+    """
     chunks = chunk_text(text)
-
     section_store = defaultdict(list)
 
-    for i, chunk in enumerate(chunks, start=1):
-        print(f"  Chunk {i}/{len(chunks)}")
-
+    for chunk in chunks:
         try:
             raw_result = classify_section(chunk)
             section, content = safe_parse_llm_output(raw_result, chunk)
-        except Exception as e:
-            print("  ⚠️ LLM failure, falling back to 'other':", e)
+        except Exception:
             section, content = "other", chunk
 
         section_store[section].append(content)
 
     # Merge chunks per section
-    final_sections = {
+    return {
         section: "\n\n".join(contents).strip()
         for section, contents in section_store.items()
     }
+
+
+def process_file(txt_path: Path):
+    """
+    Process file-based text through section classifier.
+    Refactored to delegate to process_text().
+    """
+    print(f"Processing paper: {txt_path.name}")
+
+    text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    final_sections = process_text(text)
 
     out_file = OUT_DIR / f"{txt_path.stem}.json"
     out_file.write_text(

@@ -1,5 +1,7 @@
 import streamlit as st
 import graphviz
+import pandas as pd
+import os
 
 from src.visualizer_resnet import build_resnet18_graph
 from src.visualizer_unet import build_unet_graph
@@ -12,6 +14,28 @@ from src.comparators import (
     explain_architecture_comparison,
 )
 from src.orchestrator.pipeline import Paper2CodePipeline
+from src.paper_to_code_generator import PaperToCodeGenerator
+
+
+# Check GROQ availability for PDF extraction
+_GROQ_AVAILABLE = bool(os.getenv("GROQ_API_KEY"))
+
+
+def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Extract text from PDF bytes using pdfplumber."""
+    import io
+    try:
+        import pdfplumber
+    except ImportError:
+        return ""
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        pages_text = []
+        for page in pdf.pages[:30]:  # Cap at 30 pages
+            text = page.extract_text()
+            if text:
+                pages_text.append(text)
+    return "\n\n".join(pages_text)
 
 
 # Helper function to determine comparison-based styling
@@ -78,14 +102,15 @@ def get_comparison_styling(node, comparison_ctx):
     return styling
 
 
-def render_graph_with_comparison(graph, comparison_ctx=None):
+def render_graph_with_comparison(graph, comparison_ctx=None, expand_blocks=False):
     """
     Render a graph with optional comparison styling.
-    
+
     Args:
         graph: ArchitectureGraph to render
         comparison_ctx: Optional comparison context dict
-    
+        expand_blocks: Whether to expand composite blocks (currently for future use)
+
     Returns:
         graphviz.Digraph object
     """
@@ -213,9 +238,139 @@ st.caption("Interactive visualization of deep learning architectures")
 
 
 # --------------------------------------------------
+# Session State Management
+# --------------------------------------------------
+def _init_session_state():
+    """Initialize session state keys with safe defaults."""
+    if "history" not in st.session_state:
+        st.session_state.history = []  # list of {"name": str, "graph": ArchitectureGraph}
+
+
+def _push_to_history(name: str, graph):
+    """Push architecture to history, deduplicate by name, cap at 10."""
+    st.session_state.history = [h for h in st.session_state.history if h["name"] != name]
+    st.session_state.history.insert(0, {"name": name, "graph": graph})
+    st.session_state.history = st.session_state.history[:10]
+
+
+# Initialize session state immediately
+_init_session_state()
+
+
+# --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
 st.sidebar.title("Architecture Input")
+
+# F10: Paper to Code (PDF/arXiv → PyTorch)
+use_paper_to_code = st.sidebar.checkbox("📄 Paper to Code", value=False, key="use_paper_to_code")
+if use_paper_to_code:
+    st.sidebar.subheader("Paper to Code")
+    st.sidebar.caption("Upload PDF or paste arXiv URL to generate working PyTorch code")
+
+    # Option 1: Upload PDF
+    uploaded_file = st.sidebar.file_uploader("Select PDF", type=["pdf"], key="p2c_pdf_uploader")
+
+    # Option 2: arXiv URL
+    arxiv_url = st.sidebar.text_input(
+        "Or enter arXiv URL",
+        placeholder="https://arxiv.org/abs/1512.03385",
+        key="p2c_arxiv_input"
+    )
+
+    # Generate button
+    if st.sidebar.button("🚀 Generate Code", key="p2c_generate_btn"):
+        if uploaded_file is None and not arxiv_url:
+            st.error("Please upload a PDF or enter an arXiv URL")
+            st.stop()
+
+        # Initialize generator
+        generator = PaperToCodeGenerator()
+
+        # Progress tracking
+        progress_placeholder = st.empty()
+
+        try:
+            # Run generator (handles all 4 steps internally)
+            if uploaded_file is not None:
+                paper_bytes = uploaded_file.read()
+                paper_name = uploaded_file.name.replace(".pdf", "")
+                progress_placeholder.info("⏳ Step 1/4: Extracting text from PDF...")
+                with st.spinner("Steps 2-4: Classifying sections, extracting architecture, generating code..."):
+                    result = generator.from_pdf(paper_bytes, paper_name)
+            elif arxiv_url:
+                progress_placeholder.info("⏳ Step 1/4: Fetching PDF from arXiv...")
+                with st.spinner("Steps 2-4: Classifying sections, extracting architecture, generating code..."):
+                    result = generator.from_arxiv(arxiv_url)
+            else:
+                st.error("Invalid input")
+                st.stop()
+
+            progress_placeholder.success("✅ Code generation complete!")
+
+            # Push to history
+            _push_to_history(result["paper_name"], result["graph"])
+
+            # Store result in session state for main display
+            st.session_state.p2c_result = result
+            st.stop()
+
+        except Exception as e:
+            progress_placeholder.error(f"❌ Error: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+            st.stop()
+
+# F9: Symbolic Notation Input
+use_symbolic_input = st.sidebar.checkbox("Symbolic Notation", value=False, key="use_symbolic")
+if use_symbolic_input:
+    st.sidebar.caption("Format: Conv2D(64,3)→ReLU→ResBlock×3→Linear(10)")
+    sym_spec = st.sidebar.text_input(
+        "Architecture spec",
+        placeholder="Conv2D(64,3)→ReLU→MaxPool→ResBlock×3→Linear(10)",
+        key="symbolic_spec_input"
+    )
+    if sym_spec:
+        from src.rag.symbolic_parser import parse_symbolic
+        try:
+            config = parse_symbolic(sym_spec)
+            pipeline = Paper2CodePipeline()
+            result = pipeline.run_single(config)
+            graph = result["graph"]
+            _push_to_history(graph.name, graph)
+            st.subheader(f"Architecture: {graph.name}")
+            dot_graph = render_graph_with_comparison(graph)
+            st.graphviz_chart(dot_graph, use_container_width=True)
+            # Export buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button("⬇️ Download .dot", str(dot_graph), f"{graph.name}.dot", "text/plain", key="dot_sym")
+            with col2:
+                svg_data = dot_graph.pipe(format='svg').decode('utf-8')
+                st.download_button("⬇️ Download SVG", svg_data, f"{graph.name}.svg", "image/svg+xml", key="svg_sym")
+            # Metrics and code gen
+            from src.metrics_estimator import estimate_metrics_from_graph
+            with st.expander("Compute Metrics", expanded=True):
+                metrics = estimate_metrics_from_graph(graph)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Relative FLOPs Score", metrics["total_flops_score"])
+                params = metrics["total_params_estimate"]
+                c2.metric("Est. Parameters", f"~{params/1e6:.1f}M" if params > 1e6 else f"~{params/1e3:.0f}K")
+                c3.metric("Depth", metrics["depth"])
+                st.dataframe(pd.DataFrame(metrics["breakdown"]))
+            # Code gen
+            from src.codegen import get_pytorch_code
+            if st.button("Generate PyTorch Code", key="btn_codegen_sym"):
+                code = get_pytorch_code(graph.name, graph)
+                st.code(code, language="python")
+                st.download_button("Download .py", code, f"{graph.name}.py", "text/plain", key="dl_codegen_sym")
+            st.markdown(result["explanation"])
+        except Exception as e:
+            st.error(f"Parse error: {e}")
+        st.stop()
+    else:
+        st.sidebar.info("Enter a symbolic spec above")
+        st.stop()
 
 # RAG Mode: Text Input
 use_text_input = st.sidebar.checkbox("Use Text Input (RAG Mode)", value=False)
@@ -237,6 +392,9 @@ if use_text_input:
         visual = result["visual"]
         explanation = result["explanation"]
 
+        # Push to history (F7)
+        _push_to_history(graph.name, graph)
+
         # Show truncation warning if applicable
         if result.get("metadata", {}).get("truncated"):
             st.sidebar.warning(
@@ -247,7 +405,54 @@ if use_text_input:
 
         # Render graph and explanation
         st.subheader(f"Architecture: {graph.name}")
-        st.graphviz_chart(render_graph_with_comparison(graph), use_container_width=True)
+        dot_graph = render_graph_with_comparison(graph)
+        st.graphviz_chart(dot_graph, use_container_width=True)
+
+        # Export buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="⬇️ Download .dot",
+                data=str(dot_graph),
+                file_name=f"{graph.name}.dot",
+                mime="text/plain"
+            )
+        with col2:
+            svg_data = dot_graph.pipe(format='svg').decode('utf-8')
+            st.download_button(
+                label="⬇️ Download SVG",
+                data=svg_data,
+                file_name=f"{graph.name}.svg",
+                mime="image/svg+xml"
+            )
+
+        # F3: Compute Metrics
+        st.markdown("---")
+        from src.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
+        with st.expander("Compute Metrics", expanded=True):
+            metrics = estimate_metrics_from_graph(graph)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Relative FLOPs Score", metrics["total_flops_score"])
+            params = metrics["total_params_estimate"]
+            c2.metric("Est. Parameters", f"~{params/1e6:.1f}M" if params > 1e6 else f"~{params/1e3:.0f}K")
+            c3.metric("Depth", metrics["depth"])
+            st.dataframe(pd.DataFrame(metrics["breakdown"]))
+
+        # F6: Memory Estimation
+        with st.expander("Estimated Activation Memory per Layer"):
+            batch = st.slider("Batch size", 1, 64, 1, key="mem_batch_text")
+            spatial = st.slider("Input spatial size", 32, 512, 224, 32, key="mem_spatial_text")
+            mem_data = estimate_activation_memory(graph, batch_size=batch, input_spatial=spatial)
+            df_mem = pd.DataFrame(mem_data)
+            st.metric("Total Est. Activation Memory", f"{df_mem['mem_mb'].sum():.1f} MB")
+            st.dataframe(df_mem)
+
+        # F5: PyTorch Code Generation
+        from src.codegen import get_pytorch_code
+        if st.button("Generate PyTorch Code", key="btn_codegen_text"):
+            code = get_pytorch_code(graph.name, graph)
+            st.code(code, language="python")
+            st.download_button("Download .py", code, f"{graph.name}.py", "text/plain", key="dl_codegen_text")
 
         st.markdown("---")
         st.subheader("Explanation")
@@ -258,6 +463,239 @@ if use_text_input:
         st.sidebar.info("Enter an architecture description above")
         st.stop()
 
+# Text-to-Text Comparison Mode
+use_text_comparison = st.sidebar.checkbox("Compare Text Architectures", value=False)
+
+if use_text_comparison:
+    st.sidebar.subheader("Compare Two Architectures (Text)")
+
+    text_a = st.sidebar.text_area(
+        "First architecture description",
+        placeholder="e.g., ResNet with Conv layers and residual blocks",
+        height=80,
+        key="text_a"
+    )
+
+    text_b = st.sidebar.text_area(
+        "Second architecture description",
+        placeholder="e.g., Vision Transformer with attention blocks",
+        height=80,
+        key="text_b"
+    )
+
+    if text_a and text_b:
+        pipeline = Paper2CodePipeline()
+        result = pipeline.run_comparison_from_text(text_a, text_b)
+
+        graph_a = result["graph_a"]
+        graph_b = result["graph_b"]
+        explanation = result["explanation"]
+
+        # Push to history (F7)
+        _push_to_history(graph_a.name, graph_a)
+        _push_to_history(graph_b.name, graph_b)
+
+        st.subheader("📊 Text Architecture Comparison")
+
+        # Show both architectures side-by-side
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown(f"#### Architecture A")
+            dot_a = render_graph_with_comparison(graph_a)
+            st.graphviz_chart(dot_a, use_container_width=True)
+            col1a, col1b = st.columns(2)
+            with col1a:
+                st.download_button(
+                    label="⬇️ .dot",
+                    data=str(dot_a),
+                    file_name=f"{graph_a.name}.dot",
+                    mime="text/plain",
+                    key="dot_a"
+                )
+            with col1b:
+                svg_a = dot_a.pipe(format='svg').decode('utf-8')
+                st.download_button(
+                    label="⬇️ SVG",
+                    data=svg_a,
+                    file_name=f"{graph_a.name}.svg",
+                    mime="image/svg+xml",
+                    key="svg_a"
+                )
+
+        with col2:
+            st.markdown(f"#### Architecture B")
+            dot_b = render_graph_with_comparison(graph_b)
+            st.graphviz_chart(dot_b, use_container_width=True)
+            col2a, col2b = st.columns(2)
+            with col2a:
+                st.download_button(
+                    label="⬇️ .dot",
+                    data=str(dot_b),
+                    file_name=f"{graph_b.name}.dot",
+                    mime="text/plain",
+                    key="dot_b"
+                )
+            with col2b:
+                svg_b = dot_b.pipe(format='svg').decode('utf-8')
+                st.download_button(
+                    label="⬇️ SVG",
+                    data=svg_b,
+                    file_name=f"{graph_b.name}.svg",
+                    mime="image/svg+xml",
+                    key="svg_b"
+                )
+
+        st.markdown("---")
+        st.subheader("Comparison Analysis")
+        st.markdown(explanation)
+
+        st.stop()  # Stop here if using text comparison
+    else:
+        st.sidebar.info("Enter both architecture descriptions above")
+        st.stop()
+
+# F4: PDF Upload + Auto-Extraction
+if _GROQ_AVAILABLE:
+    use_pdf = st.sidebar.checkbox("Upload PDF Paper", value=False, key="use_pdf")
+    if use_pdf:
+        st.sidebar.subheader("PDF Paper Upload")
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload research paper PDF",
+            type=["pdf"],
+            key="pdf_uploader"
+        )
+
+        if uploaded_file is not None:
+            pdf_bytes = uploaded_file.read()
+
+            with st.spinner("Extracting text from PDF..."):
+                raw_text = _extract_text_from_pdf(pdf_bytes)
+
+            if not raw_text.strip():
+                st.error("Could not extract text from PDF. Ensure it is not a scanned/image-only PDF.")
+                st.stop()
+
+            with st.spinner("Classifying sections..."):
+                from src.section_splitter import process_text
+                try:
+                    section_data = process_text(raw_text)
+                except Exception as e:
+                    st.error(f"Section classification failed: {e}")
+                    st.stop()
+
+            with st.spinner("Extracting architecture..."):
+                from src.architecture_extractor import extract_architecture
+                paper_name = uploaded_file.name.replace(".pdf", "")
+                try:
+                    schema = extract_architecture(section_data, paper_name)
+                except Exception as e:
+                    st.error(f"Architecture extraction failed: {e}")
+                    st.stop()
+
+            pipeline = Paper2CodePipeline()
+            result = pipeline.run_single(schema)
+            graph = result["graph"]
+            _push_to_history(graph.name, graph)
+
+            st.subheader(f"Extracted Architecture: {graph.name}")
+            dot_graph = render_graph_with_comparison(graph)
+            st.graphviz_chart(dot_graph, use_container_width=True)
+
+            # Export buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button("⬇️ Download .dot", str(dot_graph), f"{graph.name}.dot", "text/plain", key="dot_pdf")
+            with col2:
+                svg_data = dot_graph.pipe(format='svg').decode('utf-8')
+                st.download_button("⬇️ Download SVG", svg_data, f"{graph.name}.svg", "image/svg+xml", key="svg_pdf")
+
+            # Metrics
+            from src.metrics_estimator import estimate_metrics_from_graph
+            with st.expander("Compute Metrics", expanded=True):
+                metrics = estimate_metrics_from_graph(graph)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Relative FLOPs Score", metrics["total_flops_score"])
+                params = metrics["total_params_estimate"]
+                c2.metric("Est. Parameters", f"~{params/1e6:.1f}M" if params > 1e6 else f"~{params/1e3:.0f}K")
+                c3.metric("Depth", metrics["depth"])
+
+            st.markdown(result["explanation"])
+            st.stop()
+        else:
+            st.sidebar.info("Upload a PDF to begin extraction")
+            st.stop()
+
+# F10: Display Paper to Code Results
+if "p2c_result" in st.session_state:
+    result = st.session_state.p2c_result
+    graph = result["graph"]
+    code = result["code"]
+    code_source = result["code_source"]
+    explanation = result["explanation"]
+    spec = result["spec"]
+
+    st.header(f"📄 Paper to Code: {result['paper_name']}")
+    st.caption(f"Family: {result['family']} | Code source: {code_source}")
+
+    # Two-column layout: Graph + Code
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.subheader("Architecture Graph")
+        dot_graph = render_graph_with_comparison(graph)
+        st.graphviz_chart(dot_graph, use_container_width=True)
+
+        # Export graph buttons
+        export_col1, export_col2 = st.columns(2)
+        with export_col1:
+            st.download_button(
+                "⬇️ .dot",
+                str(dot_graph),
+                f"{graph.name}.dot",
+                "text/plain",
+                key="p2c_dot_export"
+            )
+        with export_col2:
+            svg_data = dot_graph.pipe(format='svg').decode('utf-8')
+            st.download_button(
+                "⬇️ SVG",
+                svg_data,
+                f"{graph.name}.svg",
+                "image/svg+xml",
+                key="p2c_svg_export"
+            )
+
+    with col2:
+        st.subheader("Generated PyTorch Code")
+        st.code(code, language="python")
+        st.download_button(
+            "⬇️ Download model.py",
+            code,
+            f"{result['paper_name']}_model.py",
+            "text/plain",
+            key="p2c_code_export"
+        )
+
+    # Metrics
+    from src.metrics_estimator import estimate_metrics_from_graph
+    st.subheader("Architecture Metrics")
+    metrics = estimate_metrics_from_graph(graph)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Relative FLOPs", metrics["total_flops_score"])
+    params = metrics["total_params_estimate"]
+    m2.metric("Est. Parameters", f"~{params/1e6:.1f}M" if params > 1e6 else f"~{params/1e3:.0f}K")
+    m3.metric("Depth", metrics["depth"])
+
+    # Expandable sections
+    with st.expander("Architecture Explanation", expanded=True):
+        st.markdown(explanation)
+
+    with st.expander("Raw Architecture Spec"):
+        st.json(spec)
+
+    st.stop()
+
 # Standard Model Selection Mode
 st.sidebar.title("Model Selector")
 
@@ -267,6 +705,29 @@ model_name = st.sidebar.selectbox(
 )
 
 expand_blocks = st.sidebar.checkbox("Expand composite blocks", value=False)
+
+# F7: History Panel
+st.sidebar.markdown("---")
+st.sidebar.subheader("History")
+if not st.session_state.history:
+    st.sidebar.info("No history yet")
+else:
+    for i, h in enumerate(st.session_state.history):
+        st.sidebar.markdown(f"- {h['name']}")
+    if len(st.session_state.history) >= 2:
+        names = [h["name"] for h in st.session_state.history]
+        ha = st.sidebar.selectbox("Compare A", names, key="hist_a_sel")
+        hb = st.sidebar.selectbox("Compare B", names, key="hist_b_sel", index=min(1, len(names)-1))
+        if st.sidebar.button("Compare from History", key="hist_compare_btn"):
+            ga = next(h["graph"] for h in st.session_state.history if h["name"] == ha)
+            gb = next(h["graph"] for h in st.session_state.history if h["name"] == hb)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"#### {ha}")
+                st.graphviz_chart(render_graph_with_comparison(ga), use_container_width=True)
+            with col2:
+                st.markdown(f"#### {hb}")
+                st.graphviz_chart(render_graph_with_comparison(gb), use_container_width=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Node Inspector")
@@ -280,6 +741,9 @@ elif model_name == "ViT":
     graph = build_vit_graph()
 else:
     st.stop()
+
+# Push to history (F7)
+_push_to_history(model_name, graph)
 
 # Node selection dropdown with id + label
 node_display_options = [f"{n.id} – {n.label}" for n in graph.nodes]
@@ -303,10 +767,58 @@ if selected_node:
 # --------------------------------------------------
 # Graph rendering
 # --------------------------------------------------
-dot = render_graph_with_comparison(graph)
+dot = render_graph_with_comparison(graph, expand_blocks=expand_blocks)
 
 st.subheader(graph.name)
 st.graphviz_chart(dot, use_container_width=True)
+
+# Export buttons
+col1, col2 = st.columns(2)
+with col1:
+    st.download_button(
+        label="⬇️ Download .dot",
+        data=str(dot),
+        file_name=f"{graph.name}.dot",
+        mime="text/plain",
+        key="dot_model"
+    )
+with col2:
+    svg_data = dot.pipe(format='svg').decode('utf-8')
+    st.download_button(
+        label="⬇️ Download SVG",
+        data=svg_data,
+        file_name=f"{graph.name}.svg",
+        mime="image/svg+xml",
+        key="svg_model"
+    )
+
+# F3: Compute Metrics
+st.markdown("---")
+from src.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
+from src.codegen import get_pytorch_code
+with st.expander("Compute Metrics", expanded=True):
+    metrics = estimate_metrics_from_graph(graph)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Relative FLOPs Score", metrics["total_flops_score"])
+    params = metrics["total_params_estimate"]
+    c2.metric("Est. Parameters", f"~{params/1e6:.1f}M" if params > 1e6 else f"~{params/1e3:.0f}K")
+    c3.metric("Depth", metrics["depth"])
+    st.dataframe(pd.DataFrame(metrics["breakdown"]))
+
+# F6: Memory Estimation
+with st.expander("Estimated Activation Memory per Layer"):
+    batch = st.slider("Batch size", 1, 64, 1, key="mem_batch_model")
+    spatial = st.slider("Input spatial size", 32, 512, 224, 32, key="mem_spatial_model")
+    mem_data = estimate_activation_memory(graph, batch_size=batch, input_spatial=spatial)
+    df_mem = pd.DataFrame(mem_data)
+    st.metric("Total Est. Activation Memory", f"{df_mem['mem_mb'].sum():.1f} MB")
+    st.dataframe(df_mem)
+
+# F5: PyTorch Code Generation
+if st.button("Generate PyTorch Code", key="btn_codegen_main"):
+    code = get_pytorch_code(model_name, graph)
+    st.code(code, language="python")
+    st.download_button("Download .py", code, f"{model_name.replace(' ', '_').lower()}.py", "text/plain", key="dl_codegen_main")
 
 # Node explanation panel (main content)
 if selected_node:
@@ -489,13 +1001,49 @@ if arch_a and arch_b:
     
     with col1:
         st.markdown(f"#### {arch_a}")
-        dot_a = render_graph_with_comparison(graph_a, ctx_a)
+        dot_a = render_graph_with_comparison(graph_a, ctx_a, expand_blocks=expand_blocks)
         st.graphviz_chart(dot_a, use_container_width=True)
-    
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            st.download_button(
+                label="⬇️ .dot",
+                data=str(dot_a),
+                file_name=f"{arch_a.replace(' ', '_')}.dot",
+                mime="text/plain",
+                key="dot_comp_a"
+            )
+        with col_a2:
+            svg_a = dot_a.pipe(format='svg').decode('utf-8')
+            st.download_button(
+                label="⬇️ SVG",
+                data=svg_a,
+                file_name=f"{arch_a.replace(' ', '_')}.svg",
+                mime="image/svg+xml",
+                key="svg_comp_a"
+            )
+
     with col2:
         st.markdown(f"#### {arch_b}")
-        dot_b = render_graph_with_comparison(graph_b, ctx_b)
+        dot_b = render_graph_with_comparison(graph_b, ctx_b, expand_blocks=expand_blocks)
         st.graphviz_chart(dot_b, use_container_width=True)
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            st.download_button(
+                label="⬇️ .dot",
+                data=str(dot_b),
+                file_name=f"{arch_b.replace(' ', '_')}.dot",
+                mime="text/plain",
+                key="dot_comp_b"
+            )
+        with col_b2:
+            svg_b = dot_b.pipe(format='svg').decode('utf-8')
+            st.download_button(
+                label="⬇️ SVG",
+                data=svg_b,
+                file_name=f"{arch_b.replace(' ', '_')}.svg",
+                mime="image/svg+xml",
+                key="svg_comp_b"
+            )
     
     # Display side-by-side comparison
     st.markdown("---")
@@ -545,7 +1093,7 @@ if arch_a and arch_b:
         st.metric("Input Size Scaling", scaling_summary_a["scaling"].upper())
         st.markdown(f"*{scaling_summary_a['reason']}*")
     
-    with col2:
+    with col2:\
         st.markdown(f"**{arch_b}**")
         st.metric("Input Size Scaling", scaling_summary_b["scaling"].upper())
         st.markdown(f"*{scaling_summary_b['reason']}*")
@@ -592,3 +1140,48 @@ if arch_a and arch_b:
             st.markdown(f"- {takeaway}")
     else:
         st.markdown("- Both architectures have similar trade-offs")
+
+
+# --------------------------------------------------
+# F8: Multi-Architecture Radar Chart
+# --------------------------------------------------
+st.markdown("---")
+st.header("Multi-Architecture Radar Chart")
+
+from src.radar_chart import compute_radar_scores, build_radar_chart
+
+# Build available architectures list (hardcoded + history)
+available_archs = ["ResNet-18", "U-Net", "Vision Transformer"]
+if st.session_state.get("history"):
+    hist_names = [h["name"] for h in st.session_state.history]
+    available_archs = list(dict.fromkeys(available_archs + hist_names))
+
+selected_for_radar = st.multiselect(
+    "Select architectures to compare (2–5)",
+    options=available_archs,
+    default=available_archs[:min(2, len(available_archs))],
+    key="radar_select"
+)
+
+if len(selected_for_radar) >= 2 and len(selected_for_radar) <= 5:
+    radar_graphs = []
+    for arch_name in selected_for_radar:
+        if arch_name == "ResNet-18":
+            radar_graphs.append(build_resnet18_graph())
+        elif arch_name == "U-Net":
+            radar_graphs.append(build_unet_graph())
+        elif arch_name in ("Vision Transformer", "ViT"):
+            radar_graphs.append(build_vit_graph())
+        else:
+            # Try to find in history
+            match = next((h["graph"] for h in st.session_state.get("history", []) if h["name"] == arch_name), None)
+            if match:
+                radar_graphs.append(match)
+
+    if radar_graphs:
+        records = [compute_radar_scores(g) for g in radar_graphs]
+        st.altair_chart(build_radar_chart(records), use_container_width=True)
+elif len(selected_for_radar) > 5:
+    st.warning("Select at most 5 architectures for readability")
+else:
+    st.info("Select at least 2 architectures to display the radar chart")

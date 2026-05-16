@@ -1,0 +1,200 @@
+paper2code Project Overview
+
+What this project is
+
+paper2code is a research-to-implementation toolkit for deep learning papers. Its job is to take architecture descriptions from papers, extract them into structured representations, refine them into code-ready schemas, generate diagrams and metrics, and present the results in an interactive Streamlit interface.
+
+Why this project exists
+
+Deep learning papers often describe models in ways that are hard to reproduce directly. Important details are scattered across text, diagrams, and implicit assumptions, so the same paper can be interpreted differently by different readers. paper2code exists to reduce that gap by turning informal architecture descriptions into something explicit, inspectable, comparable, and reproducible.
+
+The project is trying to solve three practical problems:
+- papers are hard to translate into implementation
+- architecture diagrams are often incomplete or inconsistent
+- model comparisons are usually done manually and are difficult to verify
+
+In practical terms, the project helps turn informal architecture descriptions into:
+- structured semantic graphs
+- visual diagrams with architectural highlighting
+- executable or code-ready model schemas
+- parameter and FLOPs analysis
+- natural-language explanations and comparisons
+
+The project is centered on four model families that are already wired into the codebase:
+- ResNet
+- U-Net
+- Vision Transformer (ViT)
+- Transformer
+
+The overall goal is not just visualization. It is to make paper architectures explicit, verifiable, comparable, and easier to reproduce.
+
+What we have used
+
+The codebase uses a mix of parsing, visualization, analysis, and interface tools:
+- Python as the main implementation language
+- Streamlit for the interactive UI in app.py
+- pdfplumber and PyMuPDF (fitz) for PDF text extraction in main.py
+- LLM-backed workflow support through src/llm_client.py for sectioning and architecture extraction
+- Graph-based data structures in src/architecture_graph.py for semantic representation
+- Graphviz-style rendering through the diagram and visualizer modules
+- PyTorch-style model builders for turning schemas into usable model definitions
+- TypedDict and abstract base classes in the agent layer for strict contracts
+- pytest-style test files and script-based validation for quality control
+
+Pipeline summary in one sentence
+
+The project starts with a paper or PDF, extracts the text, splits and classifies the content, extracts the architecture, refines it into a stable schema, converts that schema into a graph and visual output, analyzes compute and parameter behavior, and then presents everything in the Streamlit app.
+
+What the repository contains
+
+1. Core processing pipeline
+- main.py extracts text from PDFs into outputs/texts/
+- src/section_splitter.py groups extracted text into paper sections
+- src/architecture_extractor.py converts sectioned text into model specifications
+- src/schema_refiner.py and the family-specific refiner files normalize and validate schemas
+- src/generate_code_ready_schema.py and related scripts produce code-ready outputs
+- src/run_codegen.py, src/run_transformer_codegen.py, src/run_unet_codegen.py, and src/run_vit_codegen.py provide family-specific generation entry points
+- src/generate_diagram.py produces diagram artifacts from the refined schemas
+- The extraction step in main.py first tries pdfplumber and then falls back to PyMuPDF if needed
+- This makes the text extraction phase more resilient when one PDF parser fails
+
+2. Architecture and data model layer
+- src/architecture_graph.py defines GraphNode, GraphEdge, and ArchitectureGraph
+- src/schema.py and src/schemas_base.py define schema foundations and shared templates
+- src/normalizer.py standardizes extracted structure across formats
+- src/architecture_extractor.py detects model family and extracts the architecture shape
+- This layer is the backbone of the project because every later step depends on a stable intermediate representation
+
+3. Model-family support
+- ResNet support in blocks_resnet.py, diagram_resnet.py, visualizer_resnet.py, and schema_rules_resnet.py
+- U-Net support in blocks_unet.py, diagram_unet.py, visualizer_unet.py, and schema_rules_unet.py
+- Vision Transformer support in blocks_vit.py, diagram_vit.py, visualizer_vit.py, and schema_rules_vit.py
+- Transformer support in blocks_transformer.py, transformer_builder.py, and the transformer-specific schema/refiner files
+- The builder files turn code-ready schemas into PyTorch-style model definitions
+- The block files define reusable architecture components such as residual blocks, attention blocks, and encoder/decoder blocks
+
+4. Analysis and visualization
+- src/comparators/ contains deterministic model comparison logic
+- src/explainers/ contains graph and architecture explanation utilities
+- src/flops_estimator.py, src/param_counter.py, and src/verify_model.py provide model analysis and validation
+- src/generate_diagram.py and the diagram modules generate visual architecture outputs
+- src/visualizer_resnet.py, src/visualizer_unet.py, and src/visualizer_vit.py convert family-specific structures into graph views
+- src/diagram_base.py contains common rendering primitives
+- src/radar_chart.py and src/metrics_estimator.py support analysis/visual presentation helpers
+- The comparator and explainer layers let the project answer not just what the architecture is, but how it differs from another architecture and why those differences matter
+
+5. User interface
+- app.py is the main Streamlit application
+- demo_comparator.py and demo_explainer.py demonstrate the comparison and explanation features
+- The app supports both single-architecture viewing and side-by-side comparison mode
+- The UI includes visual highlighting for bottlenecks, compute-heavy nodes, scaling issues, spatial behavior, and ghost overlay for shared structure
+- The UI is the main user-facing entrypoint for exploring generated graphs, diagrams, and explanations without needing to run the pipeline manually
+
+6. Agent system
+- src/agents/ contains the Phase 3.9.B.1 agent interfaces
+- ParsingAgent handles raw architecture input to graph conversion
+- VisualizationAgent handles graph-to-visual rendering responsibilities
+- ExplanationAgent handles fact-based natural-language explanations
+- src/agents/types.py defines the shared typed contracts
+- The agent layer is interface-only at this stage, meaning the responsibilities are defined but the concrete implementations are still the next major step
+
+7. Other supporting modules
+- src/llm_client.py contains LLM connectivity used by extraction and sectioning workflows
+- src/section_splitter.py handles paper section chunking and classification
+- src/model_builder.py, src/unet_builder.py, src/vit_builder.py, and src/transformer_builder.py provide model construction utilities
+- src/utils.py and src/paper2code/ contain shared helper code and package utilities
+- src/paper_to_code_generator.py and related orchestration files connect the pieces into a higher-level paper-to-code workflow
+
+8. Tests and validation
+- The repository includes broad validation coverage in the root test_*.py files
+- Test areas include agent interfaces, comparison logic, edge cases, visual comparison, compatibility, explainers, pipeline behavior, and app behavior
+- Important validation files include test_agent_interfaces.py, test_architecture_comparator.py, test_visual_comparison.py, test_visual_features_complete.py, test_single_arch_mode.py, test_backward_compat.py, test_comparison_explainer.py, test_explainers.py, test_comprehensive_features.py, and test_resnet_vs_vit.py
+- Additional pipeline and config tests also exist for extractor and parser behavior
+
+How the data flows
+
+PDF or paper text
+-> text extraction
+-> section splitting
+-> architecture extraction
+-> schema refinement
+-> code-ready schema generation
+-> graph construction
+-> diagram generation, metric analysis, explanation generation, and UI display
+
+That flow is what makes the project more than a documentation viewer: it is a structured conversion pipeline from paper description to usable, inspectable architecture artifacts.
+
+More detailed pipeline explanation
+
+1. Input acquisition
+- The starting point is a PDF or paper text stored under data/pdfs/
+- main.py reads each paper and extracts raw text into outputs/texts/
+
+2. Section understanding
+- The extracted text is broken into chunks and classified into paper sections
+- This helps isolate the method and architecture description from unrelated paper content
+
+3. Architecture extraction
+- The architecture extractor reads the relevant sections and identifies the model family
+- It produces a raw model specification that captures blocks, connections, channels, and other structural details
+
+4. Normalization and refinement
+- The schema refiners clean up the raw extraction and enforce architecture-specific rules
+- This step reduces noise and corrects inconsistencies so the output is stable enough for later use
+
+5. Code-ready conversion
+- The refined spec is turned into a code-ready schema
+- Family-specific builder files then turn the schema into a model implementation pattern
+
+6. Graph and diagram generation
+- The architecture is represented as a semantic graph
+- That graph is used to render diagrams, highlight bottlenecks, and show structural differences
+
+7. Analysis and explanation
+- Parameter counts and FLOPs estimates are computed
+- Comparison logic identifies meaningful differences between architectures
+- Explanation modules turn those facts into readable summaries
+
+8. Presentation layer
+- The Streamlit app shows the output in a way a user can inspect directly
+- The user can view a single architecture, compare two architectures, and read the generated explanations
+
+Main output folders
+
+- outputs/texts/ stores extracted paper text
+- outputs/sections/ stores section-organized text data
+- outputs/modelspecs/ stores extracted architecture specs
+- outputs/code_ready/ stores refined implementation-ready schemas
+- outputs/code_ready_unet/ stores U-Net-specific refined schemas
+- outputs/diagrams/ stores generated architecture diagrams
+- outputs/generated_scripts/ stores generated Python artifacts when produced
+- outputs/modelspecs/ and outputs/code_ready/ are the most important intermediate stages because they bridge raw extraction and executable generation
+- outputs/diagrams/ is the user-facing visualization output that supports model inspection and comparison
+
+What has been completed so far
+
+- A multi-architecture paper-to-code pipeline is in place
+- Graph-based architecture representation is implemented
+- Model-family support exists for ResNet, U-Net, ViT, and Transformer
+- Deterministic comparison and explanation modules are implemented
+- The Streamlit UI supports interactive visualization and side-by-side comparison
+- The Phase 3.9.B.1 agent interface layer is complete and tested
+- Documentation files describe the architecture, validation, and phase status
+- The visual comparison enhancement phase is also completed, including bottleneck badges, highlight logic, ghost overlay, and legend support
+- The repository contains a formal deliverables index, completion summary, validation checklist, and phase-specific documentation
+- The project already includes multiple demos and a broad test suite, which means the codebase is beyond prototype stage and into a maintained feature set
+
+In other words, the foundation is already built: extraction, structure, refinement, comparison, visualization, explanation, and documentation are all present.
+
+What still appears to be next
+
+- Concrete agent implementations beyond the interface layer
+- Additional end-to-end automation and integration work
+- More explicit error-path, scale, and robustness testing
+- Potential expansion into RAG, batch processing, and richer paper understanding workflows
+
+Short version
+
+paper2code is a deep-learning architecture understanding and generation system that reads paper descriptions, extracts and refines model structure, turns it into graphs and diagrams, estimates complexity, explains design choices, and presents everything in an interactive UI.
+
+If you want the shortest possible description, this project is a paper-to-architecture-to-code pipeline with comparison and visualization built in.
