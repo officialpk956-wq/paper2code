@@ -1,283 +1,366 @@
-# paper2code
+# 🚀 Development Roadmap
 
-**paper2code** is a research-oriented project that converts deep learning research paper architectures into structured, executable code and clear architecture diagrams.  
-It bridges the gap between **research papers** and **practical implementation** by making model architectures explicit, reproducible, and verifiable.
+paper2code is being developed incrementally with a strong emphasis on:
 
----
+- architectural correctness
+- explainability
+- deterministic validation
+- educational transparency
 
-## 🎯 Why paper2code?
-
-Reproducing deep learning papers is often difficult because:
-- Architectures are described informally in papers
-- Implementation details are missing or ambiguous
-- Diagrams are incomplete or inconsistent
-
-paper2code solves this by converting paper-level descriptions into:
-- **Structured schemas** — machine-readable architecture definitions
-- **Executable code** — ready-to-use model representations
-- **Clear diagrams** — visual architecture representations
-- **Semantic graphs** — queryable architecture knowledge
+We intentionally prioritize understanding and reasoning over fully automated black-box generation.
 
 ---
 
-## ✨ Key Features
+## Phase 1 — Strong Architecture Foundations (Current Focus)
 
-### Core Capabilities
-- 📄 **Architecture extraction** from research papers
-- 🏗️ **Modular support** for multiple model families:
-  - ResNet (CNN-based classification)
-  - U-Net (Encoder-decoder segmentation)
-  - Vision Transformer (ViT) (Transformer-based vision)
-  - Transformer (Encoder–Decoder) (Sequence-to-sequence)
-  
-### Advanced Features
-- 🎨 **Automatic diagram generation** with semantic highlighting
-- 📊 **Code-ready schema generation** for implementation
-- 📈 **Parameter counting** and FLOPs estimation
-- ✅ **Model verification** utilities
-- 🔍 **Architecture comparison** between models
-- 💬 **Natural language explanations** of architectural differences
-- 🤖 **Agent system** for parsing, visualization, and explanation (Phase 3.9.B.1)
-- 📄 **Paper to Code** — Direct PDF/arXiv to working PyTorch code generation
+### Goal
+Build a reliable architecture extraction and validation engine based on:
 
-### User Interface
-- 🖥️ **Interactive Streamlit UI** for architecture exploration
-- 🔗 **Side-by-side comparison** with visual highlighting
-- 🎯 **Bottleneck identification** and visual emphasis
-- 📝 **Human-readable explanations** of architectural choices
+- structured extraction
+- graph-based intermediate representations
+- tensor propagation tracking
+- executable validation systems
 
----
+### Current Priorities
+Establish robust foundational templates for:
 
-## 🚀 Quick Start
+- ResNet
+- U-Net
+- Vision Transformer (ViT)
 
-### Installation
-```bash
-pip install -r requirements.txt
-```
+Each architecture family includes:
 
-### Run the Streamlit App
-```bash
-streamlit run app.py
-```
+- graph extraction
+- schema generation
+- tensor tracking
+- executable code generation
+- validation pipelines
+- visualization tooling
 
-### Run Tests
-```bash
-# All agent interface tests
-python test_agent_interfaces.py
-
-# All visual comparison tests
-python run_all_visual_tests.py
-```
+### Current Status
+✅ ResNet Stable  
+✅ U-Net Stable  
+✅ Vision Transformer Hardened & Validated
 
 ---
 
-## CI/CD Pipeline (GitHub Actions)
+## Phase 2 — KAG Expansion
 
-This repository now includes two workflows:
+### Goal
+Transform the platform from a semantic retrieval engine into a hybrid reasoning system using:
 
-- **CI** (`.github/workflows/ci.yml`)
-  - Runs on push and pull request to `main`/`master`
-  - Tests on Python 3.10 and 3.11
-  - Installs dependencies (if `requirements.txt` or `requirements.in` is populated)
-  - Runs compile smoke checks and `pytest -q test_*.py`
+- Knowledge-Augmented Generation (KAG)
+- Knowledge Graphs
+- GraphRAG pipelines
+- architecture ontologies
 
-- **CD** (`.github/workflows/cd.yml`)
-  - Runs after successful CI on `main`/`master` (or manually via workflow_dispatch)
-  - Builds a release tarball artifact
-  - Optionally triggers deployment via webhook
+### Planned Features
 
-### Optional Secret for Deployment
-
-Set this repository secret to enable automatic deployment step:
-
-- `DEPLOY_WEBHOOK_URL` — endpoint invoked by CD workflow with commit metadata
-
-If the secret is not set, the CD workflow still builds and uploads artifacts, then skips deployment.
+- semantic graph reasoning
+- tensor compatibility inference
+- architecture taxonomy mapping
+- graph-validated schema refinement
+- constraint-aware architecture correction
 
 ---
 
-## 📁 Project Structure
+## Phase 3 — Visualization & Interactive Learning
 
-```
-paper2code/
-├── app.py                      # Main Streamlit UI with visual comparison
-├── main.py                     # Legacy entry point
-├── src/
-│   ├── agents/                 # Agent system interfaces (Phase 3.9.B.1)
-│   │   ├── __init__.py
-│   │   ├── types.py            # 30 TypedDict definitions
-│   │   ├── parsing_agent.py    # ParsingAgent interface
-│   │   ├── visualization_agent.py  # VisualizationAgent interface
-│   │   └── explanation_agent.py    # ExplanationAgent interface
-│   ├── comparators/            # Architecture comparison engine
-│   ├── blocks_*.py             # Model building blocks (ResNet, U-Net, ViT, Transformer)
-│   ├── diagram_*.py            # Diagram generation and visualization
-│   ├── schema_*.py             # Schema definitions
-│   ├── schema_refiner_*.py     # Architecture-specific refinement rules
-│   ├── model_builder.py        # Model construction utilities
-│   ├── param_counter.py        # Parameter enumeration
-│   ├── flops_estimator.py      # FLOPs calculation
-│   ├── verify_model.py         # Model validation
-│   └── utils.py                # Utility functions
-├── tests/                      # Test suite
-├── templates/                  # Diagram templates
-├── outputs/                    # Generated outputs (schemas, diagrams, code)
-├── docs/                       # Documentation
-├── requirements.txt            # Python dependencies
-└── README.md
-```
+### Goal
+Turn paper2code into an interactive architecture exploration platform.
+
+### Planned Features
+
+- clickable architecture blocks
+- tensor-flow tracing
+- FLOP hotspot visualization
+- residual-path exploration
+- semantic graph navigation
+- interactive topology inspection
 
 ---
 
-## 🔬 Architecture Support Matrix
+## Phase 4 — Educational Sandbox
 
-| Model | Type | Status | Features |
-|-------|------|--------|----------|
-| **ResNet** | CNN | ✅ Stable | Building blocks, diagram generation, comparison |
-| **U-Net** | Encoder-Decoder | ✅ Stable | Semantic segmentation, encoder/decoder layers |
-| **Vision Transformer (ViT)** | Transformer | ✅ Stable | Patch embedding, attention blocks |
-| **Transformer** | Seq2Seq | ✅ Stable | Multi-head attention, encoder-decoder |
+### Goal
+Create an architecture learning environment for deep learning intuition building.
 
----
+### Planned Features
 
-## 📊 Generated Outputs
-
-The project generates several output types:
-
-### Schemas
-- **code_ready/**: Implementation-ready schemas
-- **modelspecs/**: Full model specifications
-- **sections/**: Modular architecture sections
-
-### Diagrams
-- **diagrams/**: Visual architecture representations
-- **SVG format**: Web-compatible vector graphics
-
-### Code
-- **generated_scripts/**: Executable model code
+- tensor mismatch debugging challenges
+- topology repair tasks
+- memory optimization exercises
+- architecture reconstruction games
+- interactive reasoning workflows
 
 ---
 
-## 🤖 Agent System (Phase 3.9.B.1)
+# ❌ What We Intentionally Avoid
 
-The project includes a clean **three-agent architecture** for future implementation:
+paper2code intentionally avoids:
 
-### ParsingAgent
-Responsible for:
-- Extracting architecture information from papers
-- Parsing schemas into structured representations
-- Validating architecture specifications
+- massive autonomous multi-agent systems
+- heavy ML Ops infrastructure
+- opaque "magic" generation pipelines
+- uncontrolled auto-training systems
+- framework-overgeneralization
 
-### VisualizationAgent
-Responsible for:
-- Rendering architecture diagrams
-- Generating visual cues and highlights
-- Creating semantic graph representations
+The project prioritizes:
 
-### ExplanationAgent
-Responsible for:
-- Generating natural language descriptions
-- Explaining architectural choices
-- Comparing architectures and highlighting differences
+- clarity
+- deterministic reasoning
+- explainability
+- architectural understanding
+- educational transparency
 
-**Status**: Interface design complete (Phase 3.9.B.1). Ready for implementation in Phase 3.9.B.2.
 
-See [AGENT_SYSTEM_DESIGN.md](docs/AGENT_SYSTEM_DESIGN.md) for complete architecture details.
+# 🔥 Vision Transformer (ViT) Pipeline Hardening
 
----
+paper2code now includes a hardened and validated Vision Transformer extraction pipeline.
 
-## 🎨 Visual Comparison Features
-
-### Side-by-Side Comparison
-- Interactive architecture visualization
-- Synchronized graph rendering
-- Detailed parameter comparisons
-
-### Visual Highlighting System
-1. **Bottleneck Badges** — Identifies layers with highest impact
-2. **Compute Highlighting** — Emphasizes parameter-heavy layers
-3. **Scaling Highlighting** — Shows adaptive layers
-4. **Spatial Highlighting** — Marks large spatial dimensions
-5. **Ghost Overlay** — Dims non-matching layers
-
-### Interactive Legend
-- Explains each highlighting type
-- Toggleable layer visibility
-- Comparison context display
+This milestone establishes the project's first fully validated Transformer-based architecture system.
 
 ---
 
-## 🧪 Testing
+## Core Technical Achievements
 
-Comprehensive test suite with 100% pass rate:
+### Transformer-Aware Tensor Tracking
+
+The TensorTracker now supports strict propagation rules for:
+
+- 3D token sequences `(B, N, D)`
+- embedding dimension validation
+- residual compatibility enforcement
+- attention head divisibility checks
+- sequence pooling validation
+
+The system can now detect architectural inconsistencies before executable code generation.
+
+---
+
+### Compiler-Grade Code Generation
+
+The code generation engine now includes:
+
+- deterministic constructor mappings
+- automatic shape-aware layer initialization
+- executable Vision Transformer skeleton generation
+- dedicated `ViTPatchEmbed` module generation
+
+Generated PyTorch code is now structurally executable for standard ViT configurations.
+
+---
+
+### Benchmark Validation Suite
+
+The ViT pipeline is validated using:
 
 ```bash
-# Test agent interfaces
-python test_agent_interfaces.py
-
-# Test visual comparison features
-python test_visual_comparison.py
-
-# Test architecture comparators
-python test_architecture_comparator.py
-
-# Run all visual tests
-python run_all_visual_tests.py
+benchmark_vit_pipeline.py
 ```
 
-**Coverage**: 
-- Agent interface compliance (8 tests)
-- Visual comparison features (10+ test suites)
-- Edge cases and backward compatibility
-- Windows-compatible test harness
+Validated components include:
+
+- graph extraction
+- tensor propagation
+- code generation
+- executable verification
+- embedding consistency
+- residual topology correctness
+- head divisibility constraints
+
+### Current Benchmark Status
+
+✅ End-to-End Engine PASS  
+✅ Embed Dimension Validation PASS  
+✅ Attention Head Divisibility PASS  
+✅ Residual Topology Validation PASS
 
 ---
 
-## 📚 Documentation
+## Key Components Updated
 
-Key documentation files:
-- **AGENT_SYSTEM_DESIGN.md** — Complete agent architecture
-- **PHASE_3_9_B_1_COMPLETE.md** — Phase completion report
-- **IMPLEMENTATION_SUMMARY_VISUAL_COMPARISON.md** — Visual features guide
-- **VALIDATION_CHECKLIST.md** — QA verification checklist
-- **GITHUB_PUSH_SUMMARY.md** — Latest push summary
+### Tensor Reasoning
 
----
+```text
+src/rag/tensor_tracker.py
+```
 
-## 💾 About Data and Generated Files
-
-This repository intentionally does **not** include:
-- Datasets (`data/`)
-- Trained models (`models/`)
-- Generated outputs (`outputs/`) — *except templates and reference schemas*
-- Large experiment artifacts
-
-This keeps the repository:
-- ✅ Lightweight and focused on code
-- ✅ Free from copyrighted materials
-- ✅ Reproducible through provided scripts
-
-**All diagrams, schemas, and models** can be regenerated locally using the provided scripts.
+Added:
+- 3D token propagation
+- sequence-aware validation
+- attention compatibility enforcement
 
 ---
 
-## 🔗 Project Timeline
+### Code Generation
 
-| Phase | Status | Details |
-|-------|--------|---------|
-| **3.9.A** | ✅ Complete | Visual comparison UI with highlighting and bottleneck identification |
-| **3.9.B.1** | ✅ Complete | Agent interface design (ParsingAgent, VisualizationAgent, ExplanationAgent) |
-| **3.9.B.2** | 🔜 Next | Concrete agent implementations |
-| **3.9.C** | 📋 Planned | RAG integration and batch processing |
+```text
+src/codegen.py
+```
 
----
-
-## 📧 Contact
-
-For questions or issues, please open a GitHub issue.
+Added:
+- `ViTPatchEmbed`
+- deterministic tensor-aware initialization
+- Transformer-aware constructor logic
 
 ---
 
-**Last Updated**: February 4, 2026  
-**Status**: ✅ Production Ready (Phase 3.9.B.1 Complete)  
-**Repository**: https://github.com/officialpk956-wq/paper2code
+### Validation Infrastructure
+
+```text
+benchmark_vit_pipeline.py
+```
+
+Provides:
+- deterministic validation benchmarks
+- structural consistency verification
+- execution validation
+
+---
+
+## Current Status
+
+Status: ✅ Stable and Passing
+
+Blockers: None
+
+---
+
+## Next Planned Extensions
+
+- frontend tensor-hover integration
+- tensor mismatch auto-correction agent
+- Llama-style architecture builders
+- Mixture-of-Experts (MoE) support
+- graph-aware Transformer reasoning
+
+
+# 🧠 KAG + GraphRAG Vision
+
+paper2code is evolving beyond traditional Retrieval-Augmented Generation (RAG).
+
+The long-term direction is a hybrid reasoning engine that combines:
+
+- semantic retrieval
+- symbolic graph reasoning
+- architecture ontologies
+- deterministic structural validation
+
+---
+
+## Current Limitation of Traditional RAG
+
+Standard RAG pipelines rely heavily on semantic similarity.
+
+This works well for explicit textual descriptions but struggles with:
+
+- implicit architectural hierarchies
+- topology reasoning
+- tensor compatibility
+- structural constraints
+- historical architecture relationships
+
+---
+
+## Future Hybrid Pipeline
+
+### Current Pipeline
+
+```text
+PDF → Text Chunks → Vector Search → LLM → JSON Schema
+```
+
+### Future GraphRAG Pipeline
+
+```text
+PDF
+  ↓
+Text Extraction
+  ↓
+Entity Linking
+  ↓
+Hybrid Retrieval (Vector + Graph)
+  ↓
+Graph-Augmented Reasoning
+  ↓
+Validated Architecture Schema
+  ↓
+Executable Code Generation
+```
+
+---
+
+## Knowledge Graph Objectives
+
+The Knowledge Graph will model:
+
+### Architectures
+- ResNet
+- ViT
+- DDPM
+- YOLO
+- ConvNeXt
+- U-Net
+
+### Modules
+- SelfAttention
+- ResidualBlock
+- MLPBlock
+- DepthwiseConv
+- PatchEmbedding
+
+### Relationships
+- CONTAINS
+- INHERITS_FROM
+- IS_ALTERNATIVE_TO
+- SCALES_QUADRATICALLY_WITH
+
+---
+
+## Why KAG Matters
+
+The graph layer enables:
+
+- hallucination reduction
+- architecture-aware reasoning
+- tensor constraint enforcement
+- structural consistency checking
+- reusable component retrieval
+
+Instead of generating code blindly, the engine retrieves verified architectural implementations linked to graph entities.
+
+---
+
+## Planned Tech Stack
+
+### Graph Database
+- Neo4j
+- NetworkX
+
+### Retrieval Layer
+- Hybrid Vector + Graph Retrieval
+- Graph neighborhood expansion
+- Semantic + symbolic context merging
+
+### Visualization
+- interactive architecture graph explorer
+- ontology-aware topology navigation
+- historical architecture lineage tracing
+
+
+# 🎯 Project Philosophy
+
+paper2code is not designed to be a fully autonomous "AI engineer."
+
+The goal is to build a system that helps researchers, students, and engineers:
+
+- understand architectures deeply
+- reason about tensor flow
+- validate structural correctness
+- explore architectural design choices
+- bridge theory and implementation
+
+The project prioritizes deterministic reasoning and educational transparency over opaque automation.
+
+
