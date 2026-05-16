@@ -38,6 +38,7 @@ paper2code solves this by converting paper-level descriptions into:
 - 🔍 **Architecture comparison** between models
 - 💬 **Natural language explanations** of architectural differences
 - 🤖 **Agent system** for parsing, visualization, and explanation (Phase 3.9.B.1)
+- 📄 **Paper to Code** — Direct PDF/arXiv to working PyTorch code generation
 
 ### User Interface
 - 🖥️ **Interactive Streamlit UI** for architecture exploration
@@ -67,6 +68,31 @@ python test_agent_interfaces.py
 # All visual comparison tests
 python run_all_visual_tests.py
 ```
+
+---
+
+## CI/CD Pipeline (GitHub Actions)
+
+This repository now includes two workflows:
+
+- **CI** (`.github/workflows/ci.yml`)
+  - Runs on push and pull request to `main`/`master`
+  - Tests on Python 3.10 and 3.11
+  - Installs dependencies (if `requirements.txt` or `requirements.in` is populated)
+  - Runs compile smoke checks and `pytest -q test_*.py`
+
+- **CD** (`.github/workflows/cd.yml`)
+  - Runs after successful CI on `main`/`master` (or manually via workflow_dispatch)
+  - Builds a release tarball artifact
+  - Optionally triggers deployment via webhook
+
+### Optional Secret for Deployment
+
+Set this repository secret to enable automatic deployment step:
+
+- `DEPLOY_WEBHOOK_URL` — endpoint invoked by CD workflow with commit metadata
+
+If the secret is not set, the CD workflow still builds and uploads artifacts, then skips deployment.
 
 ---
 
