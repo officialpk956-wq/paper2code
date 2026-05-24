@@ -8,11 +8,15 @@ ArchitectureGraph to ensure mathematical correctness and compatibility.
 
 from typing import Dict, Tuple, Optional, List, Any
 from src.architecture_graph import ArchitectureGraph, GraphNode
+from src.rag.flops_engine import FLOPsEngine
 import logging
 
 class TensorMismatchError(Exception):
     """Raised when tensor shapes are mathematically incompatible."""
-    pass
+    def __init__(self, message: str, node_id: str, upstream_path: List[str] = None):
+        super().__init__(message)
+        self.node_id = node_id
+        self.upstream_path = upstream_path or []
 
 # Configure logging for tensor flow tracking
 logging.basicConfig(level=logging.INFO)
@@ -20,10 +24,16 @@ logger = logging.getLogger("TensorTracker")
 
 class TensorTracker:
     def __init__(self):
-        # Default starting shape if unknown (B, C, H, W)
+        # Default starting shapes
         self.default_vision_shape = ("B", 3, 224, 224)
         self.default_sequence_shape = ("B", 196, 768)
         self.trace: List[str] = []
+        # Structured cross-attention events for the visualizer
+        self.cross_attention_events: List[Dict[str, Any]] = []
+        # Per-layer FLOPs / memory results
+        self.flops_events: List[Dict[str, Any]] = []
+        self._flops_engine = FLOPsEngine()
+        self.dependency_chains: Dict[str, List[str]] = {}
 
     # --- Utility Methods for Reusability ---
     
@@ -34,7 +44,9 @@ class TensorTracker:
         if dim % num_heads != 0:
             raise TensorMismatchError(
                 f"Multi-head Error at {node_id}: Dimension {dim} is not divisible by {num_heads} heads. "
-                f"Each head would have a non-integer size."
+                f"Each head would have a non-integer size. Transformer heads must divide the d_model dimension evenly.",
+                node_id=node_id,
+                upstream_path=self.dependency_chains.get(node_id, [])
             )
 
     def _resolve_reshape(self, node_id: str, in_shape: tuple, target_shape: list) -> tuple:
@@ -68,90 +80,153 @@ class TensorTracker:
              
         return tuple(target_shape)
 
-    def log_step(self, node_id: str, node_type: str, in_shape: tuple, out_shape: tuple):
+    def log_step(self, node_id: str, node_type: str, in_shape: tuple, out_shape: tuple,
+                 extra: Optional[Dict[str, Any]] = None):
         msg = f"[Trace] {node_id} ({node_type}): {in_shape} -> {out_shape}"
         self.trace.append(msg)
         logger.info(msg)
 
+    def _log_flops(self, node: GraphNode, in_shape: tuple, out_shape: tuple):
+        """Compute and store FLOPs/memory for a node via FLOPsEngine."""
+        try:
+            result = self._flops_engine.estimate(
+                node_id=node.id,
+                node_type=node.type,
+                in_shape=in_shape,
+                out_shape=out_shape,
+                params=node.params or {},
+                label=node.label,
+            )
+            self.flops_events.append(result.to_dict())
+        except Exception:
+            pass   # FLOPs engine is best-effort
+
+        # Attach trace, cross-attention events, and FLOPs events to metadata
+        graph.metadata["tensor_trace"] = self.trace
+        graph.metadata["cross_attention_events"] = self.cross_attention_events
+        graph.metadata["flops_events"] = self.flops_events
+
     def propagate_shapes(self, graph: ArchitectureGraph, initial_shape: Optional[tuple] = None) -> None:
         """
         Perform a forward pass simulation through the graph to track tensor shapes.
-        Validates connections and prevents impossible topologies.
         """
+        self.trace = []
+        self.cross_attention_events = []
+        self.flops_events = []
+        self.dependency_chains = {}
+        
         if not graph.nodes:
             return
 
-        # Infer initial shape from first node if not provided
         if not initial_shape:
-            if "attention" in graph.nodes[0].type or "transformer" in graph.nodes[0].type:
+            if any(t in graph.nodes[0].type for t in ["attention", "transformer", "bert", "gpt"]):
                 initial_shape = self.default_sequence_shape
             else:
                 initial_shape = self.default_vision_shape
 
-        # A mapping of node ID to its resolved output shape
         shape_memory: Dict[str, tuple] = {}
-        
-        # Build dependency graph
         dependencies = {n.id: [] for n in graph.nodes}
         for edge in graph.edges:
             if edge.target in dependencies:
                 dependencies[edge.target].append(edge.source)
 
-        for node in graph.nodes:
-            # 1. Gather Input Shapes
-            input_shapes = []
-            if not dependencies[node.id]:
-                input_shapes.append(initial_shape)
-            else:
-                for src in dependencies[node.id]:
-                    if src in shape_memory:
-                        input_shapes.append(shape_memory[src])
+        try:
+            for node in graph.nodes:
+                # 1. Gather Input Shapes and Build Dependency Chains
+                input_shapes = []
+                chain = []
+                if not dependencies[node.id]:
+                    input_shapes.append(initial_shape)
+                else:
+                    for src in dependencies[node.id]:
+                        if src in shape_memory:
+                            input_shapes.append(shape_memory[src])
+                            chain.append(src)
+                            chain.extend(self.dependency_chains.get(src, []))
+                
+                # Deduplicate and store chain
+                self.dependency_chains[node.id] = list(set(chain))
 
-            if not input_shapes:
-                continue
+                if not input_shapes:
+                    continue
 
-            # If node receives multiple inputs (e.g. Skip Connection / Concat)
-            if len(input_shapes) > 1:
-                # Merge shapes (for now assume add/residual merges to same shape)
-                main_shape = input_shapes[0]
-                for s in input_shapes[1:]:
-                    if s != main_shape:
-                        # Stricter check: All dimensions except Batch must match
-                        if s[1:] != main_shape[1:]:
-                            raise TensorMismatchError(
-                                f"Topology Error at {node.id} ({node.type}): "
-                                f"Cannot merge tensors with different spatial dimensions: {main_shape} vs {s}"
-                            )
-                node.input_shape = main_shape
+                # 2. Validation & Processing
+                if len(input_shapes) > 1:
+                    if node.type == "cross_attention":
+                        if len(input_shapes) != 2:
+                             raise TensorMismatchError(f"Cross-Attention Error: Expected 2 inputs (Q, KV), got {len(input_shapes)}", node.id, self.dependency_chains[node.id])
+                        q_shape, kv_shape = input_shapes[0], input_shapes[1]
+                        if q_shape[-1] != kv_shape[-1]:
+                             raise TensorMismatchError(f"Cross-Attention Error: Embed dim mismatch. Q: {q_shape[-1]}, KV: {kv_shape[-1]}", node.id, self.dependency_chains[node.id])
+                        node.input_shape = q_shape
+                    else:
+                        main_shape = input_shapes[0]
+                        for s in input_shapes[1:]:
+                            if node.type == "residual_add" and s[1:] != main_shape[1:]:
+                                raise TensorMismatchError(
+                                    f"Residual connection failed because branch A outputs {main_shape} while branch B outputs {s}. Dimensions must match exactly for addition.",
+                                    node.id, self.dependency_chains[node.id]
+                                )
+                        node.input_shape = main_shape
+                else:
+                    node.input_shape = input_shapes[0]
 
-            else:
-                node.input_shape = input_shapes[0]
+                # 3. Compute Output Shape
+                node.output_shape = self._compute_output_shape(node, node.input_shape)
+                shape_memory[node.id] = node.output_shape
+                self.log_step(node.id, node.type, node.input_shape, node.output_shape)
+                self._log_flops(node, node.input_shape, node.output_shape)
 
-            # 2. Compute Output Shape
-            node.output_shape = self._compute_output_shape(node, node.input_shape)
-            shape_memory[node.id] = node.output_shape
-            self.log_step(node.id, node.type, node.input_shape, node.output_shape)
-            
-        # Attach trace to graph metadata for inspection
+        except TensorMismatchError as e:
+            # Catch and store failure info in metadata
+            graph.metadata["failure"] = {
+                "node_id": e.node_id,
+                "message": str(e),
+                "upstream_path": e.upstream_path
+            }
+            logger.warning(f"Propagation failed at {e.node_id}: {str(e)}")
+
+        # Attach events to metadata
         graph.metadata["tensor_trace"] = self.trace
+        graph.metadata["cross_attention_events"] = self.cross_attention_events
+        graph.metadata["flops_events"] = self.flops_events
 
-    def _compute_output_shape(self, node: GraphNode, in_shape: tuple) -> tuple:
+    def _compute_output_shape(self, node: GraphNode, in_shape: Any) -> tuple:
         """Apply mathematical rules for specific layers to determine output shape."""
         
+        if node.type == "attention_scores":
+            # in_shape is (q_shape, k_shape)
+            # Example: q_shape = (B, H, N_q, D_H), k_shape = (B, H, N_k, D_H)
+            q_shape, k_shape = in_shape
+            if len(q_shape) != 4 or len(k_shape) != 4:
+                raise TensorMismatchError(f"Attention Scores Error at {node.id}: Expected 4D inputs, got {q_shape} and {k_shape}")
+            B, H, N_q, D_H = q_shape
+            _, _, N_k, _ = k_shape
+            return (B, H, N_q, N_k)
+
+        # Standard processing for single input shapes
+        if not isinstance(in_shape, tuple) or (len(in_shape) > 0 and isinstance(in_shape[0], tuple)):
+            # Fallback if somehow we got here with weird types
+            return in_shape
+
         # --- Strict Dimensionality Checks (ViT specific) ---
         if node.type == "clstoken":
             if len(in_shape) != 3:
                 raise TensorMismatchError(f"CLS Token Error at {node.id}: Expected 3D input (B, N, D), got {in_shape}")
             return (in_shape[0], in_shape[1] + 1, in_shape[2])
 
-        if node.type == "positionalembedding":
-            if len(in_shape) != 3:
-                raise TensorMismatchError(f"Positional Embedding Error at {node.id}: Expected 3D input (B, N, D), got {in_shape}")
-            # Validate consistency if parameters are provided
-            expected_dim = node.params.get("embed_dim") or node.params.get("embedding_dim")
-            if expected_dim and expected_dim != in_shape[2]:
-                raise TensorMismatchError(f"Positional Embedding Error at {node.id}: Dimension mismatch. Expected dim {expected_dim}, got {in_shape[2]}")
-            return in_shape
+        # Sequence Embeddings (B, N) -> (B, N, D) or (B, N, D) -> (B, N, D)
+        if node.type in ["token_embedding", "positionalembedding", "segment_embedding", "positional_embedding"]:
+            expected_dim = node.params.get("embed_dim") or node.params.get("embedding_dim", 768)
+            if len(in_shape) == 2:
+                # E.g. (B, SeqLen) input -> (B, SeqLen, D)
+                return (in_shape[0], in_shape[1], expected_dim)
+            elif len(in_shape) == 3:
+                if in_shape[2] != expected_dim:
+                    raise TensorMismatchError(f"Embedding Error at {node.id}: Dimension mismatch. Expected dim {expected_dim}, got {in_shape[2]}")
+                return in_shape
+            else:
+                 raise TensorMismatchError(f"Embedding Error at {node.id}: Expected 2D or 3D input, got {in_shape}")
 
         # Handle 4D Vision Tensors: (B, C, H, W)
         if len(in_shape) == 4:
@@ -190,6 +265,12 @@ class TensorTracker:
                 target = node.params.get("shape")
                 if not target: return in_shape
                 return self._resolve_reshape(node.id, in_shape, list(target))
+                
+            if node.type == "causal_mask":
+                # For 4D attention scores (B, H, N_q, N_k)
+                if in_shape[2] != in_shape[3] and node.params.get("strict_square", True):
+                    raise TensorMismatchError(f"Causal Mask Error at {node.id}: Expected square attention matrix for masking, got {in_shape[2]}x{in_shape[3]}")
+                return in_shape
 
         # Handle 2D/3D/4D/5D generic Transformer Tensors
         B = in_shape[0]
@@ -222,14 +303,22 @@ class TensorTracker:
             return self._resolve_reshape(node.id, in_shape, list(target))
 
         # --- Sequence / Feature Operations ---
-        if node.type in ["linear", "query_projection", "key_projection", "value_projection", "attention_merge", "feedforward"]:
+        if node.type in ["linear", "query_projection", "key_projection", "value_projection", "attention_merge"]:
             out_features = node.params.get("hidden_size", node.params.get("channels", in_shape[-1]))
             return (*in_shape[:-1], out_features)
             
-        if node.type in ["multiheadattention", "transformerblock", "mhsa"]:
+        if node.type == "feedforward":
+            out_features = node.params.get("embed_dim", node.params.get("hidden_size", in_shape[-1]))
+            return (*in_shape[:-1], out_features)
+            
+        if node.type in ["multiheadattention", "transformerblock", "mhsa", "cross_attention"]:
             num_heads = node.params.get("num_heads", 8)
             dim = in_shape[-1]
             self._validate_head_divisibility(node.id, dim, num_heads)
+            
+            causal = node.params.get("causal", False)
+            if causal and node.type == "cross_attention":
+                raise TensorMismatchError(f"Cross-Attention Error at {node.id}: Cross-attention typically shouldn't be causal autoregressive.")
             return in_shape
 
         if node.type in ["residual_add", "layernorm"]:
@@ -257,7 +346,6 @@ class TensorTracker:
         if len(in_shape) in [2, 3]:
             if node.type == "conv2d":
                 raise TensorMismatchError(f"Tensor Shape Error: Cannot pass flat tensor {in_shape} into spatial Conv2D layer ({node.id}).")
-
 
         # Fallback (Pass-through)
         return in_shape
