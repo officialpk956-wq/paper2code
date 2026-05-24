@@ -1,5 +1,6 @@
 """Rule-based semantic explainer for architecture graphs."""
 
+from typing import List
 from src.architecture_graph import GraphNode, ArchitectureGraph
 
 
@@ -97,5 +98,49 @@ def explain_graph(graph: ArchitectureGraph) -> str:
         lines.append("\nDesign pattern: Encoder-decoder with skip connections for feature restoration.")
     elif "Transformer" in graph.name or "ViT" in graph.name:
         lines.append("\nDesign pattern: Transformer-based architecture using self-attention for global reasoning.")
-    
+
+    # KAG Symbolic Reasoning — Motif Detection & Topology Verification
+    try:
+        from src.rag.knowledge_graph import KnowledgeGraph
+        kg = KnowledgeGraph()
+
+        motifs = kg.detect_motifs(graph)
+        anomalies = kg.verify_topology(graph)
+
+        if motifs:
+            lines.append("\n\n### KAG Motif Recognition")
+            for m in motifs:
+                lines.append(f"\n- ✅ Detected: **{m}**")
+
+        if anomalies:
+            lines.append("\n\n### KAG Topology Anomalies")
+            for a in anomalies:
+                lines.append(f"\n- ⚠️ {a}")
+
+        # Optimization Advice
+        flops_events = graph.metadata.get("flops_events", [])
+        advice = []
+        if flops_events:
+            total_flops = sum(e.get("flops_mflops", 0) for e in flops_events)
+            critical_layers = [e for e in flops_events if e.get("severity") == "critical"]
+            
+            if critical_layers:
+                advice.append(f"Found {len(critical_layers)} layers with critical computational cost.")
+                for cl in critical_layers:
+                    if "attention" in cl["node_type"].lower():
+                        advice.append(f"  - Optimization: Use **Flash Attention** or **Linear Attention** for '{cl['node_id']}' to reduce quadratic O(N²) complexity.")
+                    elif "conv" in cl["node_type"].lower():
+                        advice.append(f"  - Optimization: Consider **Depthwise Separable Convolutions** to reduce the FLOPs/Params ratio for '{cl['node_id']}'.")
+            
+            if total_flops > 5000: # 5 GFLOPs threshold
+                advice.append(f"Overall model complexity is high ({total_flops/1000:.1f} GFLOPs). Consider **Pruning** or **Weight Distillation**.")
+
+        if advice:
+            lines.append("\n\n### KAG Optimization Advice")
+            for ad in advice:
+                lines.append(f"\n{ad}")
+
+    except Exception:
+        pass  # KAG is best-effort; never crash the pipeline
+
     return "".join(lines)
