@@ -18,7 +18,7 @@ from src.agents.types import ConfigDict
 from src.rag.normalizer import normalize_config
 from src.rag.section_splitter import get_architecture_text, chunk_for_retrieval
 from src.rag.retriever import retrieve_and_merge
-from src.rag.knowledge_graph import DeepLearningOntology
+from src.rag.knowledge_graph import KnowledgeGraph
 
 try:
     from src.llm_client import llm_complete
@@ -263,7 +263,7 @@ class ConfigExtractor:
         self.use_retriever = use_retriever
         self.verify = verify and use_llm and _HAS_LLM
         self.max_context_chars = max_context_chars
-        self.ontology = DeepLearningOntology()
+        self.ontology = KnowledgeGraph()
 
     # ------------------------------------------------------------------
     # Public API
