@@ -24,6 +24,8 @@ from src.agents import (
     VisualizationOptions,
 )
 from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
+from src.rag.knowledge_graph import KnowledgeGraph
+from src.rag.diff_engine import GraphDiffEngine
 from src.comparators import (
     summarize_compute,
     summarize_spatial_behavior,
@@ -58,6 +60,8 @@ class Paper2CodePipeline:
         self.visualizer = visualization_agent or DefaultVisualizationAgent()
         self.explainer = explanation_agent or DefaultExplanationAgent()
         self.tensor_tracker = TensorTracker()
+        self.knowledge_graph = KnowledgeGraph()
+        self.diff_engine = GraphDiffEngine()
 
         # Optional caching for text-based inputs
         self._text_cache: Dict[str, Dict[str, Any]] = {}
@@ -109,10 +113,27 @@ class Paper2CodePipeline:
         try:
             self.tensor_tracker.propagate_shapes(graph)
         except TensorMismatchError as e:
-            # We embed the topological error into metadata for educational inspection
             if not hasattr(graph, "metadata"):
                 graph.metadata = {}
             graph.metadata["validation_warning"] = str(e)
+
+        # 1.6 KAG Symbolic Reasoning (Phase 2 — Motif + Topology)
+        kag_motifs: list = []
+        kag_anomalies: list = []
+        kag_semantic_roles: dict = {}
+        try:
+            kag_motifs = self.knowledge_graph.detect_motifs(graph)
+            kag_anomalies = self.knowledge_graph.verify_topology(graph)
+            # Collect semantic roles for every node
+            for node in graph.nodes:
+                role = self.knowledge_graph.get_semantic_role(node.type.lower())
+                if role:
+                    kag_semantic_roles[node.id] = role
+                    # Back-annotate so explain_node picks it up
+                    if "semantic_role" not in node.semantic_params:
+                        node.semantic_params["semantic_role"] = role
+        except Exception:
+            pass  # KAG is best-effort
 
         visual = self.visualizer.render(graph, mode="single", options=vis_options)
         explanation = self.explainer.explain_graph(graph)
@@ -131,6 +152,9 @@ class Paper2CodePipeline:
             "visual": visual,
             "explanation": explanation,
             "metadata": metadata,
+            "kag_motifs": kag_motifs,
+            "kag_anomalies": kag_anomalies,
+            "kag_semantic_roles": kag_semantic_roles,
         }
 
         return result
@@ -181,8 +205,8 @@ class Paper2CodePipeline:
         spatial_b = summarize_spatial_behavior(graph_b)
         scaling_b = summarize_scaling_behavior(graph_b)
 
-        # Compare graphs (pure function)
-        comparison_result = compare_graphs(graph_a, graph_b)
+        # Compare graphs using the new Diff Engine
+        comparison_result = self.diff_engine.compare(graph_a, graph_b)
 
         # Derive comparison contexts (direct from summaries, no new logic)
         dominant_compute = (
