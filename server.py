@@ -28,6 +28,10 @@ class CompareRequest(BaseModel):
     text_a: str
     text_b: str
 
+class GraphRequest(BaseModel):
+    name: str = "Architect Session"
+    layers: list[Dict[str, Any]]
+
 @app.get("/")
 def read_root():
     return FileResponse("static/index.html")
@@ -66,7 +70,13 @@ def _build_response(spec, result, code, code_source):
             "params": metrics["total_params_estimate"],
             "depth": metrics["depth"],
             "memory_mb": round(total_mem_mb, 1)
-        }
+        },
+        "tensor_trace": graph.metadata.get("tensor_trace", []),
+        "cross_attention_events": graph.metadata.get("cross_attention_events", []),
+        "flops_events": graph.metadata.get("flops_events", []),
+        "kag_motifs": result.get("kag_motifs", []),
+        "kag_anomalies": result.get("kag_anomalies", []),
+        "kag_semantic_roles": result.get("kag_semantic_roles", {}),
     }
 
 @app.post("/api/parse_pdf")
@@ -111,6 +121,34 @@ def compare_text(request: CompareRequest):
             "metadata": result["metadata"]
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze_graph")
+def analyze_graph(request: GraphRequest):
+    try:
+        # Normalize the layers received from the frontend
+        # The frontend sends: [{"type": "Conv2D", "params": {...}}, ...]
+        # Pipeline expects normalized ConfigDict.
+        
+        # We'll use the normalizer directly
+        from src.rag.normalizer import normalize_config
+        config = normalize_config({
+            "name": request.name,
+            "layers": request.layers
+        })
+        
+        # Run pipeline starting from config (bypassing extraction)
+        result = pipeline.run_single(request.name, config)
+        
+        return _build_response(
+            spec={"model_family": "Architect"}, 
+            result=result, 
+            code=result.get("code", ""), 
+            code_source="Architect Session"
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
