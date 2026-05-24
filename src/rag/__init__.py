@@ -10,6 +10,8 @@ Modules:
   symbolic_parser    - Symbolic notation parser (Conv(64)->ReLU->...)
   section_splitter   - Section-aware PDF text focusing (R2)
   retriever          - BM25 retrieval for large context reduction (R2)
+  knowledge_graph    - KAG symbolic architecture reasoning engine
+  semantic_explainer - Deterministic educational explanations
 """
 
 from src.rag.config_extractor import (
@@ -26,6 +28,8 @@ from src.rag.section_splitter import (
     score_chunks_by_density,
 )
 from src.rag.retriever import retrieve_top_chunks, retrieve_and_merge
+from src.rag.knowledge_graph import KnowledgeGraph
+from src.rag.semantic_explainer import SemanticExplainer
 
 __all__ = [
     # Core extraction
@@ -44,4 +48,7 @@ __all__ = [
     # BM25 retrieval
     "retrieve_top_chunks",
     "retrieve_and_merge",
+    # KAG reasoning
+    "KnowledgeGraph",
+    "SemanticExplainer",
 ]
