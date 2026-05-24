@@ -24,7 +24,7 @@ CANONICAL_TYPES = {
     "residualblock",
     "ssm", "patchembedding", "clstoken", "positionalembedding", "flatten",
     "query_projection", "key_projection", "value_projection", "attention_merge",
-    "residual_add", "feedforward"
+    "residual_add", "feedforward", "causal_attention", "cross_attention", "sequence_pooling"
 }
 
 # Comprehensive type synonym map: any variant → canonical type
@@ -91,6 +91,13 @@ _SYNONYM_MAP = {
     "mha": "multiheadattention",
     "mhsa": "multiheadattention",
     "multiheadselfattention": "multiheadattention",
+    "causalattention": "causal_attention",
+    "causal_attention": "causal_attention",
+    "crossattention": "cross_attention",
+    "cross_attention": "cross_attention",
+    "sequencepooling": "sequence_pooling",
+    "sequence_pooling": "sequence_pooling",
+    "global_pool": "globalavgpool2d",
 
     # Transformer variants
     "transformer": "transformerblock",
@@ -198,6 +205,10 @@ _PARAM_MAP = {
     "hidden_dim": "hidden_size",
     "units": "hidden_size",
     "num_units": "hidden_size",
+    "d_model": "embed_dim",
+    "heads": "num_heads",
+    "num_heads": "num_heads",
+    "attention_heads": "num_heads",
 }
 
 
