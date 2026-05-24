@@ -92,11 +92,24 @@ def _parse_params(raw: str) -> Dict[str, Any]:
         return {}
 
     result = {}
-    POSITIONAL_KEYS = ["channels", "kernel_size", "stride", "padding"]
-    pos_idx = 0
-
     parts = [p.strip() for p in raw.split(",")]
+    
+    # Context-aware positional keys
+    type_lower = "" # We don't have type here easily, so we check canonical list
+    POSITIONAL_KEYS = ["channels", "kernel_size", "stride", "padding"]
+    
+    # If the first part looks like a large number (e.g. 512) and it's followed by a small number (e.g. 8),
+    # it's likely a Transformer (embed_dim, num_heads).
+    if len(parts) >= 2:
+        try:
+            val1 = int(parts[0])
+            val2 = int(parts[1])
+            if val1 >= 32 and val2 <= 64: # Heuristic for (dim, heads)
+                POSITIONAL_KEYS = ["embed_dim", "num_heads"]
+        except ValueError:
+            pass
 
+    pos_idx = 0
     for part in parts:
         if "=" in part:
             # Key=value format
