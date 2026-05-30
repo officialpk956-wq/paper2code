@@ -1509,5 +1509,5 @@ Built with ❤️ for researchers, engineers, and students who want to understan
 <div align="center">
   <h3>⭐ If Paper2Code helped you, please star the repository! ⭐</h3>
   <p>Questions? Open an issue or start a discussion on GitHub.</p>
-  <i>Built with ❤️ for the AI Research Community.</i>
+  <i></i>
 </div>
