@@ -6,9 +6,9 @@ from typing import Dict, Any
 # Add the project root to sys.path
 sys.path.append(os.getcwd())
 
-from src.rag.semantic_explainer import SemanticExplainer
-from src.rag.knowledge_graph import KnowledgeGraph
-from src.architecture_graph import ArchitectureGraph, GraphNode
+from core.rag.semantic_explainer import SemanticExplainer
+from core.rag.knowledge_graph import KnowledgeGraph
+from core.architecture_graph import ArchitectureGraph, GraphNode
 
 def validate_kag_system():
     print("=== KAG Semantic Explanation System Validation ===\n")

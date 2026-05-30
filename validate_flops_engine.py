@@ -2,9 +2,9 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.rag.flops_engine import FLOPsEngine
-from src.rag.tensor_tracker import TensorTracker
-from src.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+from core.rag.flops_engine import FLOPsEngine
+from core.rag.tensor_tracker import TensorTracker
+from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
 
 eng = FLOPsEngine()
 

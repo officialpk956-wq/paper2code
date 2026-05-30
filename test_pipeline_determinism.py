@@ -4,7 +4,7 @@ Determinism validation for Paper2CodePipeline.
 Ensures pipeline produces identical results for identical inputs.
 """
 
-from src.orchestrator import Paper2CodePipeline
+from core.orchestrator import Paper2CodePipeline
 
 
 def test_single_determinism():

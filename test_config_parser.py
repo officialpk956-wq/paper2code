@@ -2,7 +2,7 @@
 Quick test for ConfigParsingAgent.
 """
 
-from src.agents.config_parser import ConfigParsingAgent
+from core.agents.config_parser import ConfigParsingAgent
 
 
 def test_simple_resnet():

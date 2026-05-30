@@ -10,7 +10,7 @@ Verifies:
 - Complete validation
 """
 
-from src.rag import ConfigExtractor
+from core.rag import ConfigExtractor
 
 
 def test_deterministic_output():

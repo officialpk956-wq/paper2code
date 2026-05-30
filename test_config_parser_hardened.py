@@ -3,7 +3,7 @@ Verification tests for ConfigParsingAgent hardening.
 Tests the 5 corrections applied.
 """
 
-from src.agents.config_parser import ConfigParsingAgent
+from core.agents.config_parser import ConfigParsingAgent
 
 
 def test_edge_type_defaults_to_flow():
@@ -181,10 +181,10 @@ def test_no_composite_block_handling():
     rb = next(n for n in graph.nodes if n.id == "rb1")
     assert rb.semantic_params["skip_connection"] == "yes"
 
-    # TransformerBlock is unknown (falls back to defaults)
+    # TransformerBlock is now recognized by the parser (has very high FLOPs)
     tb = next(n for n in graph.nodes if n.id == "tb1")
-    assert tb.semantic_params["flops"] == "low"
-    assert tb.semantic_params["compute_role"] == "unknown"
+    assert tb.semantic_params["flops"] == "very high"
+    assert tb.semantic_params["compute_role"] == "attention"
 
     print("[PASS] Composite blocks treated as flat nodes")
 

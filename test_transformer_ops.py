@@ -1,5 +1,5 @@
-from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-from src.architecture_graph import ArchitectureGraph, GraphNode
+from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+from core.architecture_graph import ArchitectureGraph, GraphNode
 import pytest
 
 def test_transformer_operations():

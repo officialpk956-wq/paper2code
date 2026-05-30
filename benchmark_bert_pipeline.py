@@ -6,9 +6,9 @@ import logging
 
 sys.path.append(os.getcwd())
 
-from src.transformer_builder import TransformerBuilder
-from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-from src.rag.semantic_explainer import SemanticExplainer
+from core.transformer_builder import TransformerBuilder
+from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+from core.rag.semantic_explainer import SemanticExplainer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("BERT-Benchmark")

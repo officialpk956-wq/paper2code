@@ -3,9 +3,9 @@ import os
 
 sys.path.append(os.getcwd())
 
-from src.transformer_builder import TransformerBuilder
-from src.rag.tensor_tracker import TensorTracker
-from src.architecture_graph import ArchitectureGraph
+from core.transformer_builder import TransformerBuilder
+from core.rag.tensor_tracker import TensorTracker
+from core.architecture_graph import ArchitectureGraph
 
 def test_encoder_only_transformer():
     print("=== Testing Encoder-Only Transformer (BERT-like) ===")

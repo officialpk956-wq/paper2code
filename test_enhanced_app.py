@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Test enhanced app.py features."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
 
 # Helper function from app.py
 def generate_reasoning(node) -> str:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Test script for Phase 3.8.3 Semantic Reasoning Hooks."""
 
-from src.explainers import explain_node, explain_graph
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
+from core.explainers import explain_node, explain_graph
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
 
 print("=" * 60)
 print("Phase 3.8.3 Semantic Reasoning Hooks - Verification Test")

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Demo: Human-readable architecture comparisons."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
-from src.comparators import explain_architecture_comparison
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
+from core.comparators import explain_architecture_comparison
 
 print("\n" + "=" * 80)
 print("DEMO: Human-Readable Architecture Comparisons")
