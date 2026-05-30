@@ -7,9 +7,9 @@ Tests:
 - Cache returns identical results
 """
 
-from src.orchestrator.pipeline import Paper2CodePipeline
-from src.rag import ConfigExtractor
-from src.agents.parsing_agent_impl import ParsingAgentImpl
+from core.orchestrator.pipeline import Paper2CodePipeline
+from core.rag import ConfigExtractor
+from core.agents.parsing_agent_impl import ParsingAgentImpl
 
 
 def test_run_from_text_basic():

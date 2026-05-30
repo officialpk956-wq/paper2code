@@ -7,15 +7,15 @@ Validates that:
 - ViT scales worse than ResNet
 """
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_vit import build_vit_graph
-from src.comparators.architecture_comparator import (
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_vit import build_vit_graph
+from core.comparators.architecture_comparator import (
     summarize_compute,
     summarize_spatial_behavior,
     summarize_scaling_behavior,
     compare_graphs
 )
-from src.comparators.comparison_explainer import explain_architecture_comparison
+from core.comparators.comparison_explainer import explain_architecture_comparison
 
 
 def test_resnet_vs_vit_comparison():

@@ -3,18 +3,18 @@ import graphviz
 import pandas as pd
 import os
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
-from src.explainers import explain_node, explain_graph
-from src.comparators import (
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
+from core.explainers import explain_node, explain_graph
+from core.comparators import (
     summarize_compute,
     summarize_spatial_behavior,
     summarize_scaling_behavior,
     explain_architecture_comparison,
 )
-from src.orchestrator.pipeline import Paper2CodePipeline
-from src.paper_to_code_generator import PaperToCodeGenerator
+from core.orchestrator.pipeline import Paper2CodePipeline
+from core.paper_to_code_generator import PaperToCodeGenerator
 
 
 # Check GROQ availability for PDF extraction
@@ -331,7 +331,7 @@ if use_symbolic_input:
         key="symbolic_spec_input"
     )
     if sym_spec:
-        from src.rag.symbolic_parser import parse_symbolic
+        from core.rag.symbolic_parser import parse_symbolic
         try:
             config = parse_symbolic(sym_spec)
             pipeline = Paper2CodePipeline()
@@ -349,7 +349,7 @@ if use_symbolic_input:
                 svg_data = dot_graph.pipe(format='svg').decode('utf-8')
                 st.download_button("⬇️ Download SVG", svg_data, f"{graph.name}.svg", "image/svg+xml", key="svg_sym")
             # Metrics and code gen
-            from src.metrics_estimator import estimate_metrics_from_graph
+            from core.metrics_estimator import estimate_metrics_from_graph
             with st.expander("Compute Metrics", expanded=True):
                 metrics = estimate_metrics_from_graph(graph)
                 c1, c2, c3 = st.columns(3)
@@ -359,7 +359,7 @@ if use_symbolic_input:
                 c3.metric("Depth", metrics["depth"])
                 st.dataframe(pd.DataFrame(metrics["breakdown"]))
             # Code gen
-            from src.codegen import get_pytorch_code
+            from core.codegen import get_pytorch_code
             if st.button("Generate PyTorch Code", key="btn_codegen_sym"):
                 code = get_pytorch_code(graph.name, graph)
                 st.code(code, language="python")
@@ -428,7 +428,7 @@ if use_text_input:
 
         # F3: Compute Metrics
         st.markdown("---")
-        from src.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
+        from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
         with st.expander("Compute Metrics", expanded=True):
             metrics = estimate_metrics_from_graph(graph)
             c1, c2, c3 = st.columns(3)
@@ -448,7 +448,7 @@ if use_text_input:
             st.dataframe(df_mem)
 
         # F5: PyTorch Code Generation
-        from src.codegen import get_pytorch_code
+        from core.codegen import get_pytorch_code
         if st.button("Generate PyTorch Code", key="btn_codegen_text"):
             code = get_pytorch_code(graph.name, graph)
             st.code(code, language="python")
@@ -577,7 +577,7 @@ if _GROQ_AVAILABLE:
                 st.stop()
 
             with st.spinner("Classifying sections..."):
-                from src.section_splitter import process_text
+                from core.section_splitter import process_text
                 try:
                     section_data = process_text(raw_text)
                 except Exception as e:
@@ -585,7 +585,7 @@ if _GROQ_AVAILABLE:
                     st.stop()
 
             with st.spinner("Extracting architecture..."):
-                from src.architecture_extractor import extract_architecture
+                from core.architecture_extractor import extract_architecture
                 paper_name = uploaded_file.name.replace(".pdf", "")
                 try:
                     schema = extract_architecture(section_data, paper_name)
@@ -611,7 +611,7 @@ if _GROQ_AVAILABLE:
                 st.download_button("⬇️ Download SVG", svg_data, f"{graph.name}.svg", "image/svg+xml", key="svg_pdf")
 
             # Metrics
-            from src.metrics_estimator import estimate_metrics_from_graph
+            from core.metrics_estimator import estimate_metrics_from_graph
             with st.expander("Compute Metrics", expanded=True):
                 metrics = estimate_metrics_from_graph(graph)
                 c1, c2, c3 = st.columns(3)
@@ -678,7 +678,7 @@ if "p2c_result" in st.session_state:
         )
 
     # Metrics
-    from src.metrics_estimator import estimate_metrics_from_graph
+    from core.metrics_estimator import estimate_metrics_from_graph
     st.subheader("Architecture Metrics")
     metrics = estimate_metrics_from_graph(graph)
     m1, m2, m3 = st.columns(3)
@@ -794,8 +794,8 @@ with col2:
 
 # F3: Compute Metrics
 st.markdown("---")
-from src.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
-from src.codegen import get_pytorch_code
+from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
+from core.codegen import get_pytorch_code
 with st.expander("Compute Metrics", expanded=True):
     metrics = estimate_metrics_from_graph(graph)
     c1, c2, c3 = st.columns(3)
@@ -1148,7 +1148,7 @@ if arch_a and arch_b:
 st.markdown("---")
 st.header("Multi-Architecture Radar Chart")
 
-from src.radar_chart import compute_radar_scores, build_radar_chart
+from core.radar_chart import compute_radar_scores, build_radar_chart
 
 # Build available architectures list (hardcoded + history)
 available_archs = ["ResNet-18", "U-Net", "Vision Transformer"]

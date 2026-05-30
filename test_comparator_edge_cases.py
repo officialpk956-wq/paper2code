@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Edge case and robustness tests for architecture comparator."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
-from src.comparators import (
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
+from core.comparators import (
     summarize_compute,
     summarize_spatial_behavior,
     summarize_scaling_behavior,
@@ -99,6 +99,30 @@ for name, graph in architectures:
     assert len(scaling["reason"]) > 0
     
     print(f"  ✓ {name}: All reasons are valid strings")
+
+print("\n[Test 7] Case-insensitive behavior for node types and params")
+print("-" * 70)
+from core.architecture_graph import ArchitectureGraph, GraphNode
+
+# Create a graph with mixed case properties
+g_case = ArchitectureGraph("MixedCase")
+g_case.add_node(GraphNode(id="n1", type="CONV2d", label="C1", semantic_params={"flops": "VERY High"}))
+g_case.add_node(GraphNode(id="n2", type="conv2D", label="C2", semantic_params={"skip_connection": "YeS"}))
+g_case.add_node(GraphNode(id="n3", type="Linear", label="L1", semantic_params={"attention": "QUADRATIC"}))
+
+compute_case = summarize_compute(g_case)
+assert compute_case["total_high_flops"] == 1
+assert compute_case["high_flops_nodes"] == ["C1"]
+
+spatial_case = summarize_spatial_behavior(g_case)
+assert spatial_case["spatial_preservation"] == "high"
+assert "skip connection" in spatial_case["reason"].lower()
+
+scaling_case = summarize_scaling_behavior(g_case)
+assert scaling_case["scaling"] == "poor"
+assert "quadratic" in scaling_case["reason"].lower()
+
+print("  ✓ Mixed case node types and semantic parameters are correctly parsed")
 
 print("\n" + "=" * 70)
 print("All Edge Cases Passed ✓")

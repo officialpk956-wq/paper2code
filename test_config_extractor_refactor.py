@@ -10,8 +10,8 @@ Tests:
 """
 
 import pytest
-from src.rag import ConfigExtractor
-from src.rag.normalizer import normalize_config, CANONICAL_TYPES
+from core.rag import ConfigExtractor
+from core.rag.normalizer import normalize_config, CANONICAL_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_empty_type_defaults_to_conv2d():
 
 def test_canonical_types_constant_is_complete():
     """CANONICAL_TYPES must contain all types used in _SYNONYM_MAP values."""
-    from src.rag.normalizer import _SYNONYM_MAP
+    from core.rag.normalizer import _SYNONYM_MAP
 
     all_mapped_values = set(_SYNONYM_MAP.values())
     missing = all_mapped_values - CANONICAL_TYPES

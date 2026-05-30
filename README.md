@@ -195,5 +195,9 @@ We welcome contributions to push the boundaries of deep learning reproducibility
 
 <br/>
 <div align="center">
+<<<<<<< HEAD
   
+=======
+  <i>Built with ❤️ for the AI Research Community.</i>
+>>>>>>> release/paper2code-mvp
 </div>

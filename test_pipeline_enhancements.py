@@ -9,8 +9,8 @@ Tests:
 5. Backward compatibility (no breaking changes)
 """
 
-from src.orchestrator.pipeline import Paper2CodePipeline
-from src.rag import ConfigExtractor, preprocess_text
+from core.orchestrator.pipeline import Paper2CodePipeline
+from core.rag import ConfigExtractor, preprocess_text
 
 
 def test_cache_key_normalization():
@@ -86,7 +86,8 @@ def test_layer_cap_below_max():
 
 def test_repeat_metadata_in_explanation():
     """Task 3: Repeat patterns should appear in explanation."""
-    pipeline = Paper2CodePipeline()
+    from core.agents import ParsingAgentImpl
+    pipeline = Paper2CodePipeline(parsing_agent=ParsingAgentImpl(use_llm=False))
 
     # Extract from text that contains multi-block patterns
     text = "3 residual blocks then 2 conv layers"
@@ -230,7 +231,8 @@ def test_cache_stability_across_runs():
 
 def test_comparison_from_text_integration():
     """Task 4: run_comparison_from_text should work end-to-end."""
-    pipeline = Paper2CodePipeline()
+    from core.agents import ParsingAgentImpl
+    pipeline = Paper2CodePipeline(parsing_agent=ParsingAgentImpl(use_llm=False))
 
     text_a = "Conv2D then Linear"
     text_b = "Conv2D then MaxPool then Linear"
@@ -251,7 +253,8 @@ def test_comparison_from_text_integration():
 
 def test_no_logic_duplication():
     """Task 5: Verify no logic duplication in enhancements."""
-    pipeline = Paper2CodePipeline()
+    from core.agents import ParsingAgentImpl
+    pipeline = Paper2CodePipeline(parsing_agent=ParsingAgentImpl(use_llm=False))
     extractor = ConfigExtractor(use_llm=False)
 
     text = "Conv2D with 64 channels then Linear"

@@ -3,8 +3,8 @@ import os
 
 sys.path.append(os.getcwd())
 
-from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-from src.architecture_graph import ArchitectureGraph, GraphNode
+from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+from core.architecture_graph import ArchitectureGraph, GraphNode
 
 def test_causal_mask_and_scores():
     print("=== Testing Causal Mask & Attention Scores ===")

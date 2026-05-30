@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Quick demo of architecture comparison engine."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_vit import build_vit_graph
-from src.comparators import compare_graphs
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_vit import build_vit_graph
+from core.comparators import compare_graphs
 
 # Compare ResNet vs Vision Transformer
 resnet = build_resnet18_graph()
