@@ -6,10 +6,10 @@ import logging
 import sys
 from typing import Dict, Any, List
 
-from src.orchestrator.pipeline import Paper2CodePipeline
-from src.paper_to_code_generator import PaperToCodeGenerator
-from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-from src.architecture_graph import ArchitectureGraph, GraphNode
+from core.orchestrator.pipeline import Paper2CodePipeline
+from core.paper_to_code_generator import PaperToCodeGenerator
+from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+from core.architecture_graph import ArchitectureGraph, GraphNode
 
 # Setup logging
 logging.basicConfig(
