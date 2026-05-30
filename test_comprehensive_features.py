@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Comprehensive test demonstrating all enhanced app features."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
 
 def generate_reasoning(node) -> str:
     """Generate 'Why This Matters' reasoning from semantic params."""
@@ -75,7 +75,7 @@ print(f"Selected Node: {conv.label}")
 print(f"Node ID: {conv.id}")
 print("Panel heading: '## Why This Block Matters: Conv 7×7'")
 print("\nExplanation content:")
-from src.explainers import explain_node
+from core.explainers import explain_node
 explanation = explain_node(conv)
 for line in explanation.split("\n")[:3]:
     print(f"  {line}")
