@@ -10,9 +10,9 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.rag.knowledge_graph import KnowledgeGraph
-from src.rag.semantic_explainer import SemanticExplainer
-from src.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+from core.rag.knowledge_graph import KnowledgeGraph
+from core.rag.semantic_explainer import SemanticExplainer
+from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
 
 PASS, FAIL = "✅ PASS", "❌ FAIL"
 results = []

@@ -3,8 +3,8 @@ import logging
 import json
 import torch
 import torch.nn as nn
-from src.orchestrator.pipeline import Paper2CodePipeline
-from src.architecture_graph import ArchitectureGraph
+from core.orchestrator.pipeline import Paper2CodePipeline
+from core.architecture_graph import ArchitectureGraph
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -66,7 +66,7 @@ def validate_extraction():
         logger.error(f"  - FAIL: Expected {expected_output}, got {patch_node.output_shape}")
 
     # Step 5: Visualization Check
-    from src.agents.types import VisualizationOptions
+    from core.agents.types import VisualizationOptions
     vis_options = VisualizationOptions(highlight_compute=True, show_shapes=True)
     result_vis = pipeline.run_single(config, vis_options=vis_options)
     visual = result_vis["visual"]
