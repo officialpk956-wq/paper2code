@@ -1037,20 +1037,20 @@ pytest test_tensor_tracker.py -v
 │ 📚 Paper2Code Library                        🔍 Search│
 ├─────────────────────────────────────────────────────┤
 │                                                     │
-│  ☑️ ResNet                           📊 Parameters  │
-│     Deep Residual Learning for...    ~ 25.5M       │
-│     Authors: He, Zhang, Ren, Sun                   │
-│     CVPR 2015  |  Cited: 82,645                    │
+│  ☑️ ResNet                           📊 Parameters │
+│     Deep Residual Learning for...    ~ 25.5M        │
+│     Authors: He, Zhang, Ren, Sun                    │
+│     CVPR 2015  |  Cited: 82,645                     │
 │                                                     │
-│  ☑️ Attention Is All You Need        📊 Parameters  │
-│     Transformer Architecture...      ~ 65M         │
-│     Authors: Vaswani et al.                        │
-│     NeurIPS 2017  |  Cited: 95,234                 │
+│  ☑️ Attention Is All You Need        📊 Parameters │
+│     Transformer Architecture...      ~ 65M          │
+│     Authors: Vaswani et al.                         │
+│     NeurIPS 2017  |  Cited: 95,234                  │
 │                                                     │
-│  ☑️ U-Net                            📊 Parameters  │
-│     Convolutional Networks for...    ~ 31M         │
-│     Authors: Ronneberger, Fischer    │             │
-│     MICCAI 2015  |  Cited: 42,876                  │
+│  ☑️ U-Net                            📊 Parameters │
+│     Convolutional Networks for...    ~ 31M          │
+│     Authors: Ronneberger, Fischer    │              │
+│     MICCAI 2015  |  Cited: 42,876                   │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
@@ -1061,23 +1061,23 @@ pytest test_tensor_tracker.py -v
 │ ResNet50 Architecture Graph        [Compare] [Export]│
 ├─────────────────────────────────────────────────────┤
 │                                                     │
-│                    Input (B,3,224,224)             │
+│                    Input (B,3,224,224)              │
 │                           ↓                         │
-│               Conv 7×7, stride=2 [Red: High FLOPs] │
-│                    (B,64,112,112)                  │
+│               Conv 7×7, stride=2 [Red: High FLOPs]  │
+│                    (B,64,112,112)                   │
 │                           ↓                         │
-│              MaxPool 3×3, stride=2                 │
-│                     (B,64,56,56)                   │
+│              MaxPool 3×3, stride=2                  │
+│                     (B,64,56,56)                    │
 │                           ↓                         │
-│  ┌─ Bottleneck × 3 ─────────────────────────────┐  │
-│  │ • Conv 1×1 (64→64)  ✓ Shape OK               │  │
-│  │ • Conv 3×3 (64→64)  ✓ Shape OK               │  │
-│  │ • Conv 1×1 (64→256) ✓ Skip add OK            │  │
-│  └────────────────────────────────────────────────┘  │
-│                   [... 5 more stages ...]            │
+│  ┌─ Bottleneck × 3 ─────────────────────────────┐   │
+│  │ • Conv 1×1 (64→64)  ✓ Shape OK                 │ │
+│  │ • Conv 3×3 (64→64)  ✓ Shape OK                 │ │
+│  │ • Conv 1×1 (64→256) ✓ Skip add OK              │ │
+│  └────────────────────────────────────────────────┘ │
+│                   [... 5 more stages ...]           │
 │                                                     │
 │  Total FLOPs: 7.3B  |  Parameters: 25.5M            │
-│  ✅ Validation: PASSED  |  📊 Download              │
+│  ✅ Validation: PASSED  |  📊 Download             │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
@@ -1090,16 +1090,16 @@ pytest test_tensor_tracker.py -v
 │                  │                              │
 │ Stages: 4        │ Stages: 4 (same)             │
 │                  │                              │
-│ Stage1: 3×       │ Stage1: 3×BottleNeck (same) │
+│ Stage1: 3×       │ Stage1: 3×BottleNeck (same)  │
 │ Blocks           │ Blocks                       │
 │                  │                              │
-│ Stage2: 4×   →   │ Stage2: 8×BottleNeck [+4]   │
-│ Blocks           │ Blocks  [🔴 +1.5B FLOPs]     │
+│ Stage2: 4×   →   │ Stage2: 8×BottleNeck [+4]    | 
+│ Blocks           │ Blocks  [🔴 +1.5B FLOPs]    │
 │                  │                              │
-│ Stage3: 6×   →   │ Stage3: 23×BottleNeck [+17] │
-│ Blocks           │ Blocks  [🔴 +4.2B FLOPs]     │
+│ Stage3: 6×   →   │ Stage3: 23×BottleNeck [+17]  │
+│ Blocks           │ Blocks  [🔴 +4.2B FLOPs]    │
 │                  │                              │
-│ Stage4: 3×       │ Stage4: 3×BottleNeck (same) │
+│ Stage4: 3×       │ Stage4: 3×BottleNeck (same)  │
 │ Blocks           │ Blocks                       │
 │                  │                              │
 │ Parameters:      │ Parameters:                  │
