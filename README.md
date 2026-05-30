@@ -1105,7 +1105,7 @@ pytest test_tensor_tracker.py -v
 │ Parameters:      │ Parameters:                  │
 │ 25.5M            │ 44.5M [+19M, +74%]           │
 │                  │                              │
-│ FLOPs: 7.3B      │ FLOPs: 11.5B [+4.2B, +58%]  │
+│ FLOPs: 7.3B      │ FLOPs: 11.5B [+4.2B, +58%]   │
 │                  │                              │
 └──────────────────┴──────────────────────────────┘
 
