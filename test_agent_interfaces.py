@@ -13,7 +13,7 @@ import inspect
 from abc import ABC, abstractmethod
 
 # Import agent interfaces
-from src.agents import (
+from core.agents import (
     ParsingAgent,
     VisualizationAgent,
     ExplanationAgent,
@@ -202,15 +202,15 @@ def test_circular_dependencies():
     # agents/__init__.py imports from agents/*.py
     # agents/*.py should not import from agents/__init__.py
     
-    import src.agents.parsing_agent as pa
-    import src.agents.visualization_agent as va
-    import src.agents.explanation_agent as ea
+    import core.agents.parsing_agent as pa
+    import core.agents.visualization_agent as va
+    import core.agents.explanation_agent as ea
     
     modules = [pa, va, ea]
     
     for module in modules:
         source = inspect.getsource(module)
-        assert "from src.agents import" not in source, f"{module.__name__} has circular import"
+        assert "from core.agents import" not in source, f"{module.__name__} has circular import"
         assert "from . import" not in source or "from .types import" in source, f"{module.__name__} has unexpected local import"
     
     print("✓ No circular dependencies detected")
