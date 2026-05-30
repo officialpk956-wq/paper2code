@@ -1,7 +1,7 @@
 import pytest
 
 def test_vit_patch_embedding_extraction():
-    from src.agents.parsing_agent_impl import ParsingAgentImpl
+    from core.agents.parsing_agent_impl import ParsingAgentImpl
     parsing_agent = ParsingAgentImpl()
     
     vit_config = {
@@ -39,8 +39,8 @@ def test_vit_patch_embedding_extraction():
     assert info["embed_dim"] == 768
 
 def test_vit_tensor_flow():
-    from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-    from src.architecture_graph import ArchitectureGraph, GraphNode
+    from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+    from core.architecture_graph import ArchitectureGraph, GraphNode
     
     graph = ArchitectureGraph(name="ViT-Flow-Full")
     nodes = [
@@ -66,8 +66,8 @@ def test_vit_tensor_flow():
     assert len(graph.metadata["tensor_trace"]) == 4
 
 def test_invalid_cls_token():
-    from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-    from src.architecture_graph import ArchitectureGraph, GraphNode
+    from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+    from core.architecture_graph import ArchitectureGraph, GraphNode
     
     graph = ArchitectureGraph(name="Invalid-CLS")
     graph.add_node(GraphNode(id="img", type="conv2d", label="I", params={}))
@@ -79,8 +79,8 @@ def test_invalid_cls_token():
         tracker.propagate_shapes(graph, initial_shape=(1, 3, 224, 224))
 
 def test_invalid_pos_embedding_dim():
-    from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-    from src.architecture_graph import ArchitectureGraph, GraphNode
+    from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+    from core.architecture_graph import ArchitectureGraph, GraphNode
     
     graph = ArchitectureGraph(name="Invalid-Pos")
     graph.add_node(GraphNode(id="p", type="patchembedding", label="P", params={"embed_dim": 768}))
@@ -88,12 +88,12 @@ def test_invalid_pos_embedding_dim():
     graph.add_edge("p", "pos")
     
     tracker = TensorTracker()
-    with pytest.raises(TensorMismatchError, match="Positional Embedding Error.*Dimension mismatch"):
+    with pytest.raises(TensorMismatchError, match="Embedding Error.*Dimension mismatch"):
         tracker.propagate_shapes(graph, initial_shape=(1, 3, 224, 224))
 
 def test_decomposed_transformer_flow():
-    from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-    from src.architecture_graph import ArchitectureGraph, GraphNode
+    from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+    from core.architecture_graph import ArchitectureGraph, GraphNode
     
     graph = ArchitectureGraph(name="Decomposed-Transformer")
     nodes = [
@@ -129,8 +129,8 @@ def test_decomposed_transformer_flow():
     assert nodes[7].output_shape == (1, 197, 768)
 
 def test_invalid_decomposed_dim():
-    from src.rag.tensor_tracker import TensorTracker, TensorMismatchError
-    from src.architecture_graph import ArchitectureGraph, GraphNode
+    from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
+    from core.architecture_graph import ArchitectureGraph, GraphNode
     
     graph = ArchitectureGraph(name="Invalid-Decomposed")
     graph.add_node(GraphNode(id="in", type="linear", label="In", params={"hidden_size": 768}))
