@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Test suite for Phase 3.9.A.2 — Comparison Explainer."""
 
-from src.visualizer_resnet import build_resnet18_graph
-from src.visualizer_unet import build_unet_graph
-from src.visualizer_vit import build_vit_graph
-from src.comparators import (
+from core.visualizer_resnet import build_resnet18_graph
+from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
+from core.comparators import (
     explain_compute_difference,
     explain_spatial_difference,
     explain_scaling_difference,
