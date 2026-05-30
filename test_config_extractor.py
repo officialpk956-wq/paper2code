@@ -2,7 +2,7 @@
 Tests for RAG ConfigExtractor.
 """
 
-from src.rag import ConfigExtractor
+from core.rag import ConfigExtractor
 
 
 def test_rule_based_extraction():

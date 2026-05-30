@@ -9,8 +9,8 @@ Tests:
 - Determinism across hardening changes
 """
 
-from src.rag import ConfigExtractor
-import src.rag.normalizer  # Import to trigger synonym validation
+from core.rag import ConfigExtractor
+import core.rag.normalizer  # Import to trigger synonym validation
 
 
 def test_synonym_map_validation():

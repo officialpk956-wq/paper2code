@@ -8,7 +8,7 @@ Tests:
 - Ordering robustness
 """
 
-from src.rag import ConfigExtractor
+from core.rag import ConfigExtractor
 
 
 def test_conv_synonyms():
