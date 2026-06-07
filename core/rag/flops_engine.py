@@ -89,6 +89,8 @@ class FLOPsEngine:
         "layernorm":           "_layernorm",
         "rmsnorm":             "_layernorm",
         "batchnorm2d":         "_batchnorm",
+        "invertedresidual":    "_residual_block",
+        "mbconvblock":         "_residual_block",
     }
 
     # ── public entry point ─────────────────────────────────

@@ -381,6 +381,9 @@ def _build_module(
 
     # Final explanation — join non-empty parts
     explanation = "\n\n".join(explanation_parts) if explanation_parts else f"Structural module: {layer_name}"
+    
+    # Append architecture context to ensure global uniqueness for fallback explanations
+    explanation += f"\n\n*(Context: {graph.name} Architecture)*"
 
     if has_skip and skip_sources:
         layer_name += " (with Skip Connection)"

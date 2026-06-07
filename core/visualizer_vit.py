@@ -1,13 +1,13 @@
 from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
 
-def build_vit_graph() -> ArchitectureGraph:
+def build_vit_graph(hidden_size: int = 768, num_heads: int = 12, depth: int = 4) -> ArchitectureGraph:
     graph = ArchitectureGraph(name="Vision Transformer")
 
     patch = GraphNode(
         id="patch",
         type="PatchEmbedding",
         label="Patch Embedding",
-        params={"patch": "16×16"},
+        params={"patch": "16×16", "embed_dim": hidden_size},
         block="Embedding",
         description="Converts image patches into token embeddings",
         semantic_params={
@@ -20,14 +20,14 @@ def build_vit_graph() -> ArchitectureGraph:
     prev = patch
 
     # -------- Transformer Encoders --------
-    for i in range(1, 5):
+    for i in range(1, depth + 1):
         block_id = f"encoder_{i}"
 
         block = GraphNode(
             id=block_id,
             type="TransformerEncoder",
             label=f"Encoder Layer {i}",
-            params={"heads": 12},
+            params={"heads": num_heads, "d_model": hidden_size},
             block="Transformer",
             description="Applies self-attention to model global relationships",
             semantic_params={
@@ -37,7 +37,7 @@ def build_vit_graph() -> ArchitectureGraph:
             }
         )
 
-        attn = GraphNode(f"{block_id}_attn", "MHSA", "Multi-Head Attention")
+        attn = GraphNode(f"{block_id}_attn", "MHSA", "Multi-Head Attention", params={"num_heads": num_heads})
         mlp  = GraphNode(f"{block_id}_mlp", "MLP", "Feed Forward")
 
         block.internal_nodes = [attn, mlp]
@@ -56,7 +56,7 @@ def build_vit_graph() -> ArchitectureGraph:
         id="head",
         type="MLPHead",
         label="Classification Head",
-        params={"classes": 1000},
+        params={"classes": 1000, "in_features": hidden_size},
         block="Head",
         description="Maps the final token representation to class predictions"
     ))

@@ -66,6 +66,12 @@ class ConfigParsingAgent(ParsingAgent):
         "feedforward": {"semantic_role": "sequence_encoder", "compute_role": "projection", "flops": "high"},
         "residual_add": {"semantic_role": "residual", "compute_role": "residual", "skip_connection": "yes"},
         "transformerblock": {"semantic_role": "sequence_encoder", "compute_role": "attention", "flops": "very high"},
+        "denseblock": {"compute_role": "feature_extraction", "flops": "high"},
+        "transitionlayer": {"compute_role": "pooling", "feature_map": "downsampling", "flops": "medium"},
+        "invertedresidual": {"compute_role": "feature_extraction", "skip_connection": "yes", "flops": "medium"},
+        "mbconvblock": {"compute_role": "feature_extraction", "skip_connection": "yes", "flops": "medium"},
+        "bottleneckblock": {"compute_role": "residual", "skip_connection": "yes", "flops": "high"},
+        "inceptionblock": {"compute_role": "feature_extraction", "flops": "high"},
     }
 
     # Default semantic_params for all nodes
