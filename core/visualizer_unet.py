@@ -1,20 +1,20 @@
 from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
 
-def build_unet_graph() -> ArchitectureGraph:
+def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGraph:
     graph = ArchitectureGraph(name="U-Net")
 
     encoder_blocks = []
     prev = None
 
     # ---------------- Encoder ----------------
-    for i in range(1, 4):
+    for i in range(1, stages + 1):
         block_id = f"enc_{i}"
 
         block = GraphNode(
             id=block_id,
             type="EncoderBlock",
             label=f"Encoder Block {i}",
-            params={"filters": 64 * 2**(i-1)},
+            params={"filters": base_channels * 2**(i-1)},
             block="Encoder",
             description="Downsamples spatial resolution to capture contextual information",
             semantic_params={
@@ -47,7 +47,7 @@ def build_unet_graph() -> ArchitectureGraph:
         id="bottleneck",
         type="Bottleneck",
         label="Bottleneck",
-        params={"filters": 1024},
+        params={"filters": base_channels * 2**stages},
         block="Bottleneck",
         description="Connects encoder and decoder at the lowest resolution",
         semantic_params={
@@ -76,7 +76,7 @@ def build_unet_graph() -> ArchitectureGraph:
         block = GraphNode(
             id=block_id,
             type="DecoderBlock",
-            label=f"Decoder Block {enc.id[-1]}",
+            label=f"Decoder Block {enc.id.split('_')[-1]}",
             params={"skip": enc.id},
             block="Decoder",
             description="Upsamples features while recovering spatial detail using skip connections",

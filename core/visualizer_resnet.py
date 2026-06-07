@@ -35,15 +35,15 @@ def build_residual_block_internal(block_name: str) -> ArchitectureGraph:
     return g
 
 
-def build_resnet18_graph() -> ArchitectureGraph:
-    graph = ArchitectureGraph(name="ResNet-18")
+def build_resnet18_graph(base_channels: int = 64, stages: int = 4, blocks_per_stage: int = 2) -> ArchitectureGraph:
+    graph = ArchitectureGraph(name="ResNet")
 
     # Stem
     graph.add_node(GraphNode(
         id="conv1",
         type="Conv2D",
         label="Conv 7×7",
-        params={"stride": 2, "channels": "3 → 64"},
+        params={"stride": 2, "channels": f"3 → {base_channels}"},
         block="Stem",
         description="Extracts low-level visual features from the input image",
         semantic_params={
@@ -66,14 +66,15 @@ def build_resnet18_graph() -> ArchitectureGraph:
     previous = "maxpool"
 
     # Residual stages
-    for stage in range(1, 5):
+    current_channels = base_channels
+    for stage in range(1, stages + 1):
         block_id = f"res_stage_{stage}"
 
         block_node = GraphNode(
             id=block_id,
             type="ResidualBlock",
             label=f"Residual Block (Stage {stage})",
-            params={"blocks": 2},
+            params={"blocks": blocks_per_stage, "channels": current_channels},
             block="Backbone",
             description="Improves gradient flow using identity shortcut connections",
             semantic_params={
@@ -88,6 +89,7 @@ def build_resnet18_graph() -> ArchitectureGraph:
         graph.add_edge(previous, block_id)
 
         previous = block_id
+        current_channels *= 2 # Standard ResNet doubles channels per stage
 
     # Head
     graph.add_node(GraphNode(

@@ -33,9 +33,17 @@ def estimate_metrics_from_graph(graph: ArchitectureGraph) -> Dict[str, Any]:
         
         if not flops_level:
             t_lower = (node.type or "").lower()
-            if t_lower in ("residualblock", "multiheadattention", "transformerblock", "stage", "block", "encoder", "decoder", "bottleneck"):
-                flops_level = "very high" if "attention" in t_lower or "transformer" in t_lower else "high"
-            elif t_lower in ("conv2d", "conv1d", "linear", "upsample", "convtranspose2d", "upconvolution", "conv"):
+            if t_lower in ("multiheadattention", "transformerblock", "mhsa"):
+                flops_level = "very high"
+            elif t_lower in ("residualblock", "bottleneckblock", "stage", "block", "encoder", "decoder", "bottleneck", "denseblock"):
+                flops_level = "high"
+            elif t_lower == "invertedresidual":
+                flops_level = "medium"  # depthwise-separable, more efficient than standard
+            elif t_lower == "mbconvblock":
+                flops_level = "medium"  # EfficientNet blocks, compound scaling
+            elif t_lower == "transitionlayer":
+                flops_level = "medium"  # 1x1 conv + pooling
+            elif t_lower in ("conv2d", "conv1d", "linear", "upsample", "convtranspose2d", "upconvolution", "conv", "inceptionblock", "feedforward"):
                 flops_level = "high"
             elif t_lower in ("maxpool2d", "avgpool2d", "adaptiveavgpool2d", "patch_embedding", "patchembedding", "embedding"):
                 flops_level = "medium"
@@ -104,7 +112,7 @@ def _estimate_node_params(node: GraphNode) -> int:
     k = _extract_numeric_value(p.get("kernel_size", 3), 3)
     hs = _extract_numeric_value(p.get("hidden_size", 512), 512)
 
-    if t in ("conv2d", "conv1d", "conv"):
+    if t in ("conv2d", "conv1d", "conv", "convtranspose2d"):
         return ch * k * k * ch
     elif t == "linear":
         return hs * hs
@@ -113,10 +121,34 @@ def _estimate_node_params(node: GraphNode) -> int:
         return 4 * d * d
     elif t in ("batchnorm2d", "layernorm"):
         return 2 * ch
-    elif t in ("residualblock", "block", "stage") and ch > 0:
+    elif t in ("residualblock", "block", "stage", "bottleneckblock") and ch > 0:
         return 9 * ch * ch * 2
+    elif t == "invertedresidual" and ch > 0:
+        # MobileNetV2-style: depthwise + pointwise (much fewer params than standard conv)
+        # For expand ratio 6: expand_ch = ch * 6; depthwise = expand_ch * 9; pointwise = expand_ch * ch
+        expand_ch = ch * 6
+        return expand_ch * 9 + expand_ch * ch
+    elif t == "mbconvblock" and ch > 0:
+        # EfficientNet-style: expansion + depthwise + SE + pointwise
+        expand_ch = ch * 6
+        se_ch = max(1, expand_ch // 4)
+        return expand_ch * 9 + (expand_ch * se_ch + se_ch * expand_ch) + expand_ch * ch
+    elif t == "inceptionblock" and ch > 0:
+        # GoogLeNet inception: 4 parallel branches
+        return ch * ch // 2 * 4
+    elif t == "denseblock" and ch > 0:
+        # DenseNet dense block: concatenation of all feature maps × num_layers
+        # Approximation: ch * 32 (growth_rate) * 16 layers average
+        growth_rate = 32
+        avg_layers = 16
+        return ch * growth_rate * avg_layers
+    elif t == "transitionlayer" and ch > 0:
+        # 1x1 conv + avg pool: in_ch * out_ch params
+        return ch * ch * 2
     elif t in ("patch_embedding", "patchembedding", "embedding"):
         return 16 * 16 * 3 * ch  # approximation for patch embedding
+    elif t == "feedforward":
+        return 2 * hs * hs  # two linear layers
     else:
         return 0
 

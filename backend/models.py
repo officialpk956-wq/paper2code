@@ -122,3 +122,47 @@ class PaperModule(Base):
 
     def __repr__(self) -> str:
         return f"<PaperModule id={self.id} paper_id={self.paper_id} layer_name={self.layer_name!r}>"
+
+# ---------------------------------------------------------------------------
+# Phase 8: Active Learning & Analytics Models
+# ---------------------------------------------------------------------------
+
+class LearnerProgress(Base):
+    __tablename__ = "learner_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    learner_id = Column(String(255), index=True, nullable=False)
+    paper_id = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False)
+    module_id = Column(Integer, ForeignKey("paper_modules.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(50), default="not_started", nullable=False) # not_started, in_progress, completed
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    time_spent_seconds = Column(Integer, default=0, nullable=False)
+
+class AssessmentAttempt(Base):
+    __tablename__ = "assessment_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    learner_id = Column(String(255), index=True, nullable=False)
+    assessment_type = Column(String(100), nullable=False)   # architecture, tensor, flops, comparison
+    architecture = Column(String(255), nullable=True)        # E.g., ResNet
+    difficulty = Column(String(50), nullable=True)           # beginner, intermediate, advanced
+    question_text = Column(Text, nullable=True)              # Full question shown to learner
+    user_answer = Column(Text, nullable=True)                # Raw answer submitted
+    correct_answer = Column(Text, nullable=True)             # Ground-truth answer
+    explanation = Column(Text, nullable=True)                # Why the answer is correct
+    score = Column(Integer, nullable=False, default=0)       # 0 or 1
+    attempt_count = Column(Integer, default=1, nullable=False)
+    is_correct = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+class TutorAnalytics(Base):
+    __tablename__ = "tutor_analytics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    learner_id = Column(String(255), index=True, nullable=True)
+    architecture = Column(String(255), nullable=True)
+    module = Column(String(255), nullable=True)
+    reasoning_type = Column(String(100), nullable=True)
+    question_count = Column(Integer, default=1, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)

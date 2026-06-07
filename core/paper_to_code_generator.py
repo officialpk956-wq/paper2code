@@ -33,14 +33,14 @@ class PaperToCodeGenerator:
         self.pipeline = Paper2CodePipeline()
         self.groq_available = bool(GROQ_API_KEY)
 
-    def from_pdf(self, pdf_bytes: bytes, paper_name: str = "paper") -> Dict[str, Any]:
+    def from_pdf(self, file_obj, paper_name: str = "paper") -> Dict[str, Any]:
         """
-        Process PDF bytes through the complete pipeline.
-
+        Process PDF stream through the complete pipeline.
+        
         Args:
-            pdf_bytes: Raw PDF file bytes
+            file_obj: File-like object containing the PDF
             paper_name: Name to use for the paper
-
+            
         Returns:
             Dict with keys:
             - paper_name: str
@@ -51,21 +51,27 @@ class PaperToCodeGenerator:
             - family: str
             - code_source: "builder" | "llm" | "skeleton"
         """
-        # Extract text from PDF
-        import io
         try:
             import pdfplumber
         except ImportError:
             raise ImportError("pdfplumber not installed")
 
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            text_pages = []
-            for page in pdf.pages[:30]:  # Cap at 30 pages
-                text = page.extract_text()
-                if text:
-                    text_pages.append(text)
+        try:
+            with pdfplumber.open(file_obj) as pdf:
+                text_pages = []
+                for page in pdf.pages[:30]:  # Cap at 30 pages
+                    text = page.extract_text()
+                    if text:
+                        text_pages.append(text)
 
-        raw_text = "\n\n".join(text_pages)
+            raw_text = "\n\n".join(text_pages)
+            if not raw_text.strip():
+                raise ValueError("Could not extract any text from the PDF. It might be corrupted, empty, or image-only.")
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f"Failed to parse PDF: {str(e)}")
+
         return self._run_pipeline(raw_text, paper_name)
 
     def from_arxiv(self, url: str) -> Dict[str, Any]:
@@ -94,7 +100,8 @@ class PaperToCodeGenerator:
         response = requests.get(pdf_url, timeout=30)
         response.raise_for_status()
 
-        return self.from_pdf(response.content, paper_name)
+        import io
+        return self.from_pdf(io.BytesIO(response.content), paper_name)
 
     def _run_pipeline(self, text: str, paper_name: str) -> Dict[str, Any]:
         """
@@ -112,10 +119,14 @@ class PaperToCodeGenerator:
 
         # Step 2: Extract architecture specification
         spec = extract_architecture(sections, paper_name)
+        if not spec.get("layers"):
+            raise ValueError("No architecture could be detected.")
 
         # Step 3: Run through pipeline to get graph + explanation
         pipeline_result = self.pipeline.run_single(spec)
         graph = pipeline_result["graph"]
+        if len(graph.nodes) < 2:
+            raise ValueError("No architecture could be detected.")
         explanation = pipeline_result["explanation"]
 
         # Step 4: Generate complete PyTorch code

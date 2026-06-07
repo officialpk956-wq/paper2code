@@ -219,13 +219,13 @@ class TensorTracker:
             return in_shape
 
         # --- Strict Dimensionality Checks (ViT specific) ---
-        if node.type == "clstoken":
+        if node.type.lower() == "clstoken":
             if len(in_shape) != 3:
                 raise TensorMismatchError(f"CLS Token Error at {node.id}: Expected 3D input (B, N, D), got {in_shape}", node.id)
             return (in_shape[0], in_shape[1] + 1, in_shape[2])
 
         # Sequence Embeddings (B, N) -> (B, N, D) or (B, N, D) -> (B, N, D)
-        if node.type in ["token_embedding", "positionalembedding", "segment_embedding", "positional_embedding"]:
+        if node.type.lower() in ["token_embedding", "positionalembedding", "segment_embedding", "positional_embedding"]:
             expected_dim = node.params.get("embed_dim") or node.params.get("embedding_dim", 768)
             if len(in_shape) == 2:
                 # E.g. (B, SeqLen) input -> (B, SeqLen, D)
@@ -241,13 +241,13 @@ class TensorTracker:
         if len(in_shape) == 4:
             B, C, H, W = in_shape
             
-            if node.type == "patchembedding":
+            if node.type.lower() == "patchembedding":
                 patch_size = node.params.get("patch_size", 16)
                 embed_dim = node.params.get("embed_dim", 768)
                 num_patches = (H // patch_size) * (W // patch_size)
                 return (B, num_patches, embed_dim)
             
-            if node.type in ["conv2d", "conv1d", "conv"]:
+            if node.type.lower() in ["conv2d", "conv1d", "conv"]:
                 out_c = node.params.get("channels", node.params.get("out_channels", node.params.get("filters", C)))
                 stride = node.params.get("stride", 1)
                 # Approximate spatial reduction
@@ -255,33 +255,33 @@ class TensorTracker:
                 out_w = W // stride
                 return (B, out_c, out_h, out_w)
             
-            if node.type.lower() in ["residualblock", "block", "stage"]:
+            if node.type.lower() in ["residualblock", "block", "stage", "invertedresidual", "mbconvblock"]:
                 # Residual blocks may downsample; read stride + out_channels if available
                 out_c = node.params.get("channels", node.params.get("out_channels", node.params.get("filters", C)))
                 stride = node.params.get("stride", 1)
                 return (B, out_c, max(1, H // stride), max(1, W // stride))
                 
-            if node.type in ["maxpool2d", "avgpool2d"]:
+            if node.type.lower() in ["maxpool2d", "avgpool2d"]:
                 stride = node.params.get("stride", 2)
                 return (B, C, H // stride, W // stride)
                 
-            if node.type == "globalavgpool2d":
+            if node.type.lower() == "globalavgpool2d":
                 return (B, C, 1, 1)
                 
-            if node.type == "linear" or node.type == "dense":
+            if node.type.lower() in ["linear", "dense"]:
                 out_features = node.params.get("hidden_size", node.params.get("channels", 1000))
                 # Auto-flatten rule: If 4D tensor hits Linear, it flattens.
                 return (B, out_features)
                 
-            if node.type == "flatten":
+            if node.type.lower() == "flatten":
                 return (B, H * W, C)
 
-            if node.type == "reshape":
+            if node.type.lower() == "reshape":
                 target = node.params.get("shape")
                 if not target: return in_shape
                 return self._resolve_reshape(node.id, in_shape, list(target))
                 
-            if node.type == "causal_mask":
+            if node.type.lower() == "causal_mask":
                 # For 4D attention scores (B, H, N_q, N_k)
                 if in_shape[2] != in_shape[3] and node.params.get("strict_square", True):
                     raise TensorMismatchError(f"Causal Mask Error at {node.id}: Expected square attention matrix for masking, got {in_shape[2]}x{in_shape[3]}", node.id)
@@ -291,42 +291,42 @@ class TensorTracker:
         B = in_shape[0]
         
         # --- Multi-Head Splitting/Merging ---
-        if node.type == "split_heads":
+        if node.type.lower() == "split_heads":
             # (B, N, D) -> (B, H, N, D/H)
             num_heads = node.params.get("num_heads", 8)
             dim = in_shape[-1]
             self._validate_head_divisibility(node.id, dim, num_heads)
             return (B, num_heads, in_shape[1], dim // num_heads)
 
-        if node.type == "merge_heads":
+        if node.type.lower() == "merge_heads":
             # (B, H, N, D_H) -> (B, N, H * D_H)
             if len(in_shape) != 4:
                 raise TensorMismatchError(f"Merge Heads Error at {node.id}: Expected 4D input (B, H, N, D_H), got {in_shape}", node.id)
             return (B, in_shape[2], in_shape[1] * in_shape[3])
 
         # --- Dimension Manipulation ---
-        if node.type == "transpose":
+        if node.type.lower() == "transpose":
             dims = node.params.get("dims", (1, 2))
             if len(dims) != 2: raise TensorMismatchError(f"Transpose Error at {node.id}: Expected 2 dimensions to swap.", node.id)
             res = list(in_shape)
             res[dims[0]], res[dims[1]] = res[dims[1]], res[dims[0]]
             return tuple(res)
 
-        if node.type == "reshape":
+        if node.type.lower() == "reshape":
             target = node.params.get("shape")
             if not target: return in_shape
             return self._resolve_reshape(node.id, in_shape, list(target))
 
         # --- Sequence / Feature Operations ---
-        if node.type in ["linear", "query_projection", "key_projection", "value_projection", "attention_merge"]:
+        if node.type.lower() in ["linear", "query_projection", "key_projection", "value_projection", "attention_merge"]:
             out_features = node.params.get("hidden_size", node.params.get("channels", in_shape[-1]))
             return (*in_shape[:-1], out_features)
             
-        if node.type == "feedforward":
+        if node.type.lower() == "feedforward":
             out_features = node.params.get("embed_dim", node.params.get("hidden_size", in_shape[-1]))
             return (*in_shape[:-1], out_features)
             
-        if node.type in ["multiheadattention", "transformerblock", "mhsa", "cross_attention"]:
+        if node.type.lower() in ["multiheadattention", "transformerblock", "mhsa", "cross_attention"]:
             num_heads = node.params.get("num_heads", 8)
             dim = in_shape[-1]
             self._validate_head_divisibility(node.id, dim, num_heads)
@@ -336,11 +336,11 @@ class TensorTracker:
                 raise TensorMismatchError(f"Cross-Attention Error at {node.id}: Cross-attention typically shouldn't be causal autoregressive.", node.id)
             return in_shape
 
-        if node.type in ["residual_add", "layernorm"]:
+        if node.type.lower() in ["residual_add", "layernorm"]:
             return in_shape
 
 
-        if node.type in ["sequence_pooling", "globalavgpool", "global_pool"]:
+        if node.type.lower() in ["sequence_pooling", "globalavgpool", "global_pool"]:
             if len(in_shape) == 3:
                 # (B, N, D) -> (B, D)
                 return (in_shape[0], in_shape[2])
@@ -348,7 +348,7 @@ class TensorTracker:
                 # (B, C, H, W) -> (B, C)
                 return (in_shape[0], in_shape[1])
 
-        if node.type == "concat":
+        if node.type.lower() == "concat":
             # (B, N1, D) + (B, N2, D) -> (B, N1+N2, D)
             # This logic assumes we handle multi-input elsewhere or via list of shapes
             # For simplicity, we assume sequence concatenation unless dim specified
@@ -359,7 +359,7 @@ class TensorTracker:
 
         # --- Safety Check ---
         if len(in_shape) in [2, 3]:
-            if node.type == "conv2d":
+            if node.type.lower() == "conv2d":
                 raise TensorMismatchError(f"Tensor Shape Error: Cannot pass flat tensor {in_shape} into spatial Conv2D layer ({node.id}).", node.id)
 
         # Fallback (Pass-through)
