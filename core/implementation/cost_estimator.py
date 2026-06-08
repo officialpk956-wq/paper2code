@@ -164,6 +164,9 @@ def estimate_training_cost(
     # ── Cost estimate ─────────────────────────────────────────────────────────
     compute_cost_usd = wall_time_hours * gpu["cloud_cost_usd_hr"]
 
+    # Calculate FLOPs for arch_profile
+    arch_flops_per_batch = arch_profile["flops_per_image_G"] * batch_size
+
     return {
         "architecture": architecture,
         "gpu_type": gpu_type,
@@ -171,8 +174,22 @@ def estimate_training_cost(
         "batch_size": batch_size,
         "epochs": epochs_used,
 
-        # Results
+        # Results (Frontend expected fields)
         "gpu_memory_gb": round(total_vram_gb, 1),
+        "training_hours": round(wall_time_hours, 1),
+        "compute_cost_usd": round(compute_cost_usd, 2),
+
+        # Profile objects for frontend UI display
+        "arch_profile": {
+            "flops": arch_flops_per_batch,
+            "params": params_M,
+        },
+        "gpu_profile": {
+            "tflops": gpu["tflops_fp32"],
+            "cost_per_hour": gpu["cloud_cost_usd_hr"],
+        },
+
+        # Detailed breakdown (for advanced users)
         "gpu_memory_breakdown": {
             "model_weights_gb": round(model_vram_gb, 2),
             "optimizer_state_gb": round(optimizer_vram_gb, 2),
@@ -183,9 +200,7 @@ def estimate_training_cost(
 
         "steps_total": total_steps,
         "steps_per_epoch": steps_per_epoch,
-        "training_hours": round(wall_time_hours, 1),
         "training_days": round(wall_time_hours / 24, 2),
-        "compute_cost_usd": round(compute_cost_usd, 2),
 
         # Transparency
         "assumptions": [
