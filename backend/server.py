@@ -1105,16 +1105,32 @@ def get_analytics_dashboard(
             "current_position": current_position,
             "next_recommended": next_recommended
         }
-        
+
+        # Build learning_path_items as an array for frontend iteration
+        learning_path_items = []
+        if current_position != "Get started by reading a paper!":
+            learning_path_items.append({
+                "title": current_position,
+                "url": "",
+                "type": "current",
+            })
+        if next_recommended not in ("None", "You have completed all available papers!"):
+            learning_path_items.append({
+                "title": next_recommended,
+                "url": "",
+                "type": "next",
+            })
+
         # Reviews
         from core.analytics.recommendation_engine import recommendation_engine
         recs = recommendation_engine.compute(db, x_learner_id)
-        
+
         return {
             "learning_overview": overview,
             "assessment_performance": assessment,
             "tutor_usage": tutor,
             "learning_path": learning_path,
+            "learning_path_items": learning_path_items,
             "reviews_and_recommendations": recs
         }
     except Exception as e:
@@ -1234,6 +1250,8 @@ class CostEstimatorRequest(BaseModel):
     batch_size: int = 32
     gpu_type: str = "A100"
     epochs: Optional[int] = None
+    mixed_precision: bool = False
+    gradient_checkpointing: bool = False
 
 
 @app.post("/api/training-estimator")
@@ -1246,6 +1264,8 @@ def training_cost_estimator(request: CostEstimatorRequest):
             batch_size=request.batch_size,
             gpu_type=request.gpu_type,
             epochs=request.epochs,
+            mixed_precision=request.mixed_precision,
+            gradient_checkpointing=request.gradient_checkpointing,
         )
         return result
     except Exception as e:
