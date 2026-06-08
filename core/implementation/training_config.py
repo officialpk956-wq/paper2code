@@ -225,6 +225,7 @@ TRAINING_CONFIGS: Dict[str, Dict[str, Any]] = {
 
 HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
     "Learning Rate": {
+        "name": "Learning Rate",
         "what_it_does": "Controls the step size during gradient descent. Scales how much model weights change per update.",
         "typical_range": "1e-4 to 0.1",
         "increase_effect": "Faster convergence initially, but risk of overshooting minima, training instability, or divergence.",
@@ -236,6 +237,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Weight Decay": {
+        "name": "Weight Decay",
         "what_it_does": "L2 regularization coefficient. Penalizes large weights to prevent overfitting.",
         "typical_range": "1e-5 to 0.3",
         "increase_effect": "Stronger regularization, smaller weights. Reduces overfitting but may underfit on complex tasks.",
@@ -247,6 +249,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Batch Size": {
+        "name": "Batch Size",
         "what_it_does": "Number of samples processed per gradient update. Affects gradient noise and memory usage.",
         "typical_range": "8 to 4096",
         "increase_effect": "More stable gradient estimates, faster training (more GPU parallelism), but needs LR scaling (linear scaling rule). Reduces regularization effect.",
@@ -258,6 +261,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Dropout": {
+        "name": "Dropout",
         "what_it_does": "Randomly zeros out neuron activations during training. Acts as ensemble regularization.",
         "typical_range": "0.0 to 0.5",
         "increase_effect": "Stronger regularization, slower convergence, helps generalization on small datasets. Too high = underfitting.",
@@ -269,6 +273,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Label Smoothing": {
+        "name": "Label Smoothing",
         "what_it_does": "Softens one-hot targets by distributing ε probability to all classes. Reduces overconfident predictions.",
         "typical_range": "0.0 to 0.2",
         "increase_effect": "More uncertainty in predictions. Better calibration. Can hurt if used with models that need sharp boundaries.",
@@ -280,6 +285,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Attention Heads": {
+        "name": "Attention Heads",
         "what_it_does": "Number of parallel attention mechanisms in Multi-Head Attention. Each head learns different relationship patterns.",
         "typical_range": "4 to 16",
         "increase_effect": "More diverse attention patterns per layer. Marginally higher capacity. Increases memory and compute (O(n²·heads)).",
@@ -291,6 +297,7 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
         }
     },
     "Hidden Dimension": {
+        "name": "Hidden Dimension",
         "what_it_does": "Width of the model. For Transformers: embedding dimension (d_model). For CNNs: channel count.",
         "typical_range": "64 to 1024",
         "increase_effect": "More representational capacity. Can model more complex patterns. Increases parameters quadratically for FFN layers.",
