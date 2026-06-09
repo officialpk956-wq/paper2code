@@ -307,6 +307,77 @@ HYPERPARAMETER_EXPLANATIONS: Dict[str, Dict[str, Any]] = {
             "ResNet-50": "Starts at 64 channels, doubles each stage (64→128→256→512).",
             "Transformer base": "512 d_model with 2048 FFN dim."
         }
+    },
+
+    # ── Optimizers ──────────────────────────────────────────────────────────
+    "Momentum": {
+        "name": "Momentum",
+        "what_it_does": "Accumulates an exponentially-decaying average of past gradients (a velocity) so SGD keeps moving along consistent directions and damps oscillations.",
+        "typical_range": "0.8 to 0.99",
+        "increase_effect": "More inertia: faster on long shallow valleys, but can overshoot the minimum and oscillate if too close to 1.0.",
+        "decrease_effect": "Behaves more like plain SGD: noisier, slower across ravines, but less prone to overshoot.",
+        "architecture_notes": {
+            "ResNet": "0.9 is the canonical value with SGD on ImageNet.",
+            "General": "Nesterov momentum looks ahead before the update for slightly better convergence."
+        }
+    },
+    "Adam Beta1": {
+        "name": "Adam Beta1",
+        "what_it_does": "Decay rate for Adam's first moment (the running mean of gradients). Controls how much past gradient direction is remembered.",
+        "typical_range": "0.9 (default)",
+        "increase_effect": "Smoother, more momentum-like updates; slower to react to changing gradients.",
+        "decrease_effect": "More reactive to the latest gradient; noisier updates.",
+        "architecture_notes": {
+            "Transformer": "0.9 with beta2=0.98 is common for Transformers (vs 0.999 default).",
+            "General": "Rarely tuned; defaults usually work."
+        }
+    },
+    "Adam Beta2 / Epsilon": {
+        "name": "Adam Beta2 / Epsilon",
+        "what_it_does": "Beta2 decays the second moment (running mean of squared gradients) used for per-parameter scaling; epsilon prevents divide-by-zero in the update.",
+        "typical_range": "beta2: 0.99–0.999, eps: 1e-8",
+        "increase_effect": "Higher beta2 = smoother variance estimate, more stable but slower to adapt the per-parameter learning rate.",
+        "decrease_effect": "Lower beta2 reacts faster to gradient scale changes but can be unstable on sparse gradients.",
+        "architecture_notes": {
+            "Transformer": "beta2=0.98 stabilizes early training; some setups raise eps to 1e-6.",
+            "AdamW": "Decouples weight decay from the gradient — prefer AdamW over Adam+L2."
+        }
+    },
+
+    # ── Schedules & stability ───────────────────────────────────────────────
+    "LR Warmup": {
+        "name": "LR Warmup",
+        "what_it_does": "Linearly ramps the learning rate from ~0 to its peak over the first N steps before the main decay schedule begins.",
+        "typical_range": "500 to 10,000 steps (or ~5% of training)",
+        "increase_effect": "Longer warmup = safer early training for large-batch / Transformer setups, but delays real learning.",
+        "decrease_effect": "Too short reintroduces the early-training instability warmup is meant to prevent (loss spikes).",
+        "architecture_notes": {
+            "Transformer": "Essential — the original paper warms up over 4000 steps then decays as 1/sqrt(step).",
+            "ViT": "Pairs warmup with cosine decay and heavy augmentation."
+        }
+    },
+    "Gradient Clipping": {
+        "name": "Gradient Clipping",
+        "what_it_does": "Caps the global gradient norm (or value) before the optimizer step, preventing a single huge gradient from destabilizing training.",
+        "typical_range": "max-norm 0.5 to 5.0",
+        "increase_effect": "Higher threshold clips less — closer to no clipping, more risk of an exploding-gradient spike.",
+        "decrease_effect": "Aggressive clipping caps step size, stabilizing RNNs/Transformers but potentially slowing learning.",
+        "architecture_notes": {
+            "Transformer": "Clip to global norm 1.0 is a very common default.",
+            "RNN/LSTM": "Critical for taming exploding gradients through time."
+        }
+    },
+    "Normalization (BatchNorm / LayerNorm)": {
+        "name": "Normalization (BatchNorm / LayerNorm)",
+        "what_it_does": "Normalizes activations to stabilize the distribution each layer sees, smoothing the loss landscape and enabling higher learning rates.",
+        "typical_range": "BatchNorm for CNNs, LayerNorm for Transformers",
+        "increase_effect": "More/earlier normalization improves stability and lets you raise the learning rate.",
+        "decrease_effect": "Removing it often requires careful init and much lower learning rates to train at all.",
+        "architecture_notes": {
+            "ResNet": "BatchNorm after every conv is part of the residual block.",
+            "Transformer/ViT": "LayerNorm (pre-norm placement) is the stability backbone.",
+            "Small batches": "Prefer GroupNorm/LayerNorm — BatchNorm statistics get noisy."
+        }
     }
 }
 
