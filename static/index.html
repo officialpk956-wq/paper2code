@@ -179,8 +179,9 @@
 
         
         /* Tutor Panel */
-        .tutor-panel { position: fixed; top: 0; right: -400px; width: 400px; height: 100vh; background: var(--bg-surface); border-left: 1px solid var(--color-border); box-shadow: -4px 0 24px rgba(0,0,0,0.2); z-index: 1000; display: flex; flex-direction: column; transition: right 0.3s ease; }
-        .tutor-panel.open { right: 0; }
+        .tutor-panel { position: fixed; top: 0; right: clamp(-440px, -90vw, -320px); width: clamp(320px, 90vw, 420px); height: 100vh; background: var(--glass-bg); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border-left: 1px solid var(--glass-border); box-shadow: -8px 0 40px rgba(0,0,0,0.35); z-index: var(--z-modal); display: flex; flex-direction: column; transition: right 0.34s var(--ease-out), opacity 0.34s var(--ease-out); opacity: 0; }
+        .tutor-panel.open { right: 0; opacity: 1; }
+        @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) { .tutor-panel { background: var(--bg-surface); } }
         .tutor-header { padding: var(--space-4); border-bottom: 1px solid var(--color-border); display: flex; justify-content: space-between; align-items: center; }
         .tutor-chat { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
         .tutor-msg { padding: var(--space-3); border-radius: 8px; font-size: 0.9rem; line-height: 1.5; max-width: 90%; }
@@ -1275,7 +1276,9 @@ let currentModuleData = {};
                             <div class="card" style="padding: 0; display: flex; flex-direction: column;">
                                 <div style="padding: 12px 16px; border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
                                     <h3 class="font-heading text-sm uppercase text-muted"><i class="fa-solid fa-project-diagram"></i> Architecture Graph</h3>
-                                    <div style="display: flex; align-items: center; gap: 4px;">
+                                    <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                                        <button id="fp-play" onclick="fpToggle()" class="btn btn-accent btn-sm" style="font-size: 0.7rem; padding: 3px 10px; margin-right: 6px;"><i class="fa-solid fa-play"></i> Forward Pass</button>
+                                        <button id="fp-step" onclick="fpStep()" class="btn btn-outline btn-sm" title="Step one layer" style="font-size: 0.7rem; padding: 3px 8px; margin-right: 10px;"><i class="fa-solid fa-forward-step"></i></button>
                                         <span class="text-xs text-muted" style="margin-right: 4px;">Heatmap:</span>
                                         <button id="hm-none" onclick="applyHeatmap('none')" class="btn btn-outline btn-sm" style="font-size: 0.7rem; padding: 3px 8px; background: rgba(139,92,246,0.15); border-color: var(--accent-transformer); color: var(--accent-transformer);">None</button>
                                         <button id="hm-flops" onclick="applyHeatmap('flops')" class="btn btn-outline btn-sm" style="font-size: 0.7rem; padding: 3px 8px;">FLOPs</button>
@@ -1347,6 +1350,128 @@ let currentModuleData = {};
             } catch (err) {
                 appContainer.innerHTML = `<div class="card text-center"><p class="text-muted">Failed to load explorer: ${err.message}</p></div>`;
             }
+        }
+
+        // ============================================================
+        // V3 — Animated forward-pass through the architecture graph
+        // ============================================================
+        window.fpState = { order: [], idx: -1, playing: false, timer: null };
+
+        function fpReady() {
+            const cy = window.currentExplorerCy;
+            return cy && cy.nodes && cy.nodes().length > 0;
+        }
+        function fpAccentColor() {
+            const rgb = getComputedStyle(document.documentElement).getPropertyValue('--page-accent-rgb').trim() || '139, 92, 246';
+            return `rgb(${rgb})`;
+        }
+        function fpSetBtn(playing) {
+            const b = document.getElementById('fp-play');
+            if (b) b.innerHTML = playing ? '<i class="fa-solid fa-pause"></i> Pause' : '<i class="fa-solid fa-play"></i> Forward Pass';
+        }
+        function fpBuildOrder() {
+            const cy = window.currentExplorerCy;
+            const nodes = cy.nodes().toArray();
+            nodes.sort((a, b) => {
+                const pa = a.position(), pb = b.position();
+                return (pa.y - pb.y) || (pa.x - pb.x);
+            });
+            return nodes.map(n => n.id());
+        }
+        function fpHighlight(i) {
+            const cy = window.currentExplorerCy;
+            const order = window.fpState.order;
+            if (!cy || i < 0 || i >= order.length) return;
+            const accent = fpAccentColor();
+            const node = cy.getElementById(order[i]);
+            cy.batch(() => {
+                cy.nodes().style('opacity', 0.28);
+                cy.edges().style({ 'line-color': '#4B5563', 'target-arrow-color': '#4B5563', 'width': 2 });
+                for (let k = 0; k <= i; k++) {
+                    const prev = cy.getElementById(order[k]);
+                    prev.style('opacity', k === i ? 1 : 0.62);
+                    prev.style('border-color', k === i ? accent : '#111827');
+                    prev.style('border-width', k === i ? 4 : 1);
+                }
+                node.incomers('edge').style({ 'line-color': accent, 'target-arrow-color': accent, 'width': 4 });
+            });
+            if (!prefersReducedMotion && node.animate) {
+                node.animate({ style: { 'width': 80, 'height': 42 } }, { duration: 170 })
+                    .animate({ style: { 'width': 60, 'height': 30 } }, { duration: 230 });
+            }
+            fpShowReadout(i, order[i]);
+            fpSyncStage(order[i]);
+        }
+        function fpShowReadout(i, id) {
+            const panel = document.getElementById('node-detail-panel');
+            const content = document.getElementById('node-detail-content');
+            if (!panel || !content) return;
+            const m = (window.currentExplorerNodeMetrics || {})[id] || {};
+            const mods = window.currentExplorerModules || [];
+            const label = m.label || id;
+            const ll = label.toLowerCase().trim();
+            const mod = mods.find(x => x.layer_name === label)
+                || mods.find(x => x.layer_name.toLowerCase() === ll)
+                || mods.find(x => ll.includes(x.layer_name.toLowerCase().trim()))
+                || mods.find(x => x.layer_name.toLowerCase().trim().includes(ll)) || null;
+            let shape = '?';
+            const ts = mod && mod.tensor_summary;
+            if (ts) {
+                let os = Array.isArray(ts.output_shape) ? ts.output_shape
+                    : (Array.isArray(ts.trace) && ts.trace.length ? ts.trace[ts.trace.length - 1].output_shape : null);
+                if (Array.isArray(os) && os.length) shape = '[' + os.join(', ') + ']';
+            }
+            const flops = m.flops ? (m.flops >= 1000 ? (m.flops / 1000).toFixed(1) + 'G' : m.flops.toFixed(1) + 'M') : '—';
+            const total = window.fpState.order.length;
+            panel.style.display = 'block';
+            content.innerHTML = `<div class="pop-in" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                <span class="badge badge-transformer">Layer ${i + 1}/${total}</span>
+                <strong style="font-family:monospace;">${label}</strong>
+                <span class="text-sm" style="color:var(--page-accent);font-family:monospace;">${shape}</span>
+                <span class="text-xs text-muted">${flops} FLOPs${m.params ? ' · ' + formatNumber(m.params) + ' params' : ''}</span>
+            </div>`;
+        }
+        function fpSyncStage(id) {
+            const stages = window.currentExplorerStages;
+            const m = (window.currentExplorerNodeMetrics || {})[id] || {};
+            if (!stages || !m.label) return;
+            let stageIdx = -1;
+            stages.forEach((s, si) => { if (s.modules.some(mm => mm.layer_name === m.label)) stageIdx = si; });
+            if (stageIdx >= 0 && window._fpStage !== stageIdx && typeof window.selectStage === 'function') {
+                window._fpStage = stageIdx;
+                window.selectStage(stageIdx);
+            }
+        }
+        function fpStep() {
+            if (!fpReady()) return false;
+            if (!window.fpState.order.length || window.fpState.idx >= window.fpState.order.length - 1) {
+                window.fpState.order = fpBuildOrder();
+                window.fpState.idx = -1;
+                window._fpStage = -1;
+            }
+            window.fpState.idx++;
+            fpHighlight(window.fpState.idx);
+            return window.fpState.idx < window.fpState.order.length - 1;
+        }
+        function fpToggle() {
+            if (!fpReady()) return;
+            if (window.fpState.playing) { fpPause(); return; }
+            if (prefersReducedMotion) { fpStep(); return; }
+            if (!window.fpState.order.length || window.fpState.idx >= window.fpState.order.length - 1) {
+                window.fpState.order = fpBuildOrder(); window.fpState.idx = -1; window._fpStage = -1;
+            }
+            window.fpState.playing = true; fpSetBtn(true);
+            const tick = () => {
+                const more = fpStep();
+                if (more && window.fpState.playing) window.fpState.timer = setTimeout(tick, 850);
+                else { window.fpState.playing = false; fpSetBtn(false); }
+            };
+            tick();
+        }
+        function fpPause() {
+            window.fpState.playing = false;
+            if (window.fpState.timer) { clearTimeout(window.fpState.timer); window.fpState.timer = null; }
+            fpSetBtn(false);
         }
 
         window.selectStage = function(stageIdx) {
