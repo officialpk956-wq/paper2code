@@ -209,6 +209,7 @@
                 <div class="logo-text">Paper2<span>Code</span></div>
             </a>
             <div style="display: flex; align-items: center; gap: var(--space-4);">
+                <a href="#/dojo" class="nav-link" id="nav-dojo"><i class="fa-solid fa-code"></i> Code Dojo</a>
                 <a href="#/training-estimator" class="nav-link"><i class="fa-solid fa-calculator"></i> Cost Estimator</a>
                 <a href="#/hyperparameters" class="nav-link"><i class="fa-solid fa-gauge-high"></i> Hyperparameters</a>
                 <a href="#/assessment" class="nav-link"><i class="fa-solid fa-graduation-cap"></i> Assessments</a>
@@ -243,9 +244,22 @@
             localStorage.learner_id = crypto.randomUUID();
         }
 
-        // Global fetch wrapper to inject X-Learner-ID header
+        // Global fetch wrapper to inject X-Learner-ID header.
+        // IMPORTANT: only attach the header to our OWN same-origin requests.
+        // Adding a custom header to cross-origin requests (e.g. the Pyodide
+        // wasm binary on a CDN) forces a CORS preflight the CDN rejects,
+        // which breaks in-browser Python in the Code Dojo.
         const originalFetch = window.fetch;
         window.fetch = function(url, options = {}) {
+            try {
+                const target = (url && typeof url === 'object' && 'url' in url) ? url.url : url;
+                const u = new URL(target, window.location.href);
+                if (u.origin !== window.location.origin) {
+                    return originalFetch(url, options);
+                }
+            } catch (e) {
+                return originalFetch(url, options);
+            }
             options.headers = options.headers || {};
             if (options.headers instanceof Headers) {
                 options.headers.set('X-Learner-ID', localStorage.learner_id);
@@ -3349,6 +3363,339 @@ let currentModuleData = {};
             }
         }
 
+        // ================================================================
+        // Phase 12 (M1): Code Dojo — implement DL primitives from scratch
+        // ================================================================
+
+        // Lazy in-browser Python (Pyodide + NumPy). Loaded only when the Dojo
+        // route is first opened, then cached for the session.
+        let pyodideReadyPromise = null;
+        function ensurePyodide() {
+            if (pyodideReadyPromise) return pyodideReadyPromise;
+            pyodideReadyPromise = (async () => {
+                if (typeof loadPyodide === 'undefined') {
+                    await new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js';
+                        s.onload = resolve;
+                        s.onerror = () => reject(new Error('Failed to load Pyodide runtime'));
+                        document.head.appendChild(s);
+                    });
+                }
+                const py = await loadPyodide();
+                await py.loadPackage('numpy');
+                return py;
+            })().catch(err => { pyodideReadyPromise = null; throw err; });
+            return pyodideReadyPromise;
+        }
+
+        const DOJO_CATEGORY_ORDER = ['Activation', 'Loss', 'Optimizer', 'Layer', 'Metric'];
+        const DOJO_CATEGORY_ICON = {
+            Activation: 'fa-bolt', Loss: 'fa-bullseye', Optimizer: 'fa-gauge-high',
+            Layer: 'fa-layer-group', Metric: 'fa-ruler'
+        };
+        window.dojo = { editor: null, current: null, hintsShown: 0, list: [] };
+
+        function dojoProgressLoad() {
+            try { return JSON.parse(localStorage.getItem('dojo_progress') || '{}'); }
+            catch (e) { return {}; }
+        }
+        function dojoProgressSave(p) { localStorage.setItem('dojo_progress', JSON.stringify(p)); }
+        function dojoStars(d) { return '★'.repeat(d) + '☆'.repeat(5 - d); }
+        function dojoEsc(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        async function renderDojoPage(params) {
+            navActions.innerHTML = `<a href="#/" class="btn btn-outline"><i class="fa-solid fa-arrow-left mr-2"></i> Library</a>`;
+            appContainer.innerHTML = `<div class="dojo-skeleton"><div class="spinner"></div><p class="text-muted text-sm" style="margin-top:12px">Loading Code Dojo…</p></div>`;
+
+            let list;
+            try {
+                const res = await fetch('/api/dojo/exercises');
+                if (!res.ok) throw new Error('Failed to load exercises');
+                list = (await res.json()).exercises;
+            } catch (e) {
+                appContainer.innerHTML = `<div class="card text-center"><p class="text-muted">Failed to load Code Dojo: ${e.message}</p></div>`;
+                return;
+            }
+            window.dojo.list = list;
+            const activeId = (params && params.id) || list[0].id;
+
+            appContainer.innerHTML = `
+                <div class="page-view">
+                    <div class="mb-6" style="text-align:center">
+                        <span class="badge badge-transformer mb-2"><i class="fa-solid fa-code"></i> Implement It Yourself</span>
+                        <h1 class="hero-title mb-2" style="font-size:2.4rem">Code Dojo</h1>
+                        <p class="text-muted" style="max-width:620px;margin:0 auto">Implement core deep-learning building blocks from scratch in Python/NumPy. Your code runs in your browser and is checked against hidden test cases — instant, deterministic feedback.</p>
+                    </div>
+                    <div class="dojo-layout">
+                        <aside class="dojo-sidebar" id="dojo-catalog"></aside>
+                        <section class="dojo-workspace card" id="dojo-workspace">
+                            <div class="dojo-skeleton"><div class="spinner"></div></div>
+                        </section>
+                        <aside class="dojo-rail" id="dojo-rail"></aside>
+                    </div>
+                </div>
+            `;
+            dojoRenderCatalog(activeId);
+            dojoLoadExercise(activeId);
+        }
+
+        function dojoRenderCatalog(activeId) {
+            const progress = dojoProgressLoad();
+            const el = document.getElementById('dojo-catalog');
+            if (!el) return;
+            const total = window.dojo.list.length;
+            const done = window.dojo.list.filter(e => progress[e.id] && progress[e.id].passed).length;
+            let html = `<div class="dojo-progress-summary"><i class="fa-solid fa-trophy" style="color:#fcd34d"></i> <strong>${done}/${total}</strong> solved</div>`;
+            DOJO_CATEGORY_ORDER.forEach(cat => {
+                const items = window.dojo.list.filter(e => e.category === cat);
+                if (!items.length) return;
+                html += `<div class="dojo-cat-header"><i class="fa-solid ${DOJO_CATEGORY_ICON[cat] || 'fa-cube'}"></i> ${cat}</div>`;
+                items.forEach(e => {
+                    const passed = progress[e.id] && progress[e.id].passed;
+                    const isActive = e.id === activeId;
+                    html += `
+                        <a href="#/dojo/${e.id}" class="dojo-cat-item ${isActive ? 'active' : ''}">
+                            <span class="dojo-tick ${passed ? 'done' : ''}">${passed ? '<i class="fa-solid fa-check"></i>' : ''}</span>
+                            <span class="dojo-cat-title">${e.title}</span>
+                            <span class="dojo-cat-diff" title="difficulty ${e.difficulty}/5">${dojoStars(e.difficulty)}</span>
+                        </a>`;
+                });
+            });
+            el.innerHTML = html;
+        }
+
+        async function dojoLoadExercise(id) {
+            window.dojo.hintsShown = 0;
+            const ws = document.getElementById('dojo-workspace');
+            const rail = document.getElementById('dojo-rail');
+            if (ws) ws.innerHTML = `<div class="dojo-skeleton"><div class="spinner"></div></div>`;
+
+            let ex;
+            try {
+                const res = await fetch(`/api/dojo/exercises/${id}`);
+                if (!res.ok) throw new Error('Exercise not found');
+                ex = await res.json();
+            } catch (e) {
+                if (ws) ws.innerHTML = `<p class="text-muted">Failed to load exercise: ${e.message}</p>`;
+                return;
+            }
+            window.dojo.current = ex;
+
+            const relatedLinks = [];
+            if (ex.related_hyperparameter) relatedLinks.push(`<a href="#/hyperparameters" class="dojo-chip"><i class="fa-solid fa-gauge-high"></i> ${dojoEsc(ex.related_hyperparameter)}</a>`);
+            if (ex.related_arch) relatedLinks.push(`<a href="#/lab" class="dojo-chip"><i class="fa-solid fa-flask-vial"></i> ${dojoEsc(ex.related_arch)}</a>`);
+
+            ws.innerHTML = `
+                <div class="dojo-ws-head">
+                    <div>
+                        <div class="dojo-ws-cat">${dojoEsc(ex.category)} · <span style="color:#fcd34d">${dojoStars(ex.difficulty)}</span></div>
+                        <h2 class="font-heading" style="margin:2px 0 4px;font-size:1.5rem">${dojoEsc(ex.title)}</h2>
+                        <p class="text-sm text-muted" style="margin:0">${dojoEsc(ex.concept)}</p>
+                    </div>
+                </div>
+
+                <div class="dojo-math"><div class="dojo-math-label">FORMULA</div><pre>${dojoEsc(ex.math)}</pre></div>
+                <p class="dojo-intuition text-sm">${dojoEsc(ex.intuition)}</p>
+                ${relatedLinks.length ? `<div class="dojo-related">${relatedLinks.join('')}</div>` : ''}
+
+                <div class="dojo-editor-bar">
+                    <span class="text-xs text-muted"><i class="fa-solid fa-pen"></i> Implement <code>${dojoEsc(ex.fn_name)}(...)</code></span>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-secondary btn-sm" onclick="dojoResetCode()"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                        <button class="btn btn-primary btn-sm" id="dojo-run-btn" onclick="dojoRunTests()"><i class="fa-solid fa-play"></i> Run Tests</button>
+                    </div>
+                </div>
+                <div id="dojo-editor" class="dojo-editor"></div>
+                <div id="dojo-results" class="dojo-results"></div>
+            `;
+
+            // Right rail: hints + common mistakes + reveal
+            rail.innerHTML = `
+                <div class="card dojo-rail-card">
+                    <div class="dojo-rail-title"><i class="fa-solid fa-lightbulb" style="color:#fcd34d"></i> Hints</div>
+                    <div id="dojo-hints" class="dojo-hints"><p class="text-xs text-muted">Stuck? Reveal hints one at a time.</p></div>
+                    <button class="btn btn-outline btn-sm w-full" id="dojo-hint-btn" onclick="dojoShowHint()" style="margin-top:8px"><i class="fa-solid fa-eye"></i> Show a hint (${ex.hints.length})</button>
+                </div>
+                <div class="card dojo-rail-card">
+                    <div class="dojo-rail-title"><i class="fa-solid fa-bug" style="color:#ef4444"></i> Common Mistakes</div>
+                    <ul class="dojo-mistakes">${ex.common_mistakes.map(m => `<li>${dojoEsc(m)}</li>`).join('')}</ul>
+                </div>
+                <div class="card dojo-rail-card">
+                    <div class="dojo-rail-title"><i class="fa-solid fa-key" style="color:var(--color-text-secondary)"></i> Solution</div>
+                    <p class="text-xs text-muted" style="margin:0 0 8px">Try the hints first — you learn more by struggling a little.</p>
+                    <button class="btn btn-secondary btn-sm w-full" onclick="dojoRevealSolution()"><i class="fa-solid fa-unlock"></i> Reveal solution</button>
+                    <div id="dojo-solution"></div>
+                </div>
+            `;
+
+            dojoRenderCatalog(id);
+
+            // Init editor (Monaco, editable). Fallback to a textarea if unavailable.
+            window.dojo.editor = null;
+            try {
+                const editor = await initMonaco('dojo-editor', ex.starter_code, false);
+                window.dojo.editor = editor;
+                if (!editor) throw new Error('no editor');
+            } catch (e) {
+                const host = document.getElementById('dojo-editor');
+                if (host) {
+                    host.innerHTML = `<textarea id="dojo-fallback" spellcheck="false" class="dojo-fallback">${dojoEsc(ex.starter_code)}</textarea>`;
+                }
+            }
+        }
+
+        function dojoGetCode() {
+            if (window.dojo.editor && typeof window.dojo.editor.getValue === 'function') return window.dojo.editor.getValue();
+            const fb = document.getElementById('dojo-fallback');
+            return fb ? fb.value : '';
+        }
+
+        function dojoResetCode() {
+            const ex = window.dojo.current;
+            if (!ex) return;
+            if (window.dojo.editor && typeof window.dojo.editor.setValue === 'function') window.dojo.editor.setValue(ex.starter_code);
+            const fb = document.getElementById('dojo-fallback');
+            if (fb) fb.value = ex.starter_code;
+            const res = document.getElementById('dojo-results');
+            if (res) res.innerHTML = '';
+        }
+
+        function dojoShowHint() {
+            const ex = window.dojo.current;
+            if (!ex) return;
+            const box = document.getElementById('dojo-hints');
+            if (window.dojo.hintsShown >= ex.hints.length) return;
+            if (window.dojo.hintsShown === 0) box.innerHTML = '';
+            const i = window.dojo.hintsShown;
+            box.insertAdjacentHTML('beforeend', `<div class="dojo-hint"><span class="dojo-hint-n">${i + 1}</span> ${dojoEsc(ex.hints[i])}</div>`);
+            window.dojo.hintsShown++;
+            const btn = document.getElementById('dojo-hint-btn');
+            const remaining = ex.hints.length - window.dojo.hintsShown;
+            if (remaining <= 0) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-check"></i> All hints shown'; }
+            else btn.innerHTML = `<i class="fa-solid fa-eye"></i> Show a hint (${remaining})`;
+        }
+
+        async function dojoRevealSolution() {
+            const ex = window.dojo.current;
+            if (!ex) return;
+            const host = document.getElementById('dojo-solution');
+            host.innerHTML = `<div class="text-xs text-muted" style="margin-top:8px">Loading…</div>`;
+            try {
+                const res = await fetch(`/api/dojo/exercises/${ex.id}/solution`);
+                const sol = await res.json();
+                host.innerHTML = `<pre class="dojo-solution-code">${dojoEsc(sol.reference_solution)}</pre>
+                    <button class="btn btn-outline btn-sm w-full" onclick="dojoUseSolution()" style="margin-top:8px"><i class="fa-solid fa-arrow-up"></i> Load into editor</button>`;
+                window.dojo.lastSolution = sol.reference_solution;
+            } catch (e) {
+                host.innerHTML = `<div class="text-xs" style="color:#ef4444">Failed to load solution.</div>`;
+            }
+        }
+        function dojoUseSolution() {
+            if (!window.dojo.lastSolution) return;
+            if (window.dojo.editor && typeof window.dojo.editor.setValue === 'function') window.dojo.editor.setValue(window.dojo.lastSolution);
+            const fb = document.getElementById('dojo-fallback');
+            if (fb) fb.value = window.dojo.lastSolution;
+        }
+
+        async function dojoRunTests() {
+            const ex = window.dojo.current;
+            if (!ex) return;
+            const btn = document.getElementById('dojo-run-btn');
+            const resEl = document.getElementById('dojo-results');
+            btn.disabled = true;
+            const prevLabel = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Running…';
+            resEl.innerHTML = `<div class="dojo-running"><i class="fa-solid fa-circle-notch fa-spin"></i> Booting Python runtime (first run downloads NumPy)…</div>`;
+
+            try {
+                const py = await ensurePyodide();
+                const code = dojoGetCode();
+                const tests = ex.test_inputs.map((inp, i) => ({ inputs: inp, expected: ex.expected_outputs[i] }));
+
+                py.globals.set('__user_code', code);
+                py.globals.set('__tests_json', JSON.stringify(tests));
+                py.globals.set('__fn_name', ex.fn_name);
+                py.globals.set('__tol', ex.tolerance);
+
+                const harness = `
+import json, numpy as np
+__ns = {'np': np, 'numpy': np}
+__results = []
+try:
+    exec(__user_code, __ns)
+except Exception as __e:
+    __results = [{'pass': False, 'error': 'Your code has an error: ' + str(__e)}]
+else:
+    __fn = __ns.get(__fn_name)
+    if __fn is None:
+        __results = [{'pass': False, 'error': "Define a function named '" + __fn_name + "'."}]
+    else:
+        __tests = json.loads(__tests_json)
+        for __t in __tests:
+            try:
+                __kw = {k: (np.array(v) if isinstance(v, list) else v) for k, v in __t['inputs'].items()}
+                __out = __fn(**__kw)
+                __exp = np.array(__t['expected'], dtype=float)
+                __got = np.array(__out, dtype=float)
+                __ok = bool(__got.shape == __exp.shape and np.allclose(__got, __exp, atol=__tol, rtol=1e-5))
+                __results.append({'pass': __ok, 'got': np.array(__out).tolist()})
+            except Exception as __e:
+                __results.append({'pass': False, 'error': str(__e)})
+json.dumps(__results)
+`;
+                const raw = await py.runPythonAsync(harness);
+                const results = JSON.parse(raw);
+                dojoRenderResults(ex, results);
+            } catch (e) {
+                resEl.innerHTML = `<div class="dojo-test-row fail"><i class="fa-solid fa-triangle-exclamation"></i> Runtime error: ${dojoEsc(e.message || String(e))}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = prevLabel;
+            }
+        }
+
+        function dojoRenderResults(ex, results) {
+            const resEl = document.getElementById('dojo-results');
+            const passed = results.filter(r => r.pass).length;
+            const allPass = passed === results.length && results.length > 0;
+            let rows = '';
+            results.forEach((r, i) => {
+                if (r.pass) {
+                    rows += `<div class="dojo-test-row pass"><i class="fa-solid fa-circle-check"></i> Test ${i + 1} passed</div>`;
+                } else if (r.error) {
+                    rows += `<div class="dojo-test-row fail"><i class="fa-solid fa-circle-xmark"></i> Test ${i + 1}: ${dojoEsc(r.error)}</div>`;
+                } else {
+                    const inp = JSON.stringify(ex.test_inputs[i]);
+                    rows += `<div class="dojo-test-row fail">
+                        <i class="fa-solid fa-circle-xmark"></i> Test ${i + 1} failed
+                        <div class="dojo-test-detail">input: <code>${dojoEsc(inp)}</code><br>expected: <code>${dojoEsc(JSON.stringify(ex.expected_outputs[i]))}</code><br>got: <code>${dojoEsc(JSON.stringify(r.got))}</code></div>
+                    </div>`;
+                }
+            });
+            const banner = allPass
+                ? `<div class="dojo-banner success"><i class="fa-solid fa-trophy"></i> All ${results.length} tests passed — nicely done!</div>`
+                : `<div class="dojo-banner partial">${passed}/${results.length} tests passing. Keep going!</div>`;
+            resEl.innerHTML = banner + rows;
+
+            if (allPass) {
+                const progress = dojoProgressLoad();
+                const prev = progress[ex.id] || { attempts: 0 };
+                progress[ex.id] = { passed: true, attempts: (prev.attempts || 0) + 1 };
+                dojoProgressSave(progress);
+                dojoRenderCatalog(ex.id);
+                // Record server-side (non-blocking)
+                const learnerId = localStorage.getItem('learner_id') || 'default';
+                fetch('/api/dojo/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Learner-ID': learnerId },
+                    body: JSON.stringify({ exercise_id: ex.id, passed: true, attempts: progress[ex.id].attempts })
+                }).catch(() => {});
+            }
+        }
+
         async function renderTrainingEstimatorPage(params, query) {
             navActions.innerHTML = `<a href="#/" class="btn btn-outline"><i class="fa-solid fa-arrow-left mr-2"></i> Library</a>`;
 
@@ -4742,6 +5089,9 @@ let currentModuleData = {};
             if (path === '/lab') return { handler: renderLabPage, params: {}, query };
             if (path === '/training-estimator') return { handler: renderTrainingEstimatorPage, params: {}, query };
             if (path === '/hyperparameters') return { handler: renderHyperparametersPage, params: {}, query };
+            if (path === '/dojo') return { handler: renderDojoPage, params: {}, query };
+            const dojoMatch = path.match(/^\/dojo\/([a-z0-9_]+)$/);
+            if (dojoMatch) return { handler: renderDojoPage, params: { id: dojoMatch[1] }, query };
             const implMatch = path.match(/^\/implementation\/(\d+)$/);
             if (implMatch) return { handler: renderImplementationPage, params: { id: implMatch[1] }, query };
             const trainingMatch = path.match(/^\/training\/(\d+)$/);

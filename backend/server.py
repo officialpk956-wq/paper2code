@@ -1244,6 +1244,83 @@ def get_hyperparameters():
     return {"hyperparameters": get_hyperparameter_explanations()}
 
 
+# ==========================================
+# Phase 12 (M1): Code Dojo — implement-it-yourself coding exercises
+# ==========================================
+
+from core.dojo import get_exercise_list, get_public_exercise, get_solution
+
+
+class DojoSubmitRequest(BaseModel):
+    exercise_id: str
+    passed: bool
+    attempts: int = 1
+
+
+@app.get("/api/dojo/exercises")
+def dojo_list_exercises():
+    """Lightweight catalog for the Dojo sidebar (no solutions / expected outputs)."""
+    return {"exercises": get_exercise_list()}
+
+
+@app.get("/api/dojo/exercises/{exercise_id}")
+def dojo_get_exercise(exercise_id: str):
+    """
+    Full exercise for the workspace: includes test_inputs + expected_outputs
+    (precomputed from the hidden reference solution) but NOT the solution itself.
+    """
+    ex = get_public_exercise(exercise_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
+    return ex
+
+
+@app.get("/api/dojo/exercises/{exercise_id}/solution")
+def dojo_get_solution(exercise_id: str):
+    """Reveal the reference solution (separate endpoint so it stays hidden by default)."""
+    sol = get_solution(exercise_id)
+    if not sol:
+        raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
+    return sol
+
+
+@app.post("/api/dojo/submit")
+def dojo_submit(
+    request: DojoSubmitRequest,
+    db: Session = Depends(get_db),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
+):
+    """
+    Record a Dojo completion as an AssessmentAttempt with assessment_type='code'
+    so it flows into the existing analytics / adaptive engine.
+    """
+    if not get_solution(request.exercise_id):
+        raise HTTPException(status_code=404, detail=f"Exercise '{request.exercise_id}' not found")
+    try:
+        from backend.models import AssessmentAttempt
+        attempt = AssessmentAttempt(
+            learner_id=x_learner_id or "default",
+            assessment_type="code",
+            architecture=None,
+            difficulty=None,
+            question_text=f"dojo:{request.exercise_id}",
+            user_answer="passed" if request.passed else "failed",
+            correct_answer="passed",
+            explanation="",
+            score=1 if request.passed else 0,
+            attempt_count=request.attempts,
+            is_correct=bool(request.passed),
+        )
+        db.add(attempt)
+        db.commit()
+        return {"status": "ok", "recorded": True, "exercise_id": request.exercise_id, "passed": request.passed}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Dojo submit error: {str(e)}")
+        # Non-fatal: client already validated; return ok so UX is not blocked.
+        return {"status": "ok", "recorded": False, "detail": str(e)}
+
+
 class CostEstimatorRequest(BaseModel):
     architecture: str
     dataset_size: int = 1000000
