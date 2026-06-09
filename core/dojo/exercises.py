@@ -659,6 +659,285 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": None,
         "related_arch": None,
     },
+
+    # ===================== MORE LOSSES / OPTIMIZERS / LAYERS =====================
+    {
+        "id": "huber_loss",
+        "category": "Loss",
+        "title": "Huber Loss",
+        "difficulty": 3,
+        "fn_name": "huber_loss",
+        "concept": "Quadratic for small errors, linear for large ones — robust regression.",
+        "math": "L = mean( 0.5*e^2          if |e|<=delta\n          delta*(|e|-0.5*delta) otherwise )   where e = y_pred - y_true",
+        "intuition": (
+            "Huber blends MSE and MAE: it is smooth (quadratic) near zero for stable gradients, "
+            "but switches to linear beyond delta so outliers don't dominate. Used in robust "
+            "regression and as the 'smooth L1' loss in object detectors."
+        ),
+        "starter_code": (
+            "def huber_loss(y_pred, y_true, delta):\n"
+            "    # Quadratic within delta, linear beyond. Return the scalar mean.\n"
+            "    pass\n"
+        ),
+        "reference_solution": (
+            "def huber_loss(y_pred, y_true, delta):\n"
+            "    e = np.abs(y_pred - y_true)\n"
+            "    quad = np.minimum(e, delta)\n"
+            "    lin = e - quad\n"
+            "    return np.mean(0.5 * quad ** 2 + delta * lin)\n"
+        ),
+        "test_inputs": [
+            {"y_pred": [0.0, 2.0, 5.0], "y_true": [0.0, 0.0, 0.0], "delta": 1.0},
+            {"y_pred": [1.0, 1.0], "y_true": [1.2, 0.5], "delta": 1.0},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "Split each error into a clamped part quad=min(|e|,delta) and the leftover lin=|e|-quad.",
+            "Per-element loss = 0.5*quad^2 + delta*lin; then take the mean.",
+        ],
+        "common_mistakes": [
+            "Using a Python if on an array — vectorize with np.minimum instead.",
+            "Forgetting the 0.5 factor on the quadratic region.",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": None,
+    },
+    {
+        "id": "rmsprop_step",
+        "category": "Optimizer",
+        "title": "RMSProp Update Step",
+        "difficulty": 3,
+        "fn_name": "rmsprop_step",
+        "concept": "Per-parameter learning rate from a running average of squared gradients.",
+        "math": "sq = alpha*sq + (1-alpha)*g^2 ;  param_new = param - lr * g / (sqrt(sq) + eps)",
+        "intuition": (
+            "RMSProp divides each gradient by the root of its recent squared magnitude, so "
+            "parameters with large, noisy gradients take smaller steps. It is Adam without the "
+            "first-moment (momentum) term."
+        ),
+        "starter_code": (
+            "def rmsprop_step(param, grad, sq_avg, lr, alpha, eps):\n"
+            "    # Update the running mean-square sq_avg, then the parameter.\n"
+            "    pass\n"
+        ),
+        "reference_solution": (
+            "def rmsprop_step(param, grad, sq_avg, lr, alpha, eps):\n"
+            "    sq_avg = alpha * sq_avg + (1 - alpha) * (grad ** 2)\n"
+            "    return param - lr * grad / (np.sqrt(sq_avg) + eps)\n"
+        ),
+        "test_inputs": [
+            {"param": [0.5, -0.2], "grad": [0.1, 0.3], "sq_avg": [0.0, 0.0],
+             "lr": 0.01, "alpha": 0.9, "eps": 1e-8},
+        ],
+        "tolerance": 1e-7,
+        "hints": [
+            "sq_avg mixes the SQUARED gradient: alpha*sq_avg + (1-alpha)*grad**2.",
+            "Step: param - lr * grad / (sqrt(sq_avg) + eps).",
+        ],
+        "common_mistakes": [
+            "Using grad instead of grad**2 in the running average.",
+            "Putting eps inside the sqrt instead of after it.",
+        ],
+        "related_hyperparameter": "Learning Rate",
+        "related_arch": None,
+    },
+    {
+        "id": "conv2d_valid",
+        "category": "Layer",
+        "title": "2-D Convolution (valid, single channel)",
+        "difficulty": 4,
+        "fn_name": "conv2d_valid",
+        "concept": "Slide a kernel over a 2-D map with no padding.",
+        "math": "out[i,j] = sum_{a,b} x[i+a, j+b] * kernel[a,b]   (output is (H-kh+1) x (W-kw+1))",
+        "intuition": (
+            "The core CNN operation: a kernel slides over the input, computing a dot product at "
+            "each position. 'Valid' means no padding, so the output shrinks by kernel_size-1. "
+            "Real frameworks vectorize this, but writing the loops cements how receptive fields work."
+        ),
+        "starter_code": (
+            "def conv2d_valid(x, kernel):\n"
+            "    # x:(H,W), kernel:(kh,kw). Return (H-kh+1, W-kw+1) via valid convolution.\n"
+            "    pass\n"
+        ),
+        "reference_solution": (
+            "def conv2d_valid(x, kernel):\n"
+            "    H, W = x.shape\n"
+            "    kh, kw = kernel.shape\n"
+            "    out = np.zeros((H - kh + 1, W - kw + 1))\n"
+            "    for i in range(H - kh + 1):\n"
+            "        for j in range(W - kw + 1):\n"
+            "            out[i, j] = np.sum(x[i:i+kh, j:j+kw] * kernel)\n"
+            "    return out\n"
+        ),
+        "test_inputs": [
+            {"x": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], "kernel": [[1.0, 0.0], [0.0, 1.0]]},
+            {"x": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], "kernel": [[1.0, 1.0]]},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "Output shape is (H-kh+1, W-kw+1).",
+            "At each (i,j), multiply the x[i:i+kh, j:j+kw] window by the kernel and sum.",
+        ],
+        "common_mistakes": [
+            "Off-by-one in the output size or loop bounds.",
+            "Element-wise window*kernel then np.sum — not a matmul.",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": "ResNet",
+    },
+    {
+        "id": "maxpool2d",
+        "category": "Layer",
+        "title": "Max Pooling 2-D",
+        "difficulty": 2,
+        "fn_name": "maxpool2d",
+        "concept": "Downsample by taking the max over non-overlapping windows.",
+        "math": "out[i,j] = max( x[i*s:(i+1)*s, j*s:(j+1)*s] )",
+        "intuition": (
+            "Max pooling shrinks spatial size while keeping the strongest activation in each "
+            "window — adding translation invariance and cutting compute. Stride equals the window "
+            "size here (non-overlapping)."
+        ),
+        "starter_code": (
+            "def maxpool2d(x, size):\n"
+            "    # Non-overlapping max pool with window=size. Return the pooled map.\n"
+            "    pass\n"
+        ),
+        "reference_solution": (
+            "def maxpool2d(x, size):\n"
+            "    H, W = x.shape\n"
+            "    oh, ow = H // size, W // size\n"
+            "    out = np.zeros((oh, ow))\n"
+            "    for i in range(oh):\n"
+            "        for j in range(ow):\n"
+            "            out[i, j] = np.max(x[i*size:(i+1)*size, j*size:(j+1)*size])\n"
+            "    return out\n"
+        ),
+        "test_inputs": [
+            {"x": [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0], [13.0, 14.0, 15.0, 16.0]], "size": 2},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "Output size is H//size by W//size.",
+            "For each output cell, take np.max over the size×size window.",
+        ],
+        "common_mistakes": [
+            "Using mean instead of max (that's average pooling).",
+            "Overlapping windows — stride should equal the window size here.",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": "ResNet",
+    },
+
+    # ===================== BACKPROP (gradients) =====================
+    {
+        "id": "relu_backward",
+        "category": "Backprop",
+        "title": "ReLU Backward",
+        "difficulty": 2,
+        "fn_name": "relu_backward",
+        "concept": "Gradient of ReLU: pass gradient where input was positive.",
+        "math": "dL/dx = grad_out * 1[x > 0]",
+        "intuition": (
+            "ReLU's local gradient is 1 for positive inputs and 0 otherwise. Backprop multiplies "
+            "the incoming gradient by this mask — which is exactly why dead (always-negative) "
+            "neurons stop learning: their gradient is zeroed."
+        ),
+        "starter_code": (
+            "def relu_backward(grad_out, x):\n"
+            "    # grad_out is dL/d(relu output). x is the ORIGINAL input. Return dL/dx.\n"
+            "    pass\n"
+        ),
+        "reference_solution": "def relu_backward(grad_out, x):\n    return grad_out * (x > 0)\n",
+        "test_inputs": [
+            {"grad_out": [1.0, 1.0, 1.0, 1.0], "x": [-2.0, 0.5, -0.1, 3.0]},
+            {"grad_out": [0.5, 2.0], "x": [1.0, -1.0]},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "The mask is (x > 0) — multiply grad_out by it.",
+            "(x > 0) is a boolean array; multiplying by a float array promotes it to 0.0/1.0.",
+        ],
+        "common_mistakes": [
+            "Using the ReLU OUTPUT instead of the input x for the mask (works for ReLU but not in general).",
+            "Returning the mask alone, forgetting to multiply by grad_out.",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": "ResNet",
+    },
+    {
+        "id": "sigmoid_backward",
+        "category": "Backprop",
+        "title": "Sigmoid Backward",
+        "difficulty": 3,
+        "fn_name": "sigmoid_backward",
+        "concept": "Gradient of sigmoid expressed via its own output.",
+        "math": "dL/dx = grad_out * out * (1 - out)   where out = sigmoid(x)",
+        "intuition": (
+            "Sigmoid has the elegant derivative s'(x) = s(x)(1-s(x)), so backprop only needs the "
+            "forward OUTPUT. Note the factor peaks at 0.25 (out=0.5) and vanishes as out→0 or 1 — "
+            "this is the saturation that causes vanishing gradients in deep sigmoid stacks."
+        ),
+        "starter_code": (
+            "def sigmoid_backward(grad_out, out):\n"
+            "    # out is the sigmoid output. Return dL/dx.\n"
+            "    pass\n"
+        ),
+        "reference_solution": "def sigmoid_backward(grad_out, out):\n    return grad_out * out * (1 - out)\n",
+        "test_inputs": [
+            {"grad_out": [1.0, 1.0], "out": [0.5, 0.8]},
+            {"grad_out": [2.0, 0.5, 1.0], "out": [0.1, 0.9, 0.5]},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "Use the identity s'(x) = out*(1-out); you don't need x at all.",
+            "Multiply the local derivative by grad_out.",
+        ],
+        "common_mistakes": [
+            "Recomputing sigmoid from x instead of using the provided output.",
+            "Dropping the grad_out factor (that gives the local derivative, not dL/dx).",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": None,
+    },
+    {
+        "id": "mse_backward",
+        "category": "Backprop",
+        "title": "MSE Backward",
+        "difficulty": 2,
+        "fn_name": "mse_backward",
+        "concept": "Gradient of mean squared error w.r.t. predictions.",
+        "math": "dL/dy_pred = 2 * (y_pred - y_true) / N",
+        "intuition": (
+            "Differentiating mean((y_pred-y_true)^2) gives 2*(y_pred-y_true)/N. The 1/N comes from "
+            "the mean. This is the signal that flows back into the network from a regression head."
+        ),
+        "starter_code": (
+            "def mse_backward(y_pred, y_true):\n"
+            "    # Return dL/dy_pred for L = mean((y_pred - y_true)**2).\n"
+            "    pass\n"
+        ),
+        "reference_solution": (
+            "def mse_backward(y_pred, y_true):\n"
+            "    n = y_pred.size\n"
+            "    return 2.0 * (y_pred - y_true) / n\n"
+        ),
+        "test_inputs": [
+            {"y_pred": [2.0, 0.0, 1.0], "y_true": [1.0, 0.0, 2.0]},
+            {"y_pred": [1.0, 3.0], "y_true": [0.0, 0.0]},
+        ],
+        "tolerance": 1e-6,
+        "hints": [
+            "N is the number of elements (y_pred.size).",
+            "Gradient is 2*(y_pred - y_true)/N — the 1/N comes from the mean.",
+        ],
+        "common_mistakes": [
+            "Forgetting the factor of 2.",
+            "Dividing by the wrong N (use the element count, not 1).",
+        ],
+        "related_hyperparameter": None,
+        "related_arch": None,
+    },
 ]
 
 
@@ -668,7 +947,7 @@ EXERCISES: List[Dict[str, Any]] = [
 
 _BY_ID: Dict[str, Dict[str, Any]] = {ex["id"]: ex for ex in EXERCISES}
 
-CATEGORY_ORDER = ["Activation", "Loss", "Optimizer", "Layer", "Metric"]
+CATEGORY_ORDER = ["Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric"]
 
 
 def get_exercise_list() -> List[Dict[str, Any]]:

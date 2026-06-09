@@ -38,7 +38,7 @@ def test_exercise_has_required_fields(ex):
     missing = REQUIRED_FIELDS - set(ex.keys())
     assert not missing, f"{ex['id']} missing fields: {missing}"
     assert 1 <= ex["difficulty"] <= 5
-    assert ex["category"] in {"Activation", "Loss", "Optimizer", "Layer", "Metric"}
+    assert ex["category"] in {"Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric"}
     assert ex["fn_name"] in ex["reference_solution"], "reference must define fn_name"
     assert ex["fn_name"] in ex["starter_code"], "starter must mention fn_name"
     assert len(ex["test_inputs"]) >= 1
