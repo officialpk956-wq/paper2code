@@ -199,8 +199,7 @@
     </style>
 </head>
 <body>
-    <div class="ambient-glow glow-top-right"></div>
-    <div class="ambient-glow glow-bottom-left"></div>
+    <div class="aurora-bg" aria-hidden="true"><div class="aurora-blob"></div></div>
 
     <header class="header-nav">
         <div class="container flex justify-between items-center">
@@ -215,6 +214,7 @@
                 <a href="#/assessment" class="nav-link"><i class="fa-solid fa-graduation-cap"></i> Assessments</a>
                 <a href="#/lab" class="nav-link" id="nav-lab"><i class="fa-solid fa-flask-vial"></i> Research Lab</a>
                 <a href="#/dashboard" class="nav-link"><i class="fa-solid fa-chart-simple"></i> Dashboard</a>
+                <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark" aria-label="Toggle light or dark theme" onclick="toggleTheme()"><i class="fa-solid fa-moon"></i></button>
                 <div id="nav-actions"></div>
             </div>
         </div>
@@ -5454,12 +5454,128 @@ json.dumps(__results)
             return { handler: renderLibraryPage, params: {}, query };
         }
 
+        // ============================================================
+        // Phase 13 — App shell: theme, per-route accent, motion helpers
+        // ============================================================
+        const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            const icon = document.querySelector('#theme-toggle i');
+            if (icon) icon.className = theme === 'light' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+        }
+        function toggleTheme() {
+            const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+            localStorage.setItem('theme', next);
+            applyTheme(next);
+        }
+        (function initTheme() {
+            let t = localStorage.getItem('theme');
+            if (!t) t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+            applyTheme(t);
+        })();
+
+        // Per-route accent: tints nav indicator, headers, glows.
+        const ROUTE_ACCENT = {
+            '#/dojo': ['var(--accent-transformer)', '139, 92, 246'],
+            '#/hyperparameters': ['var(--accent-cnn)', '16, 185, 129'],
+            '#/training-estimator': ['var(--accent-unet)', '6, 182, 212'],
+            '#/assessment': ['var(--accent-transformer)', '139, 92, 246'],
+            '#/lab': ['var(--accent-cnn)', '16, 185, 129'],
+            '#/dashboard': ['var(--accent-unet)', '6, 182, 212'],
+        };
+        function applyRouteAccent(hash) {
+            let accent = ['var(--accent-transformer)', '139, 92, 246'];
+            for (const key in ROUTE_ACCENT) { if (hash.startsWith(key)) { accent = ROUTE_ACCENT[key]; break; } }
+            if (hash.startsWith('#/explorer') || hash.startsWith('#/papers')) accent = ['var(--accent-transformer)', '139, 92, 246'];
+            document.documentElement.style.setProperty('--page-accent', accent[0]);
+            document.documentElement.style.setProperty('--page-accent-rgb', accent[1]);
+        }
+
+        // Staggered reveal-on-scroll for any .reveal element.
+        let _revealObserver = null;
+        function observeReveals() {
+            if (prefersReducedMotion) { document.querySelectorAll('.reveal').forEach(el => el.classList.add('in')); return; }
+            if (!_revealObserver) {
+                _revealObserver = new IntersectionObserver((entries) => {
+                    entries.forEach((e, i) => {
+                        if (e.isIntersecting) { e.target.style.transitionDelay = (e.target.dataset.delay || '0ms'); e.target.classList.add('in'); _revealObserver.unobserve(e.target); }
+                    });
+                }, { threshold: 0.08 });
+            }
+            document.querySelectorAll('.reveal:not(.in)').forEach((el, i) => {
+                if (!el.dataset.delay) el.dataset.delay = Math.min(i * 45, 360) + 'ms';
+                _revealObserver.observe(el);
+            });
+        }
+
+        // Count-up for numeric metrics. Element opts in via class "count-up" + data-to.
+        function animateNumber(el, to, opts = {}) {
+            if (prefersReducedMotion) { el.textContent = (opts.prefix||'') + to + (opts.suffix||''); return; }
+            const dur = opts.duration || 800, start = performance.now(), from = opts.from || 0;
+            const dec = opts.decimals != null ? opts.decimals : (Number.isInteger(to) ? 0 : 1);
+            function frame(now) {
+                const p = Math.min(1, (now - start) / dur);
+                const eased = 1 - Math.pow(1 - p, 3);
+                const val = from + (to - from) * eased;
+                el.textContent = (opts.prefix||'') + val.toFixed(dec) + (opts.suffix||'');
+                if (p < 1) requestAnimationFrame(frame);
+            }
+            requestAnimationFrame(frame);
+        }
+        function runCountUps() {
+            document.querySelectorAll('.count-up[data-to]').forEach(el => {
+                if (el.dataset.done) return; el.dataset.done = '1';
+                animateNumber(el, parseFloat(el.dataset.to), {
+                    prefix: el.dataset.prefix || '', suffix: el.dataset.suffix || '',
+                    decimals: el.dataset.decimals != null ? parseInt(el.dataset.decimals) : null
+                });
+            });
+        }
+
+        // Button ripple (event delegation).
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn');
+            if (!btn || prefersReducedMotion) return;
+            const r = btn.getBoundingClientRect();
+            const span = document.createElement('span');
+            span.className = 'ripple';
+            const size = Math.max(r.width, r.height);
+            span.style.width = span.style.height = size + 'px';
+            span.style.left = (e.clientX - r.left - size / 2) + 'px';
+            span.style.top = (e.clientY - r.top - size / 2) + 'px';
+            btn.appendChild(span);
+            setTimeout(() => span.remove(), 600);
+        });
+
+        // Hook the app container so post-render passes run automatically.
+        function afterRender() {
+            const app = document.getElementById('app-container');
+            if (app && !prefersReducedMotion) { app.classList.remove('route-fade'); void app.offsetWidth; app.classList.add('route-fade'); }
+        }
+
+        // Render functions are async (content lands after fetches). A childList
+        // observer on the container fires once per innerHTML swap — wiring up
+        // reveals + count-ups automatically without per-page calls. childList
+        // (not subtree) avoids re-firing on count-up text mutations.
+        (function watchAppContainer() {
+            const app = document.getElementById('app-container');
+            if (!app || typeof MutationObserver === 'undefined') return;
+            let t = null;
+            new MutationObserver(() => {
+                clearTimeout(t);
+                t = setTimeout(() => { observeReveals(); runCountUps(); }, 50);
+            }).observe(app, { childList: true });
+        })();
+
         function router() {
-            const { handler, params, query } = parseRoute(window.location.hash);
+            const hashFull = window.location.hash;
+            applyRouteAccent(hashFull.split('?')[0]);
+            const { handler, params, query } = parseRoute(hashFull);
             if (handler) handler(params, query);
-            
+
             // Highlight active nav links
-            const hash = window.location.hash.split('?')[0];
+            const hash = hashFull.split('?')[0];
             document.querySelectorAll('.nav-link').forEach(link => {
                 if (link.getAttribute('href') === hash) {
                     link.classList.add('active');
@@ -5467,6 +5583,7 @@ json.dumps(__results)
                     link.classList.remove('active');
                 }
             });
+            afterRender();
         }
 
         window.addEventListener('hashchange', router);
