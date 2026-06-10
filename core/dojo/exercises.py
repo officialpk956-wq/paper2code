@@ -945,23 +945,57 @@ EXERCISES: List[Dict[str, Any]] = [
 # Lookups & public projections
 # ---------------------------------------------------------------------------
 
+# Merge the "LeetCode for Data Science" problem bank into the catalog.
+from core.dojo.problems import DS_PROBLEMS
+EXERCISES = EXERCISES + DS_PROBLEMS
+
 _BY_ID: Dict[str, Dict[str, Any]] = {ex["id"]: ex for ex in EXERCISES}
 
-CATEGORY_ORDER = ["Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric"]
+CATEGORY_ORDER = [
+    "Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric",
+    "NumPy", "Statistics", "Linear Algebra", "Probability", "ML Metrics",
+    "ML Algorithms", "Data Manipulation", "Time Series", "Distances",
+    "Feature Engineering", "NLP", "Algorithms",
+]
+
+
+def difficulty_label(d: int) -> str:
+    """Map the 1-5 scale to LeetCode-style tiers."""
+    if d <= 2:
+        return "Easy"
+    if d == 3:
+        return "Medium"
+    return "Hard"
+
+
+def _example_count(ex: Dict[str, Any]) -> int:
+    return min(2, len(ex.get("test_inputs", [])))
+
+
+def get_all_topics() -> List[str]:
+    """Sorted unique topic tags across the whole catalog (for the UI filter)."""
+    topics = set()
+    for ex in EXERCISES:
+        for t in ex.get("topics", [ex["category"]]):
+            topics.add(t)
+    return sorted(topics)
 
 
 def get_exercise_list() -> List[Dict[str, Any]]:
     """Lightweight list for the catalog sidebar (no solutions, no expected outputs)."""
-    return [
-        {
+    out = []
+    for i, ex in enumerate(EXERCISES):
+        out.append({
             "id": ex["id"],
+            "number": i + 1,
             "category": ex["category"],
             "title": ex["title"],
             "difficulty": ex["difficulty"],
+            "difficulty_label": difficulty_label(ex["difficulty"]),
+            "topics": ex.get("topics", [ex["category"]]),
             "concept": ex["concept"],
-        }
-        for ex in EXERCISES
-    ]
+        })
+    return out
 
 
 def get_public_exercise(exercise_id: str) -> Optional[Dict[str, Any]]:
@@ -981,6 +1015,9 @@ def get_public_exercise(exercise_id: str) -> Optional[Dict[str, Any]]:
         "category": ex["category"],
         "title": ex["title"],
         "difficulty": ex["difficulty"],
+        "difficulty_label": difficulty_label(ex["difficulty"]),
+        "topics": ex.get("topics", [ex["category"]]),
+        "constraints": ex.get("constraints", ""),
         "fn_name": ex["fn_name"],
         "concept": ex["concept"],
         "math": ex["math"],
@@ -988,6 +1025,7 @@ def get_public_exercise(exercise_id: str) -> Optional[Dict[str, Any]]:
         "starter_code": ex["starter_code"],
         "test_inputs": ex["test_inputs"],
         "expected_outputs": expected_outputs,
+        "example_count": _example_count(ex),
         "tolerance": ex["tolerance"],
         "hints": ex["hints"],
         "common_mistakes": ex["common_mistakes"],

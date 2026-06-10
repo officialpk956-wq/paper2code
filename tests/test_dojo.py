@@ -13,7 +13,10 @@ import numpy as np
 import pytest
 
 from core.dojo import EXERCISES, get_exercise_list, get_public_exercise, get_solution
+from core.dojo.exercises import CATEGORY_ORDER
 from core.dojo.validator import run_reference, compare
+
+ALLOWED_CATEGORIES = set(CATEGORY_ORDER)
 
 
 REQUIRED_FIELDS = {
@@ -38,7 +41,7 @@ def test_exercise_has_required_fields(ex):
     missing = REQUIRED_FIELDS - set(ex.keys())
     assert not missing, f"{ex['id']} missing fields: {missing}"
     assert 1 <= ex["difficulty"] <= 5
-    assert ex["category"] in {"Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric"}
+    assert ex["category"] in ALLOWED_CATEGORIES
     assert ex["fn_name"] in ex["reference_solution"], "reference must define fn_name"
     assert ex["fn_name"] in ex["starter_code"], "starter must mention fn_name"
     assert len(ex["test_inputs"]) >= 1
