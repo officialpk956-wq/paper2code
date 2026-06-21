@@ -1,0 +1,510 @@
+# Attention Is All You Need Implementation
+
+## Concepts
+
+The Transformer introduced a paradigm shift: **replace recurrence entirely with attention**.
+
+**Core Equations:**
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+$$
+
+$$
+\text{MultiHead}(Q,K,V) = \text{Concat}(\text{head}_1,...,\text{head}_h)W^O
+$$
+
+**Key Ideas:**
+- Attention allows direct token-to-token relationships regardless of distance
+- Positional encoding injects sequence order without recurrence
+- Multi-head attention learns multiple representation subspaces simultaneously
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. Token Embedding">
+
+Transform discrete token indices into dense vector representations.
+
+**Tensor Shape:** `(batch, seq_len) → (batch, seq_len, d_model)`
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+class TokenEmbedding(nn.Module):
+    """
+    Maps token indices to dense vectors of size d_model.
+    The embedding weights are learned during training.
+    """
+    def __init__(self, vocab_size: int, d_model: int):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.d_model = d_model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len)
+        # Scale embeddings as described in paper Section 3.4
+        return self.embedding(x) * math.sqrt(self.d_model)
+        # output: (batch, seq_len, d_model)
+```
+
+:::warning
+The paper scales embeddings by √d_model to prevent the embedding vectors from being too small compared to the positional encodings. Many implementations skip this and get slightly worse results.
+:::
+
+</Milestone>
+
+<Milestone title="2. Positional Encoding">
+
+Inject information about token positions since attention is order-agnostic.
+
+**Tensor Shape:** `(seq_len, d_model)` — broadcast added to embeddings
+
+```python
+class PositionalEncoding(nn.Module):
+    """
+    Sinusoidal positional encodings from the original paper (Section 3.5).
+    PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+    PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+    """
+    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+        # Build the positional encoding matrix once
+        pe = torch.zeros(max_len, d_model)                    # (max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)      # (max_len, 1)
+
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model)
+        )                                                      # (d_model/2,)
+
+        pe[:, 0::2] = torch.sin(position * div_term)          # even indices
+        pe[:, 1::2] = torch.cos(position * div_term)          # odd indices
+
+        pe = pe.unsqueeze(0)                                   # (1, max_len, d_model)
+        self.register_buffer("pe", pe)                         # not a parameter
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len, d_model)
+        x = x + self.pe[:, : x.size(1)]
+        return self.dropout(x)
+        # output: (batch, seq_len, d_model)
+```
+
+:::tip
+`register_buffer` is critical here — it ensures the positional encoding moves to GPU with `.to(device)` but is NOT updated by the optimizer.
+:::
+
+</Milestone>
+
+<Milestone title="3. Scaled Dot-Product Attention">
+
+The core computational unit of the Transformer.
+
+**Tensor Shapes:**
+- Q: `(batch, heads, seq_len, d_k)`
+- K: `(batch, heads, seq_len, d_k)`
+- V: `(batch, heads, seq_len, d_v)`
+- Output: `(batch, heads, seq_len, d_v)`
+
+```python
+def scaled_dot_product_attention(
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    mask: torch.Tensor = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Computes: softmax(QK^T / sqrt(d_k)) * V
+    Returns: (attended values, attention weights)
+    """
+    d_k = Q.size(-1)
+
+    # Step 1: Compute similarity scores — (batch, heads, seq_len, seq_len)
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+
+    # Step 2: Apply optional mask (used in decoder to prevent peeking ahead)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float("-inf"))
+
+    # Step 3: Softmax to get attention weights
+    attention_weights = torch.softmax(scores, dim=-1)
+
+    # Step 4: Weighted sum of values
+    output = torch.matmul(attention_weights, V)
+
+    return output, attention_weights
+```
+
+:::note
+The `1/√d_k` scaling prevents the dot products from growing too large in magnitude, which would push softmax into regions with vanishingly small gradients.
+:::
+
+</Milestone>
+
+<Milestone title="4. Multi-Head Attention">
+
+Run attention in parallel across multiple representation subspaces.
+
+**Tensor Shapes:** `(batch, seq_len, d_model) → (batch, seq_len, d_model)`
+
+```python
+class MultiHeadAttention(nn.Module):
+    """
+    Projects Q, K, V into h subspaces, runs attention in each,
+    then concatenates and projects back to d_model.
+    """
+    def __init__(self, d_model: int, num_heads: int):
+        super().__init__()
+        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
+        
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads           # head dimension
+
+        # All four projection matrices (Q, K, V, output)
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+
+    def split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len, d_model)
+        batch, seq_len, _ = x.size()
+        x = x.view(batch, seq_len, self.num_heads, self.d_k)
+        return x.transpose(1, 2)
+        # output: (batch, num_heads, seq_len, d_k)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor = None
+    ) -> torch.Tensor:
+        batch = query.size(0)
+
+        # Project inputs into Q, K, V spaces
+        Q = self.split_heads(self.W_q(query))     # (batch, heads, seq_q, d_k)
+        K = self.split_heads(self.W_k(key))        # (batch, heads, seq_k, d_k)
+        V = self.split_heads(self.W_v(value))      # (batch, heads, seq_v, d_k)
+
+        # Attend across all heads simultaneously
+        x, _ = scaled_dot_product_attention(Q, K, V, mask)
+        # x: (batch, heads, seq_len, d_k)
+
+        # Merge heads back together
+        x = x.transpose(1, 2).contiguous()
+        x = x.view(batch, -1, self.d_model)        # (batch, seq_len, d_model)
+
+        return self.W_o(x)                          # (batch, seq_len, d_model)
+```
+
+:::warning
+The `.contiguous()` call before `.view()` is necessary because `.transpose()` returns a non-contiguous tensor. Forgetting it raises a runtime error. You can also use `.reshape()` instead which handles this automatically.
+:::
+
+</Milestone>
+
+<Milestone title="5. Position-wise Feed-Forward Network">
+
+Each token's representation is independently processed by a two-layer MLP.
+
+**Tensor Shape:** `(batch, seq_len, d_model) → (batch, seq_len, d_model)`
+
+```python
+class FeedForward(nn.Module):
+    """
+    FFN(x) = max(0, xW1 + b1)W2 + b2
+    The inner dimension d_ff is typically 4 * d_model.
+    """
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len, d_model)
+        return self.net(x)
+        # output: (batch, seq_len, d_model) — each position processed independently
+```
+
+:::tip
+Modern variants replace ReLU with GeLU (BERT, GPT-2) or SwiGLU (LLaMA). The ReLU here is faithful to the original paper.
+:::
+
+</Milestone>
+
+<Milestone title="6. Transformer Encoder Block">
+
+Combine attention and feed-forward with residual connections and layer norm.
+
+**Tensor Shape:** `(batch, seq_len, d_model) → (batch, seq_len, d_model)`
+
+```python
+class EncoderBlock(nn.Module):
+    """
+    One Transformer encoder layer:
+    x = LayerNorm(x + MultiHeadAttention(x))
+    x = LayerNorm(x + FeedForward(x))
+    """
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.attention = MultiHeadAttention(d_model, num_heads)
+        self.ff = FeedForward(d_model, d_ff, dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        # Self-attention with residual connection
+        attended = self.attention(x, x, x, mask)
+        x = self.norm1(x + self.dropout(attended))
+
+        # Feed-forward with residual connection
+        fed_forward = self.ff(x)
+        x = self.norm2(x + self.dropout(fed_forward))
+
+        return x
+```
+
+:::note
+This is "post-norm" from the paper. Modern training uses "pre-norm" (LayerNorm applied *before* sublayers), which trains more stably: `x = x + SubLayer(LayerNorm(x))`.
+:::
+
+</Milestone>
+
+<Milestone title="7. Full Encoder Stack">
+
+Stack N encoder blocks to build the complete encoder.
+
+**Tensor Shape:** `(batch, seq_len) → (batch, seq_len, d_model)`
+
+```python
+class TransformerEncoder(nn.Module):
+    """
+    Complete Transformer encoder from paper: N stacked EncoderBlocks.
+    Base model: N=6, d_model=512, num_heads=8, d_ff=2048.
+    """
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 6,
+        d_ff: int = 2048,
+        max_len: int = 5000,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.embedding = TokenEmbedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_len, dropout)
+        self.layers = nn.ModuleList(
+            [EncoderBlock(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
+        )
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, src: torch.Tensor, src_mask: torch.Tensor = None) -> torch.Tensor:
+        # src: (batch, seq_len) — token indices
+        x = self.embedding(src)             # (batch, seq_len, d_model)
+        x = self.positional_encoding(x)     # (batch, seq_len, d_model)
+
+        for layer in self.layers:
+            x = layer(x, src_mask)          # (batch, seq_len, d_model)
+
+        return self.norm(x)                 # (batch, seq_len, d_model)
+```
+
+</Milestone>
+
+---
+
+## Architecture Assembly
+
+The full Transformer chains these components in sequence:
+
+```
+Input Tokens
+    ↓
+Token Embedding × √d_model
+    ↓
++ Positional Encoding
+    ↓  (dropout)
+┌─────────────────────────────────────────┐
+│ Encoder Block × N                       │
+│   ┌─────────────────────────────────┐   │
+│   │ Multi-Head Self-Attention       │   │
+│   │   Q = K = V = x                 │   │
+│   ├─────────────────────────────────┤   │
+│   │ Residual + LayerNorm            │   │
+│   ├─────────────────────────────────┤   │
+│   │ Feed-Forward Network            │   │
+│   ├─────────────────────────────────┤   │
+│   │ Residual + LayerNorm            │   │
+│   └─────────────────────────────────┘   │
+└─────────────────────────────────────────┘
+    ↓
+Encoder Output: (batch, seq_len, d_model)
+```
+
+For the full Encoder-Decoder Transformer, the **Decoder** adds:
+1. Masked self-attention (prevent future token peeking)
+2. Cross-attention (Q from decoder, K/V from encoder output)
+3. Final linear + softmax → token probabilities
+
+---
+
+## Minimal Working Implementation
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+# ─── Utilities ─────────────────────────────────────────────────────────────
+
+def scaled_dot_product_attention(Q, K, V, mask=None):
+    d_k = Q.size(-1)
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float("-inf"))
+    weights = torch.softmax(scores, dim=-1)
+    return torch.matmul(weights, V), weights
+
+# ─── Components ────────────────────────────────────────────────────────────
+
+class TokenEmbedding(nn.Module):
+    def __init__(self, vocab_size, d_model):
+        super().__init__()
+        self.emb = nn.Embedding(vocab_size, d_model)
+        self.scale = math.sqrt(d_model)
+    def forward(self, x):
+        return self.emb(x) * self.scale
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000, dropout=0.1):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        pe = torch.zeros(max_len, d_model)
+        pos = torch.arange(0, max_len).unsqueeze(1)
+        div = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(pos * div)
+        pe[:, 1::2] = torch.cos(pos * div)
+        self.register_buffer("pe", pe.unsqueeze(0))
+    def forward(self, x):
+        return self.dropout(x + self.pe[:, :x.size(1)])
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, heads):
+        super().__init__()
+        self.heads = heads
+        self.d_k = d_model // heads
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+    def split(self, x):
+        B, L, _ = x.shape
+        return x.view(B, L, self.heads, self.d_k).transpose(1, 2)
+    def forward(self, q, k, v, mask=None):
+        B = q.size(0)
+        Q, K, V = self.split(self.W_q(q)), self.split(self.W_k(k)), self.split(self.W_v(v))
+        x, _ = scaled_dot_product_attention(Q, K, V, mask)
+        x = x.transpose(1, 2).contiguous().view(B, -1, self.heads * self.d_k)
+        return self.W_o(x)
+
+class EncoderBlock(nn.Module):
+    def __init__(self, d_model, heads, d_ff, dropout=0.1):
+        super().__init__()
+        self.attn = MultiHeadAttention(d_model, heads)
+        self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model))
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+    def forward(self, x, mask=None):
+        x = self.norm1(x + self.drop(self.attn(x, x, x, mask)))
+        x = self.norm2(x + self.drop(self.ff(x)))
+        return x
+
+class TransformerEncoder(nn.Module):
+    def __init__(self, vocab_size, d_model=512, heads=8, layers=6, d_ff=2048, dropout=0.1):
+        super().__init__()
+        self.emb = TokenEmbedding(vocab_size, d_model)
+        self.pe  = PositionalEncoding(d_model, dropout=dropout)
+        self.blocks = nn.ModuleList([EncoderBlock(d_model, heads, d_ff, dropout) for _ in range(layers)])
+        self.norm = nn.LayerNorm(d_model)
+    def forward(self, src, mask=None):
+        x = self.pe(self.emb(src))
+        for block in self.blocks:
+            x = block(x, mask)
+        return self.norm(x)
+
+# ─── Quick test ────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    model = TransformerEncoder(vocab_size=10000, d_model=512, heads=8, layers=6, d_ff=2048)
+    src = torch.randint(0, 10000, (2, 32))   # batch=2, seq_len=32
+    out = model(src)
+    print(out.shape)  # → torch.Size([2, 32, 512])
+```
+
+---
+
+## Production Notes
+
+:::warning
+**Padding Mask**: In production, you must generate a padding mask to prevent attending to `<PAD>` tokens. Batches of variable-length sequences need this.
+
+```python
+def create_padding_mask(seq, pad_idx=0):
+    return (seq != pad_idx).unsqueeze(1).unsqueeze(2)  # (B, 1, 1, seq_len)
+```
+:::
+
+:::tip
+**Causal Mask (Decoder)**: For decoder self-attention, use a triangular mask to prevent future information from leaking:
+
+```python
+def create_causal_mask(seq_len, device):
+    return torch.tril(torch.ones(seq_len, seq_len, device=device)).bool()
+```
+:::
+
+**Memory Considerations:**
+- Attention matrices are O(n²) in sequence length — 512-token sequences are fine; 10K-token sequences require Flash Attention
+- Store attention weights only if you need them for visualization; otherwise use `torch.nn.functional.scaled_dot_product_attention` (PyTorch 2.0+) with fused kernel
+
+**Training Considerations:**
+- Use the warmup + decay learning rate schedule from the paper: `lr = d_model^(-0.5) * min(step^(-0.5), step * warmup_steps^(-1.5))`
+- Label smoothing of 0.1 significantly improves translation quality
+- Gradient clipping at 1.0 prevents explosions
+
+**Common Implementation Bugs:**
+- Missing `contiguous()` before `.view()` after `.transpose()`
+- Applying dropout to the positional encodings but not scaling to compensate
+- Using wrong dimension for LayerNorm (`d_model`, not `seq_len`)
+- Not dividing by √d_k, causing softmax saturation
+
+---
+
+## Paper to Production
+
+| Aspect | Paper (2017) | Production (2024) |
+|--------|-------------|-------------------|
+| Norm placement | Post-norm (after sublayer) | Pre-norm (before sublayer) |
+| Activation | ReLU | GeLU / SwiGLU |
+| Positional Encoding | Sinusoidal (fixed) | RoPE / ALiBi (learned / relative) |
+| Attention | Standard O(n²) | Flash Attention 2 (memory efficient) |
+| Layer count | 6 | 32–96 (LLMs) |
+| Parameters | 65M | 7B – 405B |
+| Mixed Precision | None | bfloat16 / float16 |
+| Parallelism | Single GPU | Tensor / Pipeline / Data parallel |
+
+The biggest architectural change is the move to **Pre-LayerNorm** and **RoPE positional encoding**, both of which train significantly more stably at large scale.

@@ -1,0 +1,396 @@
+# BERT Implementation
+
+## Concepts
+
+BERT's core insight: **pre-train a Transformer encoder bidirectionally, then fine-tune on downstream tasks**.
+
+Unlike GPT which reads left-to-right, BERT reads the *entire* sequence at once — it is deeply bidirectional.
+
+**Pre-training Objectives:**
+
+$$
+\mathcal{L} = \mathcal{L}_{\text{MLM}} + \mathcal{L}_{\text{NSP}}
+$$
+
+**Masked Language Modeling (MLM):** 15% of tokens are masked. The model predicts them from full context.
+
+**Next Sentence Prediction (NSP):** Given two segments, predict if B follows A in the original document.
+
+**Key Differences from Vanilla Transformer:**
+- Encoder-only (no decoder)
+- Bidirectional self-attention (no causal mask)
+- Special tokens: `[CLS]`, `[SEP]`, `[MASK]`
+- Three embedding types: Token + Position + Segment
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. BERT Embeddings">
+
+BERT sums three embedding types before feeding into the encoder.
+
+**Tensor Shape:** `(batch, seq_len) → (batch, seq_len, hidden_size)`
+
+```python
+import torch
+import torch.nn as nn
+
+class BertEmbeddings(nn.Module):
+    """
+    BERT Input Embeddings = Token + Positional + Segment.
+    
+    Unlike the Transformer paper which uses sinusoidal PE,
+    BERT learns positional embeddings from scratch.
+    """
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int = 768,
+        max_position_embeddings: int = 512,
+        type_vocab_size: int = 2,        # 2 segments: A and B
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.token_embeddings    = nn.Embedding(vocab_size, hidden_size, padding_idx=0)
+        self.position_embeddings = nn.Embedding(max_position_embeddings, hidden_size)
+        self.segment_embeddings  = nn.Embedding(type_vocab_size, hidden_size)
+
+        self.norm    = nn.LayerNorm(hidden_size, eps=1e-12)
+        self.dropout = nn.Dropout(dropout)
+
+        # Pre-generate position indices — not a parameter
+        self.register_buffer(
+            "position_ids",
+            torch.arange(max_position_embeddings).unsqueeze(0)  # (1, max_len)
+        )
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,       # (batch, seq_len)  token indices
+        token_type_ids: torch.Tensor = None,  # (batch, seq_len) 0 or 1
+    ) -> torch.Tensor:
+        seq_len = input_ids.size(1)
+
+        # Default to segment A (all zeros) if not provided
+        if token_type_ids is None:
+            token_type_ids = torch.zeros_like(input_ids)
+
+        position_ids = self.position_ids[:, :seq_len]   # (1, seq_len)
+
+        # Sum the three embeddings
+        token_emb    = self.token_embeddings(input_ids)          # (B, L, H)
+        position_emb = self.position_embeddings(position_ids)    # (1, L, H)
+        segment_emb  = self.segment_embeddings(token_type_ids)   # (B, L, H)
+
+        embeddings = token_emb + position_emb + segment_emb
+        return self.dropout(self.norm(embeddings))
+        # output: (batch, seq_len, hidden_size)
+```
+
+:::note
+BERT uses **learned** positional embeddings (nn.Embedding), not sinusoidal. This is one reason BERT is limited to `max_position_embeddings=512` — it cannot generalize beyond sequence lengths it saw during training.
+:::
+
+</Milestone>
+
+<Milestone title="2. Self-Attention (Bidirectional)">
+
+BERT uses standard Multi-Head Attention — no causal mask, so each token attends to all others.
+
+```python
+class BertSelfAttention(nn.Module):
+    """
+    Multi-Head Self-Attention for BERT.
+    Identical to the Transformer, but with NO causal mask.
+    Attention is fully bidirectional.
+    """
+    def __init__(self, hidden_size: int = 768, num_heads: int = 12, dropout: float = 0.1):
+        super().__init__()
+        assert hidden_size % num_heads == 0
+        self.num_heads = num_heads
+        self.head_size = hidden_size // num_heads
+
+        self.query = nn.Linear(hidden_size, hidden_size)
+        self.key   = nn.Linear(hidden_size, hidden_size)
+        self.value = nn.Linear(hidden_size, hidden_size)
+        self.attn_dropout = nn.Dropout(dropout)
+
+    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len, hidden_size)
+        B, L, _ = x.shape
+        x = x.view(B, L, self.num_heads, self.head_size)
+        return x.transpose(1, 2)  # (B, heads, L, head_size)
+
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor = None
+    ) -> torch.Tensor:
+        import math
+        Q = self.transpose_for_scores(self.query(hidden_states))
+        K = self.transpose_for_scores(self.key(hidden_states))
+        V = self.transpose_for_scores(self.value(hidden_states))
+
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.head_size)
+
+        # attention_mask is an additive mask (0 → attend, -10000 → ignore)
+        if attention_mask is not None:
+            scores = scores + attention_mask
+
+        probs = torch.softmax(scores, dim=-1)
+        probs = self.attn_dropout(probs)
+
+        context = torch.matmul(probs, V)                         # (B, heads, L, head_size)
+        context = context.transpose(1, 2).contiguous()
+        B, L = context.shape[:2]
+        return context.view(B, L, self.num_heads * self.head_size)
+```
+
+:::warning
+BERT uses an **additive** attention mask (add large negative values to prevent attention), not a multiplicative one. This is because the mask is applied *before* softmax, so -10000 effectively becomes 0 after softmax.
+
+```python
+# Convert a binary mask to BERT additive format:
+extended_mask = (1.0 - attention_mask[:, None, None, :]) * -10000.0
+```
+:::
+
+</Milestone>
+
+<Milestone title="3. BERT Layer (Encoder Block)">
+
+One BERT layer wraps self-attention + intermediate + output with residual connections.
+
+```python
+class BertAttentionOutput(nn.Module):
+    """Projects attention output back to hidden_size with residual + LayerNorm."""
+    def __init__(self, hidden_size: int = 768, dropout: float = 0.1):
+        super().__init__()
+        self.dense   = nn.Linear(hidden_size, hidden_size)
+        self.norm    = nn.LayerNorm(hidden_size, eps=1e-12)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, hidden_states, input_tensor):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        return self.norm(hidden_states + input_tensor)   # residual connection
+
+
+class BertIntermediate(nn.Module):
+    """Expands hidden_size → intermediate_size with GELU activation."""
+    def __init__(self, hidden_size: int = 768, intermediate_size: int = 3072):
+        super().__init__()
+        self.dense = nn.Linear(hidden_size, intermediate_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.gelu(self.dense(x))
+
+
+class BertOutput(nn.Module):
+    """Projects intermediate_size back to hidden_size with residual + LayerNorm."""
+    def __init__(self, hidden_size: int = 768, intermediate_size: int = 3072, dropout: float = 0.1):
+        super().__init__()
+        self.dense   = nn.Linear(intermediate_size, hidden_size)
+        self.norm    = nn.LayerNorm(hidden_size, eps=1e-12)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, hidden_states, input_tensor):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        return self.norm(hidden_states + input_tensor)
+
+
+class BertLayer(nn.Module):
+    """
+    One complete BERT encoder layer:
+    x → SelfAttention → AttentionOutput (residual+norm)
+      → Intermediate (GELU expand) → BertOutput (residual+norm)
+    """
+    def __init__(self, hidden_size: int = 768, num_heads: int = 12,
+                 intermediate_size: int = 3072, dropout: float = 0.1):
+        super().__init__()
+        self.attention      = BertSelfAttention(hidden_size, num_heads, dropout)
+        self.attn_output    = BertAttentionOutput(hidden_size, dropout)
+        self.intermediate   = BertIntermediate(hidden_size, intermediate_size)
+        self.bert_output    = BertOutput(hidden_size, intermediate_size, dropout)
+
+    def forward(self, hidden_states, attention_mask=None):
+        # Self-attention
+        attn = self.attention(hidden_states, attention_mask)
+        attn = self.attn_output(attn, hidden_states)     # residual + norm
+
+        # Feed-forward
+        inter = self.intermediate(attn)
+        out   = self.bert_output(inter, attn)             # residual + norm
+        return out
+```
+
+:::tip
+BERT uses **GELU** (Gaussian Error Linear Unit), not ReLU. GELU is smoother and performed better in practice. It's now the default in most modern transformers.
+:::
+
+</Milestone>
+
+<Milestone title="4. MLM and NSP Heads">
+
+The pre-training heads that BERT is trained with.
+
+```python
+class BertMLMHead(nn.Module):
+    """
+    Masked Language Modeling head.
+    Predicts the original token at each [MASK] position.
+    Output: vocab-size logits for every token position.
+    """
+    def __init__(self, hidden_size: int = 768, vocab_size: int = 30522):
+        super().__init__()
+        self.dense      = nn.Linear(hidden_size, hidden_size)
+        self.activation = nn.GELU()
+        self.norm       = nn.LayerNorm(hidden_size, eps=1e-12)
+        self.decoder    = nn.Linear(hidden_size, vocab_size, bias=False)
+
+    def forward(self, sequence_output: torch.Tensor) -> torch.Tensor:
+        # sequence_output: (batch, seq_len, hidden_size)
+        x = self.activation(self.dense(sequence_output))
+        x = self.norm(x)
+        return self.decoder(x)   # (batch, seq_len, vocab_size)
+
+
+class BertNSPHead(nn.Module):
+    """
+    Next Sentence Prediction head.
+    Uses only the [CLS] token representation (index 0).
+    Output: 2-class logits (IsNext, NotNext).
+    """
+    def __init__(self, hidden_size: int = 768):
+        super().__init__()
+        # Pooler: project [CLS] to a classification-ready space
+        self.pooler = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.Tanh()
+        )
+        self.classifier = nn.Linear(hidden_size, 2)
+
+    def forward(self, sequence_output: torch.Tensor) -> torch.Tensor:
+        # sequence_output: (batch, seq_len, hidden_size)
+        cls_token = sequence_output[:, 0, :]   # (batch, hidden_size) — [CLS] position
+        pooled    = self.pooler(cls_token)
+        return self.classifier(pooled)          # (batch, 2)
+```
+
+</Milestone>
+
+<Milestone title="5. Full BERT Model">
+
+Assemble all components into BERT-Base.
+
+```python
+class BertModel(nn.Module):
+    """
+    BERT-Base: 12 layers, 768 hidden, 12 heads, 110M parameters.
+    BERT-Large: 24 layers, 1024 hidden, 16 heads, 340M parameters.
+    """
+    def __init__(
+        self,
+        vocab_size: int = 30522,
+        hidden_size: int = 768,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        intermediate_size: int = 3072,
+        max_position_embeddings: int = 512,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.embeddings = BertEmbeddings(
+            vocab_size, hidden_size, max_position_embeddings, dropout=dropout
+        )
+        self.encoder = nn.ModuleList([
+            BertLayer(hidden_size, num_heads, intermediate_size, dropout)
+            for _ in range(num_layers)
+        ])
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,           # (batch, seq_len)
+        attention_mask: torch.Tensor = None,
+        token_type_ids: torch.Tensor = None,
+    ) -> torch.Tensor:
+        # Convert binary mask to additive format
+        if attention_mask is not None:
+            extended_mask = (1.0 - attention_mask[:, None, None, :]) * -10000.0
+        else:
+            extended_mask = None
+
+        hidden = self.embeddings(input_ids, token_type_ids)
+        for layer in self.encoder:
+            hidden = layer(hidden, extended_mask)
+
+        return hidden  # (batch, seq_len, hidden_size)
+
+
+class BertForPreTraining(nn.Module):
+    """BERT with both MLM and NSP heads for pre-training."""
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.bert    = BertModel(**kwargs)
+        vocab_size   = kwargs.get("vocab_size", 30522)
+        hidden_size  = kwargs.get("hidden_size", 768)
+        self.mlm_head = BertMLMHead(hidden_size, vocab_size)
+        self.nsp_head = BertNSPHead(hidden_size)
+
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        seq_output  = self.bert(input_ids, attention_mask, token_type_ids)
+        mlm_logits  = self.mlm_head(seq_output)    # (batch, seq_len, vocab_size)
+        nsp_logits  = self.nsp_head(seq_output)    # (batch, 2)
+        return mlm_logits, nsp_logits
+
+
+# Quick test
+if __name__ == "__main__":
+    model = BertModel()
+    input_ids      = torch.randint(0, 30522, (2, 128))
+    attention_mask = torch.ones(2, 128, dtype=torch.long)
+    token_type_ids = torch.zeros(2, 128, dtype=torch.long)
+    out = model(input_ids, attention_mask, token_type_ids)
+    print(out.shape)  # → torch.Size([2, 128, 768])
+```
+
+</Milestone>
+
+---
+
+## Production Notes
+
+**Fine-tuning BERT:**
+```python
+class BertForSequenceClassification(nn.Module):
+    """Standard fine-tuning: add a linear classifier on top of [CLS]."""
+    def __init__(self, num_labels: int, hidden_size: int = 768, **bert_kwargs):
+        super().__init__()
+        self.bert       = BertModel(**bert_kwargs)
+        self.dropout    = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_size, num_labels)
+
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        seq_out  = self.bert(input_ids, attention_mask, token_type_ids)
+        cls_out  = self.dropout(seq_out[:, 0, :])   # [CLS] token
+        return self.classifier(cls_out)
+```
+
+**Common Bugs:**
+- Using wrong mask format (multiplicative vs additive) — leads to silent, incorrect attention
+- Forgetting `token_type_ids` during fine-tuning on sentence-pair tasks
+- Using `eps=1e-12` (BERT's LayerNorm) vs PyTorch default `eps=1e-5` — small difference but matters for loading weights
+
+---
+
+## Paper to Production
+
+| Aspect | Paper BERT (2018) | Modern (2024) |
+|--------|------------------|---------------|
+| Pre-training | MLM + NSP | MLM only (NSP dropped in RoBERTa) |
+| Tokenizer | WordPiece | BPE (RoBERTa), Unigram |
+| Data | BooksCorpus + Wikipedia (16GB) | 160GB+ (RoBERTa) |
+| Training | Batch 256, 1M steps | Batch 8192, 500K steps |
+| Positional | Learned absolute | Relative (DeBERTa) |
+| Framework | TensorFlow | Hugging Face Transformers |
+| Loading | `BertModel.from_pretrained("bert-base-uncased")` | Same API, many variants |

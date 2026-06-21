@@ -1,0 +1,274 @@
+# GAN Implementation
+
+## Concepts
+
+GANs introduced **adversarial training**: a Generator and Discriminator compete in a minimax game.
+
+**The Minimax Objective:**
+
+$$
+\min_G \max_D \; \mathbb{E}_{x \sim p_{\text{data}}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]
+$$
+
+**Intuition:**
+- **Generator G**: Takes random noise z, outputs a fake image. Wants D to classify it as real (1).
+- **Discriminator D**: Binary classifier. Wants to output 1 for real images, 0 for fakes.
+- They train alternately, each improving against the other.
+
+**Key Ideas:**
+- The generator never sees real data — it learns only via the discriminator's gradient
+- Training is adversarial and notoriously unstable
+- Mode collapse: the generator produces only a few types of outputs
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. Generator Network">
+
+Maps random noise vectors to realistic images via transposed convolutions (upsampling).
+
+**Tensor Shape:** `(batch, latent_dim) → (batch, 3, 64, 64)`
+
+```python
+import torch
+import torch.nn as nn
+
+class Generator(nn.Module):
+    """
+    DCGAN-style Generator.
+    Takes a latent vector z and produces a 64×64 RGB image through
+    a series of fractionally-strided (transposed) convolutions.
+    
+    Architecture (latent_dim=100 → 64×64 image):
+    z(100) → Linear → 4×4 → 8×8 → 16×16 → 32×32 → 64×64
+    """
+    def __init__(self, latent_dim: int = 100, feature_maps: int = 64, channels: int = 3):
+        super().__init__()
+        # Maps latent vector to spatial feature map: (B, 100) → (B, 512, 4, 4)
+        self.project = nn.Sequential(
+            nn.Linear(latent_dim, feature_maps * 8 * 4 * 4, bias=False),
+        )
+
+        self.main = nn.Sequential(
+            # Block 1: 4×4 → 8×8
+            nn.ConvTranspose2d(feature_maps * 8, feature_maps * 4,
+                               kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps * 4),
+            nn.ReLU(inplace=True),
+
+            # Block 2: 8×8 → 16×16
+            nn.ConvTranspose2d(feature_maps * 4, feature_maps * 2,
+                               kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps * 2),
+            nn.ReLU(inplace=True),
+
+            # Block 3: 16×16 → 32×32
+            nn.ConvTranspose2d(feature_maps * 2, feature_maps,
+                               kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps),
+            nn.ReLU(inplace=True),
+
+            # Output: 32×32 → 64×64 (final layer: no BN, use Tanh)
+            nn.ConvTranspose2d(feature_maps, channels,
+                               kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Tanh(),  # Output in [-1, 1] — matches normalized input images
+        )
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.ConvTranspose2d, nn.Linear)):
+                nn.init.normal_(m.weight, 0.0, 0.02)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.normal_(m.weight, 1.0, 0.02)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        # z: (batch, latent_dim)
+        x = self.project(z)                          # (batch, 512*4*4)
+        x = x.view(x.size(0), -1, 4, 4)             # (batch, 512, 4, 4)
+        return self.main(x)                          # (batch, 3, 64, 64)
+```
+
+:::tip
+The final layer uses `Tanh` to output values in [-1, 1]. Your training images must also be normalized to [-1, 1] using `transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))`.
+:::
+
+</Milestone>
+
+<Milestone title="2. Discriminator Network">
+
+Classifies images as real or fake using strided convolutions (downsampling).
+
+**Tensor Shape:** `(batch, 3, 64, 64) → (batch, 1)` — a probability
+
+```python
+class Discriminator(nn.Module):
+    """
+    DCGAN-style Discriminator.
+    Takes a 64×64 RGB image and outputs a single probability: real (1) or fake (0).
+    Uses strided convolutions instead of pooling for learnable downsampling.
+    
+    Key: Uses LeakyReLU (slope=0.2), NOT regular ReLU.
+    Key: No BatchNorm in the first layer.
+    """
+    def __init__(self, feature_maps: int = 64, channels: int = 3):
+        super().__init__()
+        self.main = nn.Sequential(
+            # Block 1: 64×64 → 32×32 (no BN in first layer)
+            nn.Conv2d(channels, feature_maps,
+                      kernel_size=4, stride=2, padding=1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # Block 2: 32×32 → 16×16
+            nn.Conv2d(feature_maps, feature_maps * 2,
+                      kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # Block 3: 16×16 → 8×8
+            nn.Conv2d(feature_maps * 2, feature_maps * 4,
+                      kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # Block 4: 8×8 → 4×4
+            nn.Conv2d(feature_maps * 4, feature_maps * 8,
+                      kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(feature_maps * 8),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # Output: 4×4 → 1×1 — a single logit
+            nn.Conv2d(feature_maps * 8, 1,
+                      kernel_size=4, stride=1, padding=0, bias=False),
+            nn.Sigmoid(),  # Output a probability in [0, 1]
+        )
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, 0.0, 0.02)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.normal_(m.weight, 1.0, 0.02)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, 3, 64, 64)
+        return self.main(x).view(-1)  # (batch,) — probability of being real
+```
+
+:::warning
+**No Sigmoid in modern GANs.** WGAN and most GAN variants post-2017 remove the Sigmoid and do NOT use BCE loss. They use the raw logit (Wasserstein distance). Only use Sigmoid if you're implementing original GAN / DCGAN.
+:::
+
+</Milestone>
+
+<Milestone title="3. Training Loop">
+
+The alternating update procedure that makes adversarial training work.
+
+```python
+def train_gan(
+    generator: Generator,
+    discriminator: Discriminator,
+    dataloader,
+    latent_dim: int = 100,
+    num_epochs: int = 50,
+    device: str = "cuda",
+    lr: float = 0.0002,
+    beta1: float = 0.5,   # Adam momentum for GANs is typically 0.5, not 0.9
+):
+    """
+    Standard GAN training loop.
+    Each iteration:
+    1. Update Discriminator: maximize log(D(x)) + log(1 - D(G(z)))
+    2. Update Generator:     minimize log(1 - D(G(z))) ≡ maximize log(D(G(z)))
+    """
+    G = generator.to(device)
+    D = discriminator.to(device)
+
+    criterion = nn.BCELoss()
+
+    opt_G = torch.optim.Adam(G.parameters(), lr=lr, betas=(beta1, 0.999))
+    opt_D = torch.optim.Adam(D.parameters(), lr=lr, betas=(beta1, 0.999))
+
+    real_label = 1.0
+    fake_label = 0.0
+
+    for epoch in range(num_epochs):
+        for real_imgs, _ in dataloader:
+            batch_size = real_imgs.size(0)
+            real_imgs  = real_imgs.to(device)
+
+            # ── Step 1: Train Discriminator ─────────────────────────────
+            D.zero_grad()
+
+            # Loss on real images (should output ~1)
+            labels = torch.full((batch_size,), real_label, device=device)
+            d_real = D(real_imgs)
+            loss_D_real = criterion(d_real, labels)
+            loss_D_real.backward()
+
+            # Loss on fake images (should output ~0)
+            z = torch.randn(batch_size, latent_dim, device=device)
+            fake_imgs = G(z)
+            labels.fill_(fake_label)
+            d_fake = D(fake_imgs.detach())  # .detach() prevents backprop through G
+            loss_D_fake = criterion(d_fake, labels)
+            loss_D_fake.backward()
+
+            opt_D.step()
+
+            # ── Step 2: Train Generator ─────────────────────────────────
+            G.zero_grad()
+
+            # Generator wants D to output 1 for fake images
+            labels.fill_(real_label)          # ← flip labels for G training
+            d_fake_for_G = D(fake_imgs)       # fresh forward pass through D
+            loss_G = criterion(d_fake_for_G, labels)
+            loss_G.backward()
+
+            opt_G.step()
+
+        print(f"Epoch {epoch}: D_loss={loss_D_real.item()+loss_D_fake.item():.4f}  G_loss={loss_G.item():.4f}")
+```
+
+:::warning
+**Critical**: Use `fake_imgs.detach()` when computing discriminator loss on fake images. Without `.detach()`, gradients would flow through both D and G during the D update, causing incorrect optimization.
+:::
+
+</Milestone>
+
+---
+
+## Production Notes
+
+**Handling Training Instability:**
+- **Mode collapse**: G produces few modes → use minibatch discrimination or spectral normalization
+- **Discriminator winning**: D loss → 0, G gets no gradient → reduce D learning rate or train G more
+- **Checkerboard artifacts**: From transposed convolutions → use upsample + regular conv instead
+
+**Modern GAN Improvements:**
+```python
+# Spectral Normalization (Miyato 2018) — stabilizes discriminator
+from torch.nn.utils import spectral_norm
+
+nn.Conv2d(...)  # before
+spectral_norm(nn.Conv2d(...))  # after — wraps any linear layer
+```
+
+---
+
+## Paper to Production
+
+| Aspect | GAN (Goodfellow 2014) | StyleGAN3 (2021) |
+|--------|----------------------|------------------|
+| Generator | MLP | Mapping network + synthesis network |
+| Architecture | FC layers | Progressive growing, skip connections |
+| Latent Space | Simple Gaussian z | Disentangled W space |
+| Loss | BCE | Non-saturating + R1 regularization |
+| Resolution | 28×28 (MNIST) | 1024×1024 |
+| Training | Alternating SGD | ADAM + gradient penalty |
+| Applications replaced by | — | Diffusion Models (2022+) |
