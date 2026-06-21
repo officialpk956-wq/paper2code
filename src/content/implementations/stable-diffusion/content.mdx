@@ -1,0 +1,433 @@
+# Stable Diffusion Implementation
+
+## Concepts
+
+Stable Diffusion is a **Latent Diffusion Model (LDM)**. Instead of diffusing in pixel space (expensive), it operates in a compressed **latent space** learned by a VAE.
+
+**The Two-Stage Design:**
+
+$$
+\text{Stage 1: } \mathcal{E}(x) = z, \quad \mathcal{D}(z) \approx x \quad \text{(VAE)}
+$$
+
+$$
+\text{Stage 2: } p_\theta(z_0) = \int p_\theta(z_{0:T}) \, dz_{1:T} \quad \text{(Diffusion in latent space)}
+$$
+
+**The Diffusion Objective:**
+
+$$
+\mathcal{L} = \mathbb{E}_{t, z_0, \epsilon} \left[ \| \epsilon - \epsilon_\theta(z_t, t, c) \|^2 \right]
+$$
+
+**Key Components:**
+- **VAE Encoder/Decoder**: Compresses 512×512 images → 64×64 latents (8× compression per side)
+- **U-Net with Attention**: The denoising network that learns to predict noise
+- **CLIP Text Encoder**: Encodes text prompts into conditioning vectors
+- **DDPM Scheduler**: Manages the forward (noise) and reverse (denoise) processes
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. The Noise Scheduler (DDPM)">
+
+Defines how noise is added (forward process) and removed (reverse process).
+
+```python
+import torch
+import torch.nn as nn
+import numpy as np
+
+class DDPMScheduler:
+    """
+    Implements the Denoising Diffusion Probabilistic Model (DDPM) noise schedule.
+    
+    Forward process: q(z_t | z_{t-1}) = N(sqrt(1-beta_t) * z_{t-1}, beta_t * I)
+    Closed form:     q(z_t | z_0)     = N(sqrt(alpha_cumprod_t) * z_0, (1-alpha_cumprod_t) * I)
+    """
+    def __init__(self, num_timesteps: int = 1000, beta_start: float = 0.00085, beta_end: float = 0.012):
+        self.num_timesteps = num_timesteps
+
+        # Linear beta schedule (Stable Diffusion uses scaled linear)
+        self.betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_timesteps) ** 2
+
+        self.alphas             = 1.0 - self.betas
+        self.alphas_cumprod     = torch.cumprod(self.alphas, dim=0)
+        self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]), self.alphas_cumprod[:-1]])
+
+        # Precomputed quantities for efficient sampling
+        self.sqrt_alphas_cumprod          = self.alphas_cumprod.sqrt()
+        self.sqrt_one_minus_alphas_cumprod = (1.0 - self.alphas_cumprod).sqrt()
+
+    def add_noise(
+        self, original_samples: torch.Tensor, noise: torch.Tensor, timesteps: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Forward process: q(z_t | z_0).
+        Given clean latents z_0, returns noisy latents z_t at the given timesteps.
+        """
+        sqrt_alpha_prod = self.sqrt_alphas_cumprod[timesteps].flatten()
+        sqrt_one_minus  = self.sqrt_one_minus_alphas_cumprod[timesteps].flatten()
+
+        # Reshape for broadcasting: (batch,) → (batch, 1, 1, 1)
+        while sqrt_alpha_prod.ndim < original_samples.ndim:
+            sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
+            sqrt_one_minus  = sqrt_one_minus.unsqueeze(-1)
+
+        return sqrt_alpha_prod * original_samples + sqrt_one_minus * noise
+
+    def step(
+        self, model_output: torch.Tensor, timestep: int, sample: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Reverse process: one denoising step.
+        Given predicted noise epsilon, computes z_{t-1} from z_t.
+        """
+        t   = timestep
+        alpha_prod_t      = self.alphas_cumprod[t]
+        alpha_prod_t_prev = self.alphas_cumprod_prev[t]
+        beta_prod_t       = 1 - alpha_prod_t
+
+        # Predict the clean sample x_0 from noise prediction
+        pred_x0 = (sample - beta_prod_t.sqrt() * model_output) / alpha_prod_t.sqrt()
+        pred_x0 = pred_x0.clamp(-1, 1)
+
+        # Compute the previous sample mean
+        coeff1      = (alpha_prod_t_prev.sqrt() * (1 - alpha_prod_t_prev / alpha_prod_t)) / beta_prod_t
+        coeff2      = (alpha_prod_t.sqrt() * (alpha_prod_t_prev - alpha_prod_t)) / (-beta_prod_t)
+        pred_prev   = coeff1 * pred_x0 + coeff2 * sample
+
+        # Add noise for t > 0
+        variance = ((1 - alpha_prod_t_prev) / (1 - alpha_prod_t) * (1 - alpha_prod_t / alpha_prod_t_prev)).clamp(1e-20)
+        noise    = torch.randn_like(sample) if t > 0 else 0
+
+        return pred_prev + variance.sqrt() * noise
+```
+
+:::note
+The "scaled linear" schedule used in Stable Diffusion (`beta = linspace(sqrt(start), sqrt(end)) ** 2`) differs from the original DDPM linear schedule. It concentrates noise steps near the extremes, which improves image quality.
+:::
+
+</Milestone>
+
+<Milestone title="2. ResNet Block for U-Net">
+
+The fundamental building block of the denoising U-Net.
+
+```python
+class ResBlock(nn.Module):
+    """
+    ResNet block used throughout the U-Net.
+    Incorporates timestep embedding so the network knows which denoising step it's on.
+    
+    Input:  (B, C, H, W) + timestep emb (B, time_emb_dim)
+    Output: (B, out_C, H, W)
+    """
+    def __init__(self, in_channels: int, out_channels: int, time_emb_dim: int, dropout: float = 0.0):
+        super().__init__()
+        self.norm1 = nn.GroupNorm(32, in_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+
+        # Project timestep embedding into the channel dimension
+        self.time_mlp = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_emb_dim, out_channels),
+        )
+
+        self.norm2   = nn.GroupNorm(32, out_channels)
+        self.dropout = nn.Dropout(dropout)
+        self.conv2   = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+        # Skip connection projection if channels differ
+        self.shortcut = (
+            nn.Conv2d(in_channels, out_channels, 1)
+            if in_channels != out_channels
+            else nn.Identity()
+        )
+
+    def forward(self, x: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
+        h = self.conv1(nn.functional.silu(self.norm1(x)))
+
+        # Add timestep conditioning: (B, out_C) → (B, out_C, 1, 1)
+        h = h + self.time_mlp(time_emb)[:, :, None, None]
+
+        h = self.conv2(self.dropout(nn.functional.silu(self.norm2(h))))
+        return h + self.shortcut(x)
+```
+
+:::tip
+**Group Normalization** is used instead of Batch Normalization. GroupNorm works correctly with batch size 1 (common during inference with diffusion models), whereas BatchNorm breaks at batch size 1.
+:::
+
+</Milestone>
+
+<Milestone title="3. Cross-Attention for Text Conditioning">
+
+Allows the U-Net to be conditioned on text embeddings from CLIP.
+
+```python
+class CrossAttention(nn.Module):
+    """
+    Cross-attention that lets image features (query) attend to text embeddings (key/value).
+    
+    Q: image features  (B, H*W, d_model) — spatial tokens
+    K: text embeddings (B, seq_len, context_dim) — text tokens
+    V: text embeddings (B, seq_len, context_dim) — text tokens
+    """
+    def __init__(self, d_model: int, context_dim: int, num_heads: int = 8):
+        super().__init__()
+        import math
+        self.num_heads = num_heads
+        self.head_dim  = d_model // num_heads
+        self.scale     = math.sqrt(self.head_dim)
+
+        self.to_q = nn.Linear(d_model, d_model, bias=False)
+        self.to_k = nn.Linear(context_dim, d_model, bias=False)
+        self.to_v = nn.Linear(context_dim, d_model, bias=False)
+        self.to_out = nn.Sequential(nn.Linear(d_model, d_model), nn.Dropout(0.0))
+
+    def forward(self, x: torch.Tensor, context: torch.Tensor = None) -> torch.Tensor:
+        # If no context provided, fall back to self-attention
+        if context is None:
+            context = x
+
+        B, N, _ = x.shape
+        H = self.num_heads
+
+        Q = self.to_q(x).view(B, N, H, self.head_dim).transpose(1, 2)
+        K = self.to_k(context).view(B, -1, H, self.head_dim).transpose(1, 2)
+        V = self.to_v(context).view(B, -1, H, self.head_dim).transpose(1, 2)
+
+        attn = torch.softmax(torch.matmul(Q, K.transpose(-2, -1)) / self.scale, dim=-1)
+        out  = torch.matmul(attn, V)
+        out  = out.transpose(1, 2).contiguous().view(B, N, -1)
+        return self.to_out(out)
+```
+
+</Milestone>
+
+<Milestone title="4. U-Net Encoder & Decoder">
+
+The U-Net processes latents at multiple resolutions and uses skip connections.
+
+```python
+class DownBlock(nn.Module):
+    """U-Net encoder block: ResBlock + optional CrossAttention + Downsample."""
+    def __init__(self, in_ch, out_ch, time_emb_dim, context_dim=None, has_attn=True):
+        super().__init__()
+        self.resblock = ResBlock(in_ch, out_ch, time_emb_dim)
+        self.attn     = CrossAttention(out_ch, context_dim or out_ch) if has_attn else None
+        self.norm     = nn.GroupNorm(32, out_ch) if has_attn else None
+        # Strided conv for downsampling (Stable Diffusion avoids MaxPool)
+        self.downsample = nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1)
+
+    def forward(self, x, time_emb, context=None):
+        x = self.resblock(x, time_emb)
+        if self.attn is not None:
+            B, C, H, W = x.shape
+            # Reshape spatial dims to sequence for attention
+            x_flat = x.permute(0, 2, 3, 1).view(B, H * W, C)
+            x_flat = x_flat + self.attn(self.norm(x_flat), context)
+            x = x_flat.view(B, H, W, C).permute(0, 3, 1, 2)
+        skip = x                        # save for decoder skip connection
+        return self.downsample(x), skip
+
+
+class UpBlock(nn.Module):
+    """U-Net decoder block: Upsample + concat skip + ResBlock + optional CrossAttention."""
+    def __init__(self, in_ch, out_ch, time_emb_dim, context_dim=None, has_attn=True):
+        super().__init__()
+        # in_ch * 2 because we concatenate the skip connection
+        self.resblock   = ResBlock(in_ch * 2, out_ch, time_emb_dim)
+        self.attn       = CrossAttention(out_ch, context_dim or out_ch) if has_attn else None
+        self.norm       = nn.GroupNorm(32, out_ch) if has_attn else None
+        self.upsample   = nn.ConvTranspose2d(in_ch, in_ch, kernel_size=2, stride=2)
+
+    def forward(self, x, skip, time_emb, context=None):
+        x = self.upsample(x)
+        x = torch.cat([x, skip], dim=1)         # concat skip connection
+        x = self.resblock(x, time_emb)
+        if self.attn is not None:
+            B, C, H, W = x.shape
+            x_flat = x.permute(0, 2, 3, 1).view(B, H * W, C)
+            x_flat = x_flat + self.attn(self.norm(x_flat), context)
+            x = x_flat.view(B, H, W, C).permute(0, 3, 1, 2)
+        return x
+```
+
+</Milestone>
+
+<Milestone title="5. Timestep Sinusoidal Embedding">
+
+The U-Net needs to know which denoising timestep it is currently at.
+
+```python
+class TimestepEmbedding(nn.Module):
+    """
+    Encodes the scalar timestep t into a high-dimensional vector
+    using sinusoidal embeddings (same idea as Transformer PE),
+    then projects through two linear layers.
+    """
+    def __init__(self, dim: int):
+        super().__init__()
+        self.dim = dim
+        # Projects sinusoidal encoding to time_emb_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.SiLU(),
+            nn.Linear(dim * 4, dim * 4),
+        )
+
+    def sinusoidal_embedding(self, timesteps: torch.Tensor) -> torch.Tensor:
+        import math
+        half = self.dim // 2
+        freqs = torch.exp(
+            -math.log(10000) * torch.arange(half, dtype=torch.float32, device=timesteps.device) / half
+        )
+        args = timesteps[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
+        return embedding  # (batch, dim)
+
+    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
+        return self.mlp(self.sinusoidal_embedding(timesteps))
+```
+
+</Milestone>
+
+<Milestone title="6. Inference: Text-to-Image Generation Loop">
+
+Chain all components together to generate an image from a text prompt.
+
+```python
+@torch.no_grad()
+def generate_image(
+    unet,
+    vae_decoder,
+    text_encoder,
+    tokenizer,
+    scheduler: DDPMScheduler,
+    prompt: str,
+    num_inference_steps: int = 50,
+    guidance_scale: float = 7.5,    # CFG scale
+    height: int = 512,
+    width: int = 512,
+    device: str = "cuda",
+) -> torch.Tensor:
+    """
+    Full Stable Diffusion inference pipeline.
+    
+    Key technique: Classifier-Free Guidance (CFG)
+    The model runs TWICE per step:
+      1. Conditioned on text: epsilon_c
+      2. Conditioned on empty string (unconditional): epsilon_u
+    Final prediction: epsilon_u + guidance_scale * (epsilon_c - epsilon_u)
+    Higher guidance_scale → more faithful to prompt, less diverse.
+    """
+    # 1. Encode text prompt + unconditional empty prompt
+    text_input     = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
+    uncond_input   = tokenizer("", return_tensors="pt", padding="max_length",
+                               max_length=text_input.input_ids.shape[-1]).to(device)
+    text_embeds    = text_encoder(text_input.input_ids)             # (1, 77, 768)
+    uncond_embeds  = text_encoder(uncond_input.input_ids)           # (1, 77, 768)
+    # Concatenate for a single batched forward pass
+    context        = torch.cat([uncond_embeds, text_embeds])        # (2, 77, 768)
+
+    # 2. Start from pure Gaussian noise in latent space
+    # SD uses 8× spatial compression: 512px → 64 latent tokens
+    latents = torch.randn((1, 4, height // 8, width // 8), device=device)
+
+    # 3. Iterative denoising
+    scheduler_timesteps = torch.linspace(
+        scheduler.num_timesteps - 1, 0, num_inference_steps, dtype=torch.long
+    )
+    for t in scheduler_timesteps:
+        # Duplicate latents for CFG (conditional + unconditional in one pass)
+        latent_input = torch.cat([latents] * 2)
+
+        # Predict noise
+        noise_pred = unet(latent_input, t, context)       # (2, 4, 64, 64)
+        noise_uncond, noise_cond = noise_pred.chunk(2)
+
+        # Classifier-Free Guidance
+        noise_guided = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
+
+        # Denoise one step
+        latents = scheduler.step(noise_guided, t.item(), latents)
+
+    # 4. Decode latents to pixel space via VAE
+    # Scale factor 0.18215 is SD-specific normalization
+    image = vae_decoder(latents / 0.18215)                # (1, 3, 512, 512) in [-1, 1]
+    image = (image / 2 + 0.5).clamp(0, 1)                # → [0, 1]
+    return image
+```
+
+:::warning
+**Classifier-Free Guidance (CFG)** is not in the original LDM paper — it was added by Ho & Salimans (2021). It doubles inference cost but dramatically improves text alignment. `guidance_scale=7.5` is the Stable Diffusion default, but values 5–15 are all commonly used.
+:::
+
+</Milestone>
+
+---
+
+## Architecture Assembly
+
+```
+Text Prompt
+    ↓
+CLIP Text Encoder
+    ↓
+Text Embeddings (77 tokens × 768 dim)
+    ↓                              ↓
+    │                    Random Latent Noise (4 × 64 × 64)
+    │                              ↓
+    │            ┌──────────────────────────────────────────┐
+    │            │  U-Net (Denoising Network)               │
+    │            │                                          │
+    └──────────→ │  Encoder: CrossAttn(image ← text)        │
+                 │     ↓ (skip connections saved)           │
+                 │  Bottleneck: CrossAttn + ResBlock         │
+                 │     ↓ (skip connections restored)        │
+                 │  Decoder: CrossAttn(image ← text)        │
+                 │                                          │
+                 │  Output: Predicted Noise ε (4 × 64 × 64) │
+                 └──────────────────────────────────────────┘
+                              ↓
+                    Scheduler removes noise
+                    (repeated N=50 times)
+                              ↓
+                 Clean Latents (4 × 64 × 64)
+                              ↓
+                       VAE Decoder
+                              ↓
+                Final Image (3 × 512 × 512)
+```
+
+---
+
+## Production Notes
+
+**Memory at Inference:**
+- VAE: ~80MB, CLIP: ~300MB, U-Net: ~3.4GB — total ~3.8GB VRAM minimum
+- `torch.float16` halves memory: `model.half()` before inference
+- `pipe.enable_attention_slicing()` (Diffusers) reduces attention memory peak
+
+**Common Bugs:**
+- Wrong latent scale factor — SD uses `0.18215`, not 1.0
+- Using DDPM scheduler (1000 steps) for inference instead of DDIM (50 steps) — DDIM is 20× faster
+- Forgetting to normalize text inputs with the CLIP tokenizer's correct max length (77 tokens)
+
+---
+
+## Paper to Production
+
+| Aspect | LDM Paper (2022) | Stable Diffusion XL (2024) |
+|--------|-----------------|---------------------------|
+| U-Net channels | 256 | 320 / 640 |
+| Image resolution | 256×256 | 1024×1024 |
+| Text encoder | CLIP ViT-L/14 | Two CLIP encoders (ViT-L + ViT-bigG) |
+| Latent channels | 4 | 4 |
+| Parameters | ~890M | ~3.5B |
+| Scheduler | DDPM (1000 steps) | DDIM / DPM-Solver++ (20-50 steps) |
+| Conditioning | Cross-attention | Cross-attention + pooled text embeds |
+| Fine-tuning | Fine-tune full model | LoRA / DreamBooth |

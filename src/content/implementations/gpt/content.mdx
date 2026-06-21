@@ -1,0 +1,300 @@
+# GPT Implementation
+
+## Concepts
+
+GPT's core insight: **pre-train a Transformer decoder with causal language modeling, then fine-tune**.
+
+Unlike BERT (bidirectional), GPT reads left-to-right. Each token can only attend to **previous** tokens — this is the causal constraint.
+
+**Training Objective:**
+
+$$
+\mathcal{L}(\mathcal{U}) = \sum_{i} \log P(u_i \mid u_{i-k}, \ldots, u_{i-1}; \Theta)
+$$
+
+**Key Design Decisions:**
+- Decoder-only Transformer (no encoder, no cross-attention)
+- Causal (autoregressive) self-attention via triangular mask
+- Language modeling as a universal pre-training objective
+- The same architecture scales from GPT (117M) to GPT-4 (1.8T+)
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. Causal Self-Attention">
+
+GPT's attention is masked so token `i` cannot see tokens `i+1, i+2, ...`.
+
+**Tensor Shape:** `(batch, seq_len, d_model) → (batch, seq_len, d_model)`
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+class CausalSelfAttention(nn.Module):
+    """
+    Multi-Head Self-Attention with a causal (autoregressive) mask.
+    Each position can only attend to itself and previous positions.
+    This is the core primitive that makes GPT autoregressive.
+    """
+    def __init__(self, d_model: int, num_heads: int, seq_len: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        self.head_size = d_model // num_heads
+        self.d_model   = d_model
+
+        # Fused QKV projection (more efficient than 3 separate Linears)
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        self.attn_drop = nn.Dropout(dropout)
+        self.resid_drop = nn.Dropout(dropout)
+
+        # Causal mask: lower-triangular matrix — precomputed once, not a parameter
+        mask = torch.tril(torch.ones(seq_len, seq_len))
+        self.register_buffer("mask", mask.view(1, 1, seq_len, seq_len))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, L, C = x.shape
+
+        # Project to Q, K, V in one pass
+        qkv = self.qkv_proj(x)                                   # (B, L, 3*d_model)
+        Q, K, V = qkv.split(self.d_model, dim=-1)               # each: (B, L, d_model)
+
+        # Split into heads
+        def split_heads(t):
+            return t.view(B, L, self.num_heads, self.head_size).transpose(1, 2)
+
+        Q, K, V = split_heads(Q), split_heads(K), split_heads(V)
+        # each: (B, heads, L, head_size)
+
+        # Scaled dot-product with causal mask
+        scale  = math.sqrt(self.head_size)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / scale    # (B, heads, L, L)
+        scores = scores.masked_fill(self.mask[:, :, :L, :L] == 0, float("-inf"))
+        probs  = torch.softmax(scores, dim=-1)
+        probs  = self.attn_drop(probs)
+
+        # Weighted sum of values
+        out = torch.matmul(probs, V)                              # (B, heads, L, head_size)
+        out = out.transpose(1, 2).contiguous().view(B, L, C)     # (B, L, d_model)
+        return self.resid_drop(self.out_proj(out))
+```
+
+:::warning
+The causal mask must be registered as a buffer (not a parameter) — it moves to GPU with the model but is never updated. Many beginner implementations create it in `forward()`, which reallocates memory every forward pass.
+:::
+
+</Milestone>
+
+<Milestone title="2. GPT Block">
+
+One GPT transformer block: **Pre-LN** (LayerNorm before sublayers, unlike the original paper).
+
+```python
+class GPTBlock(nn.Module):
+    """
+    One GPT decoder block. Note: GPT-1 paper used post-norm,
+    but this implements pre-norm (standard in GPT-2 onwards)
+    for better training stability.
+    
+    Pre-norm: x = x + Sublayer(LayerNorm(x))
+    Post-norm: x = LayerNorm(x + Sublayer(x))  ← original paper
+    """
+    def __init__(self, d_model: int, num_heads: int, seq_len: int,
+                 d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.ln1  = nn.LayerNorm(d_model)
+        self.attn = CausalSelfAttention(d_model, num_heads, seq_len, dropout)
+        self.ln2  = nn.LayerNorm(d_model)
+        self.mlp  = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Attention with pre-norm and residual
+        x = x + self.attn(self.ln1(x))
+
+        # Feed-forward with pre-norm and residual
+        x = x + self.mlp(self.ln2(x))
+
+        return x
+```
+
+</Milestone>
+
+<Milestone title="3. Full GPT Model">
+
+Stack blocks, add token + positional embeddings, and tie the output projection.
+
+```python
+class GPT(nn.Module):
+    """
+    A faithful implementation of GPT (Radford et al., 2018).
+
+    GPT-1:  n_layers=12, d_model=768,  n_heads=12, d_ff=3072  → 117M params
+    GPT-2:  n_layers=12, d_model=768,  n_heads=12, d_ff=3072  → 117M (small)
+            n_layers=48, d_model=1600, n_heads=25, d_ff=6400  → 1.5B (XL)
+    """
+    def __init__(
+        self,
+        vocab_size: int,
+        seq_len: int = 1024,
+        d_model: int = 768,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        d_ff: int = 3072,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.seq_len = seq_len
+
+        # Input embeddings (both learned)
+        self.token_emb    = nn.Embedding(vocab_size, d_model)
+        self.position_emb = nn.Embedding(seq_len, d_model)
+        self.drop         = nn.Dropout(dropout)
+
+        # Transformer blocks
+        self.blocks = nn.ModuleList([
+            GPTBlock(d_model, num_heads, seq_len, d_ff, dropout)
+            for _ in range(num_layers)
+        ])
+
+        # Final LayerNorm before head (added in GPT-2)
+        self.ln_f = nn.LayerNorm(d_model)
+
+        # Language model head
+        # Weight tying: share weights between token embedding and output projection.
+        # This is a critical trick used in BERT, GPT, and most LLMs.
+        self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
+        self.lm_head.weight = self.token_emb.weight  # ← weight tying
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        # idx: (batch, seq_len) — token indices
+        B, L = idx.shape
+        assert L <= self.seq_len, f"Sequence length {L} exceeds max {self.seq_len}"
+
+        # Build position indices on the fly
+        positions = torch.arange(L, device=idx.device).unsqueeze(0)  # (1, L)
+
+        # Combine token and position embeddings
+        x = self.drop(self.token_emb(idx) + self.position_emb(positions))
+
+        # Pass through transformer blocks
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.ln_f(x)              # (B, L, d_model)
+        return self.lm_head(x)        # (B, L, vocab_size) — logits for next token
+```
+
+</Milestone>
+
+<Milestone title="4. Autoregressive Text Generation">
+
+Use the trained model to generate text token by token.
+
+```python
+@torch.no_grad()
+def generate(
+    model: GPT,
+    idx: torch.Tensor,          # (1, prompt_len) — starting token indices
+    max_new_tokens: int = 100,
+    temperature: float = 1.0,   # >1 = more random, <1 = more focused
+    top_k: int = None,          # sample from top-k tokens only
+) -> torch.Tensor:
+    """
+    Autoregressively generate new tokens one at a time.
+    Each generated token is appended and fed back as input.
+    """
+    model.eval()
+    for _ in range(max_new_tokens):
+        # Crop context if it exceeds the model's max sequence length
+        idx_cond = idx[:, -model.seq_len:]
+
+        # Forward pass → get logits for the LAST position only
+        logits = model(idx_cond)[:, -1, :]  # (1, vocab_size)
+
+        # Apply temperature scaling
+        logits = logits / temperature
+
+        # Optionally restrict to top-k candidates
+        if top_k is not None:
+            vals, _ = torch.topk(logits, top_k)
+            logits[logits < vals[:, -1:]] = float("-inf")
+
+        # Sample from the distribution
+        probs     = torch.softmax(logits, dim=-1)
+        next_tok  = torch.multinomial(probs, num_samples=1)  # (1, 1)
+
+        # Append the new token and repeat
+        idx = torch.cat([idx, next_tok], dim=1)
+
+    return idx
+
+
+# Quick test
+if __name__ == "__main__":
+    model = GPT(vocab_size=50257, seq_len=1024, d_model=768, num_layers=12, num_heads=12)
+    prompt = torch.zeros((1, 1), dtype=torch.long)   # start with token 0
+    out = generate(model, prompt, max_new_tokens=20, temperature=0.8, top_k=40)
+    print(out.shape)  # → torch.Size([1, 21])
+```
+
+:::tip
+**Temperature = 0** makes generation deterministic (always pick the most likely token). **Temperature = 1** is sampling from the trained distribution. Values between 0.7–0.9 are typical for coherent but diverse text.
+:::
+
+</Milestone>
+
+---
+
+## Production Notes
+
+**Weight Tying is Critical:**
+```python
+self.lm_head.weight = self.token_emb.weight
+```
+This reduces parameter count by `vocab_size × d_model` (50K × 768 ≈ 38M for GPT-2) and improves convergence because the embedding and output spaces are forced to be consistent.
+
+**Common Bugs:**
+- Not cropping the context window — passing sequences longer than `seq_len` causes an index error in the causal mask
+- Missing weight tying — results in larger model and slower convergence
+- Using argmax instead of sampling — generates repetitive, degenerate text
+- Forgetting `@torch.no_grad()` during generation — wastes memory computing gradients
+
+**Memory Considerations:**
+- KV-cache: During generation, re-computing K/V for the entire prefix every step is wasteful. Production systems cache K/V for already-generated tokens and only compute attention for the new token
+- `torch.compile()` gives ~30% speedup on GPT-style models in PyTorch 2.0+
+
+---
+
+## Paper to Production
+
+| Aspect | GPT-1 (2018) | GPT-4 (2023) |
+|--------|-------------|--------------|
+| Parameters | 117M | ~1.8T (estimated) |
+| Layers | 12 | ~120 |
+| Context | 512 tokens | 128K tokens |
+| Positional Encoding | Learned absolute | RoPE |
+| Attention | Standard O(n²) | Flash Attention / Sparse |
+| Training Data | BooksCorpus (5GB) | Internet-scale (trillions of tokens) |
+| Objective | Language modeling only | LM + RLHF |
+| Parallelism | Single GPU | Tensor + Pipeline + Data (thousands of GPUs) |
