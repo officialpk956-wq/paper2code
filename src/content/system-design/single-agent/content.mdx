@@ -1,0 +1,94 @@
+Design a ReAct-style AI agent that reasons about a task, selects and invokes tools, observes results, and iterates until it completes the goal — without human intervention.
+
+## Business Problem
+
+LLMs are powerful but static — they can't browse the web, run code, or query a database. An agent wraps an LLM in a **Thought → Action → Observation** loop, enabling it to complete multi-step tasks in the real world.
+
+## Core Loop (ReAct Pattern)
+
+```
+User Task: "Find the latest NVIDIA earnings and calculate YoY revenue growth"
+
+Thought:   "I need to find NVIDIA's latest and year-ago earnings"
+Action:    web_search("NVIDIA Q3 2024 earnings revenue")
+Observation: "$18.12B revenue in Q3 FY2024"
+
+Thought:   "Now I need the year-ago figure"
+Action:    web_search("NVIDIA Q3 2023 earnings revenue")
+Observation: "$5.93B revenue in Q3 FY2023"
+
+Thought:   "I can now calculate growth"
+Action:    calculator("(18.12 - 5.93) / 5.93 * 100")
+Observation: "205.7%"
+
+Thought:   "I have everything I need"
+Answer:    "NVIDIA revenue grew 205.7% YoY in Q3 FY2024"
+```
+
+## Architecture
+
+```
+User Task
+  ↓
+Planner LLM (decides Thought + Action)
+  ↓ (selects tool + arguments)
+Tool Registry
+  ├── web_search(query) → snippets
+  ├── calculator(expr) → result
+  ├── code_interpreter(code) → output
+  ├── retrieval(query) → documents
+  └── browser(url) → page content
+  ↓ (tool executed)
+Observation Parser (extract structured result)
+  ↓ (loop)
+Short-Term Memory (full conversation + all prior T/A/O turns)
+  ↓ (when task complete)
+Final Answer Generator
+```
+
+## Tool Registry Design
+
+Tools must be:
+1. **Deterministic**: Same inputs → same outputs (where possible)
+2. **Sandboxed**: Code interpreter runs in isolated container
+3. **Timeout-bounded**: Each tool call has a max 30s budget
+4. **Observable**: Every call logged for debugging
+
+```json
+{
+  "name": "web_search",
+  "description": "Search the web and return top 5 snippets",
+  "parameters": {
+    "query": { "type": "string", "max_length": 200 }
+  },
+  "timeout_ms": 5000,
+  "max_calls_per_task": 10
+}
+```
+
+## Guard Rails
+
+Without constraints, agents loop infinitely or make catastrophic tool calls:
+
+| Guard | Mechanism |
+|-------|-----------|
+| Max iterations | Hard stop at N=20 loops |
+| Circular loop detection | Hash of recent Thought/Action pairs |
+| Cost budget | Abort if token spend > threshold |
+| Dangerous action confirmation | Human-in-the-loop gate for write actions |
+| Tool call rate limit | Max 3 calls/tool per task |
+
+## Failure Modes
+
+| Failure | Symptom | Fix |
+|---------|---------|-----|
+| Infinite loop | Task never completes | Max iteration guard |
+| Hallucinated tool arguments | Tool errors | Strict JSON schema validation |
+| Context overflow | Early truncation of observations | Compress old observations in memory |
+| Tool unavailable | Task blocked | Graceful degradation fallback |
+
+## Interview Questions
+
+1. The agent has called web_search 8 times and isn't converging. How do you detect and handle this?
+2. A user asks the agent to delete files on their behalf. How do you safely implement write actions?
+3. How would you evaluate agent quality? What metrics matter beyond task completion rate?
