@@ -1,0 +1,167 @@
+# BERT
+
+## 1. Overview
+
+BERT (Bidirectional Encoder Representations from Transformers) is a groundbreaking language model introduced by researchers at Google in 2018. It fundamentally changed the landscape of Natural Language Processing by proving that self-supervised pre-training on massive amounts of text could create a universal language representation that could be easily fine-tuned for any downstream task.
+
+Unlike earlier models (like OpenAI's GPT-1) which read text strictly left-to-right, BERT is deeply bidirectional. It uses only the **Encoder** portion of the Transformer architecture to look at the left and right context of a word simultaneously, achieving state-of-the-art results on 11 NLP tasks upon its release.
+
+:::note
+You can visualize BERT's bidirectional attention mechanisms using the [Attention Heatmap](/architectures/transformer/attention).
+:::
+
+## 2. Historical Context
+
+Before BERT, NLP relied heavily on word embeddings like Word2Vec and GloVe. These models assigned a single fixed vector to a word. Thus, the word "bank" in "bank account" and "river bank" had the exact same mathematical representation, ignoring context.
+
+ELMo (2018) solved this by using bidirectional LSTMs to create context-aware embeddings, but LSTMs were sequential and slow. Around the same time, OpenAI released GPT, which used the Transformer architecture to predict the next word, but its left-to-right nature meant it couldn't see future context. BERT married the bidirectionality of ELMo with the massive parallelization and representational power of the Transformer.
+
+## 3. Problem It Solves
+
+How do you train a bidirectional model to understand context without letting it "cheat"?
+
+If you train a bidirectional Transformer to predict the next word, the word to be predicted is already present in the right-side context, meaning the model trivially "sees" the answer through the unmasked attention mechanism.
+
+BERT solves this by completely abandoning the "next word prediction" task. Instead, it uses two novel pre-training objectives:
+1.  **Masked Language Modeling (MLM):** Randomly hide 15% of the words in a sentence and force the model to guess what they are based on the surrounding context.
+2.  **Next Sentence Prediction (NSP):** Give the model two sentences and ask if sentence B logically follows sentence A in the original document.
+
+## 4. Architecture Diagram Data
+
+BERT is composed entirely of stacked Transformer **Encoder** layers.
+
+**BERT-Base:**
+*   Layers (L): 12
+*   Hidden Size (H): 768
+*   Attention Heads (A): 12
+*   Total Parameters: 110M
+
+**BERT-Large:**
+*   Layers (L): 24
+*   Hidden Size (H): 1024
+*   Attention Heads (A): 16
+*   Total Parameters: 340M
+
+## 5. Layer-by-Layer Breakdown
+
+### Input Embeddings
+BERT's input is constructed by summing three distinct embeddings:
+1.  **Token Embeddings:** WordPiece embeddings (a subword tokenization algorithm).
+2.  **Segment Embeddings:** A learned vector indicating whether the token belongs to Sentence A or Sentence B (crucial for NSP).
+3.  **Position Embeddings:** Unlike the original Transformer's sine/cosine functions, BERT uses *learned* positional embeddings for sequences up to 512 tokens.
+
+### Special Tokens
+*   `[CLS]`: Always the very first token in the sequence. Its final hidden state is used as the aggregate sequence representation for classification tasks.
+*   `[SEP]`: Used to separate two sentences.
+*   `[MASK]`: Used during pre-training to hide a token.
+
+### The Encoder Stack
+The sequence flows through $L$ identical Transformer encoder layers. Because there is no causal mask (unlike GPT), every token explicitly attends to every other token in the 512-length context window at every layer via Multi-Head Self-Attention.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, sequence length $T$ (max 512), hidden size $H$ (768 for Base).
+
+```text
+Input: [CLS] Sentence A [SEP] Sentence B [SEP]
+
+Token Embeds      : (B, T, 768)
++ Segment Embeds  : (B, T, 768)
++ Position Embeds : (B, T, 768)
+-------------------------------
+Initial State     : (B, T, 768)
+
+--- Inside Encoder Layer (x12) ---
+Self-Attention    : (B, 12, T, T)    <- Full bidirectional attention
+Add & Norm        : (B, T, 768)
+FFN (3072 dim)    : (B, T, 768)
+Add & Norm        : (B, T, 768)
+-------------------------------
+Final Hidden State: (B, T, 768)
+
+--- Task Specific Heads ---
+Masked Token Pred : Select masked indices -> Linear(768, VocabSize)
+Classification    : Select [CLS] index 0 -> Linear(768, NumClasses)
+```
+
+## 7. Mathematical Foundations
+
+**Masked Language Modeling (MLM):**
+For a sequence $X = (x_1, \dots, x_T)$, we create a corrupted version $\hat{X}$ by masking a subset of tokens $M$. The training objective minimizes the negative log-likelihood of the true tokens given the corrupted context:
+$$ L_{MLM} = - \sum_{i \in M} \log P(x_i | \hat{X}; \theta) $$
+The probability is calculated via a Softmax over the vocabulary applied to the final hidden state of the masked position.
+
+*Masking Strategy:* Of the 15% chosen for masking:
+*   80% are replaced with `[MASK]`.
+*   10% are replaced with a random word (to force the model to rely on context, not just trust the input).
+*   10% are left unchanged (to minimize the mismatch between pre-training and fine-tuning, where `[MASK]` never appears).
+
+## 8. Forward Pass
+
+### Pre-training
+1.  A massive corpus of unlabeled text (Wikipedia + BookCorpus) is processed.
+2.  Pairs of sentences are packed together, with 15% of tokens masked.
+3.  The model processes them bidirectionally.
+4.  Gradients are calculated from the MLM loss (predicting the masked tokens) and the NSP loss (predicting if the sentences are consecutive).
+
+### Fine-Tuning
+1.  The pre-trained weights are loaded.
+2.  A small, task-specific layer is added on top. (e.g., for sentiment analysis, a simple Linear layer connects the `[CLS]` token output to a 2-class Softmax).
+3.  The *entire* network is trained end-to-end on the labeled dataset for 2-4 epochs.
+
+## 9. Training Process
+
+*   **Pre-training Compute:** Training BERT-Large took 4 days on 64 Cloud TPUs.
+*   **Optimizer:** Adam with weight decay.
+*   **The Fine-Tuning Revolution:** Before BERT, standard practice was to train task-specific architectures (LSTMs/CNNs) from scratch on task-specific data. BERT proved that pre-training a massive model once, and fine-tuning it quickly for specific tasks, yielded vastly superior results.
+
+## 10. Complexity Analysis
+
+| Model | Parameters | Attention Complexity | Context Limit |
+| :--- | :--- | :--- | :--- |
+| BERT-Base | 110M | $O(T^2 \cdot H)$ | 512 |
+| BERT-Large | 340M | $O(T^2 \cdot H)$ | 512 |
+
+**Insight:** Because BERT relies on dense bidirectional attention over the entire sequence, it is constrained to a relatively short context window of 512 tokens. Extending this requires quadratic increases in memory.
+
+## 11. Advantages
+
+*   **Deep Bidirectionality:** Understands context from both left and right simultaneously, crucial for tasks like Named Entity Recognition and Question Answering.
+*   **Universal Representation:** The same pre-trained model can be used for classification, token tagging, and question answering with minimal architectural changes.
+*   **Open Source:** Google released the pre-trained weights, democratizing access to massive NLP capabilities.
+
+## 12. Limitations
+
+*   **Not Generative:** Because it relies on bidirectional context, BERT cannot easily generate text autoregressively (unlike GPT). You cannot ask BERT to "write a story."
+*   **Pre-training / Fine-tuning Discrepancy:** The `[MASK]` token never appears during fine-tuning, creating a slight domain shift.
+*   **Inefficient Pre-training:** Because only 15% of tokens are predicted per batch, it requires many more training steps to converge compared to autoregressive models that predict *every* token.
+
+## 13. Real World Applications
+
+*   **Google Search:** Integrated into the core search algorithm in 2019 to better understand the contextual meaning of complex queries.
+*   **Information Extraction:** The industry standard for Named Entity Recognition (NER), sentiment analysis, and document classification.
+
+## 14. Interview Questions
+
+1.  **Why does BERT use Masked Language Modeling instead of Next Word Prediction?**
+    *   *Next Word Prediction is inherently unidirectional (left-to-right). To train a deeply bidirectional model without letting the model "cheat" by looking ahead, you must hide random tokens and force it to use both left and right context.*
+2.  **What is the role of the `[CLS]` token?**
+    *   *It is the first token in the sequence. Because self-attention allows it to aggregate information from every other token, its final hidden state acts as a summarized representation of the entire sequence, used for classification tasks.*
+3.  **Explain the 80/10/10 masking rule in BERT.**
+    *   *Of the 15% chosen to be masked: 80% are replaced with `[MASK]`, 10% with a random word, and 10% kept the same. This mitigates the discrepancy between pre-training (where `[MASK]` exists) and fine-tuning (where it doesn't).*
+
+## 15. Related Papers
+
+*   *BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding* (Devlin et al., 2018)
+*   *RoBERTa: A Robustly Optimized BERT Pretraining Approach* (Liu et al., 2019) - Proved NSP was unnecessary and heavily optimized BERT's training.
+
+## 16. Related Problems
+
+*   [Attention Calculation](/problems/attention-calculation)
+*   Implementing the BERT Masking Logic
+
+## 17. Related Learning Track Nodes
+
+*   Transfer Learning in NLP
+*   Encoder-Only Architectures
+*   The Attention Mechanism

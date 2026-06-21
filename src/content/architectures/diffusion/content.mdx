@@ -1,0 +1,159 @@
+# Diffusion Models
+
+## 1. Overview
+
+Diffusion Models represent a massive breakthrough in Generative AI, displacing GANs to become the undisputed state-of-the-art for image, video, and audio generation. 
+
+Instead of trying to generate a perfect image from random noise in a single step (like a GAN), a Diffusion Model breaks the generation process into hundreds of tiny, manageable steps. It learns to gradually "denoise" pure static, iteratively refining it until a crisp, high-fidelity image emerges. This step-by-step process allows diffusion models to achieve unprecedented photorealism and diversity, without the training instability of GANs or the blurriness of VAEs.
+
+:::note
+You can explore the step-by-step mathematical probabilities of adding and removing noise in the [Existing Math Engine](/math).
+:::
+
+## 2. Historical Context
+
+The idea of Diffusion Models was first introduced in 2015 by Sohl-Dickstein et al., inspired by non-equilibrium thermodynamics in physics. However, the models were slow and difficult to train, and they were largely ignored by the AI community in favor of GANs.
+
+In 2020, Ho et al. published **DDPM (Denoising Diffusion Probabilistic Models)**. They introduced a simplified objective function (predicting the noise rather than predicting the image) and established the mathematical equivalence between diffusion and score-based generative modeling. This paper proved that diffusion could beat GANs on image synthesis quality, sparking an explosion of research that led directly to DALL-E 2, Midjourney, and Stable Diffusion.
+
+## 3. Problem It Solves
+
+GANs are notoriously unstable to train. The minimax game between the Generator and Discriminator often leads to mode collapse, where the model only knows how to generate a few "safe" images and ignores the vast diversity of the training dataset.
+
+Diffusion models solve this by reframing generation as a supervised learning problem. We can easily create infinite perfect training data by taking a real image and artificially adding noise to it. The neural network's only job is to look at a noisy image and guess what noise was just added. Because the objective is a simple MSE loss (Mean Squared Error), training is highly stable and scales perfectly with larger datasets and deeper networks.
+
+## 4. Architecture Diagram Data
+
+A basic Diffusion Model operates in two mathematically defined processes:
+
+1.  **Forward Process (Diffusion):** A fixed mathematical formula (no neural network involved) that gradually adds Gaussian noise to an image over $T$ steps until it becomes pure static.
+2.  **Reverse Process (Denoising):** A Neural Network (usually a **U-Net**) that learns to undo the forward process step-by-step.
+
+The U-Net architecture features a contracting path (encoder) to capture context, a bottleneck, and an expanding path (decoder) to enable precise localization, connected by skip connections.
+
+## 5. Layer-by-Layer Breakdown
+
+### The U-Net Backbone
+The core neural network in DDPM is a U-Net based on a Wide ResNet architecture.
+
+1.  **Downsampling (Encoder):** The noisy image enters the network. Standard convolutions and Downsample layers reduce the spatial resolution while increasing channel depth, extracting high-level features. Self-attention blocks are often inserted at lower resolutions to capture global context.
+2.  **Bottleneck:** Deepest point of the network. High channel depth, low spatial resolution. Contains ResNet blocks and Self-Attention.
+3.  **Upsampling (Decoder):** Transposed convolutions or upsampling layers increase spatial resolution.
+4.  **Skip Connections:** The feature maps from the Downsampling path are concatenated directly to the corresponding layers in the Upsampling path. This is crucial because it allows the network to combine the deep semantic understanding of the bottleneck with the high-frequency spatial details (edges, textures) from the early layers, allowing it to predict noise at a pixel-perfect level.
+
+### Time Step Conditioning
+The U-Net must know *which* step $t$ it is currently denoising. The time step $t$ is converted into a sinusoidal positional embedding (similar to the Transformer) and added to the feature maps via an MLP inside every ResNet block.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Image $32 \times 32 \times 3$, Time step $t$.
+
+```text
+--- Inside the DDPM U-Net ---
+Input Image       : (B, 3, 32, 32)
+Time Embedding (t): (B, 256) -> MLP -> (B, 512)
+
+[Encoder]
+Conv -> ResBlock (adds Time) : (B, 128, 32, 32) -> Skip1
+Downsample -> ResBlock + Attn: (B, 256, 16, 16) -> Skip2
+Downsample -> ResBlock + Attn: (B, 512, 8, 8)   -> Skip3
+
+[Bottleneck]
+ResBlock -> Attention -> ResBlock: (B, 512, 8, 8)
+
+[Decoder]
+Concat Skip3 -> Upsample -> ResBlock: (B, 256, 16, 16)
+Concat Skip2 -> Upsample -> ResBlock: (B, 128, 32, 32)
+Concat Skip1 -> Final Conv          : (B, 3, 32, 32)
+
+Output: (B, 3, 32, 32) <-- The predicted noise tensor (\epsilon)
+```
+
+## 7. Mathematical Foundations
+
+**The Forward Process:**
+We define a noise schedule $\beta_1 \dots \beta_T$. At each step $t$, we add a small amount of Gaussian noise to the image $x_{t-1}$ to create $x_t$.
+Using a clever mathematical property of Gaussians, we don't need to apply this step-by-step. We can jump directly from the clean image $x_0$ to any noisy time step $t$:
+$$ x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon $$
+Where $\epsilon \sim \mathcal{N}(0, I)$ is pure noise, $\alpha_t = 1 - \beta_t$, and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$.
+
+**The Simplified DDPM Objective (Noise Prediction Loss):**
+Instead of trying to predict the slightly-less-noisy image $x_{t-1}$, Ho et al. proved it is mathematically superior to simply predict the *actual noise* $\epsilon$ that was added to the image.
+The loss function is a simple Mean Squared Error:
+$$ L_{simple} = \mathbb{E}_{t, x_0, \epsilon} \left[ \parallel \epsilon - \epsilon_\theta(x_t, t) \parallel^2 \right] $$
+Where $\epsilon_\theta$ is the U-Net predicting the noise.
+
+## 8. Forward Pass
+
+**Training:**
+1.  Sample a clean image $x_0$ from the dataset.
+2.  Sample a random time step $t$ between 1 and $T$ (e.g., $T=1000$).
+3.  Sample random Gaussian noise $\epsilon$.
+4.  Mathematically construct the noisy image $x_t$ using the closed-form forward equation.
+5.  Pass $x_t$ and $t$ through the U-Net to predict the noise $\hat{\epsilon}$.
+6.  Calculate MSE loss between the true noise $\epsilon$ and the predicted noise $\hat{\epsilon}$. Backpropagate and update the U-Net.
+
+**Inference (Sampling):**
+1.  Start with pure Gaussian noise $x_T \sim \mathcal{N}(0, I)$.
+2.  For $t = T, T-1, \dots, 1$:
+    a. Pass $x_t$ and $t$ into the U-Net to predict the noise $\hat{\epsilon}$.
+    b. Subtract a fraction of that noise from $x_t$ to create $x_{t-1}$ (following the exact DDPM reverse math, injecting a tiny bit of random variance back in to prevent collapse).
+3.  The final result is $x_0$, a clean, generated image.
+
+## 9. Training Process
+
+*   **Noise Scheduling:** The choice of $\beta_t$ (linear, cosine, etc.) is crucial. If noise is added too quickly, the network learns nothing at early steps. If added too slowly, it wastes compute on visually identical steps. The Cosine noise schedule is generally preferred as it creates a smoother transition.
+*   **Stability:** Unlike GANs, training a diffusion model is highly stable. You simply monitor the MSE loss.
+
+## 10. Complexity Analysis
+
+| Phase | FLOPs per Image | Wall-clock Latency |
+| :--- | :--- | :--- |
+| Training | 1 U-Net pass | Fast |
+| Inference | $T$ U-Net passes (e.g., 1000) | Extremely Slow |
+
+**The Inference Bottleneck:**
+Because generation is an iterative Markov chain, you cannot parallelize the reverse process. To generate one image with $T=1000$, you must run the massive U-Net 1000 times sequentially. This makes baseline DDPMs incredibly slow to sample from compared to GANs. (This led to the invention of fast samplers like DDIM, which can skip steps, reducing $T$ from 1000 to 50).
+
+## 11. Advantages
+
+*   **State-of-the-Art Quality:** Produces the highest fidelity, most realistic images in AI history.
+*   **High Diversity:** Because it maps the entire Gaussian distribution to the image distribution, it suffers from almost zero mode collapse, generating highly diverse outputs.
+*   **Stable Training:** Relies on simple MSE loss, avoiding the minimax instability of GANs.
+
+## 12. Limitations
+
+*   **Extremely Slow Inference:** The iterative step-by-step generation process makes real-time video or high-FPS rendering computationally prohibitive without massive optimization.
+*   **High Compute Cost:** Training standard pixel-space diffusion models on high-resolution images (e.g., $1024 \times 1024$) is overwhelmingly expensive because the U-Net must process massive spatial tensors at every step.
+
+## 13. Real World Applications
+
+*   **Image Synthesis:** DALL-E 2, Imagen, Midjourney.
+*   **Audio Generation:** Diffusion is increasingly used for high-fidelity text-to-speech and music generation.
+
+## 14. Interview Questions
+
+1.  **In DDPM, what exactly does the U-Net predict?**
+    *   *While you could train it to predict the clean image $x_0$ or the previous step $x_{t-1}$, Ho et al. showed it is mathematically simpler and empirically better to predict the pure Gaussian noise $\epsilon$ that was added to the image at step $t$.*
+2.  **How do you condition the U-Net on the current time step $t$?**
+    *   *The scalar $t$ is passed through a sinusoidal positional embedding function (like in a Transformer) to create a dense vector, which is then added to the feature maps inside the U-Net via MLPs, allowing the network to know how "noisy" the current image is expected to be.*
+3.  **Why is inference so much slower in Diffusion than in a GAN?**
+    *   *A GAN requires a single forward pass through the Generator. A standard Diffusion model requires $T$ sequential forward passes through the U-Net (often 50 to 1000 steps) to iteratively denoise the image.*
+
+## 15. Related Papers
+
+*   *Deep Unsupervised Learning using Nonequilibrium Thermodynamics* (Sohl-Dickstein et al., 2015)
+*   *Denoising Diffusion Probabilistic Models* (Ho et al., 2020) - The DDPM paper.
+*   *Denoising Diffusion Implicit Models* (Song et al., 2020) - DDIM, solved the slow sampling problem.
+
+## 16. Related Problems
+
+*   Implementing the DDPM Forward Noising Equation
+*   Building a U-Net with Skip Connections
+*   [Cross Entropy](/math/cross-entropy) vs MSE for Images
+
+## 17. Related Learning Track Nodes
+
+*   Generative AI Foundations
+*   Denoising Diffusion
+*   U-Net Architectures
