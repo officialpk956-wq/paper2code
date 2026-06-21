@@ -1,0 +1,40 @@
+## Problem Statement
+
+During autoregressive generation in models like GPT-3, computing the attention scores for a new token requires the Key and Value vectors of all previously generated tokens. Recomputing these from scratch at every step is computationally intractable, so they are cached in memory (the KV Cache).
+
+For a GPT-3 scale model with the following configuration:
+- Parameters: 175 Billion
+- Layers ($L$): 96
+- Number of Attention Heads ($H$): 96
+- Head Dimension ($d_k$): 128
+- Precision: FP16 (2 bytes per parameter)
+
+Calculate the memory required to store the KV cache for a **single token** across all layers. Then, calculate the total KV cache memory footprint for a batch size of $128$ and a sequence length of $2048$.
+
+---
+
+## Solution
+
+### 1. Memory per Token
+
+For a single token, in a single attention head, we must store:
+- 1 Key vector of size $d_k$
+- 1 Value vector of size $d_k$
+
+Since precision is FP16, each element is 2 bytes.
+Memory per head = $2 \times 128 \times 2\text{ bytes} = 512\text{ bytes}$
+
+Total memory per token across all heads and layers:
+$\text{Memory per token} = 512\text{ bytes/head} \times 96\text{ heads/layer} \times 96\text{ layers}$
+$\text{Memory per token} = 4,718,592\text{ bytes} \approx 4.7\text{ MB}$
+
+### 2. Total Memory for Batch and Sequence
+
+To find the total memory for the batch during inference:
+$\text{Total Memory} = \text{Memory per token} \times \text{Sequence Length} \times \text{Batch Size}$
+$\text{Total Memory} = 4.7\text{ MB} \times 2048 \times 128$
+$\text{Total Memory} \approx 1.2\text{ Terabytes (TB)}$
+
+### Discussion
+
+This result highlights a massive bottleneck in LLM inference. While the model weights themselves take up ~350 GB in FP16, the KV cache for a large batch can easily exceed 1 TB! This is why architectural innovations like **Multi-Query Attention (MQA)** and **Grouped-Query Attention (GQA)** were introduced in later models (like LLaMA 2) to share Key/Value heads and drastically reduce this memory footprint.
