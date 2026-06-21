@@ -1,0 +1,79 @@
+Design the foundational Retrieval-Augmented Generation (RAG) pipeline: index a document corpus, retrieve relevant chunks at query time, and generate grounded answers.
+
+## Business Problem
+
+Pure LLMs have a knowledge cutoff and hallucinate facts. RAG grounds answers in a live document corpus — enabling domain-specific Q&A over private data (support docs, codebases, legal briefs).
+
+## Scale Assumptions
+
+- **Document corpus**: 1M–10M documents
+- **Query volume**: 1K–10K QPS (enterprise)
+- **Latency target**: <2s end-to-end
+- **Chunk size**: 256–512 tokens
+
+## Architecture
+
+```
+OFFLINE: Ingestion Pipeline
+  Document Store (S3/GCS)
+    ↓
+  Chunker (split by semantic boundary)
+    ↓
+  Embedding Service (text-embedding-3-small)
+    ↓
+  Vector Store (Pinecone / Weaviate / pgvector)
+
+ONLINE: Query Pipeline
+  User Query
+    ↓
+  Embedding Service (same model as ingestion!)
+    ↓
+  ANN Search (top-K chunks, cosine similarity)
+    ↓
+  Context Assembler (format chunks for LLM)
+    ↓
+  LLM Generator
+    ↓
+  Answer + Source References
+```
+
+## The Critical Decisions
+
+### 1. Chunk Size
+
+| Chunk Size | Pros | Cons |
+|-----------|------|------|
+| Small (128 tokens) | High precision, less noise | May miss cross-sentence context |
+| Medium (512 tokens) | Balanced | Sometimes too much noise |
+| Large (1024 tokens) | Full context | Vector less specific, retrieval degrades |
+
+:::tip
+Use **sentence-aware** splitting (never break mid-sentence) and add 10-20% overlap between chunks to avoid losing context at boundaries.
+:::
+
+### 2. Embedding Model Consistency
+
+**Critical rule**: Use the exact same embedding model for both indexing and querying. Changing models requires re-embedding the entire corpus.
+
+### 3. ANN Algorithm
+
+| Algorithm | Library | Tradeoff |
+|---------|---------|---------|
+| HNSW | Faiss, Weaviate | High recall, high memory |
+| IVF | Faiss | Lower memory, tunable recall |
+| ScaNN | Google | Best for >10M vectors |
+
+## Failure Modes
+
+| Failure | Symptom | Fix |
+|---------|---------|-----|
+| Chunk boundary cuts key info | LLM gives incomplete answers | Add overlap between chunks |
+| Embedding model mismatch | Total retrieval failure | Pin embedding model version |
+| ANN recall too low (K too small) | Right doc not retrieved | Increase K, then rerank |
+| Context window overflow | LLM truncates silently | Enforce strict context budget |
+
+## Interview Questions
+
+1. A user's query returns irrelevant results. What would you debug first?
+2. You need to update 10% of documents daily. How do you handle incremental indexing?
+3. How do you evaluate the quality of retrieval without human labels?

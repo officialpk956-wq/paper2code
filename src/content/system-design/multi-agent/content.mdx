@@ -1,0 +1,92 @@
+Design a multi-agent system where an orchestrator LLM decomposes complex tasks and delegates to specialist sub-agents running in parallel, coordinating their results into a final answer.
+
+## Business Problem
+
+Complex tasks (research reports, software projects, data analysis pipelines) exceed what a single agent can accomplish — either due to context limits, domain specialization requirements, or parallelism opportunities.
+
+## Architecture
+
+```
+User Task (complex, multi-part)
+  ↓
+Orchestrator LLM
+  ├── Task Decomposer (break into sub-tasks)
+  └── Dependency Analyzer (which tasks can parallel-run)
+  ↓ (parallel dispatch via Message Bus)
+  ├── Research Agent      (web search + summarize)
+  ├── Code Agent          (write + test code)
+  ├── Critic Agent        (review + verify outputs)
+  └── Data Analysis Agent (run queries + charts)
+  ↓ (agents post results to shared workspace)
+Aggregator LLM
+  ├── Merge sub-task outputs
+  ├── Resolve contradictions
+  └── Synthesize final answer
+  ↓
+Human-in-the-Loop Gate (for high-stakes outputs)
+  ↓
+Final Deliverable
+```
+
+## Orchestrator Design
+
+The Orchestrator is an LLM prompted to output a **task graph** in JSON:
+
+```json
+{
+  "tasks": [
+    { "id": "t1", "agent": "research", "input": "LLM inference optimization techniques", "deps": [] },
+    { "id": "t2", "agent": "research", "input": "Speculative decoding paper summary", "deps": [] },
+    { "id": "t3", "agent": "code", "input": "Write speculative decoding demo in Python", "deps": ["t1", "t2"] },
+    { "id": "t4", "agent": "critic", "input": "Review code in t3", "deps": ["t3"] }
+  ]
+}
+```
+
+Tasks with empty `deps` run immediately in parallel. Others wait for dependencies.
+
+## Shared Memory Design
+
+Agents must share context without overloading each other's context windows:
+
+| Memory Type | Store | Access |
+|-------------|-------|--------|
+| Task outputs | Redis (TTL 1h) | Read by downstream tasks |
+| Conversation history | Vector DB | Semantic search by any agent |
+| Artifacts (files, code) | Object Storage (S3) | Referenced by URL |
+
+:::warning
+Never inject all agent outputs into one LLM's context — you'll overflow the context window on complex tasks. Use summaries + on-demand retrieval.
+:::
+
+## Communication Patterns
+
+### Blackboard Pattern
+All agents read/write a shared workspace. No direct agent-to-agent messages. Clean and observable but creates contention on shared state.
+
+### Message Passing
+Agents communicate via explicit messages through a bus (Kafka/Redis Streams). More complex but enables event-driven workflows.
+
+## Failure Handling
+
+| Failure | Impact | Strategy |
+|---------|--------|---------|
+| Sub-agent hangs | Task blocks | Timeout + retry with different agent |
+| Contradiction between agents | Wrong synthesis | Critic agent resolves conflicts |
+| Orchestrator produces invalid task graph | Nothing runs | JSON schema validation + retry |
+| Cost overrun | Expensive task | Per-task token budget enforced |
+
+## Human-in-the-Loop Gate
+
+For high-stakes tasks (sending emails, deploying code, financial decisions):
+
+1. Orchestrator marks task with `requires_approval: true`
+2. System pauses, shows human a preview
+3. Human approves/rejects/edits
+4. Execution continues
+
+## Interview Questions
+
+1. Two agents produce contradictory factual claims. How does the Aggregator resolve this?
+2. The Code Agent writes 1000 lines of code. The Critic Agent can only process 2000 tokens. How do you structure the review?
+3. How do you prevent an agent from making a tool call that another agent already made (wasted compute)?

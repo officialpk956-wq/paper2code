@@ -1,0 +1,61 @@
+Design a YouTube-scale video recommender that surfaces the right video for 2B+ users by optimizing for watch time, satisfaction, and long-term retention.
+
+## Business Problem
+
+YouTube has 800M videos and 500 hours of content uploaded per minute. The recommender must surface relevant content from this ocean in milliseconds while balancing engagement, creator diversity, and user wellbeing.
+
+## Two-Stage Architecture
+
+```
+User Watch Session
+  ↓
+Stage 1: Candidate Generation (~10ms)
+  ├── Deep Neural Retrieval (user embedding → ANN)
+  ├── Watch history co-occurrence
+  └── Subscriptions + social signals
+  → ~1000 candidates
+  ↓
+Stage 2: Deep Ranking (~50ms)
+  ├── Wide features (explicit: category, language)
+  ├── Deep features (implicit: watch patterns, session context)
+  ├── Watch time prediction head
+  └── Satisfaction score head (likes, shares, surveys)
+  → Top 10-50 ranked
+  ↓
+Policy Layer
+  ├── Deduplication (no repeats from last 48h)
+  ├── Spam/clickbait filter
+  └── Context fit (mobile vs TV vs desktop)
+  ↓
+Final Ranking
+```
+
+## Key Innovation: Watch Time as Proxy
+
+YouTube's 2016 paper introduced predicting **watch time** (not click-through rate) as the primary signal. This single change dramatically improved user satisfaction by penalizing clickbait.
+
+:::note
+Weighted logistic regression where positive examples are weighted by watch duration. A video watched 10 minutes counts 10× more than a 1-minute video.
+:::
+
+## Feature Engineering
+
+| Feature Category | Examples | Update Frequency |
+|-----------------|----------|-----------------|
+| User features | Watch history embeddings, channel subscriptions | Real-time + daily |
+| Video features | Title embeddings, view velocity, like ratio | Hourly |
+| Context features | Device type, time of day, location | Per request |
+| Cross features | User × video category affinity | Daily |
+
+## Freshness Handling
+
+New videos have no interaction data. YouTube's approach:
+- Inject "freshness feature" (age in hours) as explicit model input
+- Exploration quota: 5-10% of feed slots reserved for new content
+- Rapid online evaluation: after 100 views, real signals override priors
+
+## Interview Questions
+
+1. A creator uploads a new video. When does it first appear in recommendations?
+2. Your watch time metric is up 15% but survey satisfaction is down. What's happening?
+3. How do you recommend videos in a user's non-primary language when they might enjoy them?

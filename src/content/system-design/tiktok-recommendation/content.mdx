@@ -1,0 +1,80 @@
+Design TikTok's For You Page (FYP) — a hyper-personalized short-video feed that hooks users within seconds of opening the app, even with zero prior watch history.
+
+## Business Problem
+
+Short-form video is brutally competitive. The FYP must find your interests within 3-5 videos of opening the app (cold-start), then continuously refine in real time as you scroll. Every swipe is a signal.
+
+## Scale Assumptions
+
+- **1B+ DAU**, infinite scroll consumption
+- **~3M videos uploaded daily**
+- **Decision latency**: <100ms per video slot
+- **Signal latency**: user action visible to model within **1 second**
+
+## Why TikTok is Different
+
+Unlike Netflix (session-based) or YouTube (search-anchored), TikTok generates a **continuous feed from implicit signals only** — no explicit ratings, no search queries. Every play, skip, replay, share, and comment is a signal.
+
+## Architecture
+
+```
+User Opens App
+  ↓
+Pre-Fetched Feed (50 videos ready in buffer)
+  ↓ (parallel, background)
+Signal Collector
+  ├── Play duration (% watched)
+  ├── Replay
+  ├── Like / Share / Comment
+  └── Profile visit / Follow
+  ↓ (<1s via Kafka)
+Real-Time Feature Pipeline (Flink)
+  ↓
+User Interest Model (updated continuously)
+  ↓
+Candidate Generator
+  ├── Personalized ANN (user × video embedding)
+  ├── Trending (global + regional)
+  └── Social Graph (friends' activity)
+  → ~1000 candidates
+  ↓
+Lightweight Ranker (100ms budget)
+  ├── Predicted watch time
+  ├── Predicted like probability
+  └── Predicted share probability
+  ↓
+Diversity Injector
+  ├── Max 3 consecutive same-creator
+  └── Freshness boost for new videos
+  ↓
+Feed Buffer (next 50 videos)
+```
+
+## Cold-Start: The Secret Weapon
+
+New users have no history. TikTok's cold-start strategy:
+
+1. **Onboarding interests**: Ask 3 interest categories on sign-up
+2. **Location + time signals**: Surface locally trending content
+3. **Universal baits**: Highly-liked videos transcend demographics — insert 3-5 of these to calibrate the user
+4. **Rapid A/B at user level**: Test 10 different content clusters in the first session and observe which signals fire
+
+:::note
+TikTok reportedly builds a usable interest profile within **7-10 videos**. This is the core competitive moat.
+:::
+
+## Real-Time Signal Pipeline
+
+The key innovation: signals from user actions feed back into the ranking model **within 1 second**, not hours.
+
+```
+User Action → Kafka → Flink (stream processor) → Feature Store
+                                                      ↓
+                                                  Ranker (next request)
+```
+
+## Interview Questions
+
+1. A video goes viral — 10M plays in 30 minutes. How does your system avoid overwhelming a single creator's followers?
+2. How do you handle the explore/exploit tradeoff when a user's stated interests conflict with their watch behavior?
+3. You discover the model is over-recommending rage-bait content. How do you intervene without destroying engagement metrics?

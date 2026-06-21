@@ -1,0 +1,64 @@
+# System Design: ChatGPT
+
+Design a conversational LLM product serving 100M+ users. This case covers the full stack: request routing, GPU inference, streaming, and conversation state.
+
+## Requirements
+
+**Functional**
+- Multi-turn chat with conversation history
+- Token-by-token streaming responses
+- Multiple model tiers (fast/cheap vs slow/smart)
+
+**Non-functional**
+- Time-to-first-token < 500ms (p95)
+- Graceful degradation under GPU scarcity
+- Content safety on both input and output
+
+## High-Level Architecture
+
+```
+Client ⇄ API Gateway ⇄ Router
+                        ├→ Moderation (parallel)
+                        └→ Inference Scheduler
+                              ├→ GPU Pod (model A) — continuous batching
+                              ├→ GPU Pod (model B)
+                              └→ KV-Cache (per-conversation)
+        Conversation Store (Postgres + object storage)
+        Streaming via SSE
+```
+
+## The Core Problem: GPU Economics
+
+A single LLM request can occupy a multi-GPU server for seconds. Naive request-per-GPU serving collapses immediately. The key techniques:
+
+### Continuous Batching
+
+Don't wait for a batch to fully finish — as soon as one sequence completes, swap a queued request into its slot. This raises GPU utilization from ~10% to 70%+.
+
+### KV-Cache
+
+Attention over a growing conversation re-computes keys/values for the whole prefix on every token. Caching them makes generation $O(n)$ per token instead of $O(n^2)$:
+
+:::note
+KV-cache memory is the real constraint: for a 70B model, each conversation's cache can run to gigabytes. This is why context length is expensive and why providers charge per input token.
+:::
+
+### Model Routing
+
+Route by query complexity: a classifier sends simple queries to a small model, hard ones to the flagship. 70% of traffic on the cheap path cuts cost dramatically with minimal quality loss.
+
+## Streaming
+
+Tokens stream over **Server-Sent Events** — chosen over WebSockets because the flow is one-directional, plays well with HTTP infrastructure, and reconnects trivially.
+
+## Conversation State
+
+- **Hot**: recent messages in Redis for instant context assembly
+- **Cold**: full history in Postgres / object storage
+- Context window assembly: system prompt + summarized old turns + verbatim recent turns
+
+## Interview Discussion Points
+
+1. How do you handle a conversation longer than the context window?
+2. Where do you place moderation — pre-generation, post-generation, or streamed? What are the latency tradeoffs?
+3. How does speculative decoding change the latency/cost picture?
