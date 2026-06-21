@@ -186,15 +186,30 @@ class TestCostEstimator:
         assert vit["gpu_memory_gb"] > resnet["gpu_memory_gb"]
 
     def test_all_gpu_types_work(self):
+        # Function normalises legacy aliases (e.g. "RTX 3090" → "RTX3090")
+        # so we check that the returned gpu_type is a valid canonical key.
+        _normalize = {"RTX 3090": "RTX3090", "RTX 4090": "RTX4090"}
         for gpu in GPU_SPECS.keys():
             result = estimate_training_cost("ResNet", 100_000, 32, gpu)
-            assert result["gpu_type"] == gpu
+            expected = _normalize.get(gpu, gpu)
+            assert result["gpu_type"] == expected
             assert result["training_hours"] > 0
 
     def test_all_arch_profiles_work(self):
+        # Function normalises alias keys (e.g. "ResNet" → "ResNet50")
+        # so we check the returned architecture is a valid canonical key.
+        _normalize = {
+            "ResNet": "ResNet50",
+            "CNN": "VGG16",
+            "DenseNet": "DenseNet121",
+            "U-Net": "UNet",
+            "Encoder-Decoder": "UNet",
+            "EfficientNet-B0": "EfficientNetB0",
+        }
         for arch in ARCH_PROFILES.keys():
             result = estimate_training_cost(arch, 100_000, 32, "A100")
-            assert result["architecture"] == arch
+            expected = _normalize.get(arch, arch)
+            assert result["architecture"] == expected
 
 
 # ── Test 4: Reproduction Cards ────────────────────────────────────────────────
