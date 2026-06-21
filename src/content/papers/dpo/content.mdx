@@ -1,0 +1,162 @@
+# Direct Preference Optimization: Your Language Model is Secretly a Reward Model
+
+**Rafailov, Sharma, Mitchell, Ermon, Manning, Finn · NeurIPS 2023 · arXiv:2305.18290 · ~2,200 citations**
+
+---
+
+## 1. Overview
+
+**Direct Preference Optimization (DPO)** is a groundbreaking alignment paper from Stanford University. It presented a simple, mathematically elegant alternative to standard Reinforcement Learning from Human Feedback (RLHF). While traditional RLHF requires training a separate reward model and using unstable reinforcement learning algorithms (like PPO) to optimize the model policy, DPO bypasses these steps.
+
+The authors proved that the RLHF objective can be solved in closed form, showing that the language model itself can act as the reward model. This allowed DPO to optimize the policy model directly on human preference pairs using a simple **binary cross-entropy loss**, making alignment stable, computationally cheap, and easy to scale.
+
+---
+
+## 2. Historical Context
+
+By 2023, RLHF had become the standard method for aligning models like ChatGPT, Claude, and LLaMA-2. The process was split into:
+1. **Supervised Fine-Tuning (SFT)** on clean demonstrations.
+2. **Reward Model (RM)** training on ranked completions.
+3. **Reinforcement Learning** using Proximal Policy Optimization (PPO) to maximize reward model scores.
+
+This pipeline was notoriously difficult to implement. PPO is highly sensitive to hyperparameters, prone to training instability, and requires holding four separate models in GPU memory (policy, reference, reward, and value networks). This high compute cost restricted RLHF to well-funded AI labs.
+
+---
+
+## 3. Research Problem
+
+Can we optimize language models on human preferences directly, without training a separate reward model or using reinforcement learning? Specifically:
+1. How do we mathematically formulate the RLHF objective to eliminate the reward model?
+2. Can we design a stable, non-reinforcement learning objective for preference optimization?
+3. How does this direct method compare to PPO on standard alignment benchmarks?
+
+---
+
+## 4. Prior Work
+
+| Method | Requires Reward Model | Requires RL (PPO) | Models in GPU Memory | Training Stability |
+|:---|:---|:---|:---|:---|
+| RLHF (InstructGPT) | Yes | Yes | 4 (Policy, Reference, RM, Value) | Low (hyperparameter sensitive) |
+| SFT on preferences | No | No | 1 (Policy) | High |
+| **DPO** | **No** | **No** | **2 (Policy, Reference)** | **High (stable loss)** |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**PPO Instability:** PPO is an actor-critic RL algorithm designed for continuous control, not discrete token generation. It suffers from high variance, requiring complex value networks, advantage normalization, and KL-divergence penalties to keep training stable.
+
+**Reward Model Exploitation:** During PPO training, the policy model frequently finds hacks to exploit the reward model (e.g., repeating specific safety words or punctuation), maximizing the reward score while generating gibberish or unhelpful outputs.
+
+---
+
+## 6. Core Innovation
+
+The authors mathematically redefined the relationship between the policy $\pi_\theta$ and the reward model $r(x, y)$.
+
+By utilizing the optimal policy solution under the Bradley-Terry preference model, they proved that the latent reward function can be expressed directly using the log probabilities of the policy and reference models:
+$$r(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}$$
+Substituting this relation into the pairwise comparison loss yields the **DPO Loss Function**:
+$$\mathcal{L}_{\text{DPO}}(\theta; \pi_{\text{ref}}) = -\mathbb{E}_{(x, y_w, y_l) \sim D} \left[ \log \sigma \left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right) \right]$$
+where $y_w$ is the preferred completion, $y_l$ is the dispreferred completion, and $\pi_{\text{ref}}$ is the frozen SFT model.
+
+---
+
+## 7. Architecture Breakdown
+
+DPO reduces the GPU memory footprint by eliminating the reward model and value network.
+
+**Active Models during DPO Training:**
+1. **Policy Model ($\pi_\theta$):** The active model whose weights are updated. It is initialized from the SFT model.
+2. **Reference Model ($\pi_{\text{ref}}$):** A frozen copy of the SFT model used to calculate the KL divergence constraint.
+
+During each step, the model computes log-probabilities for both the preferred ($y_w$) and dispreferred ($y_l$) completions under both the policy and reference models.
+
+---
+
+## 8. Mathematical Foundations
+
+The gradient of the DPO loss function with respect to parameter $\theta$ is:
+$$\nabla_\theta \mathcal{L}_{\text{DPO}}(\theta) = -\beta \sum_{(x, y_w, y_l)} \hat{h}(y_w, y_l | x) \left[ \nabla_\theta \log \pi_\theta(y_w|x) - \nabla_\theta \log \pi_\theta(y_l|x) \right]$$
+where $\hat{h}(y_w, y_l | x) = \sigma\left( \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} - \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} \right)$.
+
+This gradient has an intuitive behavior:
+- It increases the likelihood of the preferred completion $y_w$ and decreases the likelihood of the dispreferred completion $y_l$.
+- The gradient step is weighted by $\hat{h}$, which acts as an error term: it is large when the model is wrong (i.e., when it assigns a higher likelihood to the dispreferred completion) and small when the model already aligns with the preference.
+
+---
+
+## 9. Key Experiments
+
+- **Tasks:** Evaluated on controlled sentiment generation (using IMDB movie reviews) and single-turn dialogue generation (using Anthropic HH-RLHF).
+- **Baselines:** Compared against SFT, PPO (standard RLHF), and rejection sampling.
+- **Evaluation:** Outputs were evaluated using GPT-4 auto-evaluation and human annotations.
+
+---
+
+## 10. Benchmark Results
+
+Results on Anthropic HH-RLHF (dialogue alignment):
+
+| Model / Method | Win Rate vs SFT | Toxicity Rate | Expected Reward Score |
+|:---|:---|:---|:---|
+| SFT Baseline | 50.0% | 8.5% | 0.00 |
+| PPO (Standard RLHF) | 59.2% | 4.8% | 0.42 |
+| Rejection Sampling (Best-of-N) | 56.4% | 5.2% | 0.35 |
+| **DPO (Ours)** | **62.8%** | **4.2%** | **0.58** |
+
+**DPO outperformed PPO in win rate and toxicity reduction** while being significantly faster and more stable to train.
+
+---
+
+## 11. Ablation Studies
+
+**Sensitivity to $\beta$:**
+The authors studied the impact of the regularization parameter $\beta$, which controls the KL penalty. They found that $\beta \in [0.1, 0.5]$ yielded the best performance. If $\beta$ was too small ($\beta < 0.01$), the model overfitted to the preference dataset, leading to degraded grammar and repetitive outputs.
+
+---
+
+## 12. Implementation Details
+
+- **Optimizer:** RMSprop or AdamW.
+- **Learning Rate:** Typically $5 \times 10^{-7}$ or $1 \times 10^{-6}$ (smaller than SFT rates).
+- **Batch Size:** 64.
+- **Data format:** Preference triplets: $(x, y_w, y_l)$.
+
+---
+
+## 13. Engineering Insights
+
+- **No reinforcement learning required:** Because DPO uses standard supervised cross-entropy loss, it is stable and does not suffer from policy collapse.
+- **GPU Memory Optimization:** Eliminating the value and reward networks frees up massive VRAM, allowing developers to run alignment on larger models or use larger batch sizes.
+- **Bypasses the reward model bottleneck:** In standard RLHF, the reward model must be trained first. A poorly trained reward model ruins the subsequent PPO step. DPO optimizes directly on preferences, removing this dependency.
+
+---
+
+## 14. Limitations
+
+- **Likelihood Discrepancies:** DPO is sensitive to the quality of the SFT model. If the reference model has low probability density for a target prompt, DPO's log-ratio calculation can become unstable.
+- **Out-of-Distribution Data:** DPO requires preference completions that are close to the reference model's distribution. It does not generalize well to completely new styles of outputs.
+- **Hyperparameter Sensitivity:** The learning rate and $\beta$ must be tuned carefully to prevent the model from overfitting and repeating text.
+
+---
+
+## 15. Influence on Later Research
+
+- **KTO (Kahneman-Tversky Optimization, 2023):** Extends DPO to work with unpaired preference data (binary thumbs up/down feedback).
+- **IPPO / Identity PO (2024):** Refines DPO gradients to prevent log-probability drift on long sequences.
+- **Open-Source LLMs:** DPO became the default alignment tool for open-weights models (e.g., Zephyr-7B, Qwen-Beta, Gemma-it), replacing PPO due to its ease of training.
+
+---
+
+## 16. Related Architectures
+
+- [GPT](/architectures/gpt) — base architecture aligned using DPO.
+- [LLaMA](/architectures/llama) — modern open LLM frequently aligned using DPO.
+
+---
+
+## 17. Related Problems
+
+- [masked-attention](/problems/masked-attention) — causal attention calculation during training.
+- [backpropagation](/problems/backpropagation) — calculating gradients across policy and reference networks.

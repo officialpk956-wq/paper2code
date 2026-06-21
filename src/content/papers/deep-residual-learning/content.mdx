@@ -1,0 +1,225 @@
+# Deep Residual Learning for Image Recognition
+
+**He, Zhang, Ren & Sun · CVPR 2016 · arXiv:1512.03385 · ~250,000 citations**
+
+---
+
+## 1. Overview
+
+ResNet is the most cited paper in computer science history. In 2015, Kaiming He and colleagues at Microsoft Research Asia trained a **152-layer** convolutional neural network that not only avoided the degradation problem that had capped depth at ~20 layers — it *improved* with every additional layer. The network won every track of ILSVRC 2015 by enormous margins.
+
+The core idea is devastatingly simple: instead of learning $H(x)$, let each layer learn the **residual** $F(x) = H(x) - x$, and add the original input back via a **skip connection**: $H(x) = F(x) + x$. If the identity is the optimal function for a layer, $F(x)$ simply learns to be zero — a much easier optimization target than learning the identity from scratch.
+
+Skip connections became the single most important structural innovation in deep learning. They appear in U-Nets (Diffusion Models), Transformers (residual around attention/FFN), DenseNets, and every modern architecture.
+
+---
+
+## 2. Historical Context
+
+By 2014, VGGNet had shown performance improved monotonically with depth — up to ~19 layers. Beyond that, something unexpected happened: **deeper networks performed *worse* than shallower ones**, even on the training set. This wasn't overfitting (training error was also higher). It was an optimization failure — the network became harder to train as it deepened.
+
+The field assumed this was a fundamental limitation. You cannot naively stack hundreds of layers with standard backpropagation. The 2014–2015 state of the art had plateaued around 20–30 layers deep.
+
+Meanwhile, Highway Networks (Srivastava et al., 2015) had explored gated skip connections but found gains marginal with millions of gating parameters. He et al.'s breakthrough was recognizing the gate wasn't necessary — a simple **parameter-free** identity shortcut was sufficient.
+
+---
+
+## 3. Research Problem
+
+**The Degradation Problem:** When deep networks are trained with standard backpropagation, adding more layers consistently hurts performance — even on *training* data. With 56-layer plain networks performing worse than 20-layer ones, this cannot be overfitting.
+
+The question: is there a formulation of deep networks that allows the optimization of networks with 100+ layers without degradation?
+
+---
+
+## 4. Prior Work
+
+| Paper | Depth | Contribution | Limitation |
+|:---|:---|:---|:---|
+| AlexNet (2012) | 8 layers | ReLU, Dropout, GPU training | Depth limited by vanishing gradients |
+| VGGNet (2014) | 19 layers | Uniform 3×3 convs; systematic depth study | Hit degradation ceiling at ~20 layers |
+| GoogLeNet (2014) | 22 layers | Inception modules, auxiliary classifiers | Complex; workaround for depth, not a solution |
+| Highway Networks (2015) | 100+ | Gated skip connections | Gating parameters added complexity; marginal gains |
+
+---
+
+## 5. Why Previous Methods Failed
+
+In a plain deep network, if the optimal solution requires learning an identity mapping for some layers (i.e., some features are already optimal and shouldn't be transformed), the network must learn to produce $H(x) = x$ from scratch — matching the input exactly using a composition of nonlinear functions. This is a surprisingly difficult optimization problem.
+
+When gradients flow backward through 50+ layers of nonlinear transforms, they either vanish (become exponentially small) or explode (become exponentially large). BatchNorm (2015) helped, but didn't solve the fundamental issue of information degradation through depth.
+
+---
+
+## 6. Core Innovation
+
+**The Residual Learning Framework:**
+
+Instead of learning $H(x)$ directly, reformulate the layer to learn:
+$$F(x) = H(x) - x$$
+
+Then the output is:
+$$H(x) = F(x) + x$$
+
+The "$+ x$" is a **shortcut connection** — it bypasses one or more layers and adds the input directly to the output. No additional parameters are required. No gates. No hyperparameters.
+
+**Why this works:**
+1. If the optimal $H(x) \approx x$, then $F(x)$ only needs to learn $\approx 0$ — much easier than learning an identity mapping from scratch.
+2. Gradients flow backward through the skip connection *without* passing through any nonlinear transforms, solving the vanishing gradient problem at depth.
+3. The model can "route around" layers that don't help — effectively learning its own depth.
+
+---
+
+## 7. Architecture Breakdown
+
+**Residual Block (Basic):**
+```
+x → Conv3×3 → BN → ReLU → Conv3×3 → BN → + → ReLU
+↑____________________________________|
+```
+
+**Residual Block (Bottleneck, for ResNet-50+):**
+```
+x → Conv1×1 (reduce) → BN → ReLU
+  → Conv3×3           → BN → ReLU
+  → Conv1×1 (expand)  → BN → + → ReLU
+↑__________________________________|
+```
+
+**ResNet Family:**
+
+| Model | Layers | Params | ILSVRC Top-1 |
+|:---|:---|:---|:---|
+| ResNet-18 | 18 | 11M | 30.2% |
+| ResNet-34 | 34 | 21M | 26.7% |
+| ResNet-50 | 50 | 25M | 24.0% |
+| ResNet-101 | 101 | 44M | 22.6% |
+| ResNet-152 | 152 | 60M | 21.4% |
+
+---
+
+## 8. Mathematical Foundations
+
+**Forward Pass Through Residual Block:**
+$$\mathbf{y} = \mathcal{F}(\mathbf{x}, \{W_i\}) + \mathbf{x}$$
+
+Where $\mathcal{F}$ represents the stacked weight layers (conv → BN → ReLU → conv → BN).
+
+**Gradient Flow (why skip connections solve vanishing gradients):**
+
+Let $L$ be the loss, $x_l$ be the input to layer $l$, and $x_L$ be the output at layer $L$. With skip connections:
+$$x_L = x_l + \sum_{i=l}^{L-1} \mathcal{F}(x_i, W_i)$$
+
+The gradient of $L$ w.r.t. $x_l$ is:
+$$\frac{\partial L}{\partial x_l} = \frac{\partial L}{\partial x_L} \cdot \left(1 + \frac{\partial}{\partial x_l}\sum_{i=l}^{L-1}\mathcal{F}(x_i, W_i)\right)$$
+
+The critical term: **$\frac{\partial L}{\partial x_L}$ is passed directly to early layers** without multiplying through $L-l$ Jacobians. Even if the learned component's gradient vanishes, the identity term preserves the signal.
+
+**Projection Shortcut (when dimensions don't match):**
+
+When the input and output have different channels (at downsampling), a 1×1 conv is used:
+$$\mathbf{y} = \mathcal{F}(\mathbf{x}, \{W_i\}) + W_s \mathbf{x}$$
+
+---
+
+## 9. Key Experiments
+
+| Network | Depth | Top-1 Error (Val) |
+|:---|:---|:---|
+| Plain-20 | 20 | 27.94% |
+| Plain-56 | 56 | 29.91% | ← **Degradation problem** |
+| ResNet-20 | 20 | 27.94% |
+| ResNet-32 | 32 | 27.61% |
+| ResNet-44 | 44 | 27.07% |
+| ResNet-56 | 56 | **27.03%** | ← Continues improving |
+| ResNet-110 | 110 | **25.44%** | ← Still improving at 110 layers |
+
+---
+
+## 10. Benchmark Results
+
+**ILSVRC 2015:**
+
+| Model | Top-5 Error |
+|:---|:---|
+| VGG (2014 winner) | 7.32% |
+| GoogLeNet (2014 winner) | 6.67% |
+| **ResNet-152 (single model)** | **4.49%** |
+| **ResNet ensemble** | **3.57%** |
+
+3.57% top-5 error — surpassing human-level performance (estimated ~5.1%).
+
+---
+
+## 11. Ablation Studies
+
+| Configuration | CIFAR-10 Error |
+|:---|:---|
+| No shortcuts (plain) | 27.94% (20 layers), 29.91% (56 layers) |
+| Identity shortcuts | 27.03% (56 layers) |
+| Projection shortcuts (all) | 27.00% (56 layers) |
+| Deeper bottleneck vs. basic | Bottleneck: faster, similar accuracy |
+
+**Key finding:** Identity (zero-parameter) shortcuts perform nearly as well as learned (projection) shortcuts. The gate is not needed.
+
+---
+
+## 12. Implementation Details
+
+- **Framework:** Caffe
+- **Hardware:** 8× NVIDIA GPUs; ResNet-152 trained in ~3 weeks
+- **Batch size:** 256
+- **Optimizer:** SGD, momentum 0.9, weight decay $10^{-4}$
+- **LR:** 0.1, divided by 10 at 32K and 48K iterations
+- **Batch Normalization:** After every conv, before activation — used throughout
+- **No Dropout:** BN + weight decay sufficient for regularization
+- **Data augmentation:** Random crop (224×224), horizontal flip, per-pixel mean subtraction, color jitter
+
+---
+
+## 13. Engineering Insights
+
+- **ResNet-50 became the universal backbone.** Its balance of depth (50 layers), accuracy (24% top-1), and size (25M params) made it the default choice for detection, segmentation, and feature extraction tasks for years.
+- **Skip connections enable feature reuse.** The skip connection allows early low-level features (edges, colors) to be passed directly to later layers without transformation. This is why the first few layers of ResNet are so similar to VGG — they don't need to encode everything into the residual.
+- **The bottleneck design (1×1 → 3×3 → 1×1)** reduces computation: a 256-channel 3×3 conv costs $256^2 \times 9$ ≈ 590K MACs per spatial position. The bottleneck reduces this to 64 channels first: $(256 \times 64 + 64^2 \times 9 + 64 \times 256) \approx 70K$ MACs — an 8× reduction.
+
+---
+
+## 14. Limitations
+
+- **Pre-activation vs Post-activation:** The original paper used post-activation (ReLU after addition). He et al.'s own follow-up (Identity Mappings, 2016) showed pre-activation (BN→ReLU before conv) gives better gradient flow.
+- **Residual blocks don't reuse features across blocks.** DenseNet (Huang et al., 2017) addressed this with dense connections.
+- **Still requires careful BatchNorm tuning.** ResNets without BN are very difficult to train.
+- **Fixed-depth design:** You cannot adaptively skip layers — MoE and mixture architectures improved on this.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | What ResNet Enabled |
+|:---|:---|
+| Feature Pyramid Networks (2017) | Skip connections across scales for object detection |
+| DenseNet (2017) | Extended skip connections to all-to-all dense connections |
+| U-Net (2015/extended 2017) | Skip connections for medical segmentation |
+| Transformer (2017) | Residual connections around attention and FFN |
+| EfficientNet (2019) | ResNet as baseline; compound scaling |
+| ResNeXt (2017) | Grouped convolutions inside residual blocks |
+
+The Transformer's residual connections around every sub-layer are **directly** imported from ResNet. Every modern LLM inherits this structural decision.
+
+---
+
+## 16. Related Architectures
+
+- [ResNet Architecture](/architectures/resnet) — full layer-by-layer breakdown
+- [DenseNet](/architectures/densenet) — skip connections to all previous layers
+- [EfficientNet](/architectures/efficientnet) — residual blocks + compound scaling
+- [Transformer](/architectures/transformer) — uses residual around every sub-layer
+
+---
+
+## 17. Related Problems
+
+- Implementing a Residual Block in PyTorch
+- Visualizing gradient flow with/without skip connections
+- Computing FLOPs for bottleneck vs. basic blocks

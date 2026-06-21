@@ -1,0 +1,207 @@
+# High-Resolution Image Synthesis with Latent Diffusion Models
+
+**Rombach, Blattmann, Lorenz, Esser & Ommer · CVPR 2022 · arXiv:2112.10752**
+
+---
+
+## 1. Overview
+
+Latent Diffusion Models (LDMs) solved the most critical bottleneck of diffusion models: compute cost. The original DDPM (Ho et al., 2020) operated directly on pixels — denoising a 512×512×3 image required running a massive U-Net on a 786,432-dimensional tensor, hundreds of times. This made training and inference prohibitively expensive.
+
+Rombach et al. at LMU Munich and Runway introduced a two-stage approach: first, compress images into a tiny latent space using a pre-trained **Variational AutoEncoder (VAE)**; then, apply the diffusion process entirely in that latent space. For a 512×512 image, the VAE produces a 64×64×4 latent — 48× smaller. The U-Net denoises this compact representation, and only at the very end does the VAE decoder expand it back to pixels.
+
+This paper is the direct technical parent of **Stable Diffusion** — the model that democratized AI image generation.
+
+---
+
+## 2. Historical Context
+
+By late 2021:
+- **DALL-E 1** (OpenAI, 2021) used CLIP + autoregressive generation; required 12B parameters and enormous GPUs
+- **GLIDE** (OpenAI, 2021) used a pixel-space diffusion model guided by a text encoder; 3.5B parameters
+- **DDPM** (Ho, 2020) had established diffusion as the quality leader, but slow and memory-hungry
+- **DALL-E 2** (concurrent, 2022) also used diffusion in pixel space with enormous compute
+
+The Munich group identified: almost all compute is wasted on imperceptible high-frequency pixel details. The semantically meaningful information fits in a much smaller space.
+
+---
+
+## 3. Research Problem
+
+Can we decouple the **perceptual compression** (removing imperceptible redundancy) from the **semantic compression** (learning the structure of the data distribution) — and perform diffusion only in the semantically compact space?
+
+The hypothesis: a powerful encoder (VAE) can compress images to their informational essence with minimal perceptual loss. Diffusion in this compact space is dramatically more efficient while maintaining full quality.
+
+---
+
+## 4. Prior Work
+
+| Model | Diffusion Space | Resolution Limitation |
+|:---|:---|:---|
+| DDPM (2020) | Pixel space | 32×32 or 256×256 practically |
+| Score-based models | Pixel space | Expensive at high-res |
+| VQGAN+Transformer | Discrete latent (GPT-style) | Slow autoregressive |
+| DALL-E 1 | Discrete latent + AR | 12B params needed |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Pixel-space diffusion:** Denoising a 512×512×3 image = 786,432-dim denoising. A U-Net processing this 1000 times per generation is computationally prohibitive (hours per image without specialized hardware).
+
+**VQGAN + Transformer (Esser et al., 2021 — same group's prior work):** Discrete latent codes + autoregressive Transformer generation was slow (sequential) and limited by the expressivity of discrete codebooks.
+
+---
+
+## 6. Core Innovation
+
+**Three-component architecture:**
+
+1. **Perceptual Compression (VAE):** Pre-train a VAE encoder-decoder (with perceptual loss + adversarial loss) to compress images to compact latents and reconstruct them faithfully. The compression factor (called $f$) defines the spatial downsampling: $f=8$ means 512×512 → 64×64.
+
+2. **Latent Diffusion U-Net:** Apply DDPM's diffusion process to the latent vectors $z = E(x)$ instead of pixels $x$. Train a U-Net to predict noise $\epsilon$ added to $z_t$.
+
+3. **Conditioning via Cross-Attention:** For conditional generation (text, semantic maps, class labels), inject conditioning information $y$ into every U-Net layer via cross-attention:
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d}}\right)V$$
+Where $Q = W_Q z_t$ (from latent), $K = W_K \tau_\theta(y)$, $V = W_V \tau_\theta(y)$ (from condition encoder $\tau_\theta$).
+
+---
+
+## 7. Architecture Breakdown
+
+**Stage 1 — VAE:**
+- Encoder: ResNet + Attention → latent $z \in \mathbb{R}^{H/f \times W/f \times C}$
+- Decoder: ResNet + Attention → reconstructed image
+- Trained with: L1 + perceptual loss (VGG features) + patch-discriminator adversarial loss + KL regularization
+- For $f=8$: 512×512×3 → 64×64×4
+
+**Stage 2 — Latent Diffusion U-Net:**
+- Standard U-Net with residual blocks + spatial attention
+- Modified: cross-attention layers injected at every resolution
+- Time conditioning: sinusoidal embeddings added to ResBlock features
+- Input: $z_t \in \mathbb{R}^{64 \times 64 \times 4}$ + time $t$ + conditioning $y$
+- Output: predicted noise $\hat{\epsilon} \in \mathbb{R}^{64 \times 64 \times 4}$
+
+---
+
+## 8. Mathematical Foundations
+
+**LDM Training Objective:**
+$$L_{LDM} = \mathbb{E}_{E(x), y, \epsilon \sim \mathcal{N}(0,1), t}\left[\|\epsilon - \epsilon_\theta(z_t, t, \tau_\theta(y))\|_2^2\right]$$
+
+Where $z_t = \sqrt{\bar\alpha_t}E(x) + \sqrt{1-\bar\alpha_t}\epsilon$ is the noisy latent at time $t$.
+
+**Cross-Attention for Conditioning:**
+For text conditioning with CLIP or BERT text encoder $\tau_\theta$:
+$$Q = W_Q^{(i)} \varphi_i(z_t), \quad K = W_K^{(i)} \tau_\theta(y), \quad V = W_V^{(i)} \tau_\theta(y)$$
+
+Where $\varphi_i(z_t)$ is the U-Net's intermediate feature map at block $i$, reshaped to a sequence. The latent image features attend over the text token embeddings.
+
+**Classifier-Free Guidance (inference-time scaling):**
+$$\hat{\epsilon}_\theta(z_t, t, y) = \epsilon_\theta(z_t, t, \emptyset) + w \cdot [\epsilon_\theta(z_t, t, y) - \epsilon_\theta(z_t, t, \emptyset)]$$
+
+$w > 1$ amplifies the text-image alignment at the cost of diversity.
+
+---
+
+## 9. Key Experiments
+
+**Compute efficiency vs. pixel-space diffusion:**
+
+| Model | FID (CelebA-HQ) | Training GPU-days |
+|:---|:---|:---|
+| DDPM (pixel, 256px) | 3.0 | 20+ |
+| LDM-1 (f=1, no compression) | 3.2 | ~20 |
+| **LDM-4 (f=4)** | **2.8** | **~5** |
+| LDM-8 (f=8, Stable Diffusion default) | 4.0 | ~2.5 |
+
+f=4 hits the sweet spot: better quality than pixel-space DDPM at 4× lower compute.
+
+---
+
+## 10. Benchmark Results
+
+**Class-conditional ImageNet (256×256):**
+
+| Model | FID ↓ | IS ↑ |
+|:---|:---|:---|
+| BigGAN | 6.95 | 224.5 |
+| ADM (pixel diffusion) | 3.60 | — |
+| **LDM-8 (class-cond.)** | **3.60** | **247.7** |
+
+**Text-to-image (COCO):**
+
+| Model | FID ↓ | CLIP Score |
+|:---|:---|:---|
+| XMC-GAN | 9.33 | — |
+| DALL-E | 27.5 | — |
+| **LDM-KL-8-G (text-cond.)** | **12.63** | High |
+
+---
+
+## 11. Ablation Studies
+
+| Compression $f$ | Quality (FID) | Speed |
+|:---|:---|:---|
+| $f=1$ (no compression) | 3.2 | 1× |
+| $f=4$ | 2.8 | 4× faster |
+| $f=8$ (Stable Diffusion) | 4.0 | 7× faster |
+| $f=16$ | 5.7 | 12× faster |
+
+Too much compression ($f=16$) loses quality; $f=4$–$f=8$ is the practical sweet spot.
+
+---
+
+## 12. Implementation Details
+
+- **VAE:** KL regularization $\beta$-VAE; perceptual loss using VGG-16 features; patch discriminator
+- **U-Net:** Width 128, depth multipliers [1,2,4,4], attention at 32×32 and 16×16
+- **Text conditioning:** BERT or CLIP text encoder (frozen)
+- **Training:** AdamW, LR 1e-4; cosine annealing; 200–400K iterations
+- **Inference:** DDIM sampler (50 steps vs. 1000 for DDPM) reduces sampling time by 20×
+
+---
+
+## 13. Engineering Insights
+
+- **Perceptual loss + adversarial loss for VAE** is crucial. Pure KL-regularized VAEs produce blurry reconstructions. Adding VGG perceptual loss and a patch discriminator forces the VAE decoder to produce sharp, photorealistic outputs — the latent space retains all perceptually important information.
+- **The bottleneck is VRAM during U-Net denoising, not VAE.** The VAE encoder/decoder run once each. The U-Net runs 20–50 times. Optimizing the U-Net for memory (attention slicing, xformers) gave the 4× VRAM reduction that enabled consumer GPU usage.
+- **Cross-attention = learnable slot-based routing.** Each spatial position in the U-Net's feature map learns to attend to specific text tokens. This is why Stable Diffusion can independently control object properties: "a red ball to the left of a blue cube" — different spatial regions attend to different text tokens.
+
+---
+
+## 14. Limitations
+
+- **Text rendering:** CLIP/BERT tokenizers don't model character-level spelling, so generating legible text within images is unreliable.
+- **Two-stage training complexity:** VAE must be trained separately first, then frozen. Any VAE quality loss compounds with diffusion quality loss.
+- **$f=8$ information loss:** Some fine details are lost in compression. Faces and text at $f=8$ are blurrier than at $f=4$.
+- **Inference still takes 20–50 U-Net passes.** Much faster than pixel diffusion, but slower than GANs (1 pass) for real-time applications.
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Year | LDM's Role |
+|:---|:---|:---|
+| Stable Diffusion 1.x | 2022 | Direct commercialization with OpenCLIP |
+| DALL-E 3 (2023) | 2023 | Improved prompt following on same latent diffusion concept |
+| SDXL (2023) | 2023 | LDM with larger U-Net and two-stage pipeline |
+| ControlNet (2023) | 2023 | Adds spatial conditioning to LDM |
+| DiT (2022) | 2022 | Replaces U-Net with Transformer for latent diffusion |
+| Sora (2024) | 2024 | Video generation with latent diffusion via DiT |
+
+---
+
+## 16. Related Architectures
+
+- [Stable Diffusion](/architectures/stable-diffusion) — the full text-to-image pipeline
+- [VAE](/architectures/vae) — the perceptual compression stage
+- [Diffusion Models](/architectures/diffusion) — the pixel-space predecessor
+
+---
+
+## 17. Related Problems
+
+- Implementing VAE with perceptual + adversarial loss
+- Computing compression ratios for different $f$ values
+- [Attention Calculation](/problems/attention-calculation) — for cross-attention conditioning

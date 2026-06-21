@@ -1,0 +1,212 @@
+# Language Models are Few-Shot Learners (GPT-3)
+
+**Brown et al. · NeurIPS 2020 · arXiv:2005.14165 · ~50,000 citations**
+
+---
+
+## 1. Overview
+
+GPT-3 is the paper that changed the world's understanding of what a language model could do. With 175 billion parameters and training on 300 billion tokens, it showed that scale alone — applied to the simple next-token prediction objective — produced a model capable of few-shot learning: given just 2-3 examples of a new task in the prompt, with no gradient updates, GPT-3 could perform that task at near-supervised levels.
+
+GPT-3 made AI capabilities mainstream. It powered the first wave of AI startups (Jasper, Copy.ai), demonstrated code generation (leading to Copilot), and served as the base model for ChatGPT (via RLHF fine-tuning). It established **scaling laws** and **emergence** as the two central concepts in AI research for the subsequent half-decade.
+
+---
+
+## 2. Historical Context
+
+After GPT-2, the field had established that larger models perform better — but GPT-2 still required fine-tuning for competitive task performance. The question: at what scale does zero/few-shot performance become practical?
+
+Concurrent research on scaling laws (Kaplan et al., 2020) had shown that loss scales predictably as a power law of compute, parameters, and data. GPT-3 was the empirical proof: take scaling laws seriously, scale to 175B, and the result is qualitatively different from GPT-2, not just quantitatively.
+
+OpenAI trained GPT-3 on a supercomputer with 285,000 CPU cores and 10,000 GPUs. The training cost was estimated at $4.6M. The result was a model that could write code, compose poetry, solve math problems, and pass professional examinations — without any fine-tuning.
+
+---
+
+## 3. Research Problem
+
+At what scale does in-context learning (providing examples in the prompt rather than gradient updates) become competitive with fine-tuning?
+
+Three evaluation conditions:
+- **Zero-shot:** Task described in natural language, no examples
+- **One-shot:** Task described with one example
+- **Few-shot:** Task described with K examples (K ≤ context window / example length)
+
+No gradient updates in any condition — the model weights are frozen.
+
+---
+
+## 4. Prior Work
+
+| Model | Parameters | Best Mode | Limitation |
+|:---|:---|:---|:---|
+| GPT-1 | 117M | Fine-tuned | No zero/few-shot |
+| BERT-Large | 340M | Fine-tuned | Bidirectional; not generative |
+| GPT-2 | 1.5B | Zero-shot (weak) | Too small for competitive zero-shot |
+| T5-11B | 11B | Fine-tuned | Full fine-tuning needed |
+| Megatron-LM | 8.3B | Fine-tuned | Pre-GPT-3 largest |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Meta-learning failure:** Prior fine-tuned models don't truly generalize — they adapt to the specific labeled dataset format. When that format shifts slightly, performance collapses. This is task-specific memorization, not general intelligence.
+
+**Scale-dependence of emergence:** GPT-2 (1.5B) showed weak zero-shot. T5-11B showed moderate few-shot. The capability wasn't smoothly interpolating — it emerged discontinuously at sufficient scale. You needed 175B+ to unlock reliable in-context learning.
+
+---
+
+## 6. Core Innovation
+
+**In-Context Learning (ICL) — few-shot prompting:**
+
+No new architecture. No new training objective. The innovation was *evaluation methodology* and *scale*:
+
+Given a prompt with $K$ examples:
+```
+Translate English to French:
+sea otter → loutre de mer
+peppermint → menthe poivrée
+[word to translate] →
+```
+
+The model completes the pattern. The examples are provided in the context window — no weights change. The model infers the task from examples.
+
+**Prompt as the only interface.** This established **prompt engineering** as a discipline.
+
+**Architecture improvements over GPT-2:**
+- Full-attention layers alternating with sparse attention layers (Sparse Transformer style)
+- Learned positional embeddings (instead of sinusoidal)
+- 96 attention heads for the 175B model
+
+---
+
+## 7. Architecture Breakdown
+
+Eight model sizes, all decoder-only Transformers:
+
+| Model | Params | Layers | Width | Heads | Batch Size |
+|:---|:---|:---|:---|:---|:---|
+| GPT-3 Small | 125M | 12 | 768 | 12 | 0.5M |
+| GPT-3 Medium | 350M | 24 | 1024 | 16 | 0.5M |
+| GPT-3 Large | 760M | 24 | 1536 | 16 | 0.5M |
+| GPT-3 XL | 1.3B | 24 | 2048 | 24 | 1M |
+| GPT-3 2.7B | 2.7B | 32 | 2560 | 32 | 1M |
+| GPT-3 6.7B | 6.7B | 32 | 4096 | 32 | 2M |
+| GPT-3 13B | 13B | 40 | 5140 | 40 | 2M |
+| **GPT-3 175B** | **175B** | **96** | **12288** | **96** | **3.2M** |
+
+See [GPT architecture page](/architectures/gpt) for breakdown.
+
+---
+
+## 8. Mathematical Foundations
+
+**Scaling Laws (Kaplan et al., 2020 — concurrent):**
+
+Loss scales as a power law:
+$$L(N) = \left(\frac{N_c}{N}\right)^{\alpha_N}, \quad L(D) = \left(\frac{D_c}{D}\right)^{\alpha_D}, \quad L(C) = \left(\frac{C_c}{C}\right)^{\alpha_C}$$
+
+Where $N$ = parameters, $D$ = dataset size, $C$ = compute. Exponents: $\alpha_N \approx 0.076$, $\alpha_D \approx 0.095$, $\alpha_C \approx 0.050$.
+
+These laws held across 7 orders of magnitude of compute and were used to predict GPT-3's final loss before training.
+
+**In-context learning is not gradient descent:**
+The weights $\theta$ are frozen. ICL works by the forward pass itself implementing a form of gradient-descent-like adaptation in activation space — later formalized by Akyürek et al. (2022) and von Oswald et al. (2023).
+
+---
+
+## 9. Key Experiments
+
+| Task | Zero-Shot | One-Shot | Few-Shot | Fine-Tuned SOTA |
+|:---|:---|:---|:---|:---|
+| SuperGLUE | 62.0 | — | 71.8 | 89.0 |
+| HellaSwag | 78.9 | 78.1 | 79.3 | 85.6 |
+| TriviaQA | 64.3 | 68.0 | **71.2** | 68.0 ← beaten! |
+| WinoGrande | 70.2 | 73.2 | 77.7 | 84.6 |
+
+---
+
+## 10. Benchmark Results
+
+| Benchmark | GPT-3 175B | Previous SOTA | Notes |
+|:---|:---|:---|:---|
+| TriviaQA (open-book) | **71.2%** | 68.0% | BEAT supervised SOTA |
+| CoQA | 81.5% | 90.7% | Near fine-tuned |
+| Natural Questions | 29.9% | 54.7% (fine-tuned) | Significant gap |
+| Arithmetic (2-digit add) | **100%** | — | Emergent capability |
+| 3-digit add | **80.2%** | — | Emergent at scale |
+
+---
+
+## 11. Ablation Studies
+
+| Scale | SuperGLUE (few-shot) |
+|:---|:---|
+| 125M | 36.1 |
+| 350M | 38.0 |
+| 760M | 40.8 |
+| 1.3B | 44.3 |
+| 2.7B | 52.4 |
+| 6.7B | 56.5 |
+| 13B | 58.3 |
+| **175B** | **71.8** |
+
+**Clear monotonic scaling with no plateau** — the case for continued scaling.
+
+---
+
+## 12. Implementation Details
+
+- **Dataset:** Common Crawl (410B tokens filtered), WebText2 (19B), Books1 (12B), Books2 (55B), Wikipedia (3B)
+- **Token sampling:** Weighted; Common Crawl ≈ 60% of training tokens
+- **Training framework:** Ray, mixed-precision FP16
+- **Hardware:** Microsoft Azure — 285K CPU cores, 10K V100 GPUs
+- **Estimated training cost:** ~$4.6M
+- **Context window:** 2048 tokens
+
+---
+
+## 13. Engineering Insights
+
+- **Few-shot > zero-shot >> fine-tuning in terms of cost-effectiveness at deployment.** You don't need labeled data, a training run, or a deployed model variant per task. One frozen model handles all tasks via prompt.
+- **Context window is the working memory.** Everything in-context can affect generation — instruction, examples, chain-of-thought — but nothing is remembered across calls. This creates the stateless, promptable interface that powers all LLM APIs today.
+- **Emergence is not smooth.** Arithmetic abilities appeared suddenly at ~7B parameters, then scaled steeply. Some capabilities appear discontinuously — motivating the search for "emergent abilities" in later work.
+- **Hallucination at scale.** GPT-3 confidently generates plausible but false information. The fluency of outputs masks their unreliability. This established "hallucination" as the central LLM safety problem.
+
+---
+
+## 14. Limitations
+
+- **Hallucinations.** Maximizing next-token likelihood optimizes for plausibility, not factuality.
+- **Sample inefficiency.** GPT-3 saw 300B tokens; humans learn with vastly less data. The model lacks true world understanding.
+- **No instruction following.** GPT-3 continues text; it doesn't reliably follow natural language instructions. (→ Fixed by InstructGPT/RLHF, 2022)
+- **Bias and toxicity.** Training on internet text encodes human biases at scale.
+- **Cannot update knowledge.** Knowledge frozen at training cutoff.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper/Product | GPT-3's Role |
+|:---|:---|
+| Codex (2021) | GPT-3 fine-tuned on code → GitHub Copilot |
+| InstructGPT (2022) | GPT-3 + RLHF → ChatGPT |
+| Scaling Laws (Kaplan, 2020) | GPT-3 was the validation |
+| Chinchilla (2022) | Showed GPT-3 was undertrained given its parameters |
+| LLaMA (2023) | Open-weights version of the GPT-3 blueprint |
+| Chain-of-Thought (2022) | Used GPT-3 to demonstrate reasoning via prompting |
+
+---
+
+## 16. Related Architectures
+
+- [GPT Architecture](/architectures/gpt) — decoder-only Transformer
+- [MoE](/architectures/moe) — scaling technique used in GPT-4
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Designing effective few-shot prompts
+- Computing scaling law exponents from loss curves

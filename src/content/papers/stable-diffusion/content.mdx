@@ -1,0 +1,144 @@
+# Stable Diffusion
+
+**Rombach et al. · CVPR 2022 · arXiv:2112.10752 (Implementation of Latent Diffusion Models)**
+
+---
+
+## 1. Overview
+
+Stable Diffusion is the specific, open-source model implementation of the Latent Diffusion Model (LDM) architecture developed by researchers at LMU Munich and Runway, and later funded by Stability AI. Released in August 2022, it democratized AI image generation by releasing the model weights publicly. Because it operated in the latent space of a VAE (reducing spatial dimensions by a factor of 8), the entire model fit in the VRAM of consumer GPUs (around 8GB).
+
+It was trained on subsets of the massive LAION-5B dataset. The combination of the LDM architecture, the CLIP text encoder for conditioning, and open weights created an unprecedented ecosystem of fine-tunes, extensions (like ControlNet and LoRA), and user interfaces (like AUTOMATIC1111).
+
+---
+
+## 2. Historical Context
+
+Before August 2022, high-quality text-to-image models (like OpenAI's DALL-E 2 and Google's Imagen) were closed-source and accessible only via API. Midjourney was available but operated through Discord.
+
+The LDM paper had been published on arXiv in late 2021, proving that diffusion could be done efficiently in latent space. CompVis (at LMU Munich) and Runway partnered with Stability AI to fund the massive compute required to train the LDM architecture on a large scale dataset (LAION). The release of Stable Diffusion v1.4 weights changed the trajectory of the open-source AI community.
+
+---
+
+## 3. Research Problem
+
+How to scale the Latent Diffusion Model architecture to a massive dataset (LAION-5B) and produce a robust, general-purpose text-to-image model that can run on consumer hardware.
+
+---
+
+## 4. Prior Work
+
+| Model | Approach | Open Source? |
+|:---|:---|:---|
+| DALL-E 1 | VQ-VAE + Autoregressive Transformer | No |
+| DALL-E 2 | CLIP + Pixel Diffusion | No |
+| Imagen | T5 + Cascaded Pixel Diffusion | No |
+| Latent Diffusion (LDM) | VAE + Latent Diffusion | Yes (Academic weights) |
+
+---
+
+## 5. Why Previous Methods Failed
+
+Pixel-space diffusion models were too computationally expensive to train and serve without massive GPU clusters. This kept the state-of-the-art models behind corporate APIs. By using LDM, Stable Diffusion bypassed this bottleneck.
+
+---
+
+## 6. Core Innovation
+
+The core innovation of Stable Diffusion is the **scale of training** applied to the LDM architecture, combined with **OpenCLIP** for robust text conditioning.
+
+1. **Architecture:** Uses the exact Latent Diffusion Model formulation (VAE + U-Net).
+2. **Text Conditioning:** Uses a frozen CLIP ViT-L/14 text encoder to process the input prompt. The resulting text embeddings guide the U-Net via cross-attention.
+3. **Training Data:** LAION-5B (a massive scrape of image-text pairs from the web).
+
+---
+
+## 7. Architecture Breakdown
+
+Stable Diffusion v1.5:
+
+- **VAE:** Downsamples images by a factor of $f=8$ (e.g., 512×512×3 → 64×64×4). ~84M parameters.
+- **U-Net:** Denoises the 64×64×4 latents. Contains self-attention and cross-attention layers. ~860M parameters.
+- **Text Encoder:** CLIP ViT-L/14. ~123M parameters.
+
+Total parameter count is around 1B, small enough to fit comfortably in consumer GPU VRAM during inference.
+
+---
+
+## 8. Mathematical Foundations
+
+**Latent Diffusion Objective:**
+$$L_{LDM} = \mathbb{E}_{\mathcal{E}(x), \epsilon \sim \mathcal{N}(0, 1), t} \left[ \parallel \epsilon - \epsilon_\theta(z_t, t, \tau_\theta(y)) \parallel^2 \right]$$
+Where $z_t$ is the noisy latent, $\epsilon_\theta$ is the U-Net, $y$ is the text prompt, and $\tau_\theta$ is the CLIP text encoder.
+
+**Classifier-Free Guidance (CFG):**
+$$\hat{\epsilon} = \epsilon_{uncond} + w \cdot (\epsilon_{cond} - \epsilon_{uncond})$$
+Allows controlling how strongly the image aligns with the text prompt by extrapolating between unconditioned and conditioned noise predictions.
+
+---
+
+## 9. Key Experiments
+
+Stable Diffusion was continuously evaluated during its training run on subsets of LAION-5B. The release checkpoints (v1.4, v1.5) represented different stages of training and fine-tuning on higher-resolution aesthetic subsets.
+
+---
+
+## 10. Benchmark Results
+
+Stable Diffusion achieves competitive zero-shot FID scores on COCO compared to much larger closed-source models, but its true benchmark success was its widespread adoption and subjective visual quality.
+
+---
+
+## 11. Ablation Studies
+
+Stable Diffusion's development included extensive ablations on the training dataset (e.g., filtering for aesthetic scores). Training on the "LAION-Aesthetics" subset significantly improved the visual appeal of generated images compared to the raw LAION-5B data.
+
+---
+
+## 12. Implementation Details
+
+- **Dataset:** Trained on `laion2B-en` and later fine-tuned on `laion-aesthetics v2 5+`.
+- **Hardware:** Trained on 256 A100 GPUs for roughly 150,000 GPU-hours.
+- **Resolution:** Trained at 256×256, then fine-tuned at 512×512.
+- **Inference Samplers:** Supports DDIM, PLMS, Euler, and others to generate images in 20-50 steps.
+
+---
+
+## 13. Engineering Insights
+
+- **The power of open weights:** Because the model was small enough to run locally and the weights were open, the community rapidly developed tools to control and extend it.
+- **Textual Inversion and LoRA:** Techniques to teach the model new concepts or styles with only a few images by updating a small number of parameters.
+- **ControlNet:** Added spatial conditioning (pose, depth maps) to Stable Diffusion by training a parallel copy of the U-Net encoder.
+
+---
+
+## 14. Limitations
+
+- **Text Rendering:** Struggles to generate coherent, spelled-out text.
+- **Anatomy:** Frequently generates malformed hands or extra limbs.
+- **Resolution Constraint:** Training at 512×512 means generating at higher resolutions (e.g., 1024×1024) natively often causes duplicated subjects (the "two-headed" problem) because the model's receptive field wasn't trained on that scale. (Addressed in SDXL).
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Contribution |
+|:---|:---|
+| SDXL (2023) | Scaled up Stable Diffusion to 1024×1024 with a much larger U-Net |
+| ControlNet (2023) | Enabled precise structural control |
+| LoRA | Efficient fine-tuning ecosystem |
+
+---
+
+## 16. Related Architectures
+
+- [Stable Diffusion Architecture](/architectures/stable-diffusion)
+- [Latent Diffusion Models](/papers/latent-diffusion-models)
+- [CLIP](/papers/clip)
+
+---
+
+## 17. Related Problems
+
+- Understanding Latent Space compression
+- Classifier-Free Guidance mechanics

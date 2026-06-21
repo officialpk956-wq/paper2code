@@ -1,0 +1,209 @@
+# ImageNet Classification with Deep Convolutional Neural Networks
+
+**Krizhevsky, Sutskever & Hinton · NeurIPS 2012 · The AlexNet Paper**
+
+---
+
+## 1. Overview
+
+This is the paper that launched the deep learning era. On September 30, 2012, Alex Krizhevsky, Ilya Sutskever, and Geoffrey Hinton submitted their results to the ImageNet Large Scale Visual Recognition Challenge (ILSVRC). Their convolutional neural network — later named **AlexNet** — achieved a top-5 error rate of **15.3%**, compared to the second-place entry at 26.2%. An 11-percentage-point gap in a competition that had seen incremental 1-2% improvements for years. The entire computer vision field pivoted overnight.
+
+The result was not just a better model. It was proof that deep neural networks trained on GPUs with ReLU activations could demolish decades of hand-crafted feature engineering. Every computer vision system since then — ResNet, EfficientNet, Stable Diffusion, GPT-4V — descends directly from this paper.
+
+---
+
+## 2. Historical Context
+
+In 2012, the dominant paradigm in computer vision was **hand-crafted features + shallow classifiers**. Systems like SIFT (Scale-Invariant Feature Transform), HOG (Histogram of Oriented Gradients), and Fisher Vectors were painstakingly assembled by domain experts. The computational backbone was SVMs (Support Vector Machines) or Naive Bayes classifiers.
+
+Convolutional neural networks were not new. Yann LeCun's LeNet-5 (1998) had proven CNNs could read handwritten digits. But scaling them to real-world images seemed computationally impossible. The ImageNet dataset — 1.2 million images across 1,000 categories — was created specifically to force the field to confront this scaling challenge. For two years (2010–2011), the winning entries were carefully engineered hand-crafted feature pipelines.
+
+Krizhevsky, working under Hinton at the University of Toronto, had been experimenting with training very deep CNNs on GPUs. The hardware had only recently become capable enough. The NVIDIA GTX 580 GPU (released 2010) had 512 CUDA cores and 3GB of GDDR5 memory — just barely enough to train AlexNet.
+
+---
+
+## 3. Research Problem
+
+Can a deep convolutional neural network, trained end-to-end on raw pixels with gradient descent, outperform feature-engineered systems on large-scale image classification?
+
+The sub-problems were:
+1. **Scale:** How do you train a deep network on 1.2 million images without running out of GPU memory?
+2. **Overfitting:** With millions of parameters, the network will memorize the training set. How do you prevent this?
+3. **Vanishing Gradients:** Deep networks trained with sigmoid activations degraded, as gradients vanished before reaching early layers.
+4. **Training Speed:** Sigmoid activations are slow to compute. Is there a faster alternative?
+
+---
+
+## 4. Prior Work
+
+| Year | Method | Limitation |
+|:---|:---|:---|
+| 1998 | LeNet-5 (LeCun et al.) | Limited to small images (32×32), shallow (7 layers) |
+| 2005–2011 | SIFT + SVM | Hand-crafted; plateaued on ImageNet |
+| 2009 | ImageNet Dataset | Enabled the benchmark, but nobody could train deep nets on it |
+| 2011 | ILSVRC winner (error 25.8%) | Dense SIFT + Fisher Vectors, no deep learning |
+
+The closest deep learning precedent was Hinton's **RBM-based Deep Belief Nets** (2006), which had renewed interest in deep architectures but were not practical for image classification at scale.
+
+---
+
+## 5. Why Previous Methods Failed
+
+1. **Hand-crafted features hit a ceiling.** SIFT and HOG captured edges and textures but could not represent high-level semantics (dog breeds, face expressions). The gap was fundamental — no amount of feature engineering could capture the compositional structure of visual concepts.
+2. **Sigmoid saturated.** Deep networks with sigmoid activations $\sigma(x) = 1/(1+e^{-x})$ suffer from vanishing gradients: when $|\sigma'(x)| \ll 1$ for large $|x|$, gradients become exponentially small in early layers. LeNet was shallow specifically because going deeper made training collapse.
+3. **CPUs were too slow.** Training a large CNN on millions of images on a CPU would take weeks. The matrix multiplications that define convolutions are perfectly suited for the parallel architecture of GPUs, but nobody had exploited this for deep learning at scale before Krizhevsky.
+4. **Overfitting was treated as intractable.** The field lacked principled techniques for regularizing very large models. Weight decay alone was insufficient.
+
+---
+
+## 6. Core Innovation
+
+AlexNet introduced **five** critical contributions simultaneously:
+
+1. **ReLU Activations:** $f(x) = \max(0, x)$. ReLU does not saturate for positive inputs, meaning gradients flow freely through deep networks. The paper showed ReLU networks trained 6× faster than tanh equivalents.
+
+2. **Dual-GPU Training:** The network was split across two NVIDIA GTX 580 GPUs (limited to 3GB RAM each). The split was architectural — layers communicated selectively between GPUs, a manual form of model parallelism.
+
+3. **Local Response Normalization (LRN):** Inspired by lateral inhibition in neuroscience, this normalized each activation using its neighbors across channels. (Later shown to be unnecessary; replaced by Batch Normalization in subsequent work.)
+
+4. **Overlapping Max-Pooling:** Pooling windows overlapped (stride 2, size 3×3) instead of being non-overlapping (stride = size). This made the model slightly harder to overfit.
+
+5. **Dropout (0.5):** Randomly zeroing 50% of neuron activations in the fully connected layers during training. Neurons cannot co-adapt on specific training examples because their partners may be dropped. This was the first large-scale demonstration of dropout as a regularizer.
+
+Plus **data augmentation**: random crops, horizontal flips, and PCA-based color jitter — expanding the effective training set by 2048×.
+
+---
+
+## 7. Architecture Breakdown
+
+| Layer | Type | Output Shape | Kernel | Notes |
+|:---|:---|:---|:---|:---|
+| Input | — | 224×224×3 | — | RGB image |
+| Conv1 | Conv + ReLU + Pool | 27×27×96 | 11×11, stride 4 | Split: 48 filters/GPU |
+| Conv2 | Conv + ReLU + Pool | 13×13×256 | 5×5 | Cross-GPU communication |
+| Conv3 | Conv + ReLU | 13×13×384 | 3×3 | Full cross-GPU |
+| Conv4 | Conv + ReLU | 13×13×384 | 3×3 | Split |
+| Conv5 | Conv + ReLU + Pool | 6×6×256 | 3×3 | Split |
+| FC6 | Dense + ReLU + Dropout | 4096 | — | |
+| FC7 | Dense + ReLU + Dropout | 4096 | — | |
+| FC8 | Dense + Softmax | 1000 | — | Output |
+
+**Total parameters: ~60 million.** The FC layers dominate (FC6 alone: 9×4096 = ~37M parameters).
+
+---
+
+## 8. Mathematical Foundations
+
+**ReLU Activation:**
+$$ f(x) = \max(0, x) $$
+Gradient: $f'(x) = 1$ for $x > 0$, $0$ otherwise. No saturation in the positive regime.
+
+**Local Response Normalization:**
+$$ b_{x,y}^i = a_{x,y}^i \Big/ \left( k + \alpha \sum_{j=\max(0,i-n/2)}^{\min(N-1,i+n/2)} (a_{x,y}^j)^2 \right)^\beta $$
+Where $n$ is the number of adjacent channels, $k=2$, $\alpha=10^{-4}$, $\beta=0.75$.
+
+**Dropout:**
+During training, each neuron $h_i$ is independently set to 0 with probability $p=0.5$. During inference, all neurons are used but their outputs are scaled by $p$ (or equivalently, weights are scaled by $1-p$ during training — inverted dropout).
+
+**Data Augmentation — PCA Color Jitter:**
+For each training image, add a multiple of the principal components of ImageNet pixel RGB values:
+$$ [p_1, p_2, p_3] [\alpha_1\lambda_1, \alpha_2\lambda_2, \alpha_3\lambda_3]^T $$
+where $\alpha_i \sim \mathcal{N}(0, 0.1)$ and $p_i, \lambda_i$ are PCA eigenvectors/values of ImageNet pixel values.
+
+---
+
+## 9. Key Experiments
+
+| Experiment | Top-5 Error | Observation |
+|:---|:---|:---|
+| ILSVRC-2012 Submission | 15.3% (ensemble) | 10.9pp gap over runner-up |
+| Single model | 16.4% | Still beat all competitors |
+| CNN without Dropout | ~18.5% | Dropout reduces overfitting significantly |
+| Removing 1 Conv layer | ~18.0% | Depth matters; each layer contributes |
+| CNN trained on full images (no crop) | ~17.1% | Data augmentation is critical |
+
+---
+
+## 10. Benchmark Results
+
+**ILSVRC 2012 Top-5 Error:**
+
+| Model | Top-5 Error |
+|:---|:---|
+| 2011 Winner (SIFT + FV) | 25.8% |
+| 2012 Runner-up (SIFT + FV) | 26.2% |
+| **AlexNet (single model)** | **16.4%** |
+| **AlexNet (ensemble of 5)** | **15.3%** |
+
+---
+
+## 11. Ablation Studies
+
+The paper ran systematic ablations showing:
+- **Depth matters:** Removing any of the middle conv layers (3, 4, 5) degraded performance by 2%.
+- **LRN helps:** Local Response Normalization reduced error by ~1%.
+- **Overlapping pooling:** Slightly reduced error vs non-overlapping.
+- **Two-GPU split pays off:** The cross-GPU communication scheme learned qualitatively different features on each GPU (frequency-selective vs. colour-selective filters) — an emergent specialization that occurred without explicit supervision.
+
+---
+
+## 12. Implementation Details
+
+- **Framework:** Custom CUDA kernels (no PyTorch/TensorFlow; they didn't exist yet)
+- **Hardware:** 2× NVIDIA GTX 580 GPU (3GB VRAM each)
+- **Training time:** 5–6 days
+- **Optimizer:** SGD, momentum 0.9, weight decay $5\times10^{-4}$
+- **Learning Rate:** Initial LR 0.01, divided by 10 when validation error plateaus (3 times total)
+- **Batch size:** 128
+- **Weight initialization:** Gaussian with std 0.01; biases initialized to 0 in conv layers 2,4,5 and all FC layers, 0 elsewhere
+
+---
+
+## 13. Engineering Insights
+
+- The **FC layer bottleneck** (60M/60M params in FC layers) became the primary lesson: subsequent architectures (NiN, GoogLeNet, ResNet) moved toward Global Average Pooling to eliminate the parameter-heavy dense layers.
+- The **dual-GPU split** was a hardware hack. As GPU memory grew (from 3GB to 80GB in A100), this was no longer necessary — but it seeded the field of model parallelism for training trillion-parameter models.
+- **ReLU was the unlock.** The simplicity of $\max(0,x)$ was initially dismissed. This paper definitively settled the debate and it remains the default activation 12 years later.
+
+---
+
+## 14. Limitations
+
+- **FC layers dominate parameters.** 60M parameters for 1000-class classification was already heavy. Scaling to more classes would explode parameter count.
+- **LRN was unnecessary.** Later work (VGG, ResNet) showed Batch Normalization was far superior and LRN added complexity for little gain.
+- **Limited depth.** AlexNet is only 8 layers. Later work proved depth (not just width) was the key variable.
+- **GPU memory constraint.** The two-GPU split was an engineering workaround that added architectural complexity.
+- **No skip connections.** Gradients still struggled in very early layers, limiting how much deeper you could go with this design.
+
+---
+
+## 15. Influence on Later Research
+
+AlexNet is the direct parent of the entire modern deep learning ecosystem:
+
+| Year | Paper | What AlexNet Enabled |
+|:---|:---|:---|
+| 2014 | VGGNet | Proved deeper (16–19 layers) with only 3×3 convs was better |
+| 2014 | GoogLeNet | Replaced FC layers with GAP; introduced Inception modules |
+| 2015 | ResNet | Skip connections solved degradation from extreme depth |
+| 2015 | Batch Normalization | Replaced LRN; enabled training at higher LR |
+| 2016 | YOLO/SSD | Object detection became viable on GPU with AlexNet-style backbones |
+| 2021 | ViT | Applied the "scale it up" lesson to Transformers on images |
+
+---
+
+## 16. Related Architectures
+
+- [LeNet](/architectures/lenet) — the predecessor
+- [VGG16](/architectures/vgg16) — the depth successor
+- [GoogLeNet](/architectures/googlenet) — efficiency successor
+- [ResNet](/architectures/resnet) — solved depth limit
+- [EfficientNet](/architectures/efficientnet) — principled scaling
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Implementing ReLU and its gradient in NumPy
+- Building a GPU-parallel Conv layer

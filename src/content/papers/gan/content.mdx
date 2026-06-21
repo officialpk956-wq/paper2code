@@ -1,0 +1,209 @@
+# Generative Adversarial Nets
+
+**Goodfellow et al. · NeurIPS 2014 · arXiv:1406.2661 · ~75,000 citations**
+
+---
+
+## 1. Overview
+
+In 2014, Ian Goodfellow conceived the idea of Generative Adversarial Networks during an argument at a bar in Montreal. He went home that night and implemented the first GAN. It trained successfully. Few ideas in the history of machine learning have had such a concentrated, immediate impact from a single late-night experiment.
+
+The GAN framework set up a two-player minimax game between a **Generator** — which synthesizes fake data from random noise — and a **Discriminator** — which tries to classify inputs as real or fake. The two networks are trained adversarially: the Generator learns to fool the Discriminator, and the Discriminator learns to catch the Generator. In Nash equilibrium, the Generator produces data indistinguishable from the real distribution.
+
+This paper launched an entire research field. By 2020, GANs were producing photorealistic human faces (StyleGAN2), super-resolving satellite imagery, and generating video. Yann LeCun called GANs "the most interesting idea in machine learning in the last decade."
+
+---
+
+## 2. Historical Context
+
+In 2014, generative modeling was dominated by:
+- **Restricted Boltzmann Machines (RBMs)** — slow MCMC-based sampling, hard to scale
+- **Variational AutoEncoders (VAEs)** — elegant Bayesian framework, but outputs were blurry due to pixel-wise MSE reconstruction loss
+- **Autoregressive models (PixelRNN)** — slow sequential generation
+
+All of these explicitly maximize the likelihood of training data, requiring either intractable integrals or surrogate bounds. Goodfellow's key insight: *you don't need to define a likelihood function at all.* Instead, train a neural network to be the loss function.
+
+---
+
+## 3. Research Problem
+
+How do you train a generative model to produce samples from a complex, high-dimensional distribution (like natural images) **without explicitly defining a likelihood function**?
+
+The specific failure of prior methods:
+- Maximum likelihood requires computing $\log p_\theta(x)$, which is intractable for deep networks
+- VAEs use the ELBO (a lower bound), which induces blurriness as a byproduct of the bound's looseness
+- Training an implicit density model without any proxy objective seemed impossible
+
+---
+
+## 4. Prior Work
+
+| Method | Training Objective | Limitation |
+|:---|:---|:---|
+| RBMs / DBNs | Contrastive Divergence | Slow MCMC; hard to scale to images |
+| VAE (Kingma & Welling, 2013) | ELBO (likelihood lower bound) | Blurry outputs; posterior collapse |
+| PixelCNN (2016) | Autoregressive likelihood | Very slow sampling; no global coherence |
+| Moment Matching Networks | Match statistics | Limited expressivity |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**VAEs produce blurry images** because the reconstruction loss (MSE over pixels) penalizes sharp incorrect edges more than diffuse average representations. When the model is uncertain which of two plausible pixel values is correct, MSE is minimized by outputting the average — a blurry compromise.
+
+**Likelihood-based methods require defining the data distribution** explicitly. For a 256×256×3 image (196,608 dimensions), this is computationally intractable without severe approximations that damage sample quality.
+
+GANs sidestep both problems entirely: the Generator never sees the real data directly, and the Discriminator *learns* what realistic data looks like, providing a rich, high-dimensional feedback signal rather than a pixel-averaged one.
+
+---
+
+## 6. Core Innovation
+
+**The adversarial framework:** Frame generative modeling as a game between two networks:
+
+- $G$: Generator. Maps noise $z \sim p_z(z)$ to data space. Tries to produce realistic $G(z)$.
+- $D$: Discriminator. Maps data $x$ to $[0, 1]$. Tries to distinguish real $x \sim p_{data}$ from fake $G(z)$.
+
+The Value Function:
+$$\min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{data}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]$$
+
+In the optimal case, $D(x) = \frac{1}{2}$ everywhere (cannot tell real from fake), and $p_G = p_{data}$.
+
+**Why this is revolutionary:** The Discriminator is a *learned, adaptive loss function*. As the Generator improves, the Discriminator upgrades its own criticism. The loss function evolves with the model — something no prior generative method had done.
+
+---
+
+## 7. Architecture Breakdown
+
+The original GAN paper used simple **multilayer perceptrons (MLPs)** for both G and D, trained on the MNIST, TFD, and CIFAR-10 datasets. No convolutional layers.
+
+**Generator:**
+- Input: $z \in \mathbb{R}^{100}$, sampled from $\mathcal{N}(0, I)$
+- 3 hidden layers, Maxout activations
+- Output: $\tanh$ activation → pixel values in $[-1, 1]$
+
+**Discriminator:**
+- Input: Image $x$
+- 3 hidden layers, Maxout + Dropout
+- Output: Sigmoid → probability of being real
+
+The deep convolutional variant (**DCGAN**, Radford et al. 2015) became the standard template: transposed convolutions in G, strided convolutions in D, BatchNorm, ReLU/LeakyReLU.
+
+---
+
+## 8. Mathematical Foundations
+
+**The Minimax Objective:**
+$$V(D, G) = \mathbb{E}_{x \sim p_{data}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]$$
+
+**Optimal Discriminator** (given fixed G):
+$$D^*_G(x) = \frac{p_{data}(x)}{p_{data}(x) + p_G(x)}$$
+
+**Jensen-Shannon Divergence:** The paper proves that with the optimal discriminator, minimizing the generator's objective is equivalent to minimizing the Jensen-Shannon divergence between $p_{data}$ and $p_G$:
+$$C(G) = -\log(4) + 2 \cdot JSD(p_{data} \| p_G)$$
+
+The global minimum $C(G) = -\log(4)$ is achieved if and only if $p_G = p_{data}$.
+
+**In practice:** The Generator is trained to maximize $\log D(G(z))$ rather than minimize $\log(1 - D(G(z)))$ — the same Nash equilibrium but with better gradient signal when D easily rejects poor fakes.
+
+---
+
+## 9. Key Experiments
+
+| Dataset | Qualitative Result |
+|:---|:---|
+| MNIST | Sharp, diverse handwritten digits |
+| TFD (Toronto Faces) | Realistic face patches |
+| CIFAR-10 | Recognizable but blurry objects (MLP baseline) |
+
+The original paper had no quantitative evaluation metrics — FID (Fréchet Inception Distance) wouldn't be invented until 2017. Results were evaluated by human raters who couldn't reliably distinguish GAN samples from MNIST/TFD real images.
+
+---
+
+## 10. Benchmark Results
+
+The original 2014 paper had no standard benchmark numbers — evaluation methodology for generative models was undefined. The paper demonstrated qualitative quality and introduced the concept.
+
+Parzen window log-likelihood estimates (since deprecated as unreliable):
+
+| Method | MNIST Log-Likelihood |
+|:---|:---|
+| DBN | 138 ± 2 |
+| Stacked CAE | 121 ± 1.6 |
+| Deep GSN | 214 ± 1.1 |
+| **GAN** | **225 ± 2** |
+
+---
+
+## 11. Ablation Studies
+
+The paper's theoretical analysis provided the ablations:
+- **Theorem 1:** The optimal D given G is $D^*_G(x) = p_{data}/(p_{data}+p_G)$
+- **Theorem 2:** The minimax game has a global optimum at $p_G = p_{data}$
+- **Proposition 2:** Algorithm 1 (alternating SGD) converges when the discriminator can reach its optimal given G
+
+The practical limitation acknowledged: these proofs assume infinite capacity and exact optimization — in practice, neither holds.
+
+---
+
+## 12. Implementation Details
+
+**Training loop (Algorithm 1):**
+1. Sample $m$ noise samples $\{z^{(1)}, \dots, z^{(m)}\}$ from $p_z$
+2. Sample $m$ real examples $\{x^{(1)}, \dots, x^{(m)}\}$ from $p_{data}$
+3. Update D by ascending gradient: $\frac{1}{m}\sum[\log D(x^{(i)}) + \log(1-D(G(z^{(i)})))]$
+4. Sample $m$ fresh noise samples
+5. Update G by descending gradient: $\frac{1}{m}\sum[\log(1-D(G(z^{(i)})))]$
+6. Repeat D step $k=1$ times per G step (paper sets $k=1$)
+
+**Key implementation detail:** The ratio of D to G updates ($k$) is a critical hyperparameter in practice.
+
+---
+
+## 13. Engineering Insights
+
+- **Mode collapse is the most dangerous failure mode.** The Generator discovers a few "safe" outputs that always fool D and collapses to producing only those. Fix: Wasserstein GAN (Earth Mover's Distance as objective), Spectral Normalization, Mini-batch discrimination.
+- **Discriminator must be strictly stronger than Generator.** If G gets ahead of D, D provides zero-gradient (it cannot tell fake from real, so $\log(1-D(G(z))) \approx 0$). The adversarial balance is delicate.
+- **Never use the same batch for D and G in the same step.** This creates correlated gradients and destabilizes training.
+- **Monitor the discriminator loss, not the generator loss.** A discriminator loss near $\log(2) \approx 0.693$ indicates perfect balance — use this as your canary.
+
+---
+
+## 14. Limitations
+
+- **Training instability:** The minimax game frequently fails to converge. Requires careful hyperparameter tuning and architectural choices (BatchNorm, LeakyReLU).
+- **Mode collapse:** G may capture only a subset of the data distribution despite low discriminator loss.
+- **No explicit density model:** You cannot compute $p(x)$ for a given image — GANs are purely implicit generative models.
+- **Hard to evaluate:** FID and IS metrics came years later; the field spent years debating evaluation methodology.
+- **Superseded by diffusion:** For high-fidelity image synthesis, Diffusion Models (2020–2022) surpassed GANs in quality and diversity without the training instability.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | Contribution |
+|:---|:---|
+| DCGAN (2015) | Convolutional G/D; stable training recipe |
+| Pix2Pix (2016) | Conditional GAN for image-to-image translation |
+| CycleGAN (2017) | Unpaired image translation (horse→zebra) |
+| Wasserstein GAN (2017) | Earth Mover's Distance; solved mode collapse analytically |
+| Progressive GAN (2018) | High-resolution training via progressive layer addition |
+| StyleGAN (2019) | Style-based G; photorealistic human faces at 1024×1024 |
+| BigGAN (2018) | Scaled GANs to ImageNet; introduced truncation trick |
+
+---
+
+## 16. Related Architectures
+
+- [GAN Architecture](/architectures/gan) — full layer-by-layer breakdown
+- [VAE](/architectures/vae) — the likelihood-based alternative
+- [Diffusion Models](/architectures/diffusion) — the current SOTA successor
+- [Stable Diffusion](/architectures/stable-diffusion) — combines VAE + Diffusion
+
+---
+
+## 17. Related Problems
+
+- Implementing the GAN training loop with PyTorch
+- Diagnosing and fixing mode collapse
+- Computing Fréchet Inception Distance (FID)
