@@ -1,0 +1,165 @@
+# AlexNet
+
+## 1. Overview
+
+AlexNet is the architecture that sparked the deep learning revolution. Created by Alex Krizhevsky, Ilya Sutskever, and Geoffrey Hinton, it won the 2012 ImageNet Large Scale Visual Recognition Challenge (ILSVRC) by a massive margin, achieving a top-5 error rate of 15.3% (the runner-up achieved 26.2%). 
+
+It demonstrated that deep convolutional neural networks, when scaled up and trained on GPUs with large datasets (ImageNet), could dramatically outperform traditional computer vision techniques based on manual feature engineering.
+
+## 2. Historical Context
+
+Before 2012, neural networks were largely considered a dead end by the broader computer vision community. Traditional methods involved extracting hand-crafted features (like SIFT, HOG, LBP) and feeding them into SVM classifiers. 
+
+While LeNet-5 had proven CNNs worked for small images (digits) in 1998, scaling them to high-resolution, full-color images with thousands of classes seemed computationally intractable. The AlexNet paper, *"ImageNet Classification with Deep Convolutional Neural Networks"*, proved that with the advent of large annotated datasets (ImageNet) and parallel computation on Graphics Processing Units (GPUs), deep neural networks could learn features directly from pixels far better than human engineers could design them.
+
+## 3. Problem It Solves
+
+Scaling LeNet to process 227x227 RGB images across 1000 classes presented extreme computational and optimization challenges:
+1.  **Compute Limitation:** CPUs could not perform the billions of MACs required fast enough.
+2.  **Vanishing Gradients:** Deep networks using Tanh/Sigmoid activations stopped learning.
+3.  **Overfitting:** With 60 million parameters, the network would memorize the training data rather than generalize.
+
+AlexNet solved these by:
+1.  **GPU Implementation:** Utilizing two GTX 580 GPUs, splitting the network across them.
+2.  **ReLU Activation:** Replacing Tanh with Rectified Linear Units to solve the vanishing gradient problem and accelerate convergence by 6x.
+3.  **Dropout & Data Augmentation:** Using dropout layers in the fully connected portion and heavy data augmentation (cropping, flipping, color jitter) to prevent overfitting.
+
+## 4. Architecture Diagram Data
+
+Input: `227x227x3` RGB images. (Note: The paper states 224x224, but math requires 227x227 with a stride of 4 and 11x11 kernel, a well-known typo).
+
+*   **Conv1:** 96 kernels of 11x11, stride 4.
+*   **MaxPool1:** 3x3, stride 2. Local Response Normalization (LRN).
+*   **Conv2:** 256 kernels of 5x5, padding 2.
+*   **MaxPool2:** 3x3, stride 2. LRN.
+*   **Conv3:** 384 kernels of 3x3, padding 1.
+*   **Conv4:** 384 kernels of 3x3, padding 1.
+*   **Conv5:** 256 kernels of 3x3, padding 1.
+*   **MaxPool3:** 3x3, stride 2.
+*   **FC6:** 4096 units + Dropout.
+*   **FC7:** 4096 units + Dropout.
+*   **FC8 (Output):** 1000 units (Softmax).
+
+## 5. Layer-by-Layer Explanation
+
+### Conv1 - First Convolutional Layer
+Uses a massive 11x11 kernel with a stride of 4. This aggressively downsamples the high-resolution input image immediately, extracting low-level features like edges and color blobs while reducing computational load for subsequent layers.
+
+### Overlapping Max Pooling & LRN
+Unlike LeNet's non-overlapping Average Pooling, AlexNet uses *overlapping* Max Pooling (kernel 3, stride 2). Max pooling preserves the strongest activations (sharpest features). Overlapping windows slightly improved accuracy and reduced overfitting. Local Response Normalization (LRN) was used to mimic lateral inhibition in neurobiology, dampening nearby neurons if one fires strongly.
+
+### Conv2 to Conv5 - The Deep Body
+Conv2 uses 5x5 filters. Conv3, Conv4, and Conv5 use 3x3 filters. This unbroken sequence of three convolutional layers without intervening pooling was novel, allowing the network to build highly complex, abstract spatial hierarchies. Because it was split across two GPUs, Conv3 was the only layer in this group that received input from both GPUs; Conv4 and Conv5 only operated on the channels within their respective GPU.
+
+### Fully Connected Layers (FC6, FC7, FC8)
+The spatial tensors are flattened into vectors of size 4096. These layers contain the vast majority of the network's parameters. Dropout is applied to FC6 and FC7 to force the network to learn robust, redundant representations.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$.
+
+```text
+Input Image   : (B, 3, 227, 227)
+Conv1         : (B, 96, 55, 55)   [kernel=11, stride=4, pad=0]
+MaxPool1      : (B, 96, 27, 27)   [kernel=3, stride=2]
+Conv2         : (B, 256, 27, 27)  [kernel=5, stride=1, pad=2]
+MaxPool2      : (B, 256, 13, 13)  [kernel=3, stride=2]
+Conv3         : (B, 384, 13, 13)  [kernel=3, stride=1, pad=1]
+Conv4         : (B, 384, 13, 13)  [kernel=3, stride=1, pad=1]
+Conv5         : (B, 256, 13, 13)  [kernel=3, stride=1, pad=1]
+MaxPool3      : (B, 256, 6, 6)    [kernel=3, stride=2]
+Flatten       : (B, 256 * 6 * 6) = (B, 9216)
+FC6           : (B, 4096)
+FC7           : (B, 4096)
+FC8           : (B, 1000)
+```
+
+## 7. Mathematical Foundations
+
+**ReLU (Rectified Linear Unit):**
+$$ f(x) = \max(0, x) $$
+Unlike Tanh, its derivative is exactly 1 for $x > 0$. This means gradients do not vanish as they backpropagate through many layers, solving the vanishing gradient problem that plagued early deep networks.
+
+**Dropout:**
+During training, a neuron is kept with probability $p$ (usually 0.5) or set to zero. Mathematically, for layer $y = f(Wx)$, dropout applies a Bernoulli mask $r \sim \text{Bernoulli}(p)$:
+$$ y = f(W(r * x)) $$
+During inference, weights are scaled by $p$ to maintain the expected value.
+
+**Local Response Normalization (LRN):**
+$$ b^i_{x,y} = a^i_{x,y} \left( k + \alpha \sum_{j=\max(0, i-n/2)}^{\min(N-1, i+n/2)} (a^j_{x,y})^2 \right)^{-\beta} $$
+*Note: LRN is largely deprecated today in favor of Batch Normalization.*
+
+## 8. Forward Pass
+
+1.  An image is heavily augmented (random 227x227 crop from 256x256, horizontal flip, PCA color jitter) and fed in.
+2.  The early layers (Conv1, Conv2) extract basic shapes, Gabor-like filters, and color blobs.
+3.  The middle layers (Conv3-Conv5) combine these into object parts (wheels, dog faces, textures).
+4.  The network flattens the spatial maps and feeds them through massive dense layers that act as the final classifier reasoning over the detected parts.
+
+## 9. Training Process
+
+*   **Dataset:** ImageNet (1.2 million training images).
+*   **Optimizer:** SGD with Momentum (0.9), Weight Decay (0.0005).
+*   **Hardware:** Two NVIDIA GTX 580 GPUs with 3GB memory each. The network was split down the middle (e.g., Conv1 produced 96 feature maps; GPU1 computed 48, GPU2 computed 48).
+*   **Time:** 5 to 6 days.
+*   **Learning Rate:** Initialized at 0.01, divided by 10 when validation error plateaued.
+
+## 10. Complexity Analysis
+
+AlexNet has approximately **61 million parameters**.
+
+| Layer | Type | Parameters | Calculation |
+| :--- | :--- | :--- | :--- |
+| Conv1 | Conv | ~35K | $(11\times11\times3)\times96$ |
+| Conv2 | Conv | ~307K | $(5\times5\times48)\times256$ (split GPU) |
+| Conv3 | Conv | ~884K | $(3\times3\times256)\times384$ |
+| Conv4 | Conv | ~663K | $(3\times3\times192)\times384$ (split GPU) |
+| Conv5 | Conv | ~442K | $(3\times3\times192)\times256$ (split GPU) |
+| FC6 | Dense | ~37.7M | $9216 \times 4096$ |
+| FC7 | Dense | ~16.7M | $4096 \times 4096$ |
+| FC8 | Dense | ~4M | $4096 \times 1000$ |
+
+**Insight:** Over 90% of the parameters are in the Fully Connected layers (FC6 and FC7), even though the convolutional layers consume most of the compute (MACs) and memory footprint during the forward pass.
+
+## 11. Advantages
+
+*   **Accuracy Paradigm Shift:** Smashed the ILSVRC records, proving deep learning works.
+*   **ReLU Standardization:** Made ReLU the default activation function in deep learning.
+*   **Dropout Success:** Validated Dropout as a highly effective regularization technique.
+
+## 12. Limitations
+
+*   **Parameter Imbalance:** The massive dense layers (FC6, FC7) are parameter-heavy and prone to overfitting. Later architectures (like GoogLeNet/ResNet) replaced them with Global Average Pooling.
+*   **Large Kernel:** The 11x11 kernel is computationally expensive and captures fewer non-linearities than stacked 3x3 kernels (as shown later by VGG).
+*   **GPU Splitting Hacks:** The architectural split across two GPUs was a hardware constraint, not a theoretical feature.
+
+## 13. Real World Applications
+
+While AlexNet is obsolete for modern production systems, it was immediately adopted in 2013-2014 for early modern facial recognition, medical image classification, and self-driving car prototypes before being superseded by VGG and ResNet.
+
+## 14. Common Interview Questions
+
+1.  **Why was ReLU chosen over Tanh in AlexNet?**
+    *   *To prevent vanishing gradients and drastically accelerate training convergence.*
+2.  **Where do most of the parameters reside in AlexNet?**
+    *   *In the first fully connected layer (FC6), connecting the flattened 9216-dim tensor to 4096 units.*
+3.  **What was the purpose of the 11x11 convolution?**
+    *   *To rapidly downsample the high-resolution input image and extract low-level features, though later architectures found stacked 3x3 convolutions to be more efficient.*
+4.  **What regularization techniques did AlexNet use?**
+    *   *Dropout, Weight Decay, and heavy Data Augmentation.*
+
+## 15. Related Papers
+
+*   *ImageNet Classification with Deep Convolutional Neural Networks* (Krizhevsky et al., 2012)
+*   *Very Deep Convolutional Networks for Large-Scale Image Recognition* (Simonyan & Zisserman, 2014) - VGG Net.
+
+## 16. Related Problems
+
+*   Implementing Dropout from scratch
+*   Calculating parameter sizes for Dense vs Conv layers
+
+## 17. Related Learning Track Nodes
+
+*   ImageNet Revolution
+*   Modern Convolutional Architectures
+*   Regularization Strategies

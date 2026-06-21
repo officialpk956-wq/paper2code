@@ -1,0 +1,146 @@
+# AutoEncoder
+
+## 1. Overview
+
+An AutoEncoder is an unsupervised artificial neural network that learns how to efficiently compress and encode data, and then learns how to reconstruct the data back from the reduced encoded representation to a representation that is as close to the original input as possible.
+
+At its core, it is a data compression algorithm where the compression and decompression functions are learned from data rather than hand-engineered (like JPEG or MP3). While traditional AutoEncoders are rarely used for generating completely novel high-quality images today, they are the foundational architecture upon which modern Generative AI (like VAEs and Stable Diffusion) is built.
+
+:::note
+You can experiment with latent space interpolation and reconstruction loss in the [Existing Math Engine](/math).
+:::
+
+## 2. Historical Context
+
+The concept of using neural networks for dimensionality reduction dates back to the 1980s (Rumelhart, Hinton, and Williams). The initial goal was to find a non-linear generalization of Principal Component Analysis (PCA). 
+
+For decades, training deep AutoEncoders was notoriously difficult due to the vanishing gradient problem. In 2006, Geoffrey Hinton published *"Reducing the Dimensionality of Data with Neural Networks,"* demonstrating that deep AutoEncoders could be successfully trained if the layers were pre-trained one at a time using Restricted Boltzmann Machines. This paper is widely considered one of the catalysts for the Deep Learning renaissance.
+
+## 3. Problem It Solves
+
+High-dimensional data (like a $1024 \times 1024$ image) is computationally expensive to process and often contains massive amounts of redundancy. 
+
+AutoEncoders solve the problem of **Dimensionality Reduction** and **Feature Extraction**. By forcing the network to push the data through a low-dimensional "bottleneck," the network is forced to discard noise and redundancy, learning only the most essential, underlying semantic features of the data distribution.
+
+## 4. Architecture Diagram Data
+
+An AutoEncoder consists of three main parts:
+
+1.  **Encoder:** A neural network that compresses the high-dimensional input $x$ into a low-dimensional representation.
+2.  **Bottleneck (Latent Space):** The lowest-dimensional layer in the middle of the network, containing the compressed knowledge representation $z$.
+3.  **Decoder:** A neural network that attempts to reconstruct the original input from the latent space, producing $\hat{x}$.
+
+*The architecture is typically symmetric. If the encoder uses 3 convolutional layers to downsample, the decoder uses 3 transposed convolutional layers to upsample.*
+
+## 5. Layer-by-Layer Breakdown
+
+### The Encoder
+The encoder function $z = f(x)$ maps the input to the latent space. For image data, this is usually a standard Convolutional Neural Network (CNN) that progressively reduces the spatial dimensions (via pooling or strided convolutions) while increasing the channel depth, eventually flattening the tensor into a small vector.
+
+### The Latent Space (Bottleneck)
+This is the most critical layer. It acts as an information bottleneck. If the bottleneck is too large, the network might just memorize the training data (an identity mapping). If it's too small, the network cannot capture enough information to accurately reconstruct the image. The values in this vector $z$ represent the underlying "features" (e.g., in a face dataset, one value might implicitly represent "glasses," another "smile").
+
+### The Decoder
+The decoder function $\hat{x} = g(z)$ maps the latent space back to the original input space. It takes the highly compressed vector and uses Transposed Convolutions (often incorrectly called Deconvolutions) or Upsampling layers to gradually rebuild the spatial resolution until it matches the original input shape.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Input Image $28 \times 28$ (MNIST), Latent Dimension $D=16$.
+
+```text
+--- Encoder ---
+Input           : (B, 1, 28, 28)
+Conv2D (stride 2): (B, 16, 14, 14) -> ReLU
+Conv2D (stride 2): (B, 32, 7, 7)   -> ReLU
+Flatten         : (B, 32 * 7 * 7) = (B, 1568)
+Linear (to Latent): (B, 16)        -> ReLU  <-- The Bottleneck (z)
+
+--- Decoder ---
+Linear (from Latent): (B, 1568)      -> ReLU
+Reshape         : (B, 32, 7, 7)
+ConvTranspose2D (s=2): (B, 16, 14, 14) -> ReLU
+ConvTranspose2D (s=2): (B, 1, 28, 28)  -> Sigmoid (to bound [0,1])
+Output          : (B, 1, 28, 28)       <-- Reconstructed Image (\hat{x})
+```
+
+## 7. Mathematical Foundations
+
+The goal of the AutoEncoder is to find functions $f$ and $g$ that minimize the difference between the input $x$ and the reconstruction $\hat{x} = g(f(x))$.
+
+**Reconstruction Loss:**
+For continuous data (like image pixel intensities), we typically use the **Mean Squared Error (MSE)** loss function:
+$$ L(x, \hat{x}) = \frac{1}{N} \sum_{i=1}^N (x_i - \hat{x}_i)^2 $$
+
+For binary data (or pixel values normalized between 0 and 1), we often use **Binary Cross-Entropy (BCE)** loss:
+$$ L(x, \hat{x}) = -\frac{1}{N} \sum_{i=1}^N \left[ x_i \log(\hat{x}_i) + (1 - x_i) \log(1 - \hat{x}_i) \right] $$
+
+**Latent Space Geometry:**
+In a standard AutoEncoder, the mapping $f(x)$ is deterministic. The network learns to map specific training images to specific points in the latent space. However, the space *between* those points is completely unstructured. If you randomly sample a point $z$ from the latent space that the network has never seen, the decoder will likely output garbage.
+
+## 8. Forward Pass
+
+1.  An image (e.g., a handwritten digit) is fed into the Encoder.
+2.  The Encoder compresses the image down to a 16-dimensional vector $z$.
+3.  This vector $z$ represents the "essence" of the digit (e.g., thickness, loop angle).
+4.  The Decoder takes $z$ and mathematically expands it back into a $28 \times 28$ grid of pixels.
+5.  The loss is calculated by comparing the output pixels to the original input pixels.
+
+## 9. Training Process
+
+*   **Self-Supervised:** The beauty of AutoEncoders is that they require no labels. The input *is* the target. You can train them on millions of unlabeled images.
+*   **Optimizer:** Standard Adam or SGD.
+*   **Denoising AutoEncoders (DAE):** To prevent the network from simply learning the identity function, a common training technique is to intentionally add random noise to the input image, but calculate the loss against the *original, clean* image. This forces the network to learn robust, noise-invariant features.
+
+## 10. Complexity Analysis
+
+| Component | FLOPs | Memory |
+| :--- | :--- | :--- |
+| Encoder | Varies based on architecture | Varies (needs activations for backprop) |
+| Decoder | Varies based on architecture | Varies |
+| Loss Calc | $O(N)$ where $N$ is pixels | Minimal |
+
+**Insight:** Because AutoEncoders typically process single images independently and don't rely on massive attention matrices, they are generally very fast to train and run, scaling linearly with the size of the network and the input resolution.
+
+## 11. Advantages
+
+*   **Unsupervised Learning:** Can extract useful feature representations from massive unannotated datasets.
+*   **Data Specific Compression:** Because they are trained on specific datasets, they compress that specific type of data (e.g., faces) much better than general-purpose algorithms like JPEG.
+*   **Anomaly Detection:** If you train an AutoEncoder on normal data, it will accurately reconstruct normal data. If you feed it an anomaly, the reconstruction loss will spike, making it an excellent anomaly detector.
+
+## 12. Limitations
+
+*   **Not Generative:** Standard AutoEncoders cannot generate *new*, realistic data. Because the latent space is discontinuous and unstructured, sampling random vectors usually produces meaningless noise.
+*   **Blurry Outputs:** Using MSE loss heavily penalizes large pixel deviations, causing the network to output "safe," blurry averages of features rather than sharp, distinct textures.
+*   **Overfitting:** If the bottleneck is too large, it acts as a simple memory bank (identity mapping) and fails to learn meaningful semantic features.
+
+## 13. Real World Applications
+
+*   **Anomaly Detection:** Fraud detection in credit card transactions, or detecting defects in manufacturing pipelines.
+*   **Image Denoising:** Removing grain, watermarks, or text from images.
+*   **Dimensionality Reduction:** Used as a more powerful, non-linear alternative to PCA for visualizing high-dimensional data.
+
+## 14. Interview Questions
+
+1.  **What is the purpose of the bottleneck layer in an AutoEncoder?**
+    *   *It forces the network to learn a compressed, generalized representation of the data. Without a bottleneck, the network would simply learn an identity mapping (memorize the data) without extracting any meaningful semantic features.*
+2.  **Why can't a standard AutoEncoder be used to generate novel images?**
+    *   *Because the latent space is not regularized. The network maps training data to isolated clusters in the latent space, but the space between clusters is undefined. Sampling a random point in the latent space will likely result in the decoder outputting garbage. (This is why VAEs were invented).*
+3.  **How does a Denoising AutoEncoder work?**
+    *   *You corrupt the input data (e.g., by adding Gaussian noise) but train the network to reconstruct the original, uncorrupted data. This prevents the network from learning the identity function and forces it to learn robust features.*
+
+## 15. Related Papers
+
+*   *Reducing the Dimensionality of Data with Neural Networks* (Hinton & Salakhutdinov, 2006)
+*   *Extracting and Composing Robust Features with Denoising Autoencoders* (Vincent et al., 2008)
+
+## 16. Related Problems
+
+*   [Cross Entropy](/math/cross-entropy)
+*   Implementing an MSE Loss Function
+*   Building a Simple Denoising AutoEncoder
+
+## 17. Related Learning Track Nodes
+
+*   Unsupervised Learning
+*   Dimensionality Reduction
+*   Foundations of Generative AI

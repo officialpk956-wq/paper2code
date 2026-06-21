@@ -1,0 +1,167 @@
+# LLaMA (Large Language Model Meta AI)
+
+## 1. Overview
+
+LLaMA is a family of foundational Large Language Models released by Meta AI in 2023. While OpenAI's GPT-3 had proven that massive scale leads to emergent intelligence, its weights were closed-source and the model was too large to run locally.
+
+The philosophy behind LLaMA was different: **train smaller models on vastly more data.** By training a 7B parameter model on 1 Trillion tokens, Meta proved that a model small enough to fit on a consumer GPU could match or exceed the performance of a 175B model. LLaMA sparked the open-source LLM revolution, serving as the base model for Alpaca, Vicuna, and thousands of community fine-tunes.
+
+:::note
+You can observe the mechanics of the autoregressive generation pipeline in the [interactive Transformer Simulator](/architectures/transformer/simulator) by isolating the Decoder block.
+:::
+
+## 2. Historical Context
+
+In 2022, DeepMind published the "Chinchilla Scaling Laws," which challenged OpenAI's earlier scaling laws. Chinchilla proved that the industry had been building models that were too large and under-trained. For compute-optimal training, the number of parameters and the number of training tokens should be scaled equally. 
+
+Therefore, a 175B parameter model (like GPT-3) should theoretically be trained on 3.5 Trillion tokens, but it was only trained on 300 Billion. Meta took this to heart with LLaMA: they designed smaller, highly optimized architectures (7B to 65B parameters) and trained them far past the compute-optimal point (up to 1.4 Trillion tokens). This resulted in models that were incredibly powerful yet cheap to run at inference time.
+
+## 3. Problem It Solves
+
+**The Inference Cost Bottleneck.**
+
+Deploying a 175B parameter model requires clusters of A100 GPUs, costing thousands of dollars a month just to keep loaded in VRAM. This centralized AI power. LLaMA solves this by shifting the cost entirely to the pre-training phase. By spending vastly more compute to train a 7B parameter model, they created a model that:
+1.  Is just as smart as massive legacy models.
+2.  Can be quantized to 4-bits and run on a standard MacBook or a 8GB gaming GPU.
+
+## 4. Architecture Diagram Data
+
+LLaMA is an autoregressive Decoder-Only Transformer, but it includes several crucial architectural tweaks to improve stability and efficiency.
+
+**LLaMA 1 (7B):**
+*   Layers (L): 32
+*   Hidden Size (H): 4096
+*   Attention Heads: 32
+*   Parameters: 7B
+
+**Key Architectural Changes from original GPT:**
+1.  **RMSNorm** (Root Mean Square Normalization) instead of LayerNorm.
+2.  **SwiGLU** activation function instead of ReLU/GELU in the FFN.
+3.  **RoPE** (Rotary Positional Embeddings) instead of absolute or relative biases.
+4.  **Grouped Query Attention (GQA)** (Added in LLaMA-2/3) to reduce KV-Cache memory.
+
+## 5. Layer-by-Layer Breakdown
+
+### Input Embeddings
+Standard token embeddings, but *without* any positional encodings added at this stage.
+
+### Pre-Norm with RMSNorm
+LLaMA applies normalization before the attention and FFN blocks. Instead of standard LayerNorm (which computes both mean and variance), it uses **RMSNorm**, which only computes the root-mean-square. This removes the mean-centering operation, saving 7-40% of the computation time in the norm layer without hurting accuracy.
+
+### Self-Attention with RoPE
+Inside the self-attention mechanism, the Queries and Keys are multiplied by a **Rotary Positional Embedding (RoPE)** before the dot product is calculated. RoPE mathematically rotates the query and key vectors in complex space based on their absolute positions. The brilliant mathematical property of this rotation is that their dot product becomes a function of their *relative* distance, blending the benefits of absolute and relative positional encodings.
+
+### SwiGLU Feed-Forward Network
+Instead of a standard MLP with a ReLU or GELU activation, LLaMA uses a Gated Linear Unit with a Swish activation. The SwiGLU layer actually requires three weight matrices instead of two:
+$ \text{SwiGLU}(x) = (\text{Swish}(x W_1) \otimes (x W_2)) W_3 $
+It is slightly more computationally expensive but yields empirically better performance.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Sequence length $T$, Hidden size $H$.
+
+```text
+Input Tokens      : (B, T)
+Embeddings        : (B, T, H)  <-- No positional embeddings yet
+
+--- Inside LLaMA Decoder Layer ---
+RMSNorm           : (B, T, H)
+Linear Proj (QKV) : Q, K, V -> (B, Heads, T, HeadDim)
+Apply RoPE        : Rotate Q and K by position indices
+Attention         : Softmax(Q * K^T / sqrt(HeadDim) + CausalMask) * V
+Output Proj       : (B, T, H)
+Residual Add      : (B, T, H)
+
+RMSNorm           : (B, T, H)
+SwiGLU FFN        : 
+   Gate = Swish(Linear1(X))
+   Up   = Linear2(X)
+   Hidden = Gate * Up
+   Down = Linear3(Hidden) -> (B, T, H)
+Residual Add      : (B, T, H)
+```
+
+## 7. Mathematical Foundations
+
+**RMSNorm (Root Mean Square Normalization):**
+$$ \text{RMS}(x) = \sqrt{\frac{1}{d} \sum_{i=1}^d x_i^2 + \epsilon} $$
+$$ y_i = \frac{x_i}{\text{RMS}(x)} g_i $$
+Where $g_i$ is a learned scaling parameter.
+
+**RoPE (Rotary Positional Embedding):**
+Given a 2D coordinate $(x_1, x_2)$, applying RoPE for position $m$ means multiplying by a rotation matrix:
+$$ \begin{pmatrix} y_1 \\ y_2 \end{pmatrix} = \begin{pmatrix} \cos(m\theta) & -\sin(m\theta) \\ \sin(m\theta) & \cos(m\theta) \end{pmatrix} \begin{pmatrix} x_1 \\ x_2 \end{pmatrix} $$
+For high-dimensional vectors, RoPE groups the dimensions into pairs and applies a 2D rotation to each pair, with $\theta$ varying across pairs. The dot product of a query at position $m$ and a key at position $n$ natively becomes a function of $m-n$.
+
+**Grouped Query Attention (GQA):**
+In standard Multi-Head Attention (MHA), there are $H$ query heads, $H$ key heads, and $H$ value heads. The KV-Cache must store $H$ key/value vectors per token.
+In GQA (used in LLaMA-2 70B and LLaMA-3), there are $H$ query heads, but only $G$ key/value heads (where $1 < G < H$). Multiple query heads share the same Key/Value heads. This drastically reduces the size of the KV-Cache, allowing much larger batch sizes and longer context windows during inference.
+
+## 8. Forward Pass & Inference (The KV Cache)
+
+During inference, generating token $t+1$ requires the Keys and Values of tokens $1 \dots t$. 
+1.  **Prefill:** The initial prompt is passed through the network in parallel. The resulting Keys and Values for all layers are written to the **KV Cache** in GPU memory.
+2.  **Decode:** The model predicts the first output token.
+3.  **Update:** The new token is passed through the network. It calculates its *own* Query, Key, and Value. The new K and V are appended to the KV Cache. The Query attends to the entire KV Cache to generate the next token.
+4.  Because of GQA (in newer LLaMAs), the KV Cache grows much slower than in older models.
+
+## 9. Training Process
+
+*   **Dataset:** LLaMA-1 was trained on 1.4 Trillion tokens of strictly publicly available data (CommonCrawl, Wikipedia, GitHub, arXiv). LLaMA-3 was trained on 15 Trillion tokens.
+*   **Optimizer:** AdamW.
+*   **Cost:** LLaMA-1 65B took 21 days on 2048 A100 GPUs (over 1 million GPU hours).
+
+## 10. Complexity Analysis
+
+| Model | Parameters | Hidden Size | GQA |
+| :--- | :--- | :--- | :--- |
+| LLaMA-1 7B | 7B | 4096 | No (MHA) |
+| LLaMA-2 70B | 70B | 8192 | Yes |
+| LLaMA-3 8B | 8B | 4096 | Yes |
+
+**KV Cache Memory Formula:**
+For a sequence of length $T$, the KV Cache requires:
+$$ \text{Memory} = 2 \times T \times \text{Layers} \times \text{KV\_Heads} \times \text{Head\_Dim} \times \text{BytesPerFloat} $$
+For LLaMA-2 70B (8 KV Heads, 128 Head Dim, 80 Layers, FP16), the cache takes about **320 KB per token**. A 4000 token context requires ~1.2 GB of VRAM *per user* just for the cache.
+
+## 11. Advantages
+
+*   **Inference Efficiency:** SwiGLU and RMSNorm make the forward pass fast, while GQA drastically reduces memory bottlenecks.
+*   **Open Source:** Weights are available, sparking massive community innovation (quantization, LoRA fine-tuning).
+*   **Compute-Optimal:** punches far above its parameter class due to massive pre-training.
+
+## 12. Limitations
+
+*   **Context Window Constraints:** While newer versions support 8k-128k contexts, the dense attention mechanism means extreme context lengths (like Gemini's 1M) are computationally prohibitive without sparse approximations.
+*   **RoPE Extrapolation:** Standard RoPE fails catastrophically if presented with a sequence longer than it saw during training. Complex "RoPE scaling" algorithms (like YaRN or NTK-Aware) are required to extend the context window post-training.
+
+## 13. Real World Applications
+
+*   **Local AI:** Quantized LLaMA models (using GGUF/llama.cpp) run natively on laptops and phones, enabling private, offline AI assistants.
+*   **Custom Enterprise Models:** Companies fine-tune LLaMA on proprietary data rather than sending sensitive data to OpenAI APIs.
+
+## 14. Interview Questions
+
+1.  **What is the difference between LayerNorm and RMSNorm?**
+    *   *LayerNorm shifts the inputs by the mean and scales by the variance. RMSNorm assumes the mean is negligible and only scales by the Root Mean Square, saving computation without losing accuracy.*
+2.  **Explain Rotary Positional Embeddings (RoPE).**
+    *   *RoPE multiplies queries and keys by a rotation matrix based on their absolute position. When a rotated query and rotated key are dotted, the math naturally yields a function of their relative distance, giving the model relative positional awareness without the overhead of computing relative bias matrices.*
+3.  **Why do we use Grouped Query Attention (GQA)?**
+    *   *During text generation, memory bandwidth to fetch the KV Cache is the primary bottleneck. GQA shares Keys and Values across multiple Query heads, shrinking the size of the KV Cache significantly and allowing for larger batch sizes.*
+
+## 15. Related Papers
+
+*   *LLaMA: Open and Efficient Foundation Language Models* (Touvron et al., 2023)
+*   *RoFormer: Enhanced Transformer with Rotary Position Embedding* (Su et al., 2021)
+*   *GLU Variants Improve Transformer* (Shazeer, 2020) - SwiGLU paper.
+
+## 16. Related Problems
+
+*   [Attention Calculation](/problems/attention-calculation)
+*   Implementing RoPE
+
+## 17. Related Learning Track Nodes
+
+*   Large Language Models
+*   Efficient Inference
+*   Open Source AI Ecosystem

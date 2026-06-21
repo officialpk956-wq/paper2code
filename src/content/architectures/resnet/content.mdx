@@ -1,0 +1,131 @@
+# ResNet
+
+## Overview
+
+ResNet (Residual Network) is a convolutional architecture built from blocks that learn *residuals* — corrections to their input — rather than full transformations. The skip connection it introduced made networks of 100+ layers trainable for the first time and is now a universal ingredient of deep learning, including every Transformer.
+
+## Why It Was Created
+
+In 2015, deeper CNNs paradoxically performed worse: a 56-layer plain network had *higher training error* than a 20-layer one. This wasn't overfitting — it was an optimization failure. In principle the deep network could imitate the shallow one by making extra layers identity functions, but SGD could not find that solution through stacks of nonlinear layers. ResNet restructured the problem so identity is the easy default.
+
+## Historical Timeline
+
+| Year | Event |
+| --- | --- |
+| 2012 | AlexNet (8 layers) wins ImageNet |
+| 2014 | VGG (19 layers) — deeper helps, but returns diminish |
+| 2015 | **ResNet (152 layers)** wins ImageNet with 3.57% top-5 error |
+| 2016 | Identity-mappings follow-up trains 1000+ layers |
+| 2017+ | Skip connections adopted by Transformers as Add & Norm |
+
+## Layer Breakdown
+
+- **Stem** — 7×7 stride-2 conv + 3×3 stride-2 max-pool: 224×224 → 56×56
+- **Four residual stages** — channel widths 64 → 128 → 256 → 512; each stage halves spatial size and doubles channels
+- **Basic block** (ResNet-18/34) — two 3×3 convs with BatchNorm
+- **Bottleneck block** (ResNet-50+) — 1×1 reduce → 3×3 → 1×1 expand, cutting FLOPs while increasing depth
+- **Head** — global average pooling + single FC layer (no giant VGG-style FC stacks)
+
+## Tensor Flow
+
+ResNet-18 on a 224×224 image:
+
+```
+input        (3, 224, 224)
+stem         (64, 56, 56)
+stage 1      (64, 56, 56)     2 blocks
+stage 2      (128, 28, 28)    2 blocks, stride-2 entry
+stage 3      (256, 14, 14)    2 blocks
+stage 4      (512, 7, 7)      2 blocks
+GAP          (512)
+FC           (1000)
+```
+
+When a stage downsamples, the skip path uses a 1×1 stride-2 conv so the addition's shapes match.
+
+## Mathematics
+
+A residual block learns $F(x) = H(x) - x$ instead of the target mapping $H(x)$:
+
+$$
+y = F(x, \{W_i\}) + x
+$$
+
+Why this fixes optimization — the gradient through a chain of blocks:
+
+$$
+\frac{\partial L}{\partial x_l} = \frac{\partial L}{\partial x_L}\left(1 + \frac{\partial}{\partial x_l}\sum F\right)
+$$
+
+The "1" is the skip path: gradients reach every layer directly, undiluted by the product of Jacobians that kills plain deep networks. See [linear algebra foundations](/math/linear-algebra) for the matrix view.
+
+## Pseudo Code
+
+```
+function residual_block(x):
+    identity = x
+    out = relu(batch_norm(conv3x3(x)))
+    out = batch_norm(conv3x3(out))
+    if shape(identity) != shape(out):
+        identity = conv1x1_stride2(identity)
+    return relu(out + identity)
+```
+
+## PyTorch Implementation
+
+```python
+import torch.nn as nn
+import torch.nn.functional as F
+
+class BasicBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_ch)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, 1, 1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_ch)
+
+        self.shortcut = nn.Identity()
+        if stride != 1 or in_ch != out_ch:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, 1, stride, bias=False),
+                nn.BatchNorm2d(out_ch),
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        return F.relu(out + self.shortcut(x))
+```
+
+## Complexity Analysis
+
+| Model | Layers | Params | GFLOPs (224²) |
+| --- | --- | --- | --- |
+| VGG-19 | 19 | 144M | 19.6 |
+| ResNet-34 | 34 | 21.8M | 3.6 |
+| ResNet-50 | 50 | 25.6M | 4.1 |
+| ResNet-152 | 152 | 60.2M | 11.6 |
+
+ResNet-152 is 8× deeper than VGG-19 with **lower** compute — bottleneck blocks and global average pooling do the saving.
+
+## Advantages
+
+- Makes arbitrary depth trainable; degradation problem solved
+- Excellent gradient flow via the additive skip path
+- Strong, transferable features — still a default backbone for detection and segmentation
+- Simple, regular design that scales by recipe
+
+## Limitations
+
+- Receptive field grows slowly with depth — global context needs many layers (ViT fixed this with attention)
+- BatchNorm couples behavior to batch size and complicates small-batch / transfer settings
+- Plain ResNets lag modern training recipes without augmentation upgrades
+
+## Interview Questions
+
+1. The degradation problem is not overfitting — what's the evidence, and why does it happen?
+2. Derive why gradients can't vanish through residual connections.
+3. Why does ResNet-50 use bottleneck (1×1–3×3–1×1) blocks instead of two 3×3 convs?
+4. How does a skip connection work when the block changes spatial resolution or channel count?
+5. Where does the residual idea appear inside a Transformer, and what would break without it?

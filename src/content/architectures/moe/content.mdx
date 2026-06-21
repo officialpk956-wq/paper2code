@@ -1,0 +1,177 @@
+# Mixture of Experts (MoE)
+
+## 1. Overview
+
+Mixture of Experts (MoE) is a neural network architecture paradigm that enables massive scaling of parameters without a proportional increase in computational cost (FLOPs). It achieves this through **sparse activation**.
+
+In a dense Transformer (like GPT-3 or LLaMA), every single parameter is used to process every single token. In an MoE model, specific sub-networks (the "Experts") are conditionally activated on a per-token basis. A "Router" network decides which expert is best suited to process a given token. This means an MoE model might have 50 Billion parameters in total, but only use 12 Billion parameters to process any specific token, granting the intelligence of a massive model with the speed of a smaller one.
+
+:::note
+You can trace how tokens are routed through different feed-forward networks in the [interactive Transformer Simulator](/architectures/transformer/simulator) by enabling the MoE layer view.
+:::
+
+## 2. Historical Context
+
+The concept of combining multiple expert networks dates back to 1991 (Jacobs et al.). However, it was Noam Shazeer and his team at Google Brain in 2017 who brought MoE to the deep learning era with the paper *"Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer."* They trained an LSTM with 137 billion parameters (an astronomical number in 2017) by replacing standard layers with MoE layers.
+
+In 2020, Google's GShard and Switch Transformer papers proved MoE worked brilliantly with Transformers. In late 2023 and 2024, the open-source release of Mistral's **Mixtral 8x7B**, and the revelation that OpenAI's GPT-4 was a massive MoE model, thrust the architecture into the mainstream.
+
+## 3. Problem It Solves
+
+**The Dense Scaling Wall.**
+
+Scaling laws dictate that larger models perform better. But eventually, you hit a wall:
+1.  **Inference Latency:** A 1 Trillion parameter dense model takes too long to execute a forward pass for real-time applications.
+2.  **Training Compute:** Training a 1T dense model takes too many FLOPs and too much time.
+
+MoE solves this by decoupling parameter count from compute. You can build a 1 Trillion parameter model that only runs 100 Billion parameters per token. The model has a vast "memory bank" of experts to draw upon, but only incurs the computational cost of the specific experts it activates.
+
+## 4. Architecture Diagram Data
+
+In modern Transformer MoEs (like Mixtral 8x7B), the self-attention mechanism remains dense (every token attends to every other token). The MoE mechanism strictly replaces the **Feed-Forward Network (FFN)** in the Transformer layer.
+
+**Standard Transformer Layer:**
+*   Self-Attention
+*   Dense FFN (applies to all tokens)
+
+**MoE Transformer Layer:**
+*   Self-Attention
+*   Router Network (computes gating weights)
+*   $N$ Expert FFNs (e.g., 8 independent SwiGLU networks)
+*   Combiner (weighted sum of selected experts)
+
+## 5. Layer-by-Layer Breakdown
+
+### The Router (Gating Network)
+For each token $x$, a small linear layer (the Router) outputs a vector of length $N$ (the number of experts). This vector is passed through a softmax function to produce routing probabilities.
+
+### Top-K Expert Selection
+To achieve sparse activation, we don't use all $N$ experts. We only select the Top-K experts with the highest probabilities (usually $K=1$ or $K=2$). For example, in an 8-expert system with Top-2 routing, 6 experts are completely ignored for that specific token, saving massive amounts of compute.
+
+### The Experts
+The chosen experts process the token. An expert is simply a standard Feed-Forward Network (e.g., a SwiGLU block). Different experts implicitly specialize during training (e.g., one might become a math expert, another a grammar expert, though in reality, the specializations are often highly abstract and not easily interpretable).
+
+### The Combiner
+The outputs of the Top-K experts are multiplied by their respective routing probabilities and summed together to form the final output of the MoE layer for that token.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Sequence length $T$, Hidden size $H$, Experts $N=8$, Top-$K=2$.
+Total tokens $M = B \times T$.
+
+```text
+Input to MoE Layer: (M, H)
+
+--- Routing ---
+Router Linear      : (M, H) x (H, 8) -> (M, 8) logits
+Softmax            : (M, 8) probabilities
+Top-K Selection    : Select indices of max 2 probs per token -> (M, 2) indices
+                   : Keep values of max 2 probs per token -> (M, 2) gate_weights
+
+--- Dispatch ---
+Tokens are physically grouped by their assigned experts.
+Expert 1 receives M_1 tokens: (M_1, H)
+Expert 2 receives M_2 tokens: (M_2, H)
+...
+(Where M_1 + M_2 + ... M_8 = 2 * M, since each token goes to 2 experts)
+
+--- Expert Execution ---
+Each Expert runs its FFN: (M_i, H) -> (M_i, H)
+
+--- Combine ---
+Gather outputs back to original token order.
+For each token: Output = gate_weight[0] * Expert_A(x) + gate_weight[1] * Expert_B(x)
+Final Output: (M, H)
+```
+
+## 7. Mathematical Foundations
+
+**The Routing Function:**
+Let $W_g$ be the router weights. The gating logits are $h(x) = W_g \cdot x$.
+The probabilities are $P(x) = \text{Softmax}(h(x))$.
+We define the Top-K gating function:
+$$ G(x)_i = \begin{cases} P(x)_i & \text{if } i \in \text{TopK}(P(x)) \\ 0 & \text{otherwise} \end{cases} $$
+Because we want to maintain differentiability and sum to 1, we re-normalize the Top-K probabilities.
+
+**The Output:**
+The MoE layer output $y$ for input $x$ is:
+$$ y = \sum_{i=1}^N G(x)_i E_i(x) $$
+Because $G(x)_i = 0$ for all but $K$ experts, we only compute $E_i(x)$ $K$ times.
+
+**Load Balancing Loss:**
+If left unchecked, the router will naturally learn to favor one or two experts for *every* token, starving the other experts of gradients. This is called "routing collapse." 
+To force the model to use all experts equally, an auxiliary load-balancing loss $L_{bal}$ is added to the total training loss. 
+$$ L_{bal} = \alpha \cdot N \sum_{i=1}^N f_i \cdot P_i $$
+Where $f_i$ is the fraction of tokens routed to expert $i$, and $P_i$ is the mean routing probability for expert $i$. This term is minimized when traffic is distributed uniformly.
+
+## 8. Forward Pass
+
+1.  A sequence of tokens enters the MoE layer.
+2.  The Router looks at every token individually and scores its affinity for the 8 available experts.
+3.  The routing mechanism "dispatches" the tokens. Token 1 might be sent to GPUs hosting Experts 2 and 5. Token 2 might be sent to Experts 1 and 2.
+4.  The experts process their assigned token batches in parallel.
+5.  The results are multiplied by the router confidence scores and combined back into a continuous sequence tensor.
+
+## 9. Training Process
+
+*   **Capacity Factor:** GPUs require static tensor sizes. If an expert suddenly receives 90% of the tokens, the GPU will Out-Of-Memory (OOM). We define an "Expert Capacity" (e.g., $1.25 \times \frac{\text{Total Tokens}}{\text{Experts}}$). If a router assigns more tokens to an expert than its capacity, the excess tokens are "dropped" (passed through via residual connection without expert processing).
+*   **Expert Parallelism:** In massive models, different experts are stored on entirely different GPUs or server nodes. The all-to-all communication required to dispatch tokens across the network is often the biggest bottleneck in training.
+
+## 10. Complexity Analysis
+
+Consider a Dense 7B model vs an MoE 8x7B model (Top-2 routing).
+
+| Model | Total Parameters | Active Parameters per Token | FLOPs per Token | Memory Required |
+| :--- | :--- | :--- | :--- | :--- |
+| Dense 7B | 7B | 7B | ~14 GFLOPs | ~14GB (FP16) |
+| Dense 56B | 56B | 56B | ~112 GFLOPs | ~112GB |
+| MoE 8x7B | ~47B* | ~13B* | ~26 GFLOPs | ~94GB |
+
+*\*Self-attention parameters are shared, only the FFNs are multiplied by 8.*
+
+**Insight:** The MoE model uses the compute (FLOPs) of a ~13B model, but requires the VRAM to hold 47B parameters. It is bounded by memory, not compute.
+
+## 11. Advantages
+
+*   **Compute-to-Intelligence Ratio:** Drastically better intelligence per FLOP than dense models.
+*   **Faster Inference:** Because only a fraction of parameters are active, inference speed (tokens per second) is much higher than a dense model of equivalent parameter count.
+*   **Pre-training Efficiency:** Scales to trillion-parameter regimes where dense networks would take centuries to train.
+
+## 12. Limitations
+
+*   **VRAM Hunger:** While FLOPs are low, all experts must reside in VRAM. You cannot run a 47B MoE on a single 12GB GPU, even if it only uses 13B active parameters.
+*   **Communication Bottleneck:** Distributing experts across multiple GPUs requires massive interconnect bandwidth (NVLink/InfiniBand) to shuffle tokens back and forth during the routing phase.
+*   **Fine-tuning Instability:** Because routing decisions are discrete and depend on the training distribution, fine-tuning an MoE on a narrow dataset can easily cause routing collapse if the load balancing loss isn't perfectly tuned.
+
+## 13. Real World Applications
+
+*   **GPT-4:** Rumored to be an MoE architecture with 8 or 16 experts.
+*   **Mixtral 8x7B:** One of the most popular and powerful open-weights models, proving MoE can be run efficiently on consumer clusters.
+*   **Google Gemini / Switch Transformer:** Google has pioneered massive sparse scaling for search and translation backends.
+
+## 14. Interview Questions
+
+1.  **What is the difference between Total Parameters and Active Parameters in an MoE?**
+    *   *Total parameters are all the weights stored in memory (e.g., 47B). Active parameters are the subset of weights actually used to process a specific token during a forward pass (e.g., 13B), which determines the FLOPs.*
+2.  **Why do MoE models require a Load Balancing Loss?**
+    *   *Neural networks are prone to the "rich get richer" effect. If the router slightly prefers Expert A early in training, Expert A gets more gradients, becomes better, and the router prefers it even more. Eventually, Expert A processes everything and the other experts die. Load balancing loss forces uniform utilization.*
+3.  **What happens if too many tokens are routed to a single expert?**
+    *   *Due to static GPU memory allocation, experts have a fixed 'capacity'. Excess tokens are dropped and do not pass through the expert, degrading performance. This is why load balancing is critical.*
+
+## 15. Related Papers
+
+*   *Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer* (Shazeer et al., 2017)
+*   *Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity* (Fedus et al., 2021)
+*   *Mixtral of Experts* (Jiang et al., 2024)
+
+## 16. Related Problems
+
+*   [Softmax](/math/softmax)
+*   Implementing Top-K Routing
+*   Calculating MoE FLOPs vs Memory
+
+## 17. Related Learning Track Nodes
+
+*   Scaling Laws
+*   Advanced Transformer Architectures
+*   Distributed Training

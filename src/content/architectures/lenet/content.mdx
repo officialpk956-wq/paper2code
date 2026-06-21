@@ -1,0 +1,161 @@
+# LeNet-5
+
+## 1. Overview
+
+LeNet-5, introduced by Yann LeCun, Leon Bottou, Yoshua Bengio, and Patrick Haffner in 1998, is the foundational architecture of Convolutional Neural Networks (CNNs). While researchers had experimented with neural networks for vision before, LeNet-5 was the first to successfully demonstrate the power of end-to-end backpropagation applied to document recognition—specifically, reading handwritten zip codes on mail for the US Postal Service.
+
+The architecture fundamentally established the dominant paradigm in computer vision: cascading convolutions and spatial pooling to build hierarchical representations, culminating in fully connected layers for classification.
+
+## 2. Historical Context
+
+Before LeNet, image recognition relied heavily on hand-crafted feature extractors (like SIFT or HOG algorithms) followed by traditional classifiers (like SVMs or shallow neural nets). 
+
+In the late 1980s and early 1990s, LeCun and colleagues at Bell Labs began applying backpropagation to networks with constrained weights, leading to earlier LeNet iterations (LeNet-1 through LeNet-4). LeNet-5, detailed in the seminal 1998 paper *"Gradient-Based Learning Applied to Document Recognition,"* perfected this design. At its peak, it read roughly 10% of all checks cashed in the United States.
+
+## 3. Problem It Solves
+
+Fully connected neural networks (Multi-Layer Perceptrons) scale poorly with image size. A 32x32 image flattened into a 1024-element vector, connected to a hidden layer of 1024 neurons, requires over a million weights. Furthermore, MLPs ignore the 2D topology of images, meaning they must relearn how to detect an edge everywhere it appears.
+
+LeNet-5 solves this through three key architectural concepts:
+1.  **Local Receptive Fields:** Neurons only connect to a small region of the input.
+2.  **Shared Weights:** The same feature detector (filter) is swept across the entire image, ensuring translation invariance and drastically reducing parameter counts.
+3.  **Spatial Sub-sampling:** Gradually reducing spatial resolution while increasing feature channels, forcing the network to learn higher-level semantic features rather than exact pixel locations.
+
+## 4. Architecture Diagram Data
+
+LeNet-5 consists of 7 learnable layers (excluding the input). 
+Input: `32x32` grayscale image.
+
+*   **C1 (Convolution):** 6 kernels of 5x5, no padding, stride 1. Output: `6x28x28`.
+*   **S2 (Subsampling):** 2x2 average pooling, stride 2. Output: `6x14x14`.
+*   **C3 (Convolution):** 16 kernels of 5x5, no padding, stride 1. Output: `16x10x10`.
+*   **S4 (Subsampling):** 2x2 average pooling, stride 2. Output: `16x5x5`.
+*   **C5 (Convolution):** 120 kernels of 5x5. (Effectively a fully connected layer since the input is 5x5). Output: `120x1x1`.
+*   **F6 (Fully Connected):** 84 units. Output: `84`.
+*   **Output Layer:** Radial Basis Function (RBF) or Softmax. Output: `10` classes.
+
+## 5. Layer-by-Layer Explanation
+
+### C1 - First Convolutional Layer
+Extracts low-level features like edges and corners. Using 6 filters of size 5x5 on a 32x32 input results in a 28x28 feature map.
+
+### S2 - Subsampling (Average Pooling)
+Reduces the spatial dimensions by a factor of 2. In the original paper, this was an *average pooling* operation where the 4 inputs were averaged, multiplied by a trainable weight, added to a trainable bias, and passed through a sigmoid function.
+
+### C3 - Second Convolutional Layer
+To break symmetry and force different filters to learn different features, the 16 filters in C3 do not connect to all 6 feature maps of S2. Instead, they connect to a specific, asymmetric subset (e.g., some filters only look at 3 input maps, some look at 4, etc.).
+
+### S4 - Subsampling
+Similar to S2, this layer halves the spatial dimensions to 5x5, increasing the receptive field of the subsequent layers.
+
+### C5 & F6 - Fully Connected Layers
+These layers flatten the spatial hierarchy into a 1D vector and learn the complex, non-linear combinations of features necessary for final classification. The number 84 in F6 was chosen to match the resolution of a stylized 7x12 bitmap of characters.
+
+## 6. Tensor Flow Walkthrough
+
+Assume a batch size of $B$. Let's trace the tensor shapes:
+
+```text
+Input Image   : (B, 1, 32, 32)
+Layer C1      : (B, 6, 28, 28)    [Conv2D, kernel=5, stride=1, pad=0]
+Layer S2      : (B, 6, 14, 14)    [AvgPool2D, kernel=2, stride=2]
+Layer C3      : (B, 16, 10, 10)   [Conv2D, kernel=5, stride=1, pad=0]
+Layer S4      : (B, 16, 5, 5)     [AvgPool2D, kernel=2, stride=2]
+Flatten       : (B, 16 * 5 * 5) = (B, 400)
+Layer C5 / FC1: (B, 120)          [Linear(400, 120)]
+Layer F6 / FC2: (B, 84)           [Linear(120, 84)]
+Output FC3    : (B, 10)           [Linear(84, 10)]
+```
+
+*Note: In PyTorch, C5 is often implemented as `nn.Linear(400, 120)` rather than a convolution, though mathematically they are identical when the spatial size matches the kernel size.*
+
+## 7. Mathematical Foundations
+
+The core mathematical operation in LeNet is the 2D discrete convolution. For a single input channel $I$, kernel $K$ of size $m \times n$, and bias $b$, the output $O$ at position $(i, j)$ is:
+
+$$ O(i, j) = \sigma\left( b + \sum_{u=0}^{m-1} \sum_{v=0}^{n-1} I(i+u, j+v) K(u, v) \right) $$
+
+Where $\sigma$ is the activation function. In modern implementations, $\sigma$ is typically ReLU, but LeCun used a scaled hyperbolic tangent function:
+
+$$ f(a) = A \tanh(S a) $$
+
+Where $A = 1.7159$ and $S = 2/3$. These specific constants ensure that $f(1) = 1$ and $f(-1) = -1$, and the second derivative is maximum near 1 and -1, which improves convergence during gradient descent.
+
+## 8. Forward Pass
+
+During the forward pass, an input image flows through the alternating convolution and pooling layers. 
+1.  **Convolutions** act as learned feature detectors. As we progress deeper, the receptive field of each neuron (the area of the original image it "sees") grows larger. By layer C3, a neuron's receptive field is 14x14 pixels of the original image.
+2.  **Pooling layers** blur the exact spatial locations, providing minor translation invariance. If a stroke shifts by 1 pixel, the pooled representation remains largely unaffected.
+3.  The final linear layers act as an MLP classifying the highly abstract feature vector produced by the CNN backbone.
+
+## 9. Training Process
+
+LeNet-5 was trained using standard Backpropagation with Stochastic Gradient Descent (SGD). 
+
+Because computational resources were severely limited in 1998, several careful optimizations were required:
+*   **Custom initialization:** Weights were drawn from a uniform distribution normalized by the fan-in (number of inputs) of the neuron to keep variances stable.
+*   **Learning Rate Decay:** The learning rate was manually decayed according to a precise schedule over 20 iterations.
+*   **Loss Function:** Instead of Cross Entropy, the original architecture used a Euclidean Radial Basis Function (RBF) loss for the final output, penalizing the L2 distance between the F6 output and target class vectors.
+
+## 10. Complexity Analysis
+
+| Layer | Type | Output Shape | Parameters | Operations (MACs) |
+| :--- | :--- | :--- | :--- | :--- |
+| C1 | Conv (5x5) | 6x28x28 | $(5\times5\times1 + 1)\times6 = 156$ | $156 \times 28 \times 28 \approx 122K$ |
+| S2 | AvgPool (2x2) | 6x14x14 | $(1 + 1)\times6 = 12$ | $4 \times 14 \times 14 \times 6 \approx 4.7K$ |
+| C3 | Conv (5x5) | 16x10x10 | $\approx 1,516$* | $1516 \times 10 \times 10 \approx 151K$ |
+| S4 | AvgPool (2x2) | 16x5x5 | $(1 + 1)\times16 = 32$ | $4 \times 5 \times 5 \times 16 \approx 1.6K$ |
+| C5 | FC / Conv | 120 | $(16\times5\times5 + 1)\times120 = 48,120$ | $48K$ |
+| F6 | FC | 84 | $(120 + 1)\times84 = 10,164$ | $10K$ |
+| Out | FC | 10 | $(84 + 1)\times10 = 850$ | $850$ |
+| **Total** | | | **~60,000** | **~340,000** |
+
+*\*C3 parameters are lower than standard due to sparse asymmetric connections.*
+
+The network contains roughly 60,000 parameters. Compared to modern models like ResNet or ViT (which have tens of millions to billions), LeNet is microscopic. However, in 1998, 340,000 multiply-accumulate operations per image was a significant computational load.
+
+## 11. Advantages
+
+*   **Parameter Efficiency:** Through weight sharing, it vastly outperforms fully connected networks of similar sizes.
+*   **Translation Invariance:** Due to pooling, it is robust to slight shifts, distortions, and scaling of the input characters.
+*   **End-to-End Learning:** Proved that raw pixel inputs could be mapped directly to classifications without handcrafted feature engineering.
+
+## 12. Limitations
+
+*   **Capacity:** With only ~60K parameters, it lacks the capacity to represent complex color images or classify objects in the real world (e.g., ImageNet).
+*   **Activation Functions:** Uses Sigmoid/Tanh, which suffer from the vanishing gradient problem in much deeper networks, unlike the ReLU activation popularized later by AlexNet.
+*   **Pooling method:** Average pooling dilutes strong feature activations. Modern networks exclusively use Max Pooling.
+
+## 13. Real World Applications
+
+*   **US Postal Service:** Deployed to automatically read handwritten ZIP codes on mail envelopes.
+*   **Banking:** Automated reading of amounts on bank checks.
+*   **Historical Milestone:** While not deployed today, every modern vision system (from self-driving cars to facial recognition) is a direct descendant of LeNet.
+
+## 14. Common Interview Questions
+
+1.  **Why use convolutions instead of fully connected layers for images?**
+    *   *Parameter sharing reduces the number of weights, preventing overfitting and reducing compute. Local receptive fields exploit the 2D spatial locality of images.*
+2.  **What is the purpose of the pooling layer?**
+    *   *To progressively reduce the spatial size of the representation, reducing parameters and computation while providing translation invariance.*
+3.  **Why did LeNet use a sparse connection matrix between S2 and C3?**
+    *   *To break symmetry and force different filters to extract different features, and to keep the number of parameters and connections within computational bounds of the era.*
+4.  **Calculate the output shape of a convolution.**
+    *   *Given input size $W$, filter size $F$, padding $P$, stride $S$, output size is $\lfloor(W - F + 2P)/S\rfloor + 1$.*
+
+## 15. Related Papers
+
+*   *Gradient-Based Learning Applied to Document Recognition* (LeCun et al., 1998) - The original LeNet paper.
+*   *ImageNet Classification with Deep Convolutional Neural Networks* (Krizhevsky et al., 2012) - AlexNet, the spiritual successor to LeNet.
+
+## 16. Related Problems
+
+*   Implementing a 2D Convolution from scratch
+*   Calculating Receptive Fields
+*   Backpropagation through a Convolutional Layer
+
+## 17. Related Learning Track Nodes
+
+*   Fundamentals of Computer Vision
+*   Convolutional Neural Networks
+*   Evolution of Deep Learning

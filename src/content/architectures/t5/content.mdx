@@ -1,0 +1,169 @@
+# T5 (Text-to-Text Transfer Transformer)
+
+## 1. Overview
+
+T5, introduced by Colin Raffel and the Google Brain team in 2019, fundamentally unified Natural Language Processing under a single paradigm. Unlike BERT (which is an encoder used for classification/tagging) or GPT (which is a decoder used for open-ended generation), T5 frames **every** NLP task as a **Text-to-Text** problem.
+
+Whether the task is translation, summarization, question answering, or even classification, both the input and the output are strictly text strings. T5 uses a standard Encoder-Decoder architecture very similar to the original 2017 Transformer, but was trained using a novel "Span Corruption" objective on a massive cleaned dataset (C4).
+
+:::note
+Explore how the Encoder-Decoder attention mechanisms interact in the [interactive Transformer Simulator](/architectures/transformer/simulator) by examining the Cross-Attention block.
+:::
+
+## 2. Historical Context
+
+By 2019, the "transfer learning" revolution in NLP was in full swing. Researchers were downloading pre-trained models (like BERT, RoBERTa, XLNet) and fine-tuning them on specific tasks. However, every task required different architectural "heads." Classification needed a dense layer on top of a `[CLS]` token. Sequence tagging needed a dense layer on top of every token. 
+
+The Google team asked: *Can we create a single, unified framework where the architecture, objective function, and decoding process are identical for every task?* 
+
+To answer this, they executed an exhaustive empirical study, testing dozens of architectures, pre-training objectives, and datasets. T5 was the culmination of this massive search—the optimal combination of techniques for transfer learning in NLP.
+
+## 3. Problem It Solves
+
+The primary problem T5 solves is the fragmentation of NLP architectures.
+
+Before T5:
+*   Translation: Sequence-to-Sequence model.
+*   Sentiment Analysis: Encoder + Classification Head (e.g., `positive`, `negative`).
+*   Text Similarity: Siamese Encoders + Cosine Similarity.
+
+With T5 (Text-to-Text Framework):
+*   Translation Input: `"translate English to German: That is good."` $\to$ Output: `"Das ist gut."`
+*   Sentiment Input: `"sst2 sentence: This movie is terrible."` $\to$ Output: `"negative"`
+*   Similarity Input: `"stsb sentence1: The cat played. sentence2: The kitten frolicked."` $\to$ Output: `"3.8"`
+
+Because the output is always text, a single pre-trained T5 model can be fine-tuned on a mixture of *all* these tasks simultaneously without changing a single line of architectural code.
+
+## 4. Architecture Diagram Data
+
+T5 closely follows the original Encoder-Decoder Transformer but incorporates relative positional embeddings.
+
+**T5-Base:**
+*   Encoder Layers: 12
+*   Decoder Layers: 12
+*   Hidden Size ($d_{model}$): 768
+*   Attention Heads: 12
+*   Total Parameters: 220M
+
+**T5-11B:**
+*   Layers (Encoder/Decoder): 24 each
+*   Hidden Size: 1024
+*   Attention Heads: 128
+*   Total Parameters: 11 Billion
+
+## 5. Layer-by-Layer Breakdown
+
+### Input Embeddings
+T5 uses a SentencePiece vocabulary of 32,000 wordpieces. It does *not* add absolute positional embeddings at the input layer.
+
+### Relative Positional Embeddings
+Instead of adding sine/cosine waves to the input, T5 uses learned relative positional embeddings. These are scalar values added directly to the attention logits (the $QK^T$ matrix) before the softmax. The model learns a different scalar offset for "token $i$ is 3 positions to the left of token $j$." This allows T5 to handle sequences longer than those seen during training.
+
+### Encoder Stack
+Standard Multi-Head Self-Attention + FFN. It uses a simplified Layer Normalization (RMSNorm, removing the mean-centering step) applied *before* the attention blocks.
+
+### Decoder Stack
+Standard Causal Masked Self-Attention + Cross-Attention + FFN. The Cross-Attention layers query the final hidden states of the Encoder.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Input sequence length $T_{in}$, Output sequence length $T_{out}$, Hidden size $H$.
+
+```text
+--- Encoder ---
+Input           : (B, T_in)
+Embeddings      : (B, T_in, H)
+Self-Attention  : (B, 12, T_in, T_in) <-- Relative bias added here
+Output          : (B, T_in, H)   <-- The Encoder Memory
+
+--- Decoder (Autoregressive Generation) ---
+Input (shifted) : (B, T_out_current)
+Embeddings      : (B, T_out_current, H)
+Masked Self-Attn: (B, 12, T_out_current, T_out_current) <-- Causal + Relative bias
+Cross-Attention : Q is (B, T_out_current, H)
+                  K, V from Encoder Memory are (B, T_in, H)
+                  -> Attention Matrix: (B, 12, T_out_current, T_in)
+Output          : (B, T_out_current, H)
+Linear Vocab    : (B, T_out_current, VocabSize)
+```
+
+## 7. Mathematical Foundations
+
+**Relative Positional Bias:**
+In standard attention, $S_{i,j} = q_i \cdot k_j$.
+In T5's relative attention, a learned scalar $b_{i,j}$ (depending only on the relative offset $i-j$) is added:
+$$ S_{i,j} = q_i \cdot k_j + b_{i,j} $$
+The offsets are bucketed (e.g., offsets 1, 2, 3 have exact buckets, but offsets 100-120 might share a single bucket).
+
+**Span Corruption Objective:**
+BERT masks individual tokens (15%). T5 masks *spans* (consecutive sequences of tokens) and replaces them with a single unique sentinel token (e.g., `<extra_id_0>`). The decoder must then generate the missing spans, separated by the sentinel tokens.
+
+*Original text:* `Thank you for inviting me to your party last week.`
+*Input to Encoder:* `Thank you <extra_id_0> me to your party <extra_id_1> week.`
+*Target for Decoder:* `<extra_id_0> for inviting <extra_id_1> last <extra_id_2>`
+
+This objective is computationally efficient because the target sequence is very short, focusing compute on the encoder.
+
+## 8. Forward Pass
+
+1.  A task prefix (e.g., `"summarize: "`) is prepended to the input text.
+2.  The Encoder processes the full text bidirectionally, creating a dense, context-aware memory representation.
+3.  The Decoder generates the output text autoregressively. At each step, it attends to the previously generated output tokens (Self-Attention) and to the relevant parts of the input text (Cross-Attention).
+4.  Generation stops when the Decoder emits the `[EOS]` (End of Sequence) token.
+
+## 9. Training Process
+
+*   **The C4 Dataset:** T5 was pre-trained on the Colossal Clean Crawled Corpus (C4), a 750GB massive dataset created by aggressively filtering Common Crawl for English text, removing code, boilerplate, and low-quality pages.
+*   **Multi-task Fine-tuning:** T5 is typically fine-tuned on a mixture of tasks simultaneously. To prevent a massive dataset (like translation) from overwhelming a tiny dataset (like sentiment analysis), they used temperature-scaled proportional mixing to balance the sampling rates.
+
+## 10. Complexity Analysis
+
+| Model | Parameters | Architecture |
+| :--- | :--- | :--- |
+| T5-Base | 220M | Enc-Dec (12L / 12L) |
+| T5-Large | 770M | Enc-Dec (24L / 24L) |
+| T5-3B | 3B | Enc-Dec (24L / 24L, wider) |
+| T5-11B | 11B | Enc-Dec (24L / 24L, huge) |
+
+**Insight:** Because it is an Encoder-Decoder model, processing an input sequence of length $L$ and output of length $L$ requires roughly the same FLOPs as a Decoder-Only model of half the parameter count processing length $2L$. The Encoder is fully parallelized, making prompt processing extremely fast.
+
+## 11. Advantages
+
+*   **Ultimate Versatility:** A single model checkpoint can perform translation, summarization, Q&A, and classification depending entirely on the prompt prefix.
+*   **Bidirectional Context:** Unlike GPT, the Encoder reads the entire input bidirectionally, leading to superior understanding of complex prompts.
+*   **Robustness:** The exhaustive empirical search behind T5 means its specific combination of RMSNorm, relative embeddings, and span corruption is highly optimized for transfer learning.
+
+## 12. Limitations
+
+*   **Not Ideal for Open-Ended Generation:** While great at transforming text (summarization/translation), it is less suited for open-ended creative writing compared to Decoder-only models like GPT-3.
+*   **Architectural Overhead:** An Encoder-Decoder requires storing two sets of weights and managing Cross-Attention, which is slightly more complex to deploy than a uniform Decoder-only stack.
+
+## 13. Real World Applications
+
+*   **Summarization & Translation:** State-of-the-art base model for fine-tuning on complex text transformation tasks.
+*   **Information Extraction:** Used heavily in pipelines that extract specific structured answers from unstructured documents.
+
+## 14. Interview Questions
+
+1.  **What is the "Text-to-Text" framework?**
+    *   *The paradigm where every NLP task (even classification) is modeled by feeding a text string into the model and training it to generate a target text string, unifying all tasks under a single loss function and architecture.*
+2.  **How does T5's Span Corruption differ from BERT's Masked Language Modeling?**
+    *   *BERT masks individual tokens and predicts them using a classification head on the encoder. T5 masks entire spans (multiple consecutive tokens), replaces them with a single sentinel token, and trains a decoder to generate the missing words.*
+3.  **What are Relative Positional Embeddings?**
+    *   *Instead of adding fixed absolute positions to the input embeddings, T5 adds learned scalar biases directly to the attention logits based on the relative distance between the query and key tokens.*
+
+## 15. Related Papers
+
+*   *Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer* (Raffel et al., 2019)
+*   *Attention Is All You Need* (Vaswani et al., 2017)
+
+## 16. Related Problems
+
+*   [Attention Calculation](/problems/attention-calculation)
+*   [Cross Entropy](/math/cross-entropy)
+
+## 17. Related Learning Track Nodes
+
+*   Sequence to Sequence Models
+*   Transfer Learning in NLP
+*   Encoder-Decoder Architectures
