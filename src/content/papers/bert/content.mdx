@@ -1,0 +1,233 @@
+# BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding
+
+**Devlin, Chang, Lee & Toutanova · NAACL 2019 · arXiv:1810.04805 · ~90,000 citations**
+
+---
+
+## 1. Overview
+
+BERT demolished 11 NLP benchmarks simultaneously upon release in October 2018. It achieved state-of-the-art on SQuAD (reading comprehension), GLUE (language understanding), NER (named entity recognition), and more — all from a single pre-trained model with minimal task-specific fine-tuning.
+
+The key insight: the Transformer's encoder is deeply bidirectional. Every token attends to every other token simultaneously. But GPT-1 (released two months before BERT) was trained autoregressively — left to right — losing the right context. BERT resolved this by introducing **Masked Language Modeling (MLM)**: randomly hide tokens, force the model to predict them using *both* left and right context. The resulting representations are richer, contextual, and dramatically more transferable.
+
+BERT launched the era of **fine-tuning pre-trained language models** as the universal paradigm for NLP. Every subsequent language model — RoBERTa, XLNet, ALBERT, DistilBERT, and eventually GPT-3 — is defined in relation to BERT.
+
+---
+
+## 2. Historical Context
+
+Before BERT, NLP transfer learning followed the **feature-based** approach:
+- Train word embeddings (Word2Vec, GloVe, FastText) on large corpora
+- Use the fixed embeddings as input features for task-specific models
+- These embeddings were **context-free**: "bank" had one vector for both "river bank" and "bank account"
+
+ELMo (2018) improved this with **contextual** embeddings from a bidirectional LSTM, generating different representations of "bank" depending on its context. But ELMo's LSTM architecture couldn't scale to Transformer-level capacity, and its features were used as fixed representations (not fine-tuned end-to-end).
+
+GPT (OpenAI, June 2018) showed that Transformer-based pre-training + fine-tuning worked powerfully — but its left-to-right language modeling limited its contextual richness. Google's BERT answered: what if we pre-train a Transformer encoder *bidirectionally*?
+
+---
+
+## 3. Research Problem
+
+How can we design a pre-training objective for a **bidirectional Transformer encoder** without allowing the model to "see" the answer through future context?
+
+The standard language modeling objective (predict next token) is inherently unidirectional: token $t$ cannot attend to tokens $>t$ during training, or it would trivially see the answer. This prevents standard LM pre-training from training a bidirectional model.
+
+---
+
+## 4. Prior Work
+
+| Method | Model | Pre-training Objective | Limitation |
+|:---|:---|:---|:---|
+| Word2Vec (2013) | Shallow NN | Predict surrounding words | Context-free; shallow |
+| GloVe (2014) | Matrix factorization | Co-occurrence statistics | Context-free |
+| ELMo (2018) | Bidirectional LSTM | Forward + backward LM | Feature-based only; LSTM-limited |
+| GPT-1 (2018) | Transformer decoder | Left-to-right LM | Unidirectional; loses right context |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Unidirectional models (GPT-1)** generate left-to-right — each token sees only its preceding context. This is suboptimal for understanding tasks:
+
+- In "The **bank** by the river", understanding "bank" requires seeing "river" (to its right)
+- In question answering, the model must attend to the *entire* question and context bidirectionally
+
+**Feature-based models (ELMo)** use bidirectional LSTMs but:
+- Representations are fixed after pre-training — the model doesn't adapt to the task
+- LSTM capacity is fundamentally limited compared to Transformers
+
+**The core problem with naïve bidirectional training:** If you train a bidirectional Transformer on "predict the next token," the token $t+1$ is already visible in the right context — the model trivially reads the answer. You need a training objective that doesn't expose the target to the model.
+
+---
+
+## 6. Core Innovation
+
+**Masked Language Modeling (MLM):**
+Randomly mask 15% of input tokens. Replace them with `[MASK]`. Train the model to predict the original tokens using the surrounding context — attending to *all* non-masked positions on both sides.
+
+**Masking strategy (80/10/10 rule):**
+Of the 15% chosen to be "masked":
+- 80% replaced with `[MASK]`
+- 10% replaced with a random word
+- 10% kept unchanged
+
+The 10/10 split prevents the model from assuming every `[MASK]` token is a masked word during fine-tuning (where `[MASK]` never appears).
+
+**Next Sentence Prediction (NSP):**
+Train a binary classifier: given sentences A and B, does B follow A in the original document? Uses the `[CLS]` token's representation. (Later shown by RoBERTa to be mostly unnecessary.)
+
+**Input representation:** Sum of three learned embeddings:
+- Token embedding (WordPiece, 30K vocabulary)
+- Segment embedding (A or B)
+- Position embedding (learned, not sinusoidal)
+
+---
+
+## 7. Architecture Breakdown
+
+BERT uses the Transformer **encoder** only (no decoder, no causal masking):
+
+| Model | Layers | Hidden | Heads | Parameters |
+|:---|:---|:---|:---|:---|
+| BERT-Base | 12 | 768 | 12 | 110M |
+| BERT-Large | 24 | 1024 | 16 | 340M |
+
+Full bidirectional attention: every token attends to every other token in the 512-token context window.
+
+**Special tokens:**
+- `[CLS]` — First token; its final hidden state used for classification tasks
+- `[SEP]` — Separator between sentence A and B
+- `[MASK]` — Used during pre-training only
+
+See [BERT architecture page](/architectures/bert) for full layer-by-layer breakdown.
+
+---
+
+## 8. Mathematical Foundations
+
+**MLM Objective:**
+
+Let $\hat{x}$ be the masked input (with some tokens replaced by `[MASK]`). Let $M$ be the set of masked positions. BERT minimizes:
+$$L_{MLM} = -\sum_{i \in M} \log P(x_i | \hat{x}; \theta)$$
+
+Each position's probability is a softmax over the full vocabulary, applied to its final hidden state:
+$$P(x_i = w | \hat{x}) = \text{softmax}(E \cdot h_i)[w]$$
+
+where $E$ is the token embedding matrix and $h_i$ is the final hidden state at position $i$.
+
+**NSP Objective:**
+
+Binary cross-entropy on the `[CLS]` token output:
+$$L_{NSP} = -[\mathbb{1}_{IsNext}\log P(\text{IsNext}|h_{CLS}) + \mathbb{1}_{NotNext}\log P(\text{NotNext}|h_{CLS})]$$
+
+**Total pre-training loss:**
+$$L = L_{MLM} + L_{NSP}$$
+
+---
+
+## 9. Key Experiments
+
+BERT set SOTA on 11 NLP benchmarks simultaneously:
+
+| Task | Previous SOTA | BERT-Base | BERT-Large |
+|:---|:---|:---|:---|
+| GLUE Score | 72.8 | 82.1 | **87.1** |
+| SQuAD 1.1 F1 | 91.7 | 88.5 | **93.2** |
+| SQuAD 2.0 F1 | 66.3 | — | **83.1** |
+| MultiNLI Acc | 86.7 | 84.6 | **86.7** |
+
+---
+
+## 10. Benchmark Results
+
+**GLUE leaderboard comparison:**
+
+| Model | GLUE Score |
+|:---|:---|
+| Previous SOTA (ensemble) | 72.8 |
+| GPT-1 | 72.8 |
+| BERT-Base | 82.1 |
+| **BERT-Large** | **87.1** |
+
+**SQuAD 2.0** (open-domain QA with unanswerable questions):
+
+| Model | F1 |
+|:---|:---|
+| Human | 89.5 |
+| Previous SOTA | 66.3 |
+| **BERT-Large** | **83.1** |
+
+---
+
+## 11. Ablation Studies
+
+| Configuration | GLUE Score |
+|:---|:---|
+| BERT-Large (full) | 87.1 |
+| No NSP | 85.7 (NSP helps, ~1.4 points) |
+| Left-to-right (no masking) | 84.2 (bidirectionality critical) |
+| No pre-training | 78.9 (pre-training contributes ~8 points) |
+| ELMo-style (BiLSTM features) | 80.5 |
+
+**Conclusion:** Both pre-training and bidirectionality are critical. NSP helps modestly.
+
+---
+
+## 12. Implementation Details
+
+- **Pre-training data:** Wikipedia (2.5B words) + BooksCorpus (800M words)
+- **Pre-training compute:** BERT-Large on 64 Cloud TPUs for 4 days
+- **Fine-tuning:** 2–4 epochs, LR 2e-5 to 5e-5, batch size 16–32
+- **Tokenizer:** WordPiece with 30K vocabulary (handles out-of-vocabulary via subwords)
+- **Max sequence length:** 512 tokens
+- **Masking ratio:** 15% of tokens per sequence
+
+---
+
+## 13. Engineering Insights
+
+- **The `[CLS]` token is a learned sentinel.** Because it participates in full bidirectional attention with all other tokens, its final state naturally aggregates sequence-level information. This architectural choice — a special leading token whose representation summarizes the sequence — was adopted by all subsequent models.
+- **Pre-training once, fine-tune many times.** BERT's pre-training is expensive (4 days on 64 TPUs), but fine-tuning is cheap (minutes on a single GPU). This democratized NLP: anyone could download BERT weights and adapt them to a new task.
+- **WordPiece tokenization handles unknown words gracefully.** "unbelievably" → ["un", "##believ", "##ably"]. No out-of-vocabulary issue, unlike word-level tokenization.
+- **The 80/10/10 masking rule matters.** If you only replace with `[MASK]`, the model learns to ignore `[MASK]` tokens at fine-tuning time (they never appear). The 10% random + 10% unchanged tokens force the model to build representations for all tokens, not just `[MASK]`.
+
+---
+
+## 14. Limitations
+
+- **Not generative.** BERT cannot generate fluent text. Its bidirectional attention breaks autoregressive generation.
+- **`[MASK]` is absent at fine-tuning time.** A distribution mismatch exists between pre-training (15% masked tokens) and fine-tuning (no masked tokens). XLNet (2019) addressed this with permutation language modeling.
+- **Inefficient pre-training.** Only 15% of tokens are predicted per step — 85% contribute to context but not to the loss. GPT-style models predict every token.
+- **Fixed context window (512 tokens).** Long documents must be split, losing cross-chunk context. Longformer and BigBird extended this to 4096+ tokens.
+- **NSP proved unnecessary.** RoBERTa (2019) showed removing NSP, training longer, and using larger batches surpassed BERT significantly.
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Year | What It Fixed |
+|:---|:---|:---|
+| RoBERTa | 2019 | Removed NSP; trained longer; dynamic masking |
+| ALBERT | 2019 | Parameter sharing; sentence-order prediction |
+| DistilBERT | 2019 | Knowledge distillation; 40% smaller, 97% of performance |
+| XLNet | 2019 | Permutation LM; no masking discrepancy |
+| DeBERTa | 2020 | Disentangled attention; SOTA on GLUE |
+| ELECTRA | 2020 | Generator-discriminator training; 4× more efficient than BERT |
+
+---
+
+## 16. Related Architectures
+
+- [BERT Architecture](/architectures/bert) — interactive layer-by-layer breakdown
+- [Transformer](/architectures/transformer) — the base architecture
+- [GPT](/architectures/gpt) — decoder-only counterpart
+- [T5](/architectures/t5) — encoder-decoder unification
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Implementing masked language modeling in PyTorch
+- Computing fine-tuning vs. feature extraction performance on GLUE tasks

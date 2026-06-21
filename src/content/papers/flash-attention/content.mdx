@@ -1,0 +1,163 @@
+# FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness
+
+**Dao, Fu, Ermon, Rudra, Ré · NeurIPS 2022 · arXiv:2205.14135 · ~2,500 citations**
+
+---
+
+## 1. Overview
+
+**FlashAttention** is a landmark paper in AI systems engineering. It redesigned self-attention computation from a hardware-first perspective. Published by Tri Dao and a team of researchers at Stanford University, it addressed a massive bottleneck: although attention is computationally expensive, its speed on GPUs is primarily limited not by floating-point operations (FLOPs), but by **memory access (I/O) overhead**.
+
+Rather than materializing the intermediate $N \times N$ attention weight matrix in slow High Bandwidth Memory (HBM), FlashAttention computes the exact same mathematical output using **tiling** and **softmax recomputation**. This reduces memory read/write cycles, scaling memory requirements linearly ($O(N)$) and accelerating training speeds by 2-4x.
+
+---
+
+## 2. Historical Context
+
+By 2022, GPUs had become incredibly fast at performing matrix multiplications (Tensor Cores). However, memory speeds had not kept pace. This mismatch divided GPU workloads into two categories:
+- **Compute-bound:** The speed is determined by how many arithmetic operations (FLOPs) the GPU cores can perform per second (e.g., large GEMMs).
+- **Memory-bound:** The speed is determined by how quickly the GPU can read and write data to/from High Bandwidth Memory (HBM) (e.g., activations, element-wise layers like softmax, dropout, and normalization).
+
+Standard PyTorch implementations of self-attention materialized the $N \times N$ attention score matrix $S = \text{softmax}(QK^T/\sqrt{d})$ in HBM. For a sequence length of 16,000, this single matrix required 1 GB of memory per attention head, causing frequent Out-of-Memory (OOM) errors and slow memory reads/writes.
+
+---
+
+## 3. Research Problem
+
+Can we compute exact self-attention without materializing the $N \times N$ attention matrix in HBM, thereby speeding up execution and enabling longer context windows? Specifically:
+1. How do we compute the softmax function on blocks of data when softmax requires a global denominator?
+2. Can we design an attention algorithm that is aware of the GPU memory hierarchy (SRAM vs HBM)?
+3. Can we trade computation for memory bandwidth (FLOPs vs I/O) to achieve overall speedups?
+
+---
+
+## 4. Prior Work
+
+| Model / Algorithm | Exact Attention | Memory Complexity | Hardware I/O Optimization |
+|:---|:---|:---|:---|
+| Standard Attention | Yes | $O(N^2)$ | None (materializes $N \times N$) |
+| Reformer (Reversible) | No (Approximate) | $O(N \log N)$ | No |
+| Linformer (Low-Rank) | No (Approximate) | $O(N)$ | No |
+| **FlashAttention** | **Yes (Exact)** | $\mathcal{O}(N)$ | **Yes (IO-Aware Tiling)** |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Approximate Attention Schemes:** Many papers proposed reducing attention complexity (e.g., linear attention, sparse attention) to bypass the $O(N^2)$ barrier. However, these methods degraded model accuracy on downstream tasks, and because they did not optimize for memory access patterns, they were often slower in practice than standard attention for moderate sequence lengths.
+
+**Lack of Memory Hierarchy Awareness:** Standard frameworks treated attention as a series of modular operations (MatMul, Softmax, Dropout, MatMul). Each modular operation read inputs from HBM and wrote outputs back to HBM, adding massive memory transfer overhead.
+
+---
+
+## 6. Core Innovation
+
+FlashAttention is an **IO-aware exact attention algorithm** that uses two techniques:
+
+**1. Tiling:**
+We divide the input matrices $Q$, $K$, and $V$ into blocks. We load these blocks from HBM into the fast local GPU **SRAM**, compute attention weights locally, and accumulate the results in SRAM before writing the final output back to HBM.
+
+**2. Softmax Recomputation:**
+To perform softmax on blocks of queries, keys, and values, the algorithm tracks scaling factors. For a block of inputs, it keeps track of the local maximum $m^{(i)}$ and local denominator sum $d^{(i)}$. When moving to the next block, it updates the accumulated output vector using:
+$$m^{\text{new}} = \max(m^{\text{old}}, \tilde{m}), \quad d^{\text{new}} = d^{\text{old}} \cdot e^{m^{\text{old}} - m^{\text{new}}} + \tilde{d} \cdot e^{\tilde{m} - m^{\text{new}}}$$
+This allows calculating the exact softmax dynamically. During the backward pass, FlashAttention does not load the $N \times N$ matrix from HBM; instead, it recomputes it on-the-fly in SRAM using stored scaling factors.
+
+---
+
+## 7. Architecture Breakdown
+
+**Memory Hierarchy Optimization:**
+- **HBM (High Bandwidth Memory):** Large (~40-80 GB) but slow (~1.5-2.0 TB/s). Stores model weights, inputs, and final outputs.
+- **SRAM (Static Random Access Memory):** Small (~20 MB per SM) but extremely fast (~19 TB/s). FlashAttention performs all intermediate operations (softmax, dot products) here.
+
+**Tiling Parameters:**
+- Query block size: $B_c = \lceil \frac{M}{4d} \rceil$ where $M$ is the SRAM size and $d$ is the head dimension.
+- Key/Value block size: $B_r = \min(\lceil \frac{M}{4d} \rceil, d)$.
+
+See the [Transformer architecture page](/architectures/transformer) for detail on attention heads.
+
+---
+
+## 8. Mathematical Foundations
+
+The core math challenge is computing softmax incrementally. For a vector $x = [x^{(1)}, x^{(2)}]$, we want to compute the softmax without holding all coordinates in memory simultaneously:
+1. For block 1 ($x^{(1)}$), compute local max $m^{(1)} = \max(x^{(1)})$ and local sum $d^{(1)} = \sum e^{x_i^{(1)} - m^{(1)}}$.
+2. For block 2 ($x^{(2)}$), compute local max $m^{(2)} = \max(x^{(2)})$ and local sum $d^{(2)} = \sum e^{x_i^{(2)} - m^{(2)}}$.
+3. Combine:
+   $$m = \max(m^{(1)}, m^{(2)})$$
+   $$d = d^{(1)} \cdot e^{m^{(1)} - m} + d^{(2)} \cdot e^{m^{(2)} - m}$$
+4. The final softmax value for element $x_i$ is $e^{x_i - m} / d$.
+
+By storing only $m$ and $d$ (which are $O(N)$ memory), we avoid storing the $N \times N$ matrix.
+
+---
+
+## 9. Key Experiments
+
+- **Training Speed:** Trained GPT-2 (117M params) and Megatron-LM (1.2B params) to compare convergence times.
+- **Context Length:** Tested models on sequence lengths up to 64k to demonstrate linear memory scaling.
+- **GPU Evaluation:** Measured execution times on NVIDIA A100 and RTX 3090 GPUs.
+
+---
+
+## 10. Benchmark Results
+
+| Model | Seq Length | Standard Attention Time | FlashAttention Time | Speedup |
+|:---|:---|:---|:---|:---|
+| GPT-2 (117M) | 2,048 | 15.2 ms | 5.1 ms | **3.0x** |
+| GPT-2 (1.2B) | 2,048 | 118 ms | 42 ms | **2.8x** |
+| Long-Context LLM | 8,192 | OOM | 185 ms | **Infinite (No OOM)** |
+
+**Memory reduction was 10-20x**, scaling linearly instead of quadratically, preventing Out-Of-Memory errors on long contexts.
+
+---
+
+## 11. Ablation Studies
+
+Comparing FLOP count vs execution time showed that FlashAttention actually performs **more** FLOPs than standard attention (due to recomputing softmax scaling during the backward pass). However, because it reduces memory transactions by over 90%, it is still 3x faster. This proved that optimizing for memory access patterns is more important than minimizing operations for memory-bound tasks.
+
+---
+
+## 12. Implementation Details
+
+- **SRAM allocation:** Implemented as a custom CUDA kernel using shared memory.
+- **Kernel Fusion:** Fuses matrix multiplication, softmax, dropout, and residual additions into a single GPU kernel.
+- **Precision:** Supports FP16 and BF16 formats; optimized for Tensor Core execution.
+
+---
+
+## 13. Engineering Insights
+
+- **FLOPs are cheap, IO is expensive:** Recomputing intermediate activations in fast SRAM is faster than writing them to and reading them from slow HBM.
+- **Block sizes depend on SRAM capacity:** Blocks must be sized carefully to maximize SRAM utilization without overflowing.
+- **Linear memory scaling enables long contexts:** By reducing memory complexity to $O(N)$, models can process 32k or 100k tokens on standard hardware.
+
+---
+
+## 14. Limitations
+
+- **Hardware Specificity:** CUDA kernels are highly specific to GPU architectures (e.g., requiring different optimizations for A100 vs H100). Porting to non-NVIDIA hardware requires significant rewrite.
+- **Head Dimension Limit:** Performance degrades when head dimension $d$ exceeds 128, as the block size must shrink to fit in SRAM, reducing compute efficiency.
+- **Shared Memory Limits:** Older GPUs with small shared memory capacities cannot use large block sizes.
+
+---
+
+## 15. Influence on Later Research
+
+- **FlashAttention-2 (2023):** Tri Dao optimized work partition schemes across threads and warps, improving execution efficiency to reach 73% of theoretical GPU peak FLOPS.
+- **vLLM & PagedAttention (2023):** Applied similar block-level allocation techniques to optimize KV caching in serving environments.
+- **Long-Context LLMs:** Enabled architectures like LLaMA-3, Claude 3, and Gemini 1.5 to scale context windows up to millions of tokens.
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer) — the host architecture that contains self-attention blocks.
+- [LLaMA](/architectures/llama) — modern open LLM implementing FlashAttention-2 inside its blocks.
+
+---
+
+## 17. Related Problems
+
+- [kv-cache](/problems/kv-cache) — storing key/value states dynamically during decoding.
+- [scaled-dot-product-attention](/problems/scaled-dot-product-attention) — the exact attention calculation accelerated by this paper.

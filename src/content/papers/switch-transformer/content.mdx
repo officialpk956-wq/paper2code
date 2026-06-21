@@ -1,0 +1,208 @@
+# Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity
+
+**Fedus, Zoph & Shazeer · JMLR 2022 · arXiv:2101.03961**
+
+---
+
+## 1. Overview
+
+Switch Transformers proved that trillion-parameter models could be trained with constant per-token compute cost by replacing the Feed-Forward Network (FFN) in each Transformer layer with a **Mixture of Experts (MoE)** that routes each token to exactly **one** expert — not two. This Top-1 routing (the "switch" in Switch Transformer) simplified prior MoE designs, eliminated routing complexity, and enabled 7× faster pre-training compared to a T5-equivalent dense baseline.
+
+The paper broke the $10^{11}$ (100B) parameter barrier cleanly, training a 1.6 trillion parameter model on Google's TPU infrastructure. It established MoE as the path to efficiently scaling beyond the density constraints of hardware SRAM.
+
+---
+
+## 2. Historical Context
+
+Mixture of Experts dates to 1991. Its application to deep learning was pioneered by Shazeer et al. (2017) with the Sparsely-Gated MoE LSTM (137B parameters). That paper showed the concept worked but left two unresolved problems: Top-K routing (usually K=2) added complexity, and training instability in sparse systems was hard to manage.
+
+By 2020, the community had established that dense scaling was hitting physical limits. Training a 175B parameter dense model (GPT-3) required specialized hardware and weeks of compute. The question: could sparsity maintain the performance gains of scale without proportional compute costs?
+
+---
+
+## 3. Research Problem
+
+Can we design a sparse expert model that:
+1. Routes with $K=1$ (simpler than $K=2$, lower communication overhead)
+2. Remains numerically stable during training
+3. Balances load across experts without routing collapse
+4. Scales to trillion parameters on existing hardware
+
+---
+
+## 4. Prior Work
+
+| Method | Year | Key Limitation |
+|:---|:---|:---|
+| MoE LSTM (Shazeer, 2017) | 2017 | Sequential; applied to LSTM, not Transformer |
+| GShard (Lepikhin, 2020) | 2020 | K=2 routing; complex sharding |
+| Outrageously Large NNs | 2017 | Instability at scale; LSTM-bound |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**K=2 routing added overhead:** Every token dispatched to two experts, doubling communication costs in distributed settings where experts live on different devices.
+
+**Routing collapse was common:** Without careful loss engineering, the router collapsed to always selecting one or two experts. Those experts got more gradients → got better → got more traffic → catastrophic collapse.
+
+**Numerical instability:** MoE models with sparse activation had gradient and precision issues (NaN losses) during training, especially with FP16.
+
+---
+
+## 6. Core Innovation
+
+**Top-1 Switch Routing:**
+
+For each token $x$, compute routing probabilities:
+$$p_i(x) = \text{softmax}(W_r \cdot x)_i$$
+
+Route each token to the single expert with highest probability:
+$$\text{Expert}_{\text{selected}} = \arg\max_i p_i(x)$$
+
+Scale the expert output by the routing probability:
+$$\text{output} = p_{\text{selected}} \cdot E_{\text{selected}}(x)$$
+
+**Load Balancing Loss:**
+To prevent collapse, add an auxiliary loss that encourages uniform routing:
+$$L_{aux} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i$$
+
+Where $f_i$ is the fraction of tokens routed to expert $i$, and $P_i$ is the mean probability of routing to expert $i$. Minimized when $f_i = P_i = 1/N$ for all $i$.
+
+**Expert Capacity:**
+Each expert has a fixed buffer. If too many tokens route to one expert, the excess are passed through (skipped) via the residual connection. This prevents OOM errors.
+
+**FP32 router, FP16 everything else:** Training exclusively in FP16 caused NaN losses from router softmax. The fix: compute the router in FP32, everything else in FP16.
+
+---
+
+## 7. Architecture Breakdown
+
+Switch Transformer replaces every other FFN layer in T5 with a Switch FFN layer:
+
+```
+Standard T5 Layer:
+  Input → Self-Attention → Add & Norm → FFN → Add & Norm → Output
+
+Switch T5 Layer (alternate layers):
+  Input → Self-Attention → Add & Norm → [Switch Router → Expert FFN] → Add & Norm → Output
+```
+
+**Model sizes:**
+
+| Model | Parameters (sparse) | Active Params per Token | Experts per Layer |
+|:---|:---|:---|:---|
+| Switch-Base | 7.4B | 223M | 128 |
+| Switch-Large | 26.3B | 739M | 128 |
+| Switch-C | **1.571T** | — | 2048 |
+
+---
+
+## 8. Mathematical Foundations
+
+**Sparse Forward Pass (per token):**
+
+Let $N$ be number of experts, $W_r \in \mathbb{R}^{d \times N}$ be router weights, $E_i$ be expert $i$'s FFN.
+
+$$h_i = \text{softmax}(W_r x)_i \quad \text{(routing probabilities)}$$
+$$\text{output} = h_{\arg\max h} \cdot E_{\arg\max h}(x)$$
+
+Only one expert FFN is evaluated — all others contribute 0 FLOPs.
+
+**Capacity Factor $C$:**
+
+Expert capacity = $\frac{\text{tokens per batch}}{N} \times C$
+
+$C=1.0$ is exact balance. $C=1.25$ allows 25% overflow buffer. Tokens exceeding capacity are dropped and bypass via residual.
+
+---
+
+## 9. Key Experiments
+
+| Model | Pre-training Speed | Neg. Log-Perplexity |
+|:---|:---|:---|
+| T5-Base (dense) | 1× baseline | 1.731 |
+| Switch-Base (128 experts) | **7.3× faster** | 1.554 |
+| T5-Large (dense) | 3.5× slower | 1.599 |
+| Switch-Base | 1× (base compute) | **1.554** |
+
+**7× faster to same quality** compared to the dense T5 equivalent.
+
+---
+
+## 10. Benchmark Results
+
+Fine-tuned on SuperGLUE:
+
+| Model | SuperGLUE Score |
+|:---|:---|
+| T5-Base (223M) | 74.6 |
+| T5-Large (739M) | 81.4 |
+| **Switch-Base (7.4B sparse, 223M active)** | **81.3** |
+| T5-11B (11B) | 88.9 |
+
+Switch-Base matches T5-Large in quality while using T5-Base compute — 3.5× more efficient.
+
+---
+
+## 11. Ablation Studies
+
+| Routing Type | Quality | Stability |
+|:---|:---|:---|
+| K=1 (Switch) | Best | Good |
+| K=2 (Top-2) | Similar | More complex |
+| Random routing | Much worse | — |
+| Expert choice (experts pick tokens) | Good | Better load balance |
+
+---
+
+## 12. Implementation Details
+
+- **Framework:** T5X (JAX/XLA)
+- **Hardware:** TPU v3 or v4 pods
+- **Expert placement:** Each expert on a separate TPU core; all-to-all communication for routing
+- **Key stability fix:** FP32 precision for router logits; FP16 everywhere else
+- **Dropout:** 0.1 in experts; 0.4 at fine-tuning time (higher dropout to regularize larger capacity)
+
+---
+
+## 13. Engineering Insights
+
+- **All-to-all communication is the bottleneck.** Routing tokens to experts on remote TPU cores requires collective communication. In very large clusters (thousands of devices), this inter-device bandwidth becomes the limiting factor, not compute.
+- **Expert capacity buffer prevents OOM but causes dropped tokens.** A capacity factor of 1.25 allows 25% more tokens than a perfectly balanced expert would receive. Tokens exceeding capacity are dropped. Monitoring the "fraction of dropped tokens" is critical.
+- **Different experts learn different specializations.** Visualization shows experts develop loose specializations: some handle punctuation, others handle specific domains (science, news). Specialization emerges without explicit supervision.
+
+---
+
+## 14. Limitations
+
+- **Memory bound, not compute bound.** MoE improves FLOPs-per-token but all expert weights must reside in SRAM. A 1.6T parameter model requires enormous memory bandwidth even if per-token FLOPs are low.
+- **Communication overhead at scale.** All-to-all routing becomes a bottleneck in multi-host distributed training.
+- **Fine-tuning instability.** MoE models fine-tuned on small datasets can suffer routing collapse without very careful loss engineering.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | Switch Transformer's Contribution |
+|:---|:---|
+| GLaM (2021) | 1.2T MoE language model; inference efficiency focus |
+| Mixtral 8x7B (2024) | Open-weights MoE; democratized sparse models |
+| GPT-4 (rumored) | Reported to be MoE architecture |
+| Gemini (2023) | Uses sparse MoE for scaling |
+
+---
+
+## 16. Related Architectures
+
+- [MoE Architecture](/architectures/moe) — full architecture page
+- [Transformer](/architectures/transformer) — base architecture
+- [T5](/architectures/t5) — dense baseline Switch was built from
+
+---
+
+## 17. Related Problems
+
+- Computing FLOPs for sparse vs. dense models
+- Implementing Top-K routing with load balancing loss
+- Diagnosing and fixing routing collapse

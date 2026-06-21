@@ -1,0 +1,218 @@
+# Learning Transferable Visual Models From Natural Language Supervision (CLIP)
+
+**Radford et al. · ICML 2021 · arXiv:2103.00020 · OpenAI**
+
+---
+
+## 1. Overview
+
+CLIP (Contrastive Language-Image Pre-training) is one of the most practically impactful papers in the history of computer vision. By training an image encoder and a text encoder jointly on 400 million image-text pairs scraped from the internet — using contrastive loss to align matching pairs and push apart non-matching pairs — CLIP learned a rich joint embedding space where images and their text descriptions occupy nearby positions.
+
+The result: zero-shot image classification on any category you can describe in natural language, without a single labeled example for that category. On ImageNet, CLIP achieved 76.2% top-1 accuracy zero-shot — matching the performance of a fully supervised ResNet-50, despite never seeing a single ImageNet label during training.
+
+CLIP became the foundational image understanding engine for Stable Diffusion, DALL-E 2, GPT-4V, and virtually every text-to-image and vision-language model released since 2021.
+
+---
+
+## 2. Historical Context
+
+Before CLIP, computer vision models were trained with:
+- **Supervised learning on labeled datasets** (ImageNet, COCO): require expensive human annotation; limited to pre-defined categories
+- **Self-supervised learning** (SimCLR, MoCo): learned visual representations but still required task-specific fine-tuning
+- **Transfer learning** (ImageNet → fine-tune): good representations but always required labeled target data
+
+The field knew that vast amounts of image-text pairs existed on the internet (product listings, image captions, news photos). Nobody had successfully trained a vision model at scale using this noisy, naturally occurring supervision — until CLIP.
+
+---
+
+## 3. Research Problem
+
+Can a vision model trained on **natural language supervision** (noisy internet image-text pairs) learn representations that transfer zero-shot to any downstream visual task, without labeled examples?
+
+Two sub-problems:
+1. What training objective effectively learns from noisy image-text data?
+2. At what scale does this produce useful representations?
+
+---
+
+## 4. Prior Work
+
+| Method | Supervision | Zero-Shot? | Limitation |
+|:---|:---|:---|:---|
+| ResNet (ImageNet) | 1.28M labeled images | No | Closed set; no text |
+| SimCLR / MoCo | Self-supervised (images only) | No | No language |
+| VirTex (2021) | Image captioning | Weak | Language model objective |
+| ALIGN (concurrent, Google) | 1.8B noisy pairs | Yes | Not published with code |
+| Noise-Contrastive Estimation (NCE) | Pairwise | Partial | Small scale |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Captioning objectives (predicting exact text from image) don't scale well.** The language space is enormous — predicting exact word sequences for millions of image-text pairs creates an intractable learning problem. You need to perfectly generate "A photo of a golden retriever playing fetch on a sunny afternoon at a dog park" — a near-impossible sequence prediction task.
+
+**Contrastive learning on images alone** (SimCLR, MoCo) produces excellent visual representations but has no language grounding — you can't ask "which image shows a cat" because the model has no text encoder.
+
+---
+
+## 6. Core Innovation
+
+**Contrastive image-text pre-training:**
+
+For a batch of $N$ image-text pairs:
+1. Encode all $N$ images with the image encoder → $N$ image embeddings $I_i$
+2. Encode all $N$ texts with the text encoder → $N$ text embeddings $T_j$
+3. Compute the $N \times N$ pairwise cosine similarity matrix
+4. Train with symmetric cross-entropy loss to maximize similarity for matching pairs $(I_i, T_i)$ and minimize for non-matching pairs $(I_i, T_j)$ where $i \neq j$
+
+The contrastive objective predicts *which* text matches *which* image in the batch — a much simpler task than generating exact text, but still sufficient to learn rich multimodal representations.
+
+**Zero-shot inference:**
+
+To classify an image into $K$ classes:
+1. Construct $K$ text prompts: "A photo of a {class}"
+2. Encode all $K$ prompts with the text encoder
+3. Encode the query image with the image encoder
+4. Take the class whose text embedding has the highest cosine similarity to the image embedding
+
+No gradient updates. Pure similarity search.
+
+---
+
+## 7. Architecture Breakdown
+
+CLIP trained five image encoder variants:
+
+| Image Encoder | Parameters | Notes |
+|:---|:---|:---|
+| ResNet-50 | 38M | Modified: attention pooling instead of GAP |
+| ResNet-101 | 57M | |
+| ViT-B/32 | 88M | Patch size 32 |
+| ViT-B/16 | 86M | Patch size 16 |
+| **ViT-L/14** | **307M** | **Best performing** |
+
+**Text Encoder:** Transformer (63M parameters), 12 layers, 512 width, 8 heads, context length 77 tokens, BPE vocabulary 49,152.
+
+**Training objective (temperature-scaled contrastive loss):**
+
+$$L = -\frac{1}{2N}\sum_{i=1}^N \left[\log\frac{e^{\text{sim}(I_i, T_i)/\tau}}{\sum_j e^{\text{sim}(I_i, T_j)/\tau}} + \log\frac{e^{\text{sim}(T_i, I_i)/\tau}}{\sum_j e^{\text{sim}(T_j, I_j)/\tau}}\right]$$
+
+Where $\tau$ is a learned temperature parameter.
+
+---
+
+## 8. Mathematical Foundations
+
+**Cosine Similarity:**
+$$\text{sim}(I, T) = \frac{I \cdot T}{\|I\| \|T\|}$$
+
+**InfoNCE Loss (the contrastive objective):**
+$$L_{i2t} = -\log\frac{\exp(\text{sim}(I_i, T_i)/\tau)}{\sum_{j=1}^N \exp(\text{sim}(I_i, T_j)/\tau)}$$
+
+This is exactly cross-entropy over $N$ classes, where the "class" is the correct text match. Large batch sizes (32,768) are critical — larger $N$ means more negative examples, making the task harder and the representations more discriminative.
+
+**Zero-shot prediction:**
+
+$$p(y = k | x) = \frac{\exp(\text{sim}(I_x, T_k)/\tau)}{\sum_{j=1}^K \exp(\text{sim}(I_x, T_j)/\tau)}$$
+
+---
+
+## 9. Key Experiments
+
+**Zero-shot ImageNet:**
+
+| Model | Top-1 Accuracy | Training Data |
+|:---|:---|:---|
+| ResNet-50 (supervised) | 76.1% | 1.28M labeled ImageNet |
+| Linear probe (BiT) | 84.9% | JFT-300M |
+| **CLIP ViT-L/14 (zero-shot)** | **76.2%** | **400M noisy pairs, no ImageNet labels** |
+
+**27 datasets, zero-shot vs. linear probe:**
+- CLIP zero-shot outperforms ImageNet-supervised linear probes on 16/27 datasets
+- Significantly better on distribution-shifted variants (ImageNet-V2, ImageNet-Sketch, ObjectNet)
+
+---
+
+## 10. Benchmark Results
+
+| Task | CLIP Zero-Shot | Previous SOTA |
+|:---|:---|:---|
+| ImageNet Top-1 | 76.2% | 76.1% (supervised ResNet-50) |
+| ImageNet-R | 88.9% | 76.7% (supervised) |
+| ImageNet-Sketch | 60.8% | 25.7% (supervised) |
+| STL-10 | 99.3% | 97.8% (supervised) |
+| MNIST | 76.0% | 99.7% (supervised) |
+
+**CLIP is notably weak on MNIST** — because internet image-text pairs rarely discuss handwritten digits in context. Zero-shot requires the pre-training distribution to cover the task.
+
+---
+
+## 11. Ablation Studies
+
+| Batch Size | Contrastive Performance |
+|:---|:---|
+| 32K | Best (more negatives = harder task = better representations) |
+| 8K | -2% |
+| 2K | -4% |
+
+Prompt engineering matters significantly:
+- "cat" → 63.3% on ImageNet
+- "A photo of a cat" → 63.9%
+- Ensemble of 80 prompts → 76.2% (+12.9% improvement from prompt engineering)
+
+---
+
+## 12. Implementation Details
+
+- **Dataset:** WebImageText (WIT) — 400M image-text pairs from internet search
+- **Training:** 32 epochs (32K batch size); ~600M steps on 256 V100 GPUs for ViT-L/14
+- **Training duration:** ~18 days for ViT-B/32; longer for ViT-L/14
+- **Temperature $\tau$:** Learned; initialized to 0.07
+- **Data augmentation:** Random square crop; color jitter (small)
+- **No labeled data used in pre-training**
+
+---
+
+## 13. Engineering Insights
+
+- **Batch size is the hyperparameter.** InfoNCE's effectiveness scales with batch size. The 32,768 batch CLIP used requires 256 GPUs just to hold the batch — this is why CLIP-level training wasn't accessible to academic labs until years later.
+- **Prompt engineering is required for best zero-shot.** "A photo of a {label}" consistently outperforms bare label names. The 80-prompt ensemble CLIP uses for official evaluation is non-trivial engineering.
+- **CLIP embeddings are universal features.** The image embeddings transfer to object detection (ViLD), segmentation (SAM uses CLIP-aligned representations), video understanding (VideoCLIP), and audio (AudioCLIP). No single feature extractor before CLIP had this breadth.
+- **CLIP text encoder is the de facto standard for text conditioning.** Stable Diffusion, DALL-E 2, and most text-to-image models use CLIP's text encoder as the conditioning signal, frozen.
+
+---
+
+## 14. Limitations
+
+- **Weak on fine-grained or specialized tasks.** Differentiating dog breeds, counting objects, reading text in images — tasks that don't appear in natural image-text pairs on the internet.
+- **Biased toward internet data distribution.** Western-centric, English-centric, skewed toward common objects and concepts.
+- **Not generative.** CLIP generates embeddings, not images. You need a generative model (diffusion, autoregressive) conditioned on CLIP embeddings.
+- **Prompt sensitivity.** Small changes in prompt wording can dramatically affect zero-shot accuracy.
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Year | CLIP's Role |
+|:---|:---|:---|
+| DALL-E 2 (2022) | 2022 | CLIP text embedding as generation conditioner |
+| Stable Diffusion | 2022 | Frozen CLIP text encoder; cross-attention conditioning |
+| OpenCLIP | 2022 | Open-source reimplementation trained on LAION |
+| BLIP-2 (2023) | 2023 | CLIP vision encoder + LLM for VQA |
+| SAM (2023) | 2023 | Builds on CLIP-style vision pre-training philosophy |
+| GPT-4V (2023) | 2023 | Vision encoder aligned to text via CLIP-style training |
+
+---
+
+## 16. Related Architectures
+
+- [Stable Diffusion](/architectures/stable-diffusion) — uses frozen CLIP text encoder for conditioning
+- [Transformer](/architectures/transformer) — text encoder backbone
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Implementing contrastive loss (InfoNCE) in PyTorch
+- Computing cosine similarity matrices for batch contrastive learning

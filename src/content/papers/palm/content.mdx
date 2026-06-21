@@ -1,0 +1,197 @@
+# PaLM: Scaling Language Modeling with Pathways
+
+**Chowdhery et al. · JMLR 2023 · arXiv:2204.02311 · Google Research**
+
+---
+
+## 1. Overview
+
+PaLM (Pathways Language Model) is Google's 540 billion parameter dense autoregressive language model, trained using the Pathways system — a novel ML infrastructure enabling training across thousands of TPU chips simultaneously with efficient inter-device communication. Released in April 2022, it demonstrated that scaling dense Transformers beyond 500B parameters produced discontinuous capability jumps, particularly on multi-step reasoning tasks.
+
+PaLM's landmark result: on the BIG-Bench suite of 150 tasks, PaLM 540B surpassed human-average performance on 58% of tasks — the first model to do so. On mathematical chain-of-thought reasoning (with prompting), it outperformed fine-tuned models. It established that chain-of-thought prompting was a qualitative capability that emerged at scale.
+
+---
+
+## 2. Historical Context
+
+By April 2022, the LLM landscape had:
+- GPT-3 (175B, OpenAI) — the few-shot benchmark
+- Gopher (280B, DeepMind) — strong factual performance
+- Chinchilla (70B, DeepMind) — just published, showing parameter efficiency
+- MT-NLG (530B, NVIDIA/Microsoft) — largest at the time
+
+Google had been training large models (LaMDA, GLaM) but hadn't published a fully transparent scaling study at GPT-3's level. PaLM was Google's comprehensive answer: a 540B dense model trained on the most diverse dataset assembled, using infrastructure that allowed training across 6,144 TPU v4 chips.
+
+---
+
+## 3. Research Problem
+
+Do quality improvements from scaling dense Transformers continue beyond 500B parameters? Do new capabilities emerge discontinuously (rather than smoothly) at extreme scale? Can chain-of-thought reasoning emerge from scale alone?
+
+---
+
+## 4. Prior Work
+
+| Model | Params | Notable Capability |
+|:---|:---|:---|
+| GPT-3 | 175B | Few-shot in-context learning |
+| Gopher | 280B | Strong factual QA |
+| Chinchilla | 70B | Efficient scaling |
+| GLaM | 1.2T (sparse) | MoE efficiency |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Dense scaling plateau concern:** Kaplan's original scaling laws (pre-Chinchilla) suggested returns diminish. Whether 540B dense would outperform 280B was empirically unknown — no one had published results at this scale.
+
+**Reasoning at scale was unproven.** Chain-of-thought prompting (Wei et al., 2022 — concurrent) required sufficient scale to work. PaLM was the vehicle for proving this empirically.
+
+---
+
+## 6. Core Innovation
+
+**Architecture — Decoder-only with key improvements:**
+- **SwiGLU activation** (replaces ReLU/GELU; empirically better at large scale)
+- **Parallel attention + FFN** (instead of sequential): compute attention and FFN simultaneously, merge results. Equivalent mathematically at initialization, but 15% faster due to better parallelism.
+- **Multi-Query Attention (MQA):** All query heads share a single key/value head. Reduces KV-cache size dramatically during inference.
+- **RoPE Positional Embeddings** (rotary — same as LLaMA, better extrapolation)
+- **No biases** in any linear layers (reduces memory)
+
+**Training — Pathways infrastructure:**
+PaLM was trained across two TPU v4 Pods simultaneously (3,072 chips each, 6,144 total). The Pathways system managed cross-pod communication for data parallelism, enabling the largest dense model training run at the time.
+
+**Chain-of-thought evaluation:**
+PaLM was systematically evaluated with "Let's think step by step" chain-of-thought prompting — the first large-scale demonstration that reasoning emerges from scale.
+
+---
+
+## 7. Architecture Breakdown
+
+| Property | PaLM-8B | PaLM-62B | PaLM-540B |
+|:---|:---|:---|:---|
+| Layers | 32 | 64 | 118 |
+| Width | 4096 | 8192 | 18432 |
+| Heads (Q/KV) | 16/1 | 32/1 | 48/1 |
+| FFN Dim | 16384 | 32768 | 73728 |
+| Parameters | 8B | 62B | 540B |
+| Sequence Length | 2048 | 2048 | 2048 |
+
+**Multi-Query Attention:** All query heads attend to the same K and V projections. This reduces KV-cache size from $O(n \cdot h)$ to $O(n)$ per layer — critical for 540B inference.
+
+---
+
+## 8. Mathematical Foundations
+
+**Parallel Attention + FFN:**
+
+Standard Transformer:
+$$x' = x + \text{Attn}(\text{LN}(x))$$
+$$x'' = x' + \text{FFN}(\text{LN}(x'))$$
+
+PaLM (parallel):
+$$x' = x + \text{Attn}(\text{LN}(x)) + \text{FFN}(\text{LN}(x))$$
+
+The FFN and attention branches read from the same normalized input, and their outputs are summed together with the residual. Communication cost is halved because you only need to all-reduce once.
+
+**SwiGLU FFN:**
+$$\text{SwiGLU}(x, W, V, W_2) = (\text{Swish}(xW) \otimes xV) W_2$$
+
+Where $\text{Swish}(x) = x \cdot \sigma(x)$. Three weight matrices instead of two, but consistently outperforms GELU at scale.
+
+---
+
+## 9. Key Experiments
+
+**BIG-Bench (150 language tasks, 0-shot and few-shot):**
+
+| Model | Tasks surpassing human average |
+|:---|:---|
+| GPT-3 | ~32% |
+| Gopher | ~38% |
+| Chinchilla | ~48% |
+| **PaLM-540B** | **58%** |
+
+**Chain-of-thought reasoning:**
+
+| Task | Standard Prompting | Chain-of-Thought |
+|:---|:---|:---|
+| GSM8K (grade math) | 29% | **58%** |
+| MATH | 8% | 11% |
+| BIG-Bench Hard | 23% | 49% |
+
+---
+
+## 10. Benchmark Results
+
+| Benchmark | PaLM 540B | Chinchilla 70B | GPT-3 175B |
+|:---|:---|:---|:---|
+| BIG-Bench | 58% tasks | 48% tasks | ~32% tasks |
+| TriviaQA | 81.4 | 73.2 | 71.2 |
+| LAMBADA | 77.9 | — | 76.2 |
+| HellaSwag | 83.4 | 79.3 | 78.9 |
+| GSM8K (CoT) | **58%** | — | 46% (175B CoT) |
+
+---
+
+## 11. Ablation Studies
+
+| Architecture Variant | Training Throughput |
+|:---|:---|
+| Sequential Attn + FFN (standard) | Baseline |
+| **Parallel Attn + FFN (PaLM)** | **+15% tokens/sec** |
+| No Multi-Query Attention | +0% train; slower inference |
+
+---
+
+## 12. Implementation Details
+
+- **Dataset:** 780B tokens; multilingual (English 78%, multilingual 10%, source code 13%)
+- **Sources:** social media, filtered webpages, books, GitHub, Wikipedia, news
+- **Optimizer:** Adafactor (memory-efficient variant of Adam)
+- **Infrastructure:** Pathways; 6,144 TPU v4 chips
+- **Training time:** ~54 days for 540B
+- **Batch size:** 2048 sequences × 2048 tokens = ~4M tokens/step
+
+---
+
+## 13. Engineering Insights
+
+- **Multi-Query Attention halves KV-cache.** For serving 540B at inference, the KV-cache grows with sequence length. MQA reduces its size from $2 \times n_{heads} \times seq\_len \times head\_dim$ to $2 \times 1 \times seq\_len \times head\_dim$ — a 48× reduction for PaLM-540B's 48 heads. This enabled serving long contexts without OOM.
+- **Parallel Attn+FFN is a free 15% throughput gain.** With no quality cost, this became standard in subsequent models (Falcon, some Mistral variants).
+- **Chain-of-thought prompting is a scale-dependent emergent capability.** At 8B parameters, CoT prompting barely helps. At 540B, it gives +29 percentage points on GSM8K. This is one of the clearest demonstrations of emergent behavior.
+
+---
+
+## 14. Limitations
+
+- **540B requires extreme hardware to serve.** Even quantized to INT8, 540B needs 540GB of accelerator memory — over 6 fully-loaded A100-80GB GPUs just to hold the weights.
+- **English-heavy training.** Despite multilingual data, 78% English creates a bias toward English tasks.
+- **Dense model at a compute cost Chinchilla would consider suboptimal.** PaLM-540B trained on 780B tokens — Chinchilla's rule would suggest 10.8T tokens for a 540B model.
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Year | PaLM's Contribution |
+|:---|:---|:---|
+| PaLM 2 (2023) | 2023 | Multi-Query Attention; multilingual focus |
+| Gemini (2023) | 2023 | Direct successor; multimodal extension |
+| LLaMA (2023) | 2023 | Adopted MQA, SwiGLU, RoPE from PaLM |
+| Chain-of-Thought research | 2022+ | PaLM was the key empirical vehicle |
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer)
+- [LLaMA](/architectures/llama) — adopted PaLM's architectural improvements
+- [MoE](/architectures/moe) — GLaM used MoE; PaLM chose dense
+
+---
+
+## 17. Related Problems
+
+- Implementing Multi-Query Attention
+- Computing KV-cache size reduction with MQA vs. MHA
+- Chain-of-thought prompting design

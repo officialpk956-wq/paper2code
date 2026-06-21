@@ -1,0 +1,161 @@
+# Training Language Models to Follow Instructions with Human Feedback
+
+**Ouyang, Wu, Jiang et al. (OpenAI) · arXiv 2022 · arXiv:2203.02155 · ~8,500 citations**
+
+---
+
+## 1. Overview
+
+This paper introduced **InstructGPT**, the direct predecessor to ChatGPT. It presented the first large-scale validation of **Reinforcement Learning from Human Feedback (RLHF)** to align Large Language Models (LLMs) with human intent. While raw base models like GPT-3 excel at next-token prediction, they often generate outputs that are toxic, unhelpful, or fail to follow instructions.
+
+To solve this misalignment, the authors developed a three-stage pipeline (Supervised Fine-Tuning, Reward Modeling, and PPO Reinforcement Learning) to optimize models based on human preferences. The resulting 1.3B parameter InstructGPT model outperformed the much larger 175B GPT-3 base model in human evaluation, proving that alignment is a highly efficient way to unlock LLM utility.
+
+---
+
+## 2. Historical Context
+
+In 2020, GPT-3 demonstrated that scaling autoregressive models yields emergent few-shot capabilities. However, these models were not aligned: their objective was to predict the next token on the internet, not to answer questions helpful to a user. If a user prompted: *"Write a Python function to sort a list,"* a base model might respond by listing more prompt variations, or write a blog post about sorting, rather than writing the code.
+
+Aligning models required moving beyond next-token prediction. While Supervised Fine-Tuning (SFT) helped, gathering high-quality target demonstrations for every possible user prompt was too expensive. A more scalable approach was needed to teach models human preferences across open-ended tasks.
+
+---
+
+## 3. Research Problem
+
+How do we align Large Language Models to follow instructions safely, accurately, and helpfully while minimizing harmful outputs? Specifically:
+1. How do we collect and incorporate human preferences into a scalable loss function?
+2. Can reinforcement learning optimize language model policies without causing training instability?
+3. What is the impact of alignment on the model's performance on core academic NLP benchmarks (the "alignment tax")?
+
+---
+
+## 4. Prior Work
+
+| Method | Scaling Objective | Alignment Feedback | Out-of-Distribution Safety |
+|:---|:---|:---|:---|
+| GPT-3 Pre-training | Next-token prediction | Implicit (Web text) | Poor |
+| Supervised Fine-Tuning | Cross-entropy loss | Explicit (Human demonstrations) | Moderate |
+| **RLHF (InstructGPT)** | **PPO Reinforcement Learning** | **Explicit (Human preferences)** | **High** |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Pure Pre-training:** Base models replicate the biases, errors, and toxic content found on the web. They are completion engines, not assistants, requiring complex prompt engineering to follow instructions.
+
+**Standard Supervised Fine-Tuning (SFT):** SFT is limited by the creativity and expertise of the labelers. For complex tasks (e.g., writing a summary), multiple different outputs may be correct. Standard cross-entropy loss penalizes correct outputs that do not match the exact target text, restricting model capability.
+
+---
+
+## 6. Core Innovation
+
+InstructGPT uses a **three-stage alignment pipeline**:
+
+```
+[Base Model] ---> Stage 1: Supervised Fine-Tuning (SFT)
+                       |
+                       v
+[SFT Model]  ---> Stage 2: Reward Model (RM) Training
+                       |
+                       v
+[RM + SFT]   ---> Stage 3: Reinforcement Learning via PPO
+```
+
+**Stage 1: Supervised Fine-Tuning (SFT):**
+Fine-tune the base model on a small dataset of human-written instruction demonstrations.
+
+**Stage 2: Reward Model (RM) Training:**
+Prompt the SFT model to generate multiple completions for a prompt. Human labelers rank these completions from best to worst. Train a scalar reward model $r_\psi(x, y)$ to predict these rankings using a pairwise loss function.
+
+**Stage 3: RL Fine-Tuning (PPO):**
+Optimize the SFT model's policy using the Reward Model as the reward generator. To prevent the model from drifting too far from the original distribution (which leads to gibberish), add a KL divergence penalty between the active RL policy and the initial SFT policy.
+
+---
+
+## 7. Architecture Breakdown
+
+- **SFT Model:** GPT-3 architecture, initialized from pre-trained weights, fine-tuned for 16 epochs.
+- **Reward Model (RM):** A 6B parameter GPT model (downscaled to improve training speed and stability). It takes a prompt $x$ and completion $y$ as input and outputs a scalar reward score.
+- **RL Policy (PPO):** A copy of the SFT model optimized using PPO updates. It includes a value network initialized from the reward model.
+
+---
+
+## 8. Mathematical Foundations
+
+**Pairwise Loss for the Reward Model:**
+The loss function for training the reward model $r_\psi(x, y)$ on a dataset of pairwise comparisons is:
+$$\mathcal{L}(\psi) = -\mathbb{E}_{(x, y_w, y_l) \sim D} \left[ \log \sigma(r_\psi(x, y_w) - r_\psi(x, y_l)) \right]$$
+where $y_w$ is the preferred completion and $y_l$ is the less preferred completion.
+
+**PPO Objective Function:**
+The objective optimized during Stage 3 is:
+$$\text{obj}(\theta) = \mathbb{E}_{(x, y) \sim D_{\pi_\theta}} \left[ r_\psi(x, y) - \beta D_{\text{KL}}(\pi_\theta(y|x) \,\|\, \pi^{\text{SFT}}(y|x)) \right] + \gamma \mathbb{E}_{x \sim D_{\text{pretrain}}} \left[ \log \pi_\theta(x) \right]$$
+- $D_{\text{KL}}$ is the KL divergence penalty preventing the model from exploiting the reward model.
+- The final term is a pre-training gradient correction to prevent the model's capabilities on standard tasks from degrading.
+
+---
+
+## 9. Key Experiments
+
+The authors evaluated model outputs on prompts submitted to the OpenAI API:
+- Labelers rated outputs based on **Helpfulness, Honesty, and Safety**.
+- Tested model outputs against base GPT-3 models on standard academic benchmarks (HellaSwag, TruthfulQA, RealToxicityPrompts).
+
+---
+
+## 10. Benchmark Results
+
+- **Human Preferences:** The 1.3B parameter InstructGPT model was preferred by human evaluators over the 175B parameter GPT-3 base model on 85% of test prompts.
+- **Toxicity Reduction:** InstructGPT generated 25% fewer toxic outputs than GPT-3 on RealToxicityPrompts.
+- **Truthfulness:** InstructGPT scored significantly higher on TruthfulQA compared to GPT-3.
+
+---
+
+## 11. Ablation Studies
+
+**The Alignment Tax:**
+Optimizing purely for human preferences using PPO causes the model's performance on academic benchmarks (like GSM8K math or code generation) to degrade. The authors showed that adding the pre-training gradient correction term ($\gamma \mathbb{E} \left[ \log \pi_\theta(x) \right]$) to the PPO objective successfully mitigated this tax, preserving the model's general capabilities while maintaining alignment.
+
+---
+
+## 12. Implementation Details
+
+- **Labeler Selection:** Hired 40 contract labelers based on performance on screening tests, emphasizing sensitivity to toxicity and bias.
+- **Hyperparameters:** $\beta$ (KL coefficient) set to 0.02, $\gamma$ (pre-training correction) set to 27.8.
+- **RL Training:** Optimized for 20,000 steps using PPO with a rollout batch size of 512.
+
+---
+
+## 13. Engineering Insights
+
+- **Scale mismatch:** A small reward model (6B) is sufficient to optimize a large policy model (175B). This saves GPU memory during RL training, which requires holding multiple copies of the model in VRAM (policy, reference, reward, value).
+- **KL divergence is critical:** Without the KL penalty, the policy model quickly learns to exploit the reward model's weaknesses (e.g., generating gibberish tokens that score high on safety keywords), causing model performance to collapse.
+- **Alignment does not create knowledge:** RLHF does not teach the model new information; instead, it teaches the model how to expose and format the knowledge it already acquired during the pre-training phase.
+
+---
+
+## 14. Limitations
+
+- **Labeler Bias:** The model is aligned to the preferences of a small group of contract workers, which may not represent general human values.
+- **Honesty is hard to evaluate:** Labelers cannot verify the truth of complex technical claims, meaning the model can learn to generate confident-sounding but incorrect information (hallucinations).
+- **Safety Over-refusal:** Aggressive safety alignment can lead to the model refusing benign prompts that contain sensitive words.
+
+---
+
+## 15. Influence on Later Research
+
+- **ChatGPT (2022) & GPT-4 (2023):** Applied the same RLHF pipeline to chat-based architectures, sparking the generative AI wave.
+- **Direct Preference Optimization (DPO, 2023):** Showed that the RLHF objective can be optimized directly using preference pairs without training an explicit reward model or using PPO.
+- **Constitutional AI (Anthropic, 2022):** Replaced human labelers in Stage 2/3 with AI feedback guided by a set of safety rules.
+
+---
+
+## 16. Related Architectures
+
+- [GPT](/architectures/gpt) — the decoder-only foundation architecture aligned by this paper.
+
+---
+
+## 17. Related Problems
+
+- [masked-attention](/problems/masked-attention) — the causal attention mask used during autoregressive rollout generation.
