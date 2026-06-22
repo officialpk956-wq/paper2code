@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, ExternalLink, Info } from 'lucide-react';
+import { Copy, ExternalLink, Info, BookOpen } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { ARCHITECTURE_CATALOG } from '@/data/architecture-catalog';
 import Link from 'next/link';
@@ -200,9 +200,25 @@ export function ArchitectureInspector({ selectedSlug, selectedBlockId }: Inspect
         )}
       </div>
 
-      {/* Footer */}
-      <div className="p-3 border-t border-[--color-border] bg-[--bg-body] text-xs text-[--color-text-tertiary]">
-        Learn more in the Academy
+      {/* Footer CTA */}
+      <div className="p-4 border-t border-[--color-border] bg-[--bg-body] space-y-2">
+        <h4 className="text-xs font-semibold text-[--color-text-primary] mb-2">Take the Next Step</h4>
+        {entry.papers && entry.papers.length > 0 && (
+          <Link
+            href={`/papers/${entry.papers[0].slug}`}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[--bg-surface] hover:bg-[--bg-panel] border border-[--color-border] rounded text-xs font-medium text-[--color-text-primary] transition-colors"
+          >
+            <ExternalLink size={14} />
+            Read the Paper
+          </Link>
+        )}
+        <Link
+            href="/learn"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[--accent-primary] hover:opacity-90 rounded text-xs font-medium text-white transition-opacity"
+          >
+            <BookOpen size={14} />
+            Learn the Theory
+        </Link>
       </div>
     </div>
   );
