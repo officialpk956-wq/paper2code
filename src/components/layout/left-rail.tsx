@@ -20,71 +20,73 @@ interface NavSection {
   items: NavItem[];
 }
 
-const NAV: NavSection[] = [
-  {
-    title: 'HOME',
-    items: [
-      { icon: <LayoutDashboard size={16} />, label: 'Dashboard', href: '/dashboard' },
-    ],
-  },
-  {
-    title: 'LEARN',
-    items: [
-      { icon: <BookOpen size={16} />, label: 'Foundations', href: '/learn' },
-      { icon: <BarChart2 size={16} />, label: 'Statistics', href: '/learn/statistics' },
-      { icon: <Brain size={16} />, label: 'Machine Learning', href: '/learn/machine-learning' },
-      { icon: <Layers3 size={16} />, label: 'Deep Learning', href: '/learn/deep-learning' },
-      { icon: <MessageSquare size={16} />, label: 'NLP', href: '/learn/nlp' },
-      { icon: <Zap size={16} />, label: 'LLMs', href: '/learn/llms' },
-      { icon: <Eye size={16} />, label: 'Computer Vision', href: '/learn/computer-vision' },
-    ],
-  },
-  {
-    title: 'EXPLORE',
-    items: [
-      { icon: <Network size={16} />, label: 'Architecture Explorer', href: '/architectures' },
-      { icon: <Server size={16} />, label: 'System Design', href: '/system-design' },
-    ],
-  },
-  {
-    title: 'BUILD',
-    items: [
-      { icon: <FolderOpen size={16} />, label: 'Projects', href: '/paper-to-code' },
-    ],
-  },
-  {
-    title: 'PRACTICE',
-    items: [
-      { icon: <Code2 size={16} />, label: 'Coding Problems', href: '/problems' },
-      { icon: <Trophy size={16} />, label: 'Quizzes', href: '/dojo' },
-    ],
-  },
-  {
-    title: 'RESEARCH',
-    items: [
-      { icon: <Upload size={16} />, label: 'Upload Paper', href: '/papers/upload' },
-      { icon: <Microscope size={16} />, label: 'Research Lab', href: '/papers' },
-      { icon: <RotateCcw size={16} />, label: 'Reproducibility', href: '/labs' },
-    ],
-  },
-  {
-    title: 'CAREER',
-    items: [
-      { icon: <Map size={16} />, label: 'Roadmaps', href: '/roadmaps' },
-    ],
-  },
-  {
-    title: 'ANALYTICS',
-    items: [
-      { icon: <TrendingUp size={16} />, label: 'Progress', href: '/dashboard' },
-    ],
-  },
-];
+const PILLAR_NAV: Record<string, NavSection[]> = {
+  learn: [
+    {
+      title: 'LEARNING PATHS',
+      items: [
+        { icon: <BookOpen size={16} />, label: 'Foundations', href: '/learn' },
+        { icon: <BarChart2 size={16} />, label: 'Statistics', href: '/learn/statistics' },
+        { icon: <Brain size={16} />, label: 'Machine Learning', href: '/learn/machine-learning' },
+        { icon: <Layers3 size={16} />, label: 'Deep Learning', href: '/learn/deep-learning' },
+        { icon: <MessageSquare size={16} />, label: 'NLP', href: '/learn/nlp' },
+        { icon: <Zap size={16} />, label: 'LLMs', href: '/learn/llms' },
+        { icon: <Eye size={16} />, label: 'Computer Vision', href: '/learn/computer-vision' },
+      ],
+    }
+  ],
+  research: [
+    {
+      title: 'EXPLORATION',
+      items: [
+        { icon: <Microscope size={16} />, label: 'Paper Index', href: '/papers' },
+        { icon: <Network size={16} />, label: 'Architectures', href: '/architectures' },
+        { icon: <Map size={16} />, label: 'Knowledge Graph', href: '/knowledge-intelligence' },
+        { icon: <Upload size={16} />, label: 'Upload Paper', href: '/papers/upload' },
+      ],
+    }
+  ],
+  build: [
+    {
+      title: 'PRACTICE',
+      items: [
+        { icon: <Trophy size={16} />, label: 'The Dojo', href: '/dojo' },
+        { icon: <Code2 size={16} />, label: 'Coding Problems', href: '/problems' },
+      ],
+    },
+    {
+      title: 'PROJECTS & SYSTEMS',
+      items: [
+        { icon: <FolderOpen size={16} />, label: 'Paper to Code', href: '/paper-to-code' },
+        { icon: <RotateCcw size={16} />, label: 'Reproducibility Labs', href: '/labs' },
+        { icon: <Server size={16} />, label: 'System Design', href: '/system-design' },
+      ]
+    }
+  ],
+  workspace: [
+    {
+      title: 'MY WORKSPACE',
+      items: [
+        { icon: <LayoutDashboard size={16} />, label: 'Dashboard', href: '/dashboard' },
+        { icon: <TrendingUp size={16} />, label: 'Roadmaps', href: '/roadmaps' },
+        { icon: <Trophy size={16} />, label: 'Assessment', href: '/assessment' },
+      ],
+    }
+  ]
+};
 
 export function LeftRail() {
   const [expanded, setExpanded] = useState(true);
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || (href !== '/' && pathname.startsWith(href));
+
+  // Determine active pillar
+  let activePillar = 'workspace';
+  if (pathname.startsWith('/learn') || pathname.startsWith('/math')) activePillar = 'learn';
+  else if (pathname.startsWith('/papers') || pathname.startsWith('/architectures') || pathname.startsWith('/knowledge-intelligence')) activePillar = 'research';
+  else if (pathname.startsWith('/dojo') || pathname.startsWith('/problems') || pathname.startsWith('/paper-to-code') || pathname.startsWith('/labs') || pathname.startsWith('/system-design')) activePillar = 'build';
+
+  const activeNav = PILLAR_NAV[activePillar] || PILLAR_NAV['workspace'];
 
   return (
     <>
@@ -131,7 +133,7 @@ export function LeftRail() {
         {/* Nav sections */}
         <div className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5"
           style={{ scrollbarWidth: 'none' }}>
-          {NAV.map((section, si) => (
+          {activeNav.map((section, si) => (
             <div key={si} className={si > 0 ? 'pt-3' : ''}>
               {expanded && (
                 <div className="px-3 pb-1.5">

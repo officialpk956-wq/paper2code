@@ -1,4 +1,5 @@
 import { DashboardHero } from '@/components/dashboard/dashboard-hero';
+import { DomainProgressRings } from '@/components/dashboard/domain-progress-rings';
 import { QuickActionGrid } from '@/components/dashboard/quick-actions';
 import { KnowledgeMap } from '@/components/dashboard/knowledge-map';
 import { LearningProgress } from '@/components/dashboard/learning-progress';
@@ -19,6 +20,7 @@ export default function DashboardPage() {
         style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(139,92,246,0.2) transparent' }}
       >
         <DashboardHero />
+        <DomainProgressRings />
 
         <div className="px-6 pb-8 space-y-5 mt-4">
           <QuickActionGrid />

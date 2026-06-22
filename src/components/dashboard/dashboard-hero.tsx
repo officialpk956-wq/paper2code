@@ -3,6 +3,11 @@
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { ArrowRight, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { hasProfile, loadProfile } from '@/lib/assessment';
+import type { Profile } from '@/lib/assessment';
+import { getPathProgress, generateYourPath } from '@/lib/assessment/path';
+import { getDisplayName } from '@/lib/persistence';
 
 /* ─── Floating label chips ─────────────────────────────────── */
 const CHIPS = [
@@ -45,19 +50,30 @@ function NeuralSVG() {
 }
 
 /* ─── Component ────────────────────────────────────────────── */
-interface DashboardHeroProps {
-  name?: string;
-  track?: string;
-  progress?: number;
-  goal?: string;
-}
 
-export function DashboardHero({
-  name = 'Researcher',
-  track = 'Transformers and Attention Mechanisms',
-  progress = 34,
-  goal = 'Complete Multi-Head Attention module',
-}: DashboardHeroProps) {
+export function DashboardHero() {
+  const [mounted, setMounted] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [nextHref, setNextHref] = useState('/learn');
+
+  useEffect(() => {
+    setMounted(true);
+    if (hasProfile()) {
+      const p = loadProfile();
+      setProfile(p);
+      if (p) {
+        setProgress(getPathProgress(p));
+        const pathItems = generateYourPath(p, 1);
+        if (pathItems.length > 0) {
+          setNextHref(pathItems[0].href);
+        }
+      }
+    }
+  }, []);
+
+  const name = mounted ? getDisplayName() : 'Researcher';
+
   return (
     <motion.div
       initial={{ opacity: 0, y: -12 }}
@@ -108,49 +124,64 @@ export function DashboardHero({
         <h1 className="text-2xl font-black text-white mb-1">
           Welcome back, <span style={{ background: 'linear-gradient(135deg, #A78BFA, #22D3EE)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>{name}</span>
         </h1>
-        <p className="text-sm text-slate-400 mb-5">Continue your AI journey — you&apos;re on a roll.</p>
+        <p className="text-sm text-slate-400 mb-5">
+          {profile ? "Continue your AI journey — you're on a roll." : "Get your personalized path to master AI Engineering."}
+        </p>
 
         <div className="max-w-md space-y-3">
-          {/* Track */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs text-slate-500">Current Track</span>
-              <span className="text-xs font-semibold" style={{ color: '#A78BFA' }}>{progress}%</span>
-            </div>
-            <div className="text-sm font-semibold text-white mb-2">{track}</div>
-            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
-              <motion.div
-                className="h-full rounded-full"
-                style={{ background: 'linear-gradient(to right, #7C3AED, #06B6D4)' }}
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 1, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              />
-            </div>
-          </div>
+          {profile ? (
+            <>
+              {/* Track */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-slate-500 capitalize">Your Path: {profile.level.replace('-', ' ')} · {profile.goal}</span>
+                  <span className="text-xs font-semibold" style={{ color: '#A78BFA' }}>{progress}%</span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: 'linear-gradient(to right, #7C3AED, #06B6D4)' }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ duration: 1, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                  />
+                </div>
+              </div>
 
-          {/* Goal */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{ boxShadow: '0 0 6px #10B981' }} />
-              <span className="text-xs text-slate-400">{goal}</span>
+              {/* CTA */}
+              <div className="pt-2">
+                <Link
+                  href={nextHref}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all duration-200 group"
+                  style={{
+                    background: 'linear-gradient(135deg, #7C3AED, #8B5CF6)',
+                    boxShadow: '0 0 20px rgba(139,92,246,0.3)',
+                  }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 28px rgba(139,92,246,0.5)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 20px rgba(139,92,246,0.3)'}
+                >
+                  Continue Learning
+                  <ArrowRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+              </div>
+            </>
+          ) : (
+            <div className="pt-2">
+              <Link
+                href="/assessment"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all duration-200 group"
+                style={{
+                  background: 'linear-gradient(135deg, #7C3AED, #8B5CF6)',
+                  boxShadow: '0 0 20px rgba(139,92,246,0.3)',
+                }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 28px rgba(139,92,246,0.5)'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 20px rgba(139,92,246,0.3)'}
+              >
+                Take the 5-min skill assessment
+                <ArrowRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
+              </Link>
             </div>
-          </div>
-
-          {/* CTA */}
-          <Link
-            href="/learn"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all duration-200 group"
-            style={{
-              background: 'linear-gradient(135deg, #7C3AED, #8B5CF6)',
-              boxShadow: '0 0 20px rgba(139,92,246,0.3)',
-            }}
-            onMouseEnter={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 28px rgba(139,92,246,0.5)'}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.boxShadow = '0 0 20px rgba(139,92,246,0.3)'}
-          >
-            Continue Learning
-            <ArrowRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
-          </Link>
+          )}
         </div>
       </div>
     </motion.div>

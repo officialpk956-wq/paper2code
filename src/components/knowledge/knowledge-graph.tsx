@@ -6,15 +6,17 @@ import { ZoomIn, ZoomOut, Search, Download, Lock, CheckCircle } from 'lucide-rea
 import { EVOLUTION_NODES } from '@/data/evolution';
 import { isCompleted } from '@/lib/progress';
 import { isUnlocked } from '@/lib/learning-graph';
+import { getIndexEntry } from '@/lib/content/relationships';
+import { TOPIC_REGISTRY, resolveTopicPath } from '@/data/topics';
 
 // ---------------------------------------------------------------------------
-// Build graph from real EVOLUTION_NODES data
+// Build graph from real EVOLUTION_NODES data + TOPIC_REGISTRY
 // ---------------------------------------------------------------------------
 
 interface GraphNode {
   id: string;
   label: string;
-  type: 'paper' | 'architecture';
+  type: 'paper' | 'architecture' | 'topic';
   x: number;
   y: number;
   size: number;
@@ -53,22 +55,66 @@ function buildNodes(): GraphNode[] {
     'chain-of-thought': 200, 'rlhf-paper': 240,
   };
 
-  return EVOLUTION_NODES.map((evo, i) => {
+  // 1. Validate EVOLUTION_NODES to avoid 404s
+  const validEvoNodes = EVOLUTION_NODES.filter(
+    (evo) => !!getIndexEntry(evo.type as 'paper' | 'architecture', evo.slug)
+  );
+  const validSlugs = new Set(validEvoNodes.map((n) => n.slug));
+
+  const nodes: GraphNode[] = validEvoNodes.map((evo, i) => {
     const col = i % 8;
     const row = Math.floor(i / 8);
     return {
       id: evo.slug,
       label: evo.title,
-      type: evo.type,
+      type: evo.type as 'paper' | 'architecture',
       x: ERA_X[evo.slug] ?? 40 + col * 90,
       y: ERA_Y[evo.slug] ?? 60 + row * 90,
       size: evo.children.length >= 3 ? 9 : evo.children.length >= 1 ? 7 : 5,
-      connections: evo.children,
+      connections: evo.children.filter((childId) => validSlugs.has(childId)),
       href: evo.type === 'architecture'
         ? `/architectures/${evo.slug}`
         : `/papers/${evo.slug}`,
     };
   });
+
+  // 2. Add topic nodes
+  const topicsMap = new Map<string, any>();
+  for (const domainTopics of Object.values(TOPIC_REGISTRY)) {
+    for (const topic of Object.values(domainTopics)) {
+      if (!topicsMap.has(topic.meta.slug)) {
+        topicsMap.set(topic.meta.slug, topic);
+      }
+    }
+  }
+
+  let topicIndex = 0;
+  for (const topic of topicsMap.values()) {
+    // Determine edges (topic -> real paper)
+    const topicConnections: string[] = [];
+    for (const rp of topic.relatedPapers) {
+      // rp href is like '/papers/bert'
+      const pSlug = rp.id || rp.href?.replace('/papers/', '');
+      if (pSlug && validSlugs.has(pSlug)) {
+        topicConnections.push(pSlug);
+      }
+    }
+
+    // Place topics in a band at the bottom (Y >= 600)
+    nodes.push({
+      id: topic.meta.slug,
+      label: topic.meta.title,
+      type: 'topic',
+      x: 60 + (topicIndex % 8) * 100,
+      y: 600 + Math.floor(topicIndex / 8) * 80,
+      size: 6,
+      connections: topicConnections,
+      href: resolveTopicPath(topic.meta.slug) || '#',
+    });
+    topicIndex++;
+  }
+
+  return nodes;
 }
 
 const NODES = buildNodes();
@@ -83,6 +129,7 @@ const EDGES: GraphEdge[] = NODES.flatMap((node) =>
 const TYPE_COLORS: Record<GraphNode['type'], string> = {
   paper: '#7C3AED',
   architecture: '#06B6D4',
+  topic: '#EC4899',
 };
 
 // ---------------------------------------------------------------------------
@@ -220,7 +267,7 @@ export function KnowledgeGraph({ onNodeClick }: KnowledgeGraphProps) {
             />
           </div>
           <div className="flex gap-1 flex-wrap">
-            {(['all', 'paper', 'architecture'] as const).map((t) => (
+            {(['all', 'paper', 'architecture', 'topic'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setFilter(t)}

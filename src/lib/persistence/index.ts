@@ -70,6 +70,8 @@ export const KEYS = {
   lastProblemSlug: 'p2c:last-problem-slug',
   // User display name
   displayName: 'p2c:display-name',
+  // Diagnostic skill profile
+  userProfile: 'p2c:profile',
 } as const;
 
 // ---------------------------------------------------------------------------

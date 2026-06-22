@@ -3,13 +3,20 @@
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { LeftRail } from './left-rail';
-import { Search, Flame, Zap } from 'lucide-react';
+import { Search, Flame, Zap, Compass, FlaskConical, Hammer, LayoutDashboard } from 'lucide-react';
 import { useUserStats } from '@/hooks/use-user-stats';
 import { CommandPalette } from '@/components/command-palette';
 
 interface AppShellProps {
   children: React.ReactNode;
 }
+
+const PILLARS = [
+  { id: 'learn', label: 'Learn', icon: Compass, match: ['/learn', '/math'] },
+  { id: 'research', label: 'Research', icon: FlaskConical, match: ['/papers', '/architectures', '/knowledge-intelligence'] },
+  { id: 'build', label: 'Build', icon: Hammer, match: ['/dojo', '/problems', '/paper-to-code', '/labs', '/system-design'] },
+  { id: 'workspace', label: 'Workspace', icon: LayoutDashboard, match: ['/dashboard', '/roadmaps', '/assessment', '/settings'] },
+];
 
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
@@ -47,11 +54,40 @@ export function AppShell({ children }: AppShellProps) {
             backdropFilter: 'blur(12px)',
           }}
         >
+          {/* Pillar Navigation */}
+          <div className="flex items-center gap-1">
+            {PILLARS.map(pillar => {
+              const isActive = pillar.match.some(prefix => pathname.startsWith(prefix));
+              return (
+                <Link
+                  key={pillar.id}
+                  href={pillar.match[0]}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                  style={{
+                    background: isActive ? 'rgba(255,255,255,0.08)' : 'transparent',
+                    color: isActive ? '#fff' : '#94A3B8',
+                  }}
+                  onMouseEnter={e => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.color = '#fff';
+                  }}
+                  onMouseLeave={e => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.color = '#94A3B8';
+                  }}
+                >
+                  <pillar.icon size={14} />
+                  {pillar.label}
+                </Link>
+              );
+            })}
+          </div>
+
+          <div className="flex-1" />
+
           {/* Search */}
-          <div className="flex-1 max-w-xl">
+          <div className="w-64">
             <button
               aria-label="Open command palette (Ctrl+K)"
-              className="w-full flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs transition-all text-left"
+              className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs transition-all text-left"
               style={{
                 background: 'rgba(255,255,255,0.04)',
                 border: '1px solid rgba(255,255,255,0.07)',
@@ -72,9 +108,9 @@ export function AppShell({ children }: AppShellProps) {
               }}
             >
               <Search size={13} className="flex-shrink-0" />
-              <span className="flex-1">Search papers, concepts, architectures, system designs…</span>
+              <span className="flex-1 truncate">Search...</span>
               <span
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono"
+                className="px-1 py-0.5 rounded text-[10px] font-mono flex-shrink-0"
                 style={{ background: 'rgba(255,255,255,0.06)', color: '#334155' }}
               >
                 ⌘K
