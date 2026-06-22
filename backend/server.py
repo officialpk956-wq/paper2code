@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -25,6 +25,7 @@ from backend.database import ping_db, get_db, engine
 from sqlalchemy.orm import Session
 from fastapi import Depends, Header, Request
 from backend.models import Base
+from backend.services.paper_ingestion_service import ingest_pdf_paper
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Paper2Code API")
@@ -380,6 +381,7 @@ def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
             "flops_context": m.flops_context
         })
 
+    ingestion_data = (p.architecture_graph or {}).get("ingestion", {})
     return {
         "metadata": {
             "id": p.id,
@@ -388,7 +390,10 @@ def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
             "authors": p.authors,
             "abstract": p.abstract,
             "architecture_type": arch_type,
-            "status": status
+            "status": status,
+            "source_filename": ingestion_data.get("source_filename"),
+            "figure_count": ingestion_data.get("figure_count", 0),
+            "equation_count": ingestion_data.get("equation_count", 0),
         },
         "module_summary": modules_summary,
         "architecture_statistics": {
@@ -398,7 +403,8 @@ def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
         },
         "architecture_graph": p.architecture_graph or {"nodes": [], "edges": []},
         "flops": flops_analysis.get("total_flops_score", 0),
-        "parameter_count": flops_analysis.get("total_params_estimate", 0)
+        "parameter_count": flops_analysis.get("total_params_estimate", 0),
+        "ingestion": ingestion_data,
     }
 
 # ==========================================
@@ -588,7 +594,11 @@ def get_module(module_id: int, db: Session = Depends(get_db)):
     return result
 
 @app.post("/api/papers/upload")
-async def upload_paper(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_paper(
+    file: UploadFile = File(...),
+    paperName: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
     logger.info("Upload Started for file: %s", file.filename)
     if not file.filename.lower().endswith(".pdf"):
         logger.warning("Upload Failed: non-PDF file: %s", file.filename)
@@ -601,80 +611,83 @@ async def upload_paper(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="File exceeds 20MB limit.")
         
     try:
-        paper_name = file.filename.replace(".pdf", "")
-        
-        # 1. Run pipeline using file object directly to prevent OOM
-        result_dict = generator.from_pdf(file.file, paper_name)
-        
-        # 2. Extract components
-        spec = result_dict.get("spec", {})
-        graph = result_dict["graph"]
-        
-        # 3. Classify architecture
-        from core.classification import classify_architecture
-        classification = classify_architecture(graph)
-        
-        # 4. Generate learning modules
-        from core.module_generator import generate_modules
-        paper_meta, learning_modules = generate_modules(
-            paper_name=paper_name,
-            schema=spec,
-            pipeline_result=result_dict
+        pdf_bytes = await file.read()
+        result = ingest_pdf_paper(
+            db=db,
+            pdf_bytes=pdf_bytes,
+            source_filename=file.filename,
+            paper_name=paperName or file.filename.replace(".pdf", ""),
         )
-        
-        # Add metadata fields
-        paper_meta["architecture_graph"]["classification"] = classification
-        paper_meta["architecture_graph"]["status"] = "Draft"
-        
-        # 5. Save to database
-        from backend.models import Paper, PaperModule
-        
-        paper = Paper(
-            title=paper_name,
-            authors=paper_meta.get("authors"),
-            abstract=paper_meta.get("abstract"),
-            architecture_graph=paper_meta.get("architecture_graph"),
-            flops_analysis=paper_meta.get("flops_analysis")
-        )
-        
-        db.add(paper)
-        db.commit()
-        db.refresh(paper)
-        
-        for m in learning_modules:
-            pm = PaperModule(
-                paper_id=paper.id,
-                layer_name=m.layer_name,
-                module_type=m.module_type,
-                explanation=m.explanation,
-                tensor_flow=m.tensor_flow,
-                graph_nodes=m.graph_nodes,
-                flops_context=m.flops_context,
-                order_index=m.order_index
-            )
-            db.add(pm)
-        
-        db.commit()
-        
         logger.info("Upload Completed for file: %s", file.filename)
-        return {
-            "paper_id": paper.id,
-            "title": paper_name,
-            "classification": classification,
-            "status": "Draft",
-            "report": {
-                "nodes": len(graph.nodes),
-                "edges": len(graph.edges),
-                "parameters": paper_meta["flops_analysis"]["total_params_estimate"],
-                "flops": paper_meta["flops_analysis"]["total_flops_score"],
-                "detected_components": list(set(n.type for n in graph.nodes))
-            }
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return result
     except Exception as e:
         logger.error("Upload Failed: %s", str(e))
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/papers/{paper_id}/blueprint")
+def get_architecture_blueprint(paper_id: int, db: Session = Depends(get_db)):
+    from backend.models import Paper
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    bp = (p.architecture_graph or {}).get("ingestion", {}).get("architecture_blueprint")
+    if not bp:
+        raise HTTPException(status_code=404, detail="Blueprint not generated yet")
+    return bp
+
+
+@app.get("/api/papers/{paper_id}/executable-graph")
+def get_executable_graph(paper_id: int, db: Session = Depends(get_db)):
+    from backend.models import Paper
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    eg = (p.architecture_graph or {}).get("ingestion", {}).get("executable_graph")
+    if not eg:
+        raise HTTPException(status_code=404, detail="Executable graph not generated yet")
+    return eg
+
+
+@app.get("/api/papers/{paper_id}/graph-export")
+def export_paper_graph(
+    paper_id: int,
+    format: str = "json",
+    db: Session = Depends(get_db),
+):
+    from backend.models import Paper
+    from backend.services.architecture_graph_compiler import (
+        ExecutableGraph, export_graph_json, export_graph_mermaid, export_graph_dot
+    )
+    from fastapi.responses import PlainTextResponse
+
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    eg_dict = (p.architecture_graph or {}).get("ingestion", {}).get("executable_graph")
+    if not eg_dict:
+        raise HTTPException(status_code=404, detail="Executable graph not generated yet")
+
+    if format not in ("json", "mermaid", "dot"):
+        raise HTTPException(status_code=400, detail="format must be json, mermaid, or dot")
+
+    graph = ExecutableGraph.from_dict(eg_dict)
+    if format == "json":
+        return PlainTextResponse(export_graph_json(graph), media_type="application/json")
+    elif format == "mermaid":
+        return PlainTextResponse(export_graph_mermaid(graph), media_type="text/plain")
+    else:
+        return PlainTextResponse(export_graph_dot(graph), media_type="text/plain")
+
+
+@app.get("/api/papers/{paper_id}/knowledge-graph")
+def get_knowledge_graph(paper_id: int, db: Session = Depends(get_db)):
+    from backend.models import Paper
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    kg = (p.architecture_graph or {}).get("ingestion", {}).get("knowledge_graph", {})
+    return {"nodes": kg.get("nodes", []), "edges": kg.get("edges", [])}
+
 
 @app.post("/api/papers/{paper_id}/publish")
 def publish_paper(paper_id: int, db: Session = Depends(get_db)):
@@ -720,17 +733,16 @@ def tutor_ask(
         # Log tutor analytics automatically
         from backend.models import TutorAnalytics
         import datetime
-        arch = request.context_data.get("paper_title") or request.context_data.get("title") or "General"
+        arch = request.context_data.get("architecture") or request.context_type
         mod = request.context_data.get("layer_name") or "general"
         reasoning_type = response.get("reasoning_type", "General")
-        
+
         existing = db.query(TutorAnalytics).filter(
             TutorAnalytics.learner_id == x_learner_id,
             TutorAnalytics.architecture == arch,
             TutorAnalytics.module == mod
         ).first()
         if existing:
-            existing.question_count += 1
             existing.created_at = datetime.datetime.utcnow()
         else:
             t_anal = TutorAnalytics(

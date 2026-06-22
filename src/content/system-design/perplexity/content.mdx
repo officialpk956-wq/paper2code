@@ -1,0 +1,85 @@
+Design a search-augmented LLM (like Perplexity) that retrieves live web sources, synthesizes a grounded answer, and presents numbered citations — all in under 3 seconds.
+
+## Business Problem
+
+Users want answers that are **accurate, current, and verifiable** — things a pure LLM cannot guarantee. The system must retrieve fresh web content at query time and use it to produce cited, grounded answers.
+
+## Scale Assumptions
+
+- **10M+ daily queries**, peak ~5K QPS
+- **End-to-end latency**: <3s p95
+- **Sources per answer**: 5-10 web documents
+- No document pre-indexing — everything is fetched live per query
+
+## Architecture
+
+```
+User Query
+  ↓
+Query Analyzer (intent + entity extraction)
+  ↓
+Query Rewriter (expand for search diversity)
+  ├──→ Web Search API (Bing/Google)      ←── parallel
+  └──→ Direct URL Fetch (if URL in query) ←── parallel
+  ↓
+Snippet Extractor (HTML → clean text chunks)
+  ↓
+Reranker (cross-encoder relevance scoring)
+  ↓
+Context Packer (fit within LLM token budget)
+  ↓
+LLM Generator (grounded answer + [N] markers)
+  ↓
+Citation Linker (map [N] → source URLs)
+  ↓
+Streaming Response
+```
+
+## The Core Problem: Latency Budget
+
+With a 3s target, every component has a strict budget:
+
+| Stage | Budget |
+|-------|--------|
+| Query rewrite | 50ms |
+| Web search (parallel) | 500ms |
+| Snippet extraction | 200ms |
+| Reranking | 300ms |
+| Context packing | 50ms |
+| LLM generation (first token) | 400ms |
+| Streaming remaining tokens | ~1500ms |
+
+Total: ~3s p50 ✓
+
+## Retrieval Design
+
+### Query Rewriting
+A small LLM (7B) rewrites the user's natural-language question into 2-3 short search queries optimized for search engine recall.
+
+:::tip
+Multi-query retrieval dramatically improves recall. "What caused the 2008 financial crisis?" becomes ["2008 financial crisis causes", "subprime mortgage collapse", "Lehman Brothers bankruptcy reasons"].
+:::
+
+### Reranking
+Web search returns by popularity, not relevance. A cross-encoder (BERT-style) reranks the top 20 snippets by semantic relevance to the query — typically the top 5 jump the leaderboard.
+
+## Context Budget Management
+
+LLMs have a fixed context window. With 10 documents × 500 tokens each = 5K tokens just for sources, the packer must:
+1. Prioritize the top-ranked snippets
+2. Truncate each snippet to key sentences
+3. Reserve tokens for system prompt + answer generation
+
+## Failure Modes
+
+| Failure | User Impact | Mitigation |
+|---------|-------------|------------|
+| Web API timeout | Stale or no sources | Cache last 24h for repeat queries |
+| All snippets irrelevant | Hallucinated answer | Confidence threshold triggers "I don't know" |
+| LLM generates citation [N] for non-existent source | Broken citation | Post-process to verify all [N] markers |
+
+## Interview Questions
+
+1. A query has no good web results. How do you gracefully degrade?
+2. How would you cache results for repeat queries without showing stale data on news topics?
+3. What's your strategy for queries that require synthesizing contradictory sources?

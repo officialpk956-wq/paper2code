@@ -1,0 +1,75 @@
+Design a Netflix-scale recommendation system that generates a personalized homepage for 300M subscribers in under 200ms, balancing engagement, diversity, and business rules.
+
+## Business Problem
+
+Netflix has 10K+ titles. The average subscriber will cancel if they can't find something to watch in 60-90 seconds. The recommendation system must surface the right title for the right user in the right context — accounting for device, time of day, and recent activity.
+
+## Scale Assumptions
+
+- **300M subscribers**, homepage refreshed each session
+- **10K+ catalog titles** (movies, shows, episodes)
+- **Homepage generation**: <200ms p99
+- **Model retraining**: hourly (signals), daily (deep models)
+
+## Two-Stage Architecture
+
+Large-scale recommendation always separates **retrieval** (fast, coarse) from **ranking** (slow, precise).
+
+```
+User Session Signal
+  ↓
+Stage 1: Candidate Generation
+  ├── Two-Tower Model (user emb ⊙ item emb → ANN search)
+  ├── Collaborative Filtering (similar users)
+  └── Editorial Picks (trending, new releases)
+  → ~500 candidate titles
+  ↓
+Stage 2: Deep Ranker
+  ├── Wide & Deep Network
+  ├── Features: watch history, device, time, genre affinity
+  └── Predicted completion rate + satisfaction score
+  → Top 40 ranked titles
+  ↓
+Business Logic Filter
+  ├── License restrictions by region
+  ├── Content rating filters (parental controls)
+  └── Diversity injection (no 3 consecutive same-genre)
+  ↓
+Personalized Artwork Selection (separate ML model)
+  ↓
+Homepage Response
+```
+
+## The Two-Tower Model
+
+Each tower is a deep neural network:
+- **User Tower**: embeds watch history, ratings, demographics → 256-dim vector
+- **Item Tower**: embeds title metadata, genre, cast, synopsis → 256-dim vector
+
+At serving time, item embeddings are **pre-computed and indexed** with ANN (FAISS). Only the user tower runs live — finding nearest neighbors in <10ms.
+
+:::note
+The Two-Tower model trades ranking accuracy for retrieval speed. The ranker is where the heavy ML lifting happens.
+:::
+
+## Feature Store
+
+Real-time and batch features must be pre-joined for <200ms serving:
+
+| Feature | Update Frequency | Storage |
+|---------|-----------------|---------|
+| Watch history (last 30 days) | Real-time | Redis |
+| Genre affinity score | Hourly | Feature Store (Feast) |
+| Global title popularity | Daily | S3 snapshot |
+| User-item interaction matrix | Weekly | Spark job |
+
+## Tradeoffs
+
+- **Exploitation vs Exploration**: Pure optimization of watch time creates filter bubbles. Netflix injects 10-15% "exploration" slots (new genres, unknown titles).
+- **Real-time vs Batch**: Real-time signals (current session activity) outperform batch embeddings but require complex infrastructure.
+
+## Interview Questions
+
+1. A new movie launches today. How does it get recommended before any interaction data exists?
+2. How do you prevent the system from recommending the same title across 5 rows on the homepage?
+3. A user watches a genre once. How do you avoid over-indexing on a single signal?

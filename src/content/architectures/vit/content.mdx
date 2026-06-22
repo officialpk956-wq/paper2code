@@ -1,0 +1,130 @@
+# Vision Transformer (ViT)
+
+## Overview
+
+ViT applies a completely standard Transformer encoder to images by slicing each image into 16×16 patches and treating the patches as tokens. No convolutions, no vision-specific machinery — and with enough pre-training data it matches or beats the best CNNs. Its message reshaped the field: *the Transformer is a general learning machine; only the tokenizer is domain-specific.*
+
+## Why It Was Created
+
+By 2020 the Transformer had conquered NLP while vision still belonged to CNNs, whose convolutional priors (locality, translation equivariance) were considered essential. The ViT authors asked whether those priors are *necessary* — or just a crutch that helps when data is limited. Their answer: hard-coded priors win on small data, but at 300M+ images a prior-free Transformer learns better representations than the priors encode.
+
+## Historical Timeline
+
+| Year | Event |
+| --- | --- |
+| 2015 | ResNet defines the CNN era |
+| 2017 | Transformer succeeds in NLP |
+| 2020 | **ViT**: plain Transformer beats CNNs given JFT-300M pre-training |
+| 2021 | DeiT trains ViT on ImageNet-only via distillation; Swin adds hierarchy |
+| 2021+ | ViT becomes the backbone of CLIP, DINO, segmentation foundations |
+
+## Layer Breakdown
+
+- **Patch embedding** — split 224×224 into 196 patches of 16×16×3; flatten each (768 values) and project linearly to d. Implemented as a stride-16 convolution.
+- **[CLS] token** — a learned vector prepended to the sequence (from BERT); its final state represents the whole image
+- **Position embeddings** — learned 1-D embeddings; no 2-D structure is given
+- **Transformer encoder** — pre-LN blocks, identical to NLP. Base: 12 layers, 12 heads, d = 768 (86M params)
+- **MLP head** — classification from the final [CLS] state
+
+## Tensor Flow
+
+ViT-Base/16 on a 224×224 image:
+
+```
+image          (3, 224, 224)
+patches        (196, 768)       16×16×3 flattened
+projection     (196, 768)       linear E
++[CLS], +pos   (197, 768)
+encoder ×12    (197, 768)       attention scores (197, 197) per head
+[CLS] out      (768)
+head           (1000)
+```
+
+Attention is global from layer 1 — patch (0,0) can attend to patch (13,13) immediately, while a CNN needs many layers for that receptive field.
+
+## Mathematics
+
+The input construction is the whole trick:
+
+$$
+z_0 = [x_{cls};\; x_p^1 E;\; x_p^2 E;\; \cdots;\; x_p^N E] + E_{pos}
+$$
+
+where each $x_p^i \in \mathbb{R}^{768}$ is a flattened patch and $E \in \mathbb{R}^{768 \times d}$. After this single linear map, everything is the standard encoder:
+
+$$
+z_l' = \text{MSA}(\text{LN}(z_{l-1})) + z_{l-1}, \qquad z_l = \text{MLP}(\text{LN}(z_l')) + z_l'
+$$
+
+Patch count scales as $(H/16)(W/16)$, so attention cost grows with the **fourth power** of resolution — the reason high-res ViTs need windowing or pooling variants.
+
+## Pseudo Code
+
+```
+function vit_forward(image):
+    patches = split(image, 16x16)            # N = 196
+    tokens  = [cls] + [flatten(p) @ E for p in patches]
+    tokens  = tokens + position_embeddings
+    for layer in 1..12:
+        tokens = encoder_block(tokens)        # standard Transformer
+    return mlp_head(tokens[0])                # classify from [CLS]
+```
+
+## PyTorch Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+class ViT(nn.Module):
+    def __init__(self, dim=768, depth=12, heads=12, n_classes=1000):
+        super().__init__()
+        self.patch = nn.Conv2d(3, dim, kernel_size=16, stride=16)
+        self.cls = nn.Parameter(torch.zeros(1, 1, dim))
+        self.pos = nn.Parameter(torch.zeros(1, 197, dim))
+        layer = nn.TransformerEncoderLayer(
+            dim, heads, dim * 4, activation="gelu",
+            batch_first=True, norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, depth)
+        self.head = nn.Linear(dim, n_classes)
+
+    def forward(self, img):                       # (B, 3, 224, 224)
+        x = self.patch(img).flatten(2).transpose(1, 2)   # (B, 196, d)
+        cls = self.cls.expand(x.size(0), -1, -1)
+        x = torch.cat([cls, x], dim=1) + self.pos        # (B, 197, d)
+        x = self.encoder(x)
+        return self.head(x[:, 0])                        # [CLS]
+```
+
+## Complexity Analysis
+
+| Model | Params | ImageNet top-1 | Pre-training |
+| --- | --- | --- | --- |
+| ResNet-152x4 (BiT) | 928M | 87.5% | JFT-300M |
+| ViT-Large/16 | 307M | 87.8% | JFT-300M |
+| ViT-Huge/14 | 632M | 88.6% | JFT-300M |
+
+ViT used ~4× less pre-training compute than the comparable CNN. Attention cost: O(N² · d) with N = 197 — trivial at 224², punishing at high resolution.
+
+## Advantages
+
+- Global receptive field from the first layer
+- Unifies vision and language tooling — one architecture, one set of scaling tricks
+- Scales better than CNNs with data and compute
+- Natural multimodal building block (CLIP pairs ViT with a text Transformer)
+
+## Limitations
+
+- Data-hungry: without large pre-training or distillation (DeiT), CNNs win on ImageNet-scale data
+- O(N²) in patch count — quartic in image resolution
+- Learned 1-D positions interpolate awkwardly to new resolutions
+- Plain ViT lacks the multi-scale features dense prediction tasks like detection prefer
+
+## Interview Questions
+
+1. Why is the patch embedding "just a stride-16 convolution," and is ViT therefore convolution-free?
+2. What inductive biases does a CNN have that ViT lacks, and when do they matter?
+3. Why does attention cost grow with the fourth power of image resolution?
+4. How does ViT classify from the [CLS] token, and what alternatives exist (mean-pooling patches)?
+5. You must fine-tune ViT at 384² after pre-training at 224². What breaks and how do you fix it?

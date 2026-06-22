@@ -1,0 +1,191 @@
+# Training Compute-Optimal Large Language Models (Chinchilla)
+
+**Hoffmann et al. · NeurIPS 2022 · arXiv:2203.15556 · DeepMind**
+
+---
+
+## 1. Overview
+
+Chinchilla is the paper that proved the entire LLM industry was building models wrong. At the time of publication in March 2022, the field was racing to build ever-larger parameter counts — GPT-3 (175B), Gopher (280B), MT-NLG (530B). All were trained on datasets of 300B tokens or fewer.
+
+Hoffmann et al. asked a different question: given a fixed compute budget, what is the **optimal** balance between model size and number of training tokens? Using 400 training runs spanning models from 70M to 16B parameters and 5B to 500B tokens, they derived a clean empirical law: **for compute-optimal training, the number of parameters and number of training tokens should scale equally.** Since GPT-3 was trained with far too few tokens for its parameter count, a much smaller model (Chinchilla, 70B) trained on 4× more data (1.4T tokens) matched or beat Gopher (280B) on every benchmark.
+
+This paper redirected the entire field. LLaMA, Mistral, and every subsequent efficient model was built on Chinchilla's insight: data, not parameters, is the bottleneck.
+
+---
+
+## 2. Historical Context
+
+OpenAI's scaling laws paper (Kaplan et al., 2020) had established that loss scales as a power law with compute, parameters, and tokens — and crucially concluded that **parameters should scale faster than data**. The field followed this prescription, building ever-larger models on relatively fixed datasets.
+
+DeepMind had just trained Gopher (280B parameters) on 300B tokens — an enormous parameter-to-token ratio. Then they ran the Chinchilla experiments and discovered their own model was severely undertrained. The math showed that a 70B model on 1.4T tokens would match Gopher at a fraction of the inference cost.
+
+---
+
+## 3. Research Problem
+
+Given a fixed compute budget $C$ (measured in FLOPs), what is the optimal number of model parameters $N^*$ and number of training tokens $D^*$?
+
+Formally: minimize $L(N, D)$ subject to $C = 6ND$ (the approximation that one token forward-backward pass costs $6ND$ FLOPs).
+
+---
+
+## 4. Prior Work
+
+| Scaling Law | Prediction | Reality |
+|:---|:---|:---|
+| Kaplan et al. (2020) | Scale parameters faster than data | Led to undertrained large models |
+| Neural Scaling Laws (2022) | Power laws hold | Confirmed, but exponents revised |
+
+**Kaplan's key error:** Their scaling law experiments held dataset size fixed when varying model size. This conflated two variables and produced biased recommendations.
+
+---
+
+## 5. Why Previous Methods Failed
+
+Kaplan et al. (2020) measured loss as a function of parameters *while holding data size constant*. This is equivalent to testing how full your plate is while keeping the amount of food constant — you're measuring the wrong thing. When you correctly optimize the compute frontier (both $N$ and $D$ free to vary given fixed $C$), the optimal trade-off is very different.
+
+Specifically, Kaplan's law suggested $N \propto C^{0.73}$ and $D \propto C^{0.27}$. Chinchilla found $N \propto C^{0.5}$ and $D \propto C^{0.5}$ — equal scaling.
+
+---
+
+## 6. Core Innovation
+
+**Three methods, same conclusion:**
+
+**Method 1:** Fix compute budget, vary $N$ and $D$ with $C = 6ND$ constant. Measure minimum loss.
+
+**Method 2:** For each model size $N$, train on multiple token counts $D$ and fit the loss surface.
+
+**Method 3:** Parametrize loss as:
+$$\hat{L}(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta}$$
+
+Fit $A, B, E, \alpha, \beta$ to all training runs. The compute-optimal frontier satisfies:
+$$N_{opt} = G \cdot C^{0.5}, \quad D_{opt} = G^{-1} \cdot C^{0.5}$$
+
+**Compute-optimal rule of thumb:**
+$$\text{Tokens} = 20 \times \text{Parameters}$$
+
+GPT-3 (175B) should have been trained on $20 \times 175\text{B} = 3.5\text{T}$ tokens. It was trained on 300B.
+
+---
+
+## 7. Architecture Breakdown
+
+Chinchilla itself is a 70B parameter dense decoder-only Transformer (same architecture as Gopher/GPT-3):
+
+| Property | Value |
+|:---|:---|
+| Parameters | 70B |
+| Training tokens | 1.4 Trillion |
+| Architecture | Decoder-only Transformer |
+| Context length | 2048 |
+
+The architecture is unremarkable — the contribution is the *training compute allocation*, not architectural innovation.
+
+---
+
+## 8. Mathematical Foundations
+
+**Parametric loss model:**
+$$\hat{L}(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta}$$
+
+Fitted values:
+- $A = 406.4$, $\alpha = 0.34$
+- $B = 410.7$, $\beta = 0.28$
+- $E = 1.69$ (irreducible entropy of natural language)
+
+**Compute-optimal $N$ and $D$:**
+
+Taking $\partial \hat{L}/\partial N = 0$ and $\partial \hat{L}/\partial D = 0$ subject to $C = 6ND$:
+
+$$N_{opt}(C) \propto C^{a/(a+b)}, \quad D_{opt}(C) \propto C^{b/(a+b)}$$
+
+With $a = \alpha = 0.34$ and $b = \beta = 0.28$: $N_{opt} \propto C^{0.55}$, $D_{opt} \propto C^{0.45}$ — approximately equal.
+
+---
+
+## 9. Key Experiments
+
+400 training runs were conducted, covering:
+- Model sizes: 70M to 16B parameters
+- Token counts: 5B to 500B
+- IsoFLOP profiles (fixed compute, varied N and D)
+
+**The critical result:** Plotting minimum loss along the compute-optimal frontier shows equal scaling of $N$ and $D$.
+
+---
+
+## 10. Benchmark Results
+
+| Model | Params | Tokens | Avg Benchmark Score |
+|:---|:---|:---|:---|
+| Gopher | 280B | 300B | 63.6 |
+| GPT-3 | 175B | 300B | — |
+| MT-NLG | 530B | 270B | — |
+| **Chinchilla** | **70B** | **1.4T** | **67.5** |
+
+Chinchilla (70B) outperforms Gopher (280B) while using **4× less compute at inference** (inference cost ∝ parameters).
+
+---
+
+## 11. Ablation Studies
+
+| Training tokens for 70B model | Validation Loss |
+|:---|:---|
+| 300B tokens | Higher loss (undertrained) |
+| 700B tokens | Improving |
+| **1.4T tokens (compute-optimal)** | **Minimum loss** |
+| 2.8T tokens | Diminishing returns |
+
+---
+
+## 12. Implementation Details
+
+- **Infrastructure:** Google TPU v3/v4 pods, JAX
+- **Optimizer:** AdamW, cosine LR schedule
+- **Data:** Same MassiveText corpus as Gopher (books, news, Wikipedia, GitHub, C4)
+- **All 400 runs** were used to fit the loss surface (meta-learning at scale)
+
+---
+
+## 13. Engineering Insights
+
+- **Inference cost ∝ parameters, not training tokens.** A 70B model is 4× cheaper to run than a 280B model. When you serve a model to millions of users, inference cost dominates lifetime compute cost. Chinchilla's insight means the efficient choice for deployment is always to train a smaller model for longer.
+- **The 20× rule of thumb is actionable.** If you have 10B tokens of domain-specific text, the optimal model is 500M parameters. Not 7B.
+- **Data quality matters more after Chinchilla.** Once you know data is the binding constraint, data quality engineering (filtering, deduplication, domain balancing) became the primary research focus.
+
+---
+
+## 14. Limitations
+
+- **The compute-optimal frontier assumes training once.** If you're building a model to be used by millions of users, the optimal point shifts toward smaller models (lower inference cost) with even more training tokens — "beyond Chinchilla optimal."
+- **Does not account for emergent capabilities.** Some capabilities emerge discontinuously with scale, meaning a slightly larger model trained slightly less may unlock capabilities that a smaller Chinchilla-optimal model lacks.
+- **Dataset quality was held fixed.** Chinchilla's law was derived on MassiveText. Higher-quality data (like code, textbooks) shifts the optimum.
+
+---
+
+## 15. Influence on Later Research
+
+| Model | Year | Applied Chinchilla |
+|:---|:---|:---|
+| LLaMA-1 | 2023 | 7B model, 1T tokens (slightly over) |
+| LLaMA-2 | 2023 | 70B model, 2T tokens |
+| Mistral 7B | 2023 | Small model, heavy training |
+| Falcon (2023) | 2023 | 40B model, 1T tokens |
+| Phi-1 (2023) | 2023 | Textbook-quality data; even smaller model |
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer)
+- [LLaMA](/architectures/llama) — direct application of Chinchilla's insight
+
+---
+
+## 17. Related Problems
+
+- Computing compute-optimal parameters vs. tokens given a budget
+- Fitting power-law curves to training loss
+- Comparing Kaplan vs. Chinchilla scaling recommendations

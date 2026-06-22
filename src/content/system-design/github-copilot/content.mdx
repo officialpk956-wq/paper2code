@@ -1,0 +1,101 @@
+Design the AI pair programmer that serves millions of developers inside VS Code, JetBrains, and Neovim — completing lines, functions, and whole files in under 100ms.
+
+## Business Problem
+
+Developers spend 30-40% of time on boilerplate. Copilot cuts this while keeping latency low enough to feel instantaneous — the hard constraint is **time-to-first-token < 100ms at p50**.
+
+## Scale Assumptions
+
+- **1M+ active daily users** generating ~50 completion events each
+- **50M completions/day** peak, highly bursty (start of working hours)
+- **Context window**: 2-8K tokens of surrounding file content
+- **Model fleet**: Codex-class models (6B–12B parameters) on A100/H100 clusters
+
+## Architecture
+
+```
+IDE Plugin
+  ↓ (debounced, ~50ms)
+API Gateway (edge PoPs for low latency)
+  ↓
+Context Assembler
+  ├── Cursor context (N lines before/after)
+  ├── Open file tabs (repo context)
+  └── Language + framework signals
+  ↓
+Prefix Cache Lookup
+  ↓ (miss)
+Inference Fleet
+  ├── Speculative Decoder (draft model 1B)
+  └── Verifier Model (12B)
+  ↓
+Completion Filter (safety + IP check)
+  ↓
+Streaming Response → IDE Plugin
+```
+
+## The Latency Problem
+
+### Prefix Caching
+90%+ of requests share common prefixes (imports, function signatures, boilerplate). Cache the KV state for these prefixes on GPU RAM — turning a 100ms prefill into a 2ms cache lookup.
+
+:::tip
+Prefix caches are invalidated when the surrounding file changes. A versioned hash of the prefix is the cache key.
+:::
+
+### Speculative Decoding
+A small draft model (1B) proposes 4-6 tokens at once. The large verifier model checks all of them in a single forward pass. When the draft is correct (60-70% of the time), throughput 3-4x.
+
+## Data Flow: A Single Completion
+
+1. User pauses typing — IDE debounce fires after 50ms
+2. Plugin assembles context: cursor line ± N lines, imports, open files
+3. Request hits nearest edge PoP (adds ~5ms RTT vs origin)
+4. Context assembler trims to token budget, adds file-type prompt
+5. Prefix cache hit? → skip prefill entirely
+6. Speculative decoder drafts 5 tokens, verifier accepts/rejects
+7. Tokens stream back token-by-token via SSE
+8. Plugin renders inline ghost text
+
+## Model Layer
+
+| Model | Size | Use Case | Latency |
+|-------|------|----------|---------|
+| Draft | 1B | Speculative proposals | ~5ms |
+| Verifier | 12B | Quality gate | ~30ms |
+| Safety | 300M | IP/harmful code filter | ~5ms |
+
+## Storage Layer
+
+| Store | Technology | Purpose |
+|-------|-----------|---------|
+| Prefix KV Cache | GPU HBM | Hot attention states |
+| Completion Telemetry | ClickHouse | A/B analysis, latency tracking |
+| User Preferences | DynamoDB | Language, style settings |
+
+## Failure Modes
+
+| Failure | Impact | Mitigation |
+|---------|--------|-----------|
+| GPU pod failure | Completions slow/stop | Load balancer reroutes, spare capacity |
+| Prefix cache eviction | Latency spike | Gradual eviction, LRU policy |
+| Draft model divergence | Low acceptance rate | Quality monitor triggers rollback |
+
+## Tradeoffs
+
+- **Model size vs latency**: Every billion parameters adds ~8ms. The 12B verifier is the maximum feasible for <100ms.
+- **Prefix cache size vs cost**: GPU memory is expensive. Cache only top-N shared prefixes per language.
+- **Speculative aggressiveness**: Drafting 8+ tokens improves throughput but increases mismatch probability.
+
+## Cost Analysis
+
+At 50M completions/day, 500 tokens average output:
+- **25B tokens/day** through the verifier
+- At $0.001/1K tokens, **$25K/day** in inference alone
+- Speculative decoding cuts effective cost by ~3x
+
+## Interview Questions
+
+1. How would you handle a surge when a popular open-source repo goes viral?
+2. The draft model has a 40% acceptance rate. Should you switch to a larger draft model or tune the verifier?
+3. How do you avoid generating code that reproduces training data verbatim?

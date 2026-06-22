@@ -1,0 +1,122 @@
+The Vision Transformer (ViT) proved that a pure transformer architecture could match or exceed state-of-the-art CNNs in image classification when trained on massive datasets.
+
+Let's build ViT step-by-step.
+
+<Milestone title="1. Patch Embeddings">
+Instead of passing individual pixels to the transformer, ViT splits the image into fixed-size patches and linearly projects each of them.
+
+**Shapes:**
+* Input: `(batch_size, channels, height, width)`
+* Output: `(batch_size, num_patches, embed_dim)`
+
+```python
+import torch
+import torch.nn as nn
+
+class PatchEmbedding(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = (img_size // patch_size) ** 2
+        
+        # A 2D Conv layer with kernel_size == stride == patch_size 
+        # elegantly extracts non-overlapping patches and projects them in one step!
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        # x is (B, embed_dim, H/patch_size, W/patch_size)
+        x = self.proj(x)
+        # Flatten the spatial dimensions: (B, embed_dim, num_patches)
+        x = x.flatten(2)
+        # Transpose to match transformer expected input: (B, num_patches, embed_dim)
+        x = x.transpose(1, 2)
+        return x
+```
+
+:::tip
+Using `nn.Conv2d` for patch extraction is much faster and more memory efficient than using `unfold` and a linear layer.
+:::
+
+</Milestone>
+
+<Milestone title="2. The [CLS] Token and Positional Encoding">
+Because transformers are permutation invariant, we must add positional information. We also prepend a learnable `[CLS]` token whose final representation will be used for classification.
+
+**Shapes:**
+* Input: `(batch_size, num_patches, embed_dim)`
+* Output: `(batch_size, num_patches + 1, embed_dim)`
+
+```python
+class ViTEmbeddingSystem(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        super().__init__()
+        self.patch_embed = PatchEmbedding(img_size, patch_size, in_chans, embed_dim)
+        
+        # Learnable classification token
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        
+        # Learnable positional embeddings (1 for CLS + num_patches)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches + 1, embed_dim))
+
+    def forward(self, x):
+        B = x.shape[0]
+        x = self.patch_embed(x)
+        
+        # Expand the CLS token to the batch size
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        
+        # Concatenate CLS token to the sequence
+        x = torch.cat((cls_tokens, x), dim=1)
+        
+        # Add positional embeddings
+        x = x + self.pos_embed
+        return x
+```
+</Milestone>
+
+<Milestone title="3. Full ViT Architecture">
+With the embedding system complete, we just pass the sequence through standard Transformer Encoder blocks and take the `[CLS]` token output for the MLP head.
+
+```python
+class VisionTransformer(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, 
+                 embed_dim=768, depth=12, num_heads=12, mlp_ratio=4.0):
+        super().__init__()
+        
+        self.embed_system = ViTEmbeddingSystem(img_size, patch_size, in_chans, embed_dim)
+        
+        # Standard Transformer Encoder Blocks (using PyTorch's built-in for brevity)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, 
+            nhead=num_heads, 
+            dim_feedforward=int(embed_dim * mlp_ratio),
+            gelu=True, 
+            batch_first=True,
+            norm_first=True # ViT uses Pre-LayerNorm
+        )
+        self.blocks = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+        self.norm = nn.LayerNorm(embed_dim)
+        
+        # Classification Head
+        self.head = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        # 1. Extract patches, add CLS and Positional Encoding
+        x = self.embed_system(x)
+        
+        # 2. Pass through Transformer Blocks
+        x = self.blocks(x)
+        
+        # 3. Apply final LayerNorm
+        x = self.norm(x)
+        
+        # 4. Extract the [CLS] token representation (the 0th index)
+        cls_out = x[:, 0]
+        
+        # 5. Classify
+        return self.head(cls_out)
+```
+</Milestone>

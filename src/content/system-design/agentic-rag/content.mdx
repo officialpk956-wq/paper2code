@@ -1,0 +1,79 @@
+Design an Agentic RAG system where an LLM plans and executes multiple adaptive retrieval operations to answer complex, multi-hop questions that basic RAG cannot solve.
+
+## Why Basic RAG Fails for Complex Queries
+
+**Query**: "Compare the transformer architecture's attention mechanism to BERT's and explain how GPT differs in its training objective."
+
+Basic RAG retrieves chunks for this as a single query — and likely misses the nuanced comparison. Agentic RAG breaks this into **planned retrieval steps**.
+
+## Architecture
+
+```
+Complex User Query
+  ↓
+Planner LLM (decompose into retrieval sub-tasks)
+  ↓
+Sub-task 1: retrieve("transformer attention mechanism")
+  → Observation 1: [chunks about self-attention]
+  ↓
+Sub-task 2: retrieve("BERT bidirectional attention")
+  → Observation 2: [chunks about BERT]
+  ↓
+Sub-task 3: retrieve("GPT autoregressive training objective")
+  → Observation 3: [chunks about GPT]
+  ↓
+(Optional) Sub-task 4: web_search("transformer vs BERT vs GPT comparison")
+  → Observation 4: [live article]
+  ↓
+Synthesizer LLM
+  (all observations in context)
+  ↓
+Final grounded answer
+```
+
+## Planner Design
+
+The Planner is prompted with:
+- The user's original query
+- Available tools: `retrieve(query)`, `web_search(query)`, `summarize(text)`, `compare(item_a, item_b)`
+- The retrieval corpus description
+
+It outputs a **retrieval plan** — an ordered or parallel list of tool calls — before any retrieval happens. This is more efficient than interleaved planning (ReAct style) for retrieval-heavy tasks.
+
+## Adaptive Retrieval
+
+After each retrieval step, the planner re-evaluates:
+
+```
+Did observation answer the sub-question?
+  YES → proceed to next sub-task
+  NO  → generate a reformulated query and retry (max 2 retries)
+  EMPTY → mark sub-question as "no evidence found"
+```
+
+:::warning
+Cap retries at 2-3 per sub-task to prevent infinite retrieval loops. Unanswered sub-questions should be acknowledged in the final answer.
+:::
+
+## Memory Design
+
+| Memory | Contents | Access |
+|--------|---------|--------|
+| Working memory | Current plan + all observations | Full LLM context |
+| External memory | Historical session retrievals | Vector search (if returning user) |
+| Compressed memory | Summaries of past turns | Injected as context prefix |
+
+## When to Use Agentic RAG
+
+| Scenario | Basic RAG | Agentic RAG |
+|---------|----------|-------------|
+| Simple factual lookup | ✅ Sufficient | Overkill |
+| Multi-hop question | ❌ Fails | ✅ Required |
+| Comparison query | ❌ Fragmented | ✅ Required |
+| Real-time + corpus hybrid | ❌ No web | ✅ Mixed retrieval |
+
+## Interview Questions
+
+1. Your agentic RAG makes 8 retrieval calls and is still not confident. What do you do?
+2. How do you evaluate whether the agent's plan was optimal vs just adequate?
+3. A user asks for a comparison across 10 products. How do you parallelize while staying within token limits?

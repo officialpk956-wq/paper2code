@@ -1,0 +1,212 @@
+# Language Models are Unsupervised Multitask Learners (GPT-2)
+
+**Radford, Wu, Child, Luan, Amodei & Sutskever · OpenAI 2019**
+
+---
+
+## 1. Overview
+
+GPT-2 proved something nobody had expected: if you train a language model large enough on high-quality data diverse enough, it learns to perform tasks it was never explicitly trained on — **zero-shot**. Ask it to translate, summarize, or answer questions with no labeled examples or fine-tuning. It just works.
+
+The model — 1.5 billion parameters, trained on 40GB of curated Reddit-sourced text (WebText) — was OpenAI's proof-of-concept for scale. More consequentially, GPT-2's release was deliberately staged due to misuse concerns, marking the first major AI safety controversy in the field and setting the precedent for all future "responsible release" debates.
+
+The paper's key message: scale + data quality + the right architecture = emergent zero-shot multitask learning. This insight, pursued to its logical extreme, became GPT-3.
+
+---
+
+## 2. Historical Context
+
+After GPT-1, the field had settled into a BERT-dominated era. BERT's bidirectional pre-training beat GPT-1 on almost every benchmark. The consensus was: for NLP understanding, bidirectional encoders win. Generative models are for... generating.
+
+OpenAI disagreed. They bet that **scale** would be the decisive variable. GPT-2 ran the same experiment as GPT-1 but with:
+- **10× more parameters** (1.5B vs 117M)
+- **40× more data** (40GB vs 1GB)
+- **Higher-quality data** (WebText: filtered Reddit outbound links with ≥3 karma)
+
+The result was a model that — without any fine-tuning — could achieve competitive results on summarization, translation, and reading comprehension tasks.
+
+---
+
+## 3. Research Problem
+
+Can a single language model learn to perform diverse NLP tasks without task-specific fine-tuning or labeled examples?
+
+The hypothesis: language modeling on sufficiently large, diverse text implicitly encodes a learnable set of tasks. A large enough model will learn to execute those tasks when prompted appropriately, purely from the pre-training objective.
+
+Formally: maximize $p(output | input, task)$ without task-specific training, by conditioning on natural language descriptions of the task within the prompt.
+
+---
+
+## 4. Prior Work
+
+| Method | Task-Specific Training | Zero-Shot |
+|:---|:---|:---|
+| GPT-1 | Fine-tuning required | Not evaluated |
+| BERT | Fine-tuning required | No |
+| NLP baselines (2019) | Task-specific from scratch | No |
+| ULMFiT | Fine-tuning required | No |
+
+GPT-2 was the first large-scale demonstration that a language model could perform competitively on NLP tasks **without any task-specific training**.
+
+---
+
+## 5. Why Previous Methods Failed
+
+Previous models either:
+1. Required **labeled data** for every new task (task-specific models)
+2. Required **fine-tuning** even after pre-training (GPT-1, BERT)
+
+The key failure mode: these models *learned to follow the fine-tuning distribution* rather than *learning the underlying task*. If you only ever fine-tune BERT with labeled examples in a structured format, it doesn't learn to be flexible — it learns that specific format.
+
+A sufficiently large language model trained on diverse human text doesn't need a structured format: it has read thousands of examples of translation, summarization, and Q&A formatted naturally in web text.
+
+---
+
+## 6. Core Innovation
+
+**Zero-shot task conditioning via natural language:**
+
+Instead of fine-tuning on task-specific labeled data, provide the task as natural language context:
+
+- **Translation:** `"In French: [sentence] =" ` → generates French
+- **Summarization:** `"TL;DR:"` appended to article → generates summary
+- **QA:** `"Q: [question] A:"` → generates answer
+
+The model learned these patterns from the pre-training data itself — web text contains countless examples of all these formats.
+
+**Architecture improvements over GPT-1:**
+- Layer normalization moved to **input** of each sub-block (pre-norm)
+- Additional layer norm after the final self-attention block
+- Vocabulary expanded to 50,257 BPE tokens
+- Context length increased from 512 to 1024 tokens
+- Weight initialization scaled by $1/\sqrt{N}$ where $N$ is number of residual layers
+
+---
+
+## 7. Architecture Breakdown
+
+Four model sizes released:
+
+| Model | Layers | Width | Heads | Parameters |
+|:---|:---|:---|:---|:---|
+| GPT-2 Small | 12 | 768 | 12 | 117M |
+| GPT-2 Medium | 24 | 1024 | 16 | 345M |
+| GPT-2 Large | 36 | 1280 | 20 | 762M |
+| **GPT-2 XL** | **48** | **1600** | **25** | **1.5B** |
+
+Same decoder-only Transformer as GPT-1, scaled up. See [GPT architecture page](/architectures/gpt).
+
+---
+
+## 8. Mathematical Foundations
+
+**Language modeling objective (identical to GPT-1):**
+$$P(x_1, \dots, x_n) = \prod_{i=1}^n P(x_i | x_1, \dots, x_{i-1})$$
+
+**Pre-norm formulation (key architectural change):**
+
+Original Transformer (post-norm): `x → Sublayer → Add → LayerNorm`
+
+GPT-2 (pre-norm): `x → LayerNorm → Sublayer → Add`
+
+Pre-norm allows much more stable gradient flow in very deep networks. This was adopted by all subsequent large language models (GPT-3, LLaMA, Mistral).
+
+**Byte-Pair Encoding (BPE) tokenization:**
+
+Starting from character-level, greedily merge the most frequent pair of tokens until vocabulary size $|V|$ is reached. For GPT-2, $|V| = 50{,}257$. This handles any Unicode text without OOV issues.
+
+---
+
+## 9. Key Experiments
+
+**Zero-shot performance on held-out benchmarks:**
+
+| Task | Dataset | GPT-2 Zero-Shot | Supervised SOTA |
+|:---|:---|:---|:---|
+| Language Modeling | PTB | 35.8 perplexity | 35.8 (matched SOTA) |
+| Summarization | CNN/DailyMail | 11.9 ROUGE-2 | 21.0 (supervised) |
+| Translation | WMT14 FR→EN | 11.5 BLEU | 41.0 (supervised) |
+| Reading Comp. | CoQA | 55 F1 | 89 (supervised) |
+| QA | Natural Questions | 4.1% exact match | — |
+
+**Key insight:** Zero-shot numbers lag supervised models significantly — but the fact that they work *at all* without task-specific training was the revelation. GPT-3 would close this gap.
+
+---
+
+## 10. Benchmark Results
+
+**Language modeling — zero-shot state-of-the-art:**
+
+| Dataset | Previous SOTA | GPT-2 (zero-shot) |
+|:---|:---|:---|
+| Penn Treebank | 35.8 (GPT-1 fine-tuned) | **35.8** (zero-shot match) |
+| WikiText-2 | 39.14 | **18.34** (new zero-shot SOTA) |
+| WikiText-103 | 18.34 | **17.48** |
+| 1B Word Benchmark | 24.0 | **52.0** (worse — smaller scale vs huge task) |
+
+---
+
+## 11. Ablation Studies
+
+| Model Size | PTB Perplexity | CoQA F1 |
+|:---|:---|:---|
+| 117M (small) | 65.8 | 45 |
+| 345M (medium) | 55.7 | 49 |
+| 762M (large) | 44.1 | 52 |
+| **1.5B (XL)** | **35.8** | **55** |
+
+**Clear scaling law:** Performance improves consistently with model size. The curves hadn't flattened — suggesting larger models would continue improving. This was the empirical basis for GPT-3.
+
+---
+
+## 12. Implementation Details
+
+- **Dataset:** WebText — 45M outbound links from Reddit with ≥3 upvotes; 40GB text; 8M documents
+- **Tokenizer:** Byte-level BPE, 50,257 vocab (handles all Unicode including code)
+- **Training:** Adam optimizer; gradients clipped to 1.0; cosine LR schedule
+- **Release strategy:** Initially withheld largest model due to misuse concerns; released in stages over 9 months (the first major AI safety release controversy)
+
+---
+
+## 13. Engineering Insights
+
+- **WebText quality over quantity.** The key difference from GPT-1 wasn't just scale — it was data quality. Curating Reddit outbound links (with karma threshold) filtered for human-judged interesting, coherent content. Quality of data proved as important as quantity.
+- **Pre-norm stabilized very deep training.** Moving LayerNorm before the sublayer (instead of after) allowed training 48-layer models stably. This became universal in LLM architectures.
+- **1024-token context doubled GPT-1.** Longer context allows the model to leverage more text when forming predictions — critical for coherent long-form generation.
+- **The staged release was precedent-setting.** OpenAI's decision to withhold GPT-2's largest model until November 2019 (the model was trained by February 2019) started the "responsible release" conversation that shapes AI governance today.
+
+---
+
+## 14. Limitations
+
+- **Zero-shot is impressive but not competitive.** Supervised SOTA beats GPT-2 zero-shot by large margins on most tasks. Scale alone is insufficient — you need orders-of-magnitude more scale (→ GPT-3).
+- **No instruction following.** GPT-2 completes text; it doesn't follow instructions. Asking it a question produces a continuation, not an answer. This required RLHF/SFT (→ InstructGPT, ChatGPT).
+- **1024 token context** still limits document-length reasoning.
+- **Training data cutoff.** No knowledge update mechanism; knowledge frozen at training time.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | GPT-2's Role |
+|:---|:---|
+| GPT-3 (2020) | Direct scale-up: same architecture, 175B parameters |
+| GPT-Neo / GPT-J (2021) | Open-source replications of GPT-2/3 |
+| Scaling Laws (2020) | GPT-2 data provided empirical basis for power-law fitting |
+| Copilot (2021) | GPT-2 → Codex → Copilot pipeline |
+| LLaMA (2023) | Same decoder-only blueprint; open weights |
+
+---
+
+## 16. Related Architectures
+
+- [GPT Architecture](/architectures/gpt) — decoder-only Transformer
+- [Transformer](/architectures/transformer) — base architecture
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Implementing BPE tokenization from scratch
+- Measuring zero-shot vs. few-shot vs. fine-tuned performance

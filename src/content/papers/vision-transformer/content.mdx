@@ -1,0 +1,194 @@
+# An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale (ViT)
+
+**Dosovitskiy et al. · ICLR 2021 · arXiv:2010.11929 · ~45,000 citations**
+
+---
+
+## 1. Overview
+
+The Vision Transformer (ViT) answered a question that seemed settled: do CNNs have an inherent advantage for vision over sequence models? The answer, if you scale training data sufficiently, is **no**.
+
+By splitting an image into a grid of 16×16 pixel patches, flattening each into a vector, and treating the sequence of patches as tokens fed into a standard Transformer encoder, Dosovitskiy et al. demonstrated that the inductive biases of convolutions (locality, translation equivariance) are not necessary for high-accuracy vision — they are merely useful regularizers that reduce the amount of data needed.
+
+ViT with large-scale pre-training (JFT-300M, 300M images) achieves results matching or exceeding state-of-the-art CNNs while requiring significantly less compute to fine-tune. This paper launched the **vision foundation model** era and directly enabled CLIP, DINO, SAM, and MAE.
+
+---
+
+## 2. Historical Context
+
+From 2012 to 2020, CNNs dominated computer vision almost absolutely. AlexNet, VGG, ResNet, EfficientNet — every ImageNet breakthrough was convolutional. Attempts to apply Transformers directly to pixels (e.g., Parmar et al. 2018) required local attention to manage the quadratic cost over the full image and underperformed CNNs.
+
+The NLP world had proven Transformers could achieve SOTA with scale. The vision world hadn't found a clean way to apply Transformers. ViT's insight was elegantly simple: don't apply self-attention to every pixel — **treat image patches as tokens**. A 224×224 image divided into 16×16 patches gives a sequence of just 196 tokens. Standard Transformer attention is perfectly tractable.
+
+---
+
+## 3. Research Problem
+
+Can a standard Transformer architecture — with **no convolutions** and **no CNN-specific inductive biases** — achieve competitive image classification accuracy?
+
+The challenge: CNNs have strong inductive biases (locality, translation equivariance) that allow them to generalize from relatively small datasets. A pure Transformer must learn these biases from data, requiring much more training examples.
+
+---
+
+## 4. Prior Work
+
+| Model | Year | Approach | Limitation |
+|:---|:---|:---|:---|
+| Standalone Self-Attention (Parmar, 2018) | 2018 | Pixel-level attention | $O(n^4)$ for full image |
+| Axial Attention (Ho, 2019) | 2019 | Row+column attention | CNN auxiliary still needed |
+| DETR (2020) | 2020 | Transformer for detection heads | Used CNN backbone |
+| ResNet-152x4 (Big Transfer) | 2020 | CNN pre-training at scale | CNN baseline for comparison |
+
+---
+
+## 5. Why Previous Methods Failed
+
+Applying attention to individual pixels: for a 224×224 image, that's 50,176 positions. Self-attention is $O(n^2)$ — 50,176² ≈ 2.5 billion operations per layer. Completely intractable.
+
+Local attention approximations (Parmar 2018) helped computationally but lost the global receptive field that makes Transformers powerful. They essentially reinvented local convolutions in the Transformer framework — getting the worst of both worlds.
+
+---
+
+## 6. Core Innovation
+
+**Patch-based tokenization of images:**
+
+1. Split image $H \times W \times C$ into a grid of $N = HW/P^2$ patches, each $P \times P \times C$
+2. Flatten each patch into a vector of dimension $P^2 \cdot C$
+3. Linearly project each patch to $D$ dimensions (the patch embedding)
+4. Prepend a learned `[CLS]` token (borrowed from BERT)
+5. Add learned positional embeddings (1D positions over patch sequence)
+6. Feed the sequence of $N+1$ token embeddings into a standard Transformer encoder
+
+That's it. The Transformer itself is completely unchanged. The entire innovation is in the input representation.
+
+---
+
+## 7. Architecture Breakdown
+
+Three model variants:
+
+| Model | Patch Size | Layers | Width | Heads | Parameters |
+|:---|:---|:---|:---|:---|:---|
+| ViT-Base | 16×16 | 12 | 768 | 12 | 86M |
+| ViT-Large | 16×16 | 24 | 1024 | 16 | 307M |
+| ViT-Huge | 14×14 | 32 | 1280 | 16 | 632M |
+
+For a 224×224 image with patch size 16:
+- Number of patches: $(224/16)^2 = 14^2 = 196$ patches
+- Sequence length: 197 tokens (196 patches + 1 CLS)
+- Each patch vector: $16 \times 16 \times 3 = 768$ values → projected to $D$-dim
+
+---
+
+## 8. Mathematical Foundations
+
+**Patch Embedding:**
+$$z_0 = [x_{cls}; x^1_p E; x^2_p E; \dots; x^N_p E] + E_{pos}$$
+
+Where $E \in \mathbb{R}^{(P^2 \cdot C) \times D}$ is the learnable linear projection, $x^i_p$ is the $i$-th flattened patch, and $E_{pos} \in \mathbb{R}^{(N+1) \times D}$ is the learnable position embedding.
+
+**Standard Transformer encoder blocks (identical to BERT):**
+$$z'_l = \text{MSA}(\text{LN}(z_{l-1})) + z_{l-1}$$
+$$z_l = \text{MLP}(\text{LN}(z'_l)) + z'_l$$
+
+**Classification:**
+$$y = \text{LN}(z^0_L)$$
+The `[CLS]` token's final hidden state $z^0_L$ is passed through a classification head.
+
+---
+
+## 9. Key Experiments
+
+Evaluated on three pre-training regimes:
+1. **ImageNet only** (1.2M images): ViT underperforms ResNets by 2-4%
+2. **ImageNet-21K** (14M images): ViT matches ResNets
+3. **JFT-300M** (303M images): ViT surpasses all CNNs
+
+| Pre-training Data | ViT-L/16 Top-1 | BiT-L (ResNet) | Notes |
+|:---|:---|:---|:---|
+| ImageNet | 81.8% | 87.5% | CNN wins (inductive bias) |
+| ImageNet-21K | 83.1% | 86.5% | CNN wins (slightly) |
+| **JFT-300M** | **88.1%** | **87.5%** | **ViT wins at scale** |
+
+---
+
+## 10. Benchmark Results
+
+| Model | ImageNet Top-1 | Training Compute |
+|:---|:---|:---|
+| EfficientNet-B7 (CNN) | 84.4% | — |
+| BiT-L (ResNet-152x4) | 87.5% | ~14M TPU-days |
+| **ViT-H/14 (JFT-300M)** | **88.5%** | ~2.5M TPU-days |
+
+ViT achieves better accuracy at ~5× lower training compute than BiT-L.
+
+---
+
+## 11. Ablation Studies
+
+| Patch Size | Sequence Length | Top-1 (ImageNet-21K) |
+|:---|:---|:---|
+| 32×32 | 49 | 79.9% |
+| 16×16 | 196 | 83.1% |
+| 14×14 | 256 | 84.0% |
+
+Smaller patches → longer sequences → better accuracy (at higher compute). The quadratic attention cost limits how small you can go.
+
+**Hybrid model (CNN + Transformer):**
+Using ResNet50 feature map as patch embeddings → 84.3% — slightly better with small data, converges with pure ViT at large scale.
+
+---
+
+## 12. Implementation Details
+
+- **Optimizer:** Adam ($\beta_1=0.9$, $\beta_2=0.999$), weight decay 0.1
+- **LR schedule:** Linear warmup + cosine decay
+- **Data augmentation:** Mixup, Cutmix, AutoAugment, random crop, horizontal flip
+- **Pre-training resolution:** 224×224; fine-tuning at 384×384 (interpolating position embeddings)
+- **Hardware:** TPU-v3 pods (2,048 TPU cores for ViT-H)
+
+---
+
+## 13. Engineering Insights
+
+- **Position embeddings learn grid structure.** When you visualize the learned 1D position embeddings (reshaped to 2D), the model learns approximate 2D spatial coordinates without explicit 2D biases — demonstrating that the Transformer can implicitly learn spatial structure from data.
+- **Fine-tuning at higher resolution improves accuracy.** ViT pre-trained at 224×224 can be fine-tuned at 384×384 by interpolating the position embeddings — the model handles sequences of different lengths naturally.
+- **No inductive bias = more data needed.** This is the core trade-off. ViT needs JFT-300M (300M images) to match ResNets trained on ImageNet (1.2M images). This was impractical before large-scale web data collection.
+
+---
+
+## 14. Limitations
+
+- **Data-hungry.** Requires enormous pre-training datasets to overcome the lack of CNN inductive biases. Not practical for small-data domains without transfer from large-scale pre-training.
+- **$O(N^2)$ attention over patches.** For very high-resolution images (e.g., medical imaging at 2048×2048), even patch-level attention becomes expensive.
+- **No hierarchical features.** CNNs naturally build hierarchical representations (edges → textures → parts → objects). ViT operates at a single resolution throughout — addressed by Swin Transformer (2021).
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | Year | ViT's Contribution |
+|:---|:---|:---|
+| DINO (2021) | Self-supervised ViT; emergent semantic segmentation from attention maps |
+| CLIP (2021) | ViT image encoder + text encoder for zero-shot vision |
+| Swin Transformer (2021) | Hierarchical ViT with shifted windows |
+| MAE (2022) | Masked Autoencoding for ViT pre-training |
+| SAM (2023) | ViT-H backbone for Segment Anything |
+| DINOv2 (2023) | State-of-the-art self-supervised ViT |
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer) — base encoder architecture
+- [BERT](/architectures/bert) — shared encoder design (CLS token, LayerNorm)
+- [Swin Transformer](/architectures/swin-transformer) — hierarchical ViT variant
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Computing the sequence length for different patch sizes and resolutions
+- Implementing position embedding interpolation for resolution changes

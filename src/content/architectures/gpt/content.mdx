@@ -1,0 +1,176 @@
+# GPT (Generative Pre-trained Transformer)
+
+## 1. Overview
+
+The Generative Pre-trained Transformer (GPT) family of models, created by OpenAI, revolutionized AI by proving the effectiveness of the **Autoregressive Decoder-Only** architecture. Starting with GPT-1 in 2018 and culminating in the massively scaled GPT-3 and GPT-4, the core philosophy remained identical: train a gigantic Transformer decoder to simply predict the next word in a sequence across vast amounts of internet data.
+
+Unlike BERT, which focuses on bidirectional understanding, GPT is inherently generative. Because it is trained strictly left-to-right, it excels at continuing prompts, writing code, generating dialogue, and through zero-shot and few-shot learning, performing tasks it was never explicitly trained to do.
+
+:::note
+You can observe how the causal mask works in the [interactive Transformer Simulator](/architectures/transformer/simulator) by isolating the Decoder block.
+:::
+
+## 2. Historical Context
+
+Before GPT-1, NLP models were typically task-specific. You trained one model for translation, another for sentiment analysis, and another for summarization. 
+
+In 2018, OpenAI released GPT-1, demonstrating that unsupervised pre-training (next word prediction) on a large corpus (BooksCorpus) followed by supervised fine-tuning yielded state-of-the-art results across diverse tasks. 
+
+In 2019, GPT-2 proved that as the model scaled (1.5B parameters), it began to solve tasks *without* fine-tuning (zero-shot learning). In 2020, GPT-3 scaled this to 175B parameters, proving that "Scaling Laws" held true: larger models and larger datasets predictably led to massive leaps in generalized intelligence.
+
+## 3. Problem It Solves
+
+How do we build a single model capable of performing *any* language task?
+
+The GPT family solves this through the "Next Token Prediction" objective. Language is the ultimate compression of human knowledge. To accurately predict the next word in a Wikipedia article about Quantum Mechanics, the model *must* implicitly learn the rules of physics. To predict the next word in a Python script, it *must* learn programming logic. 
+
+By scaling up the "Next Token Prediction" objective on massive compute, GPT bypasses the need for task-specific architectures entirely.
+
+## 4. Architecture Diagram Data
+
+The GPT architecture is a **Decoder-Only Transformer**. It removes the Encoder entirely, and therefore also removes the Cross-Attention mechanism from the Decoder layer.
+
+**GPT-3 (175B):**
+*   Layers (L): 96
+*   Hidden Size (H): 12288
+*   Attention Heads (A): 96
+*   Context Window: 2048 tokens
+*   Parameters: 175 Billion
+
+**Single Layer Components:**
+1.  Layer Normalization
+2.  Masked Multi-Head Self-Attention (Causal Attention)
+3.  Residual Addition
+4.  Layer Normalization
+5.  Feed-Forward Network (FFN)
+6.  Residual Addition
+
+## 5. Layer-by-Layer Breakdown
+
+### Input Embeddings
+Text is tokenized using Byte Pair Encoding (BPE), ensuring the model can handle any text (including code and unseen words) by breaking them into subword tokens. Learned absolute positional embeddings are added to the token embeddings.
+
+### Masked Self-Attention (Causal Attention)
+This is the heart of GPT. Because the model must predict token $t+1$ given tokens $1 \dots t$, the attention mechanism uses a **causal mask**—an upper triangular matrix of $-\infty$. When passed through the [Softmax](/math/softmax), these become 0 probabilities. This guarantees that token $t$ can only attend to itself and previous tokens, strictly enforcing left-to-right information flow.
+
+### Feed-Forward Network
+Like the original Transformer, the FFN expands the hidden dimension by $4\times$ (e.g., $12288 \to 49152$ in GPT-3), applies a non-linearity (GELU, rather than ReLU), and projects back down. 
+
+### Pre-Norm Architecture
+Unlike the original 2017 Transformer which applied LayerNorm *after* the residual addition (Post-Norm), GPT applies LayerNorm *before* the Attention and FFN blocks. This seemingly minor change vastly improves training stability in very deep networks.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Sequence length $T$, Hidden size $H$.
+
+```text
+Input Tokens      : (B, T)
+Embeddings        : (B, T, H)
++ Position Embeds : (B, T, H)
+
+--- Inside Decoder Layer (x96 for GPT-3) ---
+LayerNorm         : (B, T, H)
+Q, K, V Projections: (B, T, H) -> Split into Heads
+Causal Attention  : (B, Heads, T, T) <-- Mask applied here
+Context Vector    : (B, T, H)
+Residual Add      : (B, T, H)
+
+LayerNorm         : (B, T, H)
+FFN (Expand 4x)   : (B, T, 4*H) -> GELU -> (B, T, H)
+Residual Add      : (B, T, H)
+---------------------------------------
+
+Final LayerNorm   : (B, T, H)
+Un-embedding      : (B, T, VocabSize)  <-- Tied weights with input embed
+Softmax           : (B, T, VocabSize)
+```
+
+## 7. Mathematical Foundations
+
+**The Causal Mask in Attention:**
+Let $S = \frac{QK^T}{\sqrt{d_k}}$ be the raw score matrix of size $T \times T$.
+The causal mask $M$ is defined as:
+$$ M_{i,j} = \begin{cases} 0 & \text{if } i \ge j \\ -\infty & \text{if } i < j \end{cases} $$
+The attention is computed as:
+$$ \text{Attention}(Q,K,V) = \text{softmax}(S + M)V $$
+Because $e^{-\infty} = 0$, tokens cannot look ahead.
+
+**The Objective Function (Cross Entropy):**
+The model maximizes the likelihood of the sequence $X = (x_1, \dots, x_T)$:
+$$ L(\theta) = \sum_{i} \log P(x_i | x_{1}, \dots, x_{i-1}; \theta) $$
+
+**Scaling Laws:**
+Kaplan et al. (OpenAI, 2020) proved that the cross-entropy loss $L$ scales as a power-law with respect to compute ($C$), dataset size ($D$), and parameters ($N$):
+$$ L(N) \approx \left(\frac{N_c}{N}\right)^{\alpha_N} $$
+This mathematical predictability allowed OpenAI to invest millions into training GPT-3, knowing exactly what the final loss would be before training started.
+
+## 8. Forward Pass & Inference Pipeline
+
+During training, the forward pass is massively parallel. The entire sequence is processed at once, and the causal mask ensures correct offset predictions.
+
+However, **Inference is strictly autoregressive and sequential:**
+1.  The user prompt is processed in parallel to generate the initial Keys and Values. This is called the "Prefill" phase.
+2.  The network predicts the next token.
+3.  The next token is appended to the input.
+4.  To avoid recalculating the entire sequence, the Keys and Values for all past tokens are cached in GPU memory (the **KV-Cache**).
+5.  The network processes *only* the new token, querying the KV-Cache, to generate the subsequent token.
+
+## 9. Training Process
+
+*   **Pre-training:** Next token prediction on a massive dataset (e.g., CommonCrawl, WebText, Books, Wikipedia). Cost is measured in tens of millions of dollars.
+*   **Supervised Fine-Tuning (SFT):** The model is trained on high-quality prompt-response pairs to learn how to act as a helpful assistant rather than a raw text-continuation engine.
+*   **RLHF (Reinforcement Learning from Human Feedback):** A reward model is trained on human preferences. The GPT model is then optimized using PPO (Proximal Policy Optimization) to maximize this reward, creating the highly aligned behavior seen in ChatGPT.
+
+## 10. Complexity Analysis
+
+| Model | Parameters | Layers | Hidden | Compute for Training |
+| :--- | :--- | :--- | :--- | :--- |
+| GPT-1 (2018) | 117M | 12 | 768 | ~10^18 FLOPs |
+| GPT-2 (2019) | 1.5B | 48 | 1600 | ~10^21 FLOPs |
+| GPT-3 (2020) | 175B | 96 | 12288 | ~3.14 x 10^23 FLOPs |
+
+**The Inference Bottleneck:**
+During autoregressive generation, memory bandwidth—not compute—is the bottleneck. Fetching the massive 175B parameter matrix and the growing KV-Cache from GPU VRAM into the compute cores for *every single token generated* requires massive memory bandwidth (e.g., 8x A100 GPUs connected via NVLink).
+
+## 11. Advantages
+
+*   **Generative Power:** Excels at open-ended generation, coding, and dialogue.
+*   **Few-Shot Learner:** Can adapt to new tasks simply by reading a few examples in the prompt, requiring no weight updates.
+*   **Scalability:** The simple, homogeneous decoder-only architecture scales perfectly across massive GPU clusters.
+
+## 12. Limitations
+
+*   **Unidirectional:** Because it only looks left-to-right, it lacks the deep bidirectional context of BERT for tasks like filling in the middle of a sentence (though Fill-In-The-Middle training objectives have partially mitigated this).
+*   **Hallucinations:** The model is optimized to predict plausible text, not truthful text. It can confidently generate false information.
+*   **KV-Cache Size:** For long context windows (e.g., 128k tokens), storing the Keys and Values for every token across all 96 layers consumes gigabytes of VRAM per user.
+
+## 13. Real World Applications
+
+*   **ChatGPT / Copilot:** Powers the most widely used AI assistants in the world for coding, writing, and analysis.
+*   **Agentic Workflows:** Used as the reasoning engine for autonomous AI agents navigating APIs and the web.
+
+## 14. Interview Questions
+
+1.  **Why does GPT use a Decoder-Only architecture instead of Encoder-Decoder?**
+    *   *For unsupervised pre-training on massive text, simply predicting the next token autoregressively is highly efficient and scalable. An encoder is unnecessary when the task is pure language modeling.*
+2.  **Explain the KV-Cache.**
+    *   *During text generation, the model must predict token $t+1$. Instead of recalculating the Key and Value matrices for tokens $1 \dots t$ (which have not changed), we cache them in memory. The new token only generates its own Q, K, V, and uses its Q to attend to the cached K and V.*
+3.  **What is the purpose of the Causal Mask?**
+    *   *It ensures that during the parallelized training phase, the prediction for position $t$ only depends on tokens prior to $t$, preventing the model from looking ahead at the answer.*
+
+## 15. Related Papers
+
+*   *Language Models are Few-Shot Learners* (Brown et al., 2020) - The GPT-3 Paper.
+*   *Scaling Laws for Neural Language Models* (Kaplan et al., 2020)
+
+## 16. Related Problems
+
+*   [Attention Calculation](/problems/attention-calculation)
+*   [Softmax](/math/softmax)
+*   Implementing Autoregressive Decoding
+
+## 17. Related Learning Track Nodes
+
+*   Large Language Models
+*   Generative AI
+*   Reinforcement Learning from Human Feedback (RLHF)

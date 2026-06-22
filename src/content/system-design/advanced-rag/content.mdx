@@ -1,0 +1,85 @@
+Design an Advanced RAG system that goes beyond basic retrieve-then-generate with hybrid search, cross-encoder reranking, HyDE, and contextual compression.
+
+## Why Basic RAG Falls Short
+
+Basic RAG fails when:
+- Query uses different vocabulary than the document ("heart attack" vs "myocardial infarction")
+- The most relevant chunk is on page 30, but keyword/vector search returns page 1
+- The answer requires synthesizing 3 separate chunks
+
+Advanced RAG fixes each of these failure modes systematically.
+
+## Architecture
+
+```
+User Query
+  ↓
+Query Analyzer
+  ├── Intent classification
+  └── Entity extraction
+  ↓ (parallel)
+  ├── HyDE Module → hypothetical answer → dense embedding → ANN search
+  ├── Dense Retriever → query embedding → ANN search (cosine)
+  └── Sparse Retriever → BM25 keyword search
+  ↓
+Result Fusion (Reciprocal Rank Fusion)
+  → ~50 candidates
+  ↓
+Cross-Encoder Reranker (BERT)
+  → Top 10 chunks
+  ↓
+Contextual Compressor (remove irrelevant sentences)
+  ↓
+Context Packer (fit token budget)
+  ↓
+LLM Generator
+  ↓
+Answer + Citations
+```
+
+## Key Techniques
+
+### Hypothetical Document Embeddings (HyDE)
+
+Instead of embedding the query, generate a **hypothetical answer** and embed that:
+
+1. LLM generates a plausible (possibly wrong) answer to the query
+2. Embed the hypothetical answer — it's in the same vocabulary as real documents
+3. Use this embedding for ANN search
+
+:::tip
+HyDE dramatically improves recall for knowledge-intensive queries where the question and the answer use completely different vocabulary.
+:::
+
+### Hybrid Search + RRF
+
+Dense vectors excel at semantic similarity. Sparse (BM25) excels at exact keyword match. Combine them with **Reciprocal Rank Fusion**:
+
+```
+final_score(doc) = Σ 1 / (k + rank_in_list_i)
+```
+
+No weights to tune. RRF empirically outperforms weighted averages in most settings.
+
+### Cross-Encoder Reranking
+
+Bi-encoder models (used for ANN) compute embeddings independently. Cross-encoders process query+document together — much higher quality but 100× slower. Use them on just the top 50 candidates after ANN.
+
+## Contextual Compression
+
+Retrieved chunks often contain 80% irrelevant text. A compression LLM (7B) removes sentences irrelevant to the query before passing to the main LLM — fits more relevant content into the context window.
+
+## Evaluation Framework
+
+| Metric | Measures | Tool |
+|--------|---------|------|
+| Recall@K | Are relevant chunks retrieved? | RAGAS |
+| Context Precision | What % of retrieved chunks are relevant? | RAGAS |
+| Faithfulness | Does answer stick to retrieved context? | RAGAS |
+| Answer Relevance | Does answer address the question? | Human eval |
+
+## Interview Questions
+
+1. HyDE works well for factual questions but poorly for conversational queries. Why?
+2. Your cross-encoder is adding 300ms to latency. What's your strategy?
+3. How would you build an evaluation set for Advanced RAG without manually labeling thousands of Q&A pairs?

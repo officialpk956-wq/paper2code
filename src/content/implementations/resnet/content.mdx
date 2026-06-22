@@ -1,0 +1,279 @@
+# ResNet Implementation
+
+## Concepts
+
+ResNet's core insight: **learning residual mappings F(x) is easier than learning the original mapping H(x)**.
+
+**The Residual Equation:**
+
+$$
+H(x) = F(x) + x
+$$
+
+$$
+F(x) = W_2 \cdot \sigma(W_1 \cdot x)
+$$
+
+**Why it works:** If the identity mapping is optimal, F(x) can be driven to zero. This is far easier to optimize than fitting an identity function directly.
+
+**Key Ideas:**
+- Skip connections allow gradients to flow directly to early layers
+- Networks can be arbitrarily deep without vanishing gradients
+- Batch normalization after each convolution stabilizes training
+
+---
+
+## Implementation Milestones
+
+<Milestone title="1. Basic Residual Block">
+
+The fundamental building block for ResNet-18 and ResNet-34.
+
+**Tensor Shape:** `(batch, C, H, W) → (batch, C, H, W)` (when stride=1)
+
+```python
+import torch
+import torch.nn as nn
+
+class BasicBlock(nn.Module):
+    """
+    ResNet BasicBlock: two 3×3 convolutions with a skip connection.
+    Used in ResNet-18 and ResNet-34.
+    expansion = 1 (output channels == input channels per group)
+    """
+    expansion = 1
+
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+        super().__init__()
+        # First conv: may downsample spatial dimensions if stride > 1
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels,
+            kernel_size=3, stride=stride, padding=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        # Second conv: always stride=1, preserves spatial dimensions
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels,
+            kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # Projection shortcut: used when spatial dims or channels change
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels * self.expansion:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels * self.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels * self.expansion)
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)   # skip connection (may be projected)
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out = out + identity          # ← the residual connection
+        out = self.relu(out)          # ReLU after addition
+
+        return out
+```
+
+:::warning
+The ReLU goes *after* the addition. This is "post-activation." Modern variants like Pre-Activation ResNet (He et al. 2016) place BN+ReLU *before* each conv, which trains better for very deep networks.
+:::
+
+</Milestone>
+
+<Milestone title="2. Bottleneck Block">
+
+Used in deeper ResNets (50, 101, 152) to reduce parameter count.
+
+**Tensor Shape:** `(batch, in_ch, H, W) → (batch, out_ch×4, H, W)`
+
+```python
+class BottleneckBlock(nn.Module):
+    """
+    ResNet Bottleneck: 1×1 → 3×3 → 1×1 convolutions.
+    The 1×1 convs reduce then restore dimensions, making the 3×3 conv cheaper.
+    Used in ResNet-50, ResNet-101, ResNet-152.
+    expansion = 4 (output channels are 4× the bottleneck width)
+    """
+    expansion = 4
+
+    def __init__(self, in_channels: int, bottleneck_channels: int, stride: int = 1):
+        super().__init__()
+        out_channels = bottleneck_channels * self.expansion
+
+        # 1×1: Reduce channels (compress)
+        self.conv1 = nn.Conv2d(in_channels, bottleneck_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(bottleneck_channels)
+
+        # 3×3: Process spatial features (expensive, but on small channel count)
+        self.conv2 = nn.Conv2d(bottleneck_channels, bottleneck_channels,
+                               kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(bottleneck_channels)
+
+        # 1×1: Expand channels back (restore)
+        self.conv3 = nn.Conv2d(bottleneck_channels, out_channels, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+
+        self.relu = nn.ReLU(inplace=True)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+
+        out = self.relu(self.bn1(self.conv1(x)))    # compress
+        out = self.relu(self.bn2(self.conv2(out)))  # spatial
+        out = self.bn3(self.conv3(out))              # expand (no ReLU yet!)
+
+        out = out + identity
+        out = self.relu(out)
+        return out
+```
+
+:::tip
+Notice the third conv has NO ReLU before the addition. This is intentional — you want to allow the residual output to be both positive and negative before activation.
+:::
+
+</Milestone>
+
+<Milestone title="3. Layer Groups">
+
+Stack blocks into groups, each potentially downsampling spatial dimensions.
+
+```python
+def make_layer(
+    block_cls,
+    in_channels: int,
+    out_channels: int,
+    num_blocks: int,
+    stride: int = 1
+) -> nn.Sequential:
+    """
+    Creates one "stage" of ResNet — multiple blocks of the same type.
+    Only the FIRST block handles downsampling (stride > 1).
+    Subsequent blocks use stride=1 and matching channels.
+    """
+    layers = []
+    # First block: may downsample and change channel count
+    layers.append(block_cls(in_channels, out_channels, stride=stride))
+
+    # Remaining blocks: same resolution and channels
+    final_channels = out_channels * block_cls.expansion
+    for _ in range(1, num_blocks):
+        layers.append(block_cls(final_channels, out_channels, stride=1))
+
+    return nn.Sequential(*layers)
+```
+
+</Milestone>
+
+<Milestone title="4. Full ResNet-50">
+
+Assemble the complete ResNet architecture.
+
+**Architecture:** `ImageNet input (224×224×3) → 1000-class output`
+
+```python
+class ResNet50(nn.Module):
+    """
+    ResNet-50: 4 layer groups with bottleneck blocks [3, 4, 6, 3].
+    Input:  (batch, 3, 224, 224)
+    Output: (batch, num_classes)
+    """
+    def __init__(self, num_classes: int = 1000):
+        super().__init__()
+
+        # Stage 0: Initial conv + pool (224 → 56)
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),  # 112 → 56
+        )
+
+        # Stages 1-4: Residual layer groups
+        #               in_ch  out_ch  blocks  stride
+        self.layer1 = make_layer(BottleneckBlock,  64,  64, 3, stride=1)  # 56×56
+        self.layer2 = make_layer(BottleneckBlock, 256, 128, 4, stride=2)  # 28×28
+        self.layer3 = make_layer(BottleneckBlock, 512, 256, 6, stride=2)  # 14×14
+        self.layer4 = make_layer(BottleneckBlock,1024, 512, 3, stride=2)  #  7×7
+
+        # Classification head
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))   # 7×7 → 1×1
+        self.fc = nn.Linear(512 * BottleneckBlock.expansion, num_classes)
+
+        # Weight initialization (critical for training stability)
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, 3, 224, 224)
+        x = self.stem(x)        # (batch, 64,  56, 56)
+        x = self.layer1(x)      # (batch, 256, 56, 56)
+        x = self.layer2(x)      # (batch, 512, 28, 28)
+        x = self.layer3(x)      # (batch, 1024,14, 14)
+        x = self.layer4(x)      # (batch, 2048, 7,  7)
+        x = self.avgpool(x)     # (batch, 2048, 1,  1)
+        x = x.flatten(1)        # (batch, 2048)
+        x = self.fc(x)          # (batch, num_classes)
+        return x
+
+# Quick test
+if __name__ == "__main__":
+    model = ResNet50(num_classes=1000)
+    x = torch.randn(2, 3, 224, 224)
+    print(model(x).shape)  # → torch.Size([2, 1000])
+    params = sum(p.numel() for p in model.parameters())
+    print(f"Parameters: {params / 1e6:.1f}M")  # → ~25.6M
+```
+
+</Milestone>
+
+---
+
+## Production Notes
+
+**Common Mistakes:**
+- Forgetting `bias=False` in conv layers before BatchNorm (BN has its own bias)
+- Using wrong expansion factor (1 for Basic, 4 for Bottleneck) when building the shortcut
+- Not applying Kaiming initialization — default Xavier can cause dead ReLUs at depth
+
+**Memory Considerations:**
+- Feature maps from early layers are large (56×56×256 for layer1 of ResNet-50)
+- Gradient checkpointing (`torch.utils.checkpoint`) can trade compute for memory during training
+- Use `inplace=True` in ReLU to reduce activation memory
+
+---
+
+## Paper to Production
+
+| Aspect | Paper (2015) | Production (2024) |
+|--------|-------------|-------------------|
+| Norm | Batch Normalization | Group Norm / Instance Norm (small batches) |
+| Activation | ReLU post-addition | Pre-activation (BN+ReLU before conv) |
+| Training | SGD + momentum | AdamW + cosine LR |
+| Augmentation | Random crop + flip | RandAugment / MixUp / CutMix |
+| Pretrained | Train from scratch | Load ImageNet checkpoint |
+| Deployment | `.pt` | TorchScript / ONNX |

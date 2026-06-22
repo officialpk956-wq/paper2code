@@ -1,0 +1,196 @@
+# Current State: reverse-engineered from codebase
+# Scanned: 2026-06-11
+# SDK: none (custom localStorage + server-side SQLAlchemy ORM)
+
+events:
+  # -- Client-side (localStorage) --
+  - name: "dojo_exercise_completed"
+    status: LIVE
+    description: "Exercise pass/fail result saved to localStorage dojo_progress"
+    locations:
+      - file: "static/index.html"
+        context: "dojo_progress localStorage update on exercise submit"
+    properties: [exercise_id, passed, attempts]
+    source: frontend
+
+  - name: "dojo_submission_recorded"
+    status: LIVE
+    description: "Timestamped submission history saved to localStorage dojo_submissions"
+    locations:
+      - file: "static/index.html"
+        context: "dojo_submissions localStorage append on code submit"
+    properties: [exercise_id, timestamp, passed, code]
+    source: frontend
+
+  - name: "dojo_note_saved"
+    status: LIVE
+    description: "Personal notes per exercise saved to localStorage dojo_notes"
+    locations:
+      - file: "static/index.html"
+        context: "dojo_notes localStorage write on note change"
+    properties: [exercise_id, note_text]
+    source: frontend
+
+  - name: "dojo_ui_state_saved"
+    status: LIVE
+    description: "UI layout preferences persisted to localStorage"
+    locations:
+      - file: "static/index.html"
+        context: "Multiple localStorage writes for split ratio, sidebar, editor width"
+    properties: [dojo_split_ratio, dojo_sidebar_collapsed, dojo_sidebar_width, dojo_editor_width]
+    source: frontend
+
+  - name: "estimates_calculated"
+    status: LIVE
+    description: "Training cost estimator usage counter incremented in localStorage"
+    locations:
+      - file: "static/index.html"
+        context: "estimates_calculated_count localStorage increment"
+    properties: [count]
+    source: frontend
+
+  - name: "lab_experiment_logged"
+    status: LIVE
+    description: "Research lab experiment log saved to localStorage lab_notebook"
+    locations:
+      - file: "static/index.html"
+        context: "lab_notebook localStorage write"
+    properties: [experiment_data]
+    source: frontend
+
+  - name: "theme_changed"
+    status: LIVE
+    description: "Light/dark theme preference saved to localStorage"
+    locations:
+      - file: "static/index.html"
+        context: "theme localStorage write on toggle"
+    properties: [theme]
+    source: frontend
+
+  # -- Server-side (API + SQLAlchemy) --
+  - name: "progress.update"
+    status: LIVE
+    description: "Module completion status sent to server via POST /api/progress/update"
+    locations:
+      - file: "backend/server.py"
+        line: 930
+        context: "POST /api/progress/update endpoint"
+    properties: [paper_id, module_id, status, learner_id]
+    source: both
+
+  - name: "dojo.submit"
+    status: LIVE
+    description: "Exercise submission sent to server via POST /api/dojo/submit"
+    locations:
+      - file: "backend/server.py"
+        context: "POST /api/dojo/submit endpoint"
+    properties: [exercise_id, passed, attempts, learner_id]
+    source: both
+
+  - name: "assessment.validate"
+    status: LIVE
+    description: "Assessment answer validation via POST /api/assessment/validate"
+    locations:
+      - file: "backend/server.py"
+        context: "POST /api/assessment/validate endpoint"
+    properties: [question, answer, architecture, is_correct, learner_id]
+    source: both
+
+  - name: "tutor.ask"
+    status: LIVE
+    description: "Tutor question submitted via POST /api/tutor/ask"
+    locations:
+      - file: "backend/server.py"
+        context: "POST /api/tutor/ask endpoint"
+    properties: [question, architecture, learner_id]
+    source: both
+
+  - name: "tutor.quiz"
+    status: LIVE
+    description: "Tutor quiz generation via POST /api/tutor/quiz"
+    locations:
+      - file: "backend/server.py"
+        context: "POST /api/tutor/quiz endpoint"
+    properties: [architecture, learner_id]
+    source: both
+
+  - name: "analytics.dashboard"
+    status: LIVE
+    description: "Aggregated learning analytics retrieved via GET /api/analytics/dashboard"
+    locations:
+      - file: "backend/server.py"
+        line: 976
+        context: "GET /api/analytics/dashboard endpoint"
+    properties: [learner_id]
+    source: both
+
+identity:
+  identify_calls:
+    - location: "static/index.html"
+      method: "localStorage.getItem('learner_id') with UUID generation fallback"
+      traits_set: []
+      notes: "Anonymous UUID generated on first visit, no traits attached"
+  group_calls: "No group() calls found"
+  page_calls: "No page() or screen() calls — hash-based routing with no page view tracking"
+  reset_calls: "No reset or logout handling — anonymous identity persists until localStorage is cleared"
+
+patterns:
+  naming_style: "mixed — localStorage uses snake_case keys, API uses dot-separated paths"
+  naming_format: "mixed — localStorage keys are free-form (dojo_progress), API paths use object.action (dojo/submit)"
+  centralized: false
+  centralization_notes: "localStorage calls are scattered throughout static/index.html. Server-side tracking is handled by individual FastAPI endpoint handlers — no centralized tracking wrapper or middleware."
+  error_handling: "Server-side endpoints use try/catch with error logging. Client-side localStorage calls have no error handling."
+  shutdown_flush: "Not applicable — no analytics SDK to flush"
+
+storage:
+  client_side:
+    mechanism: "localStorage"
+    keys:
+      - key: "learner_id"
+        purpose: "Anonymous user identity (UUID)"
+        format: "UUID string"
+      - key: "dojo_progress"
+        purpose: "Exercise pass/fail and attempt counts"
+        format: "JSON object keyed by exercise_id"
+      - key: "dojo_submissions"
+        purpose: "Timestamped submission history per exercise"
+        format: "JSON object keyed by exercise_id, arrays of submissions"
+      - key: "dojo_notes"
+        purpose: "Personal notes per exercise"
+        format: "JSON object keyed by exercise_id"
+      - key: "dojo_split_ratio"
+        purpose: "Code editor split pane ratio"
+        format: "Number"
+      - key: "dojo_sidebar_collapsed"
+        purpose: "Sidebar collapsed state"
+        format: "Boolean string"
+      - key: "dojo_sidebar_width"
+        purpose: "Sidebar width in pixels"
+        format: "Number"
+      - key: "dojo_editor_width"
+        purpose: "Editor pane width percentage"
+        format: "Number"
+      - key: "estimates_calculated_count"
+        purpose: "Training cost estimator usage counter"
+        format: "Integer"
+      - key: "lab_notebook"
+        purpose: "Research lab experiment log"
+        format: "JSON"
+      - key: "theme"
+        purpose: "Light/dark theme preference"
+        format: "String (light/dark)"
+  server_side:
+    mechanism: "SQLAlchemy ORM → SQLite (dev) / PostgreSQL (prod)"
+    tables:
+      - table: "learner_progress"
+        model: "LearnerProgress"
+        purpose: "Module completion tracking"
+        fields: [learner_id, paper_id, module_id, status, started_at, completed_at]
+      - table: "assessment_attempts"
+        model: "AssessmentAttempt"
+        purpose: "Assessment answer history"
+        fields: [learner_id, question, answer, is_correct, architecture, difficulty]
+      - table: "tutor_analytics"
+        model: "TutorAnalytics"
+        purpose: "Tutor interaction tracking"
+        fields: [learner_id, architecture, question_count]

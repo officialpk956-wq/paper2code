@@ -1,0 +1,155 @@
+# Generative Adversarial Network (GAN)
+
+## 1. Overview
+
+Generative Adversarial Networks (GANs), introduced by Ian Goodfellow and his colleagues in 2014, represented a massive paradigm shift in machine learning. Yann LeCun famously described GANs as "the most interesting idea in the last 10 years in ML."
+
+Instead of using a predefined mathematical loss function (like Mean Squared Error in AutoEncoders) to teach a network how to generate data, a GAN uses a **second neural network** as the loss function. The two networks are pitted against each other in a zero-sum game: one tries to create fake data that looks real, and the other tries to tell the difference between fake and real data.
+
+:::note
+You can explore the minimax game dynamics and how the loss functions interact in the [Existing Math Engine](/math).
+:::
+
+## 2. Historical Context
+
+Prior to GANs, generative modeling was dominated by VAEs (Variational AutoEncoders) and RBMs (Restricted Boltzmann Machines). While VAEs were mathematically elegant and easy to train, their reliance on pixel-wise reconstruction loss (MSE) forced them to output safe, blurry averages of images. They couldn't generate the sharp, high-frequency details needed for photorealism.
+
+Goodfellow's insight was that defining a mathematical formula for "realism" is impossible. Instead, he proposed letting a neural network *learn* what realism looks like, and using that network to train the generator.
+
+## 3. Problem It Solves
+
+How do you train a network to output an image of a "dog" when there are millions of valid, perfectly sharp dog images, and you don't want the network to just output a blurry average of all of them?
+
+GANs solve the "Blurry Generation Problem" by eliminating pixel-wise loss. The Generator never actually sees the real training images. It only sees the gradients flowing backward from the Discriminator. If the Generator produces a perfectly sharp image of a dog with a black spot, the Discriminator accepts it. It doesn't penalize the Generator just because the training dataset didn't have a dog with a spot in that exact pixel location.
+
+## 4. Architecture Diagram Data
+
+A GAN consists of two entirely separate neural networks:
+
+1.  **Generator ($G$):** Takes a vector of random noise ($z$) from a latent space and maps it to the data space (e.g., an image $x$).
+2.  **Discriminator ($D$):** Takes an image (either real from the dataset, or fake from the Generator) and outputs a scalar probability indicating whether the image is real or fake.
+
+## 5. Layer-by-Layer Breakdown
+
+### The Generator
+Starts with a random noise vector $z$ (e.g., length 100) sampled from a standard normal distribution. In modern architectures like DCGAN (Deep Convolutional GAN), $z$ is passed through a dense layer, reshaped into a small spatial tensor (e.g., $4 \times 4 \times 1024$), and then passed through a series of **Transposed Convolutions** to upsample the spatial dimensions and decrease the channel depth until it reaches the target image size (e.g., $64 \times 64 \times 3$). It typically uses ReLU activations and ends with a Tanh activation (bounding outputs to $[-1, 1]$).
+
+### The Discriminator
+A standard Convolutional Neural Network (CNN) used for binary classification. It takes a $64 \times 64 \times 3$ image, applies standard strided Convolutions to downsample the image and extract features. It typically uses LeakyReLU activations (to prevent dead gradients from flowing back to the generator) and ends with a Sigmoid activation to output a probability $P(\text{real})$.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $B$, Latent Dimension $z=100$.
+
+```text
+--- Generator (G) ---
+Input Noise (z) : (B, 100)
+Linear -> Reshape: (B, 1024, 4, 4)
+ConvTranspose2D : (B, 512, 8, 8)   -> BatchNorm -> ReLU
+ConvTranspose2D : (B, 256, 16, 16) -> BatchNorm -> ReLU
+ConvTranspose2D : (B, 128, 32, 32) -> BatchNorm -> ReLU
+ConvTranspose2D : (B, 3, 64, 64)   -> Tanh
+Output (Fake)   : (B, 3, 64, 64)
+
+--- Discriminator (D) ---
+Input (Real/Fake): (B, 3, 64, 64)
+Conv2D (stride 2): (B, 64, 32, 32)  -> LeakyReLU
+Conv2D (stride 2): (B, 128, 16, 16) -> BatchNorm -> LeakyReLU
+Conv2D (stride 2): (B, 256, 8, 8)   -> BatchNorm -> LeakyReLU
+Conv2D (stride 2): (B, 512, 4, 4)   -> BatchNorm -> LeakyReLU
+Flatten -> Linear: (B, 1)           -> Sigmoid
+Output          : (B, 1)            <-- Probability image is Real
+```
+
+## 7. Mathematical Foundations
+
+The GAN is formulated as a **Minimax Game**. 
+The Discriminator $D$ wants to maximize the probability of correctly classifying real vs fake.
+The Generator $G$ wants to minimize the probability that $D$ correctly classifies its fakes.
+
+The Value Function $V(D, G)$ is:
+$$ \min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{data}(x)}[\log D(x)] + \mathbb{E}_{z \sim p_z(z)}[\log(1 - D(G(z)))] $$
+
+*   **Term 1:** $D$ wants to maximize $\log D(x)$ (output 1 for real data).
+*   **Term 2:** $D$ wants to maximize $\log(1 - D(G(z)))$ (output 0 for fake data).
+*   **Term 3:** $G$ wants to minimize $\log(1 - D(G(z)))$ (force $D$ to output 1 for fake data).
+
+*Implementation note:* In practice, minimizing $\log(1 - D(G(z)))$ leads to vanishing gradients early in training when $D$ easily rejects $G$'s poor fakes. Instead, $G$ is trained to maximize $\log(D(G(z)))$.
+
+## 8. Forward Pass
+
+Unlike standard networks, a training step requires two distinct phases:
+
+**Phase 1: Train Discriminator**
+1.  Sample a batch of Real images $x$. Run through $D$, calculate loss against label 1.
+2.  Sample a batch of noise $z$. Run through $G$ to create Fake images $\hat{x}$.
+3.  Run $\hat{x}$ through $D$, calculate loss against label 0.
+4.  Backpropagate and update ONLY the Discriminator's weights.
+
+**Phase 2: Train Generator**
+1.  Sample a *new* batch of noise $z$. Run through $G$ to create Fake images $\hat{x}$.
+2.  Run $\hat{x}$ through $D$.
+3.  Calculate loss against label 1 (because $G$ wants $D$ to think they are real).
+4.  Backpropagate the gradient from $D$ all the way back into $G$, and update ONLY the Generator's weights.
+
+## 9. Training Process
+
+GAN training is notoriously difficult. Because it is a zero-sum game, there is no absolute loss metric to track. If the loss drops to zero, it usually means training has failed.
+
+**Training Instabilities:**
+1.  **Mode Collapse:** The Generator discovers a single output (e.g., one specific face) that consistently fools the Discriminator. It stops exploring the latent space and outputs the exact same image for every noise vector.
+2.  **Vanishing Gradients:** If the Discriminator becomes too good too quickly, its output is perfectly 0 or 1. The gradients become zero, and the Generator learns nothing.
+3.  **Non-Convergence:** The networks can enter endless oscillating loops.
+
+## 10. Complexity Analysis
+
+| Component | Architecture | Complexity |
+| :--- | :--- | :--- |
+| Generator | Stack of Transposed Convs | $O(N)$ scales with image size |
+| Discriminator | Standard CNN | $O(N)$ scales with image size |
+
+**Insight:** While individual forward passes are fast, GANs take a very long time to converge due to the adversarial setup. Often, the Discriminator must be trained 5 times for every 1 Generator step (as proposed in Wasserstein GANs).
+
+## 11. Advantages
+
+*   **Unmatched Sharpness:** Historically, GANs produced the highest fidelity, sharpest, and most photorealistic images of any generative paradigm (until Diffusion Models arrived).
+*   **Fast Inference:** Generating an image requires exactly one forward pass through the Generator (unlike Diffusion which requires 20-50 passes).
+
+## 12. Limitations
+
+*   **Extreme Training Instability:** Requires massive hyperparameter tuning, specific architectural hacks (Spectral Normalization, Gradient Penalties), and constant monitoring.
+*   **Mode Collapse:** Even successful GANs often lack diversity, generating variations of a few "safe" archetypes rather than covering the true distribution of the training data.
+*   **Hard to Invert:** Unlike AutoEncoders, you cannot easily take a real image and find its corresponding $z$ vector in the latent space.
+
+## 13. Real World Applications
+
+*   **DeepFakes & Video Generation:** Heavily used for face swapping and high-fidelity video generation due to their fast inference speed.
+*   **Super Resolution:** GANs (like ESRGAN) are used to upscale low-resolution images or video game textures, inventing sharp high-frequency details where none exist.
+*   **StyleGAN:** NVIDIA's StyleGAN architecture remains a benchmark for generating high-resolution, infinitely controllable human faces.
+
+## 14. Interview Questions
+
+1.  **Explain the Minimax game in GANs.**
+    *   *The Discriminator tries to maximize the probability of correctly identifying real vs fake images. The Generator tries to minimize the Discriminator's success rate by generating fakes that the Discriminator classifies as real.*
+2.  **What is Mode Collapse?**
+    *   *A failure state where the Generator finds a small handful of specific outputs that fool the Discriminator. It abandons mapping the full latent space and simply outputs those exact same images over and over, losing all generation diversity.*
+3.  **Why do we use LeakyReLU in the Discriminator but ReLU in the Generator?**
+    *   *If a standard ReLU outputs 0, the gradient is 0. If the Discriminator has dead gradients, no learning signal can flow backward into the Generator, halting training entirely. LeakyReLU ensures gradients always flow.*
+
+## 15. Related Papers
+
+*   *Generative Adversarial Nets* (Goodfellow et al., 2014)
+*   *Unsupervised Representation Learning with Deep Convolutional Generative Adversarial Networks* (Radford et al., 2015) - DCGAN, the blueprint for modern GANs.
+*   *Wasserstein GAN* (Arjovsky et al., 2017) - Solved many stability issues with a new mathematical formulation.
+
+## 16. Related Problems
+
+*   [Cross Entropy](/math/cross-entropy)
+*   Implementing the GAN Training Loop
+*   Coding the Generator Transposed Convolutions
+
+## 17. Related Learning Track Nodes
+
+*   Generative AI Foundations
+*   Adversarial Training
+*   Image Synthesis

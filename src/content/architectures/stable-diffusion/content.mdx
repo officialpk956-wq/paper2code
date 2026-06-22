@@ -1,0 +1,164 @@
+# Stable Diffusion
+
+## 1. Overview
+
+Stable Diffusion, developed by researchers at LMU Munich (CompVis) and Runway, and later popularized by Stability AI in 2022, is the defining model of the open-source Generative AI era. It is a specific, highly optimized implementation of a **Latent Diffusion Model (LDM)**.
+
+Standard pixel-space diffusion models (like the original DALL-E 2 or Imagen) require massive server farms to run because they denoise high-resolution images pixel-by-pixel. Stable Diffusion solved this compute bottleneck by performing the diffusion process not in the pixel space, but inside the highly compressed mathematical **latent space** of a Variational AutoEncoder (VAE). Because of this, it can generate breathtaking $512 \times 512$ photorealistic images on a consumer laptop with just 8GB of VRAM.
+
+:::note
+You can trace the interaction between the U-Net and the CLIP text embeddings via Cross-Attention in the [interactive Transformer Simulator](/architectures/transformer/simulator).
+:::
+
+## 2. Historical Context
+
+By 2021, DDPMs had proven that diffusion was the future of image synthesis. However, these models operated directly on raw pixels. A $512 \times 512$ RGB image has 786,432 values. Denoising an array of that size through a massive U-Net 1,000 times was computationally paralyzing.
+
+In 2022, Rombach et al. published *"High-Resolution Image Synthesis with Latent Diffusion Models."* They realized that the vast majority of pixels in an image are just high-frequency perceptual details (like the exact texture of grass), while the actual semantic meaning (the "dog") can be compressed heavily. By separating the image compression (using a VAE) from the semantic generation (using Diffusion), they reduced the computational cost of diffusion by a factor of 64, making AI art accessible to the masses.
+
+## 3. Problem It Solves
+
+**The Compute Bottleneck of High-Resolution Diffusion.**
+
+Stable Diffusion solves this by utilizing three separate neural networks working in concert:
+1.  **VAE (Variational AutoEncoder):** Compresses a $512 \times 512 \times 3$ image down to a $64 \times 64 \times 4$ latent space. This is a $48\times$ reduction in data volume.
+2.  **U-Net (The Diffusion Model):** Learns to denoise the tiny $64 \times 64$ latent vectors, which is incredibly fast.
+3.  **CLIP (Text Encoder):** Converts user text prompts into dense embeddings that guide the U-Net via Cross-Attention, ensuring the output matches the prompt.
+
+## 4. Architecture Diagram Data
+
+The text-to-image pipeline requires all three components:
+
+1.  **Text Conditioning:** User Prompt $\to$ CLIP Tokenizer $\to$ CLIP Text Encoder $\to$ Text Embeddings ($77 \times 768$).
+2.  **Latent Denoising Loop (e.g., 50 steps):**
+    *   Start with random latent noise $z_T$ ($64 \times 64 \times 4$).
+    *   Pass $z_t$, Time $t$, and Text Embeddings into the **U-Net Backbone**.
+    *   U-Net predicts latent noise $\epsilon$.
+    *   Subtract noise to get $z_{t-1}$.
+3.  **Decoding:** Final clean latent $z_0 \to$ VAE Decoder $\to$ Output Image ($512 \times 512 \times 3$).
+
+## 5. Layer-by-Layer Breakdown
+
+### The VAE (Compression)
+The VAE is pre-trained on a massive dataset of images and frozen. Its sole job is to compress pixels into a dense perceptual space. A $512 \times 512 \times 3$ image becomes a $64 \times 64 \times 4$ tensor. Because the spatial dimensions are reduced by a factor of 8 ($512/8 = 64$), this is called an $f=8$ autoencoder.
+
+### The CLIP Text Encoder
+Developed by OpenAI, CLIP (Contrastive Language-Image Pre-training) maps text and images into the exact same vector space. Stable Diffusion takes the user's prompt (e.g., "A corgi on the moon"), tokenizes it (max 77 tokens), and passes it through the frozen CLIP Transformer. The output is a matrix of shape $77 \times 768$, representing the semantic meaning of the words.
+
+### The U-Net (Denoising)
+This is the only part of the system that actually performs diffusion. It operates strictly on the $64 \times 64 \times 4$ latent tensors. 
+Crucially, the U-Net contains **Cross-Attention layers**. Inside the ResNet blocks of the U-Net, the latent image features act as Queries, while the CLIP Text Embeddings act as Keys and Values. This is how the network "reads" the text prompt and uses it to shape the emerging image.
+
+## 6. Tensor Flow Walkthrough
+
+Batch size $1$, Prompt: "A cyberpunk city."
+
+```text
+--- 1. Text Encoding ---
+Input Text    : "A cyberpunk city"
+CLIP Encoder  : -> (1, 77, 768)   <-- Text Embeddings (Context)
+
+--- 2. Latent Denoising Loop (x50 steps) ---
+Input Latent (z_T): (1, 4, 64, 64) <-- Pure Gaussian Noise
+
+Loop t from 50 to 1:
+   Input to U-Net: z_t (1, 4, 64, 64), Context (1, 77, 768), Time t
+   U-Net Self-Attn: Latents attend to themselves
+   U-Net Cross-Attn: Latents attend to Context (Text Embeddings)
+   U-Net Output   : \epsilon (1, 4, 64, 64) <-- Predicted Noise
+   Sampler Math   : z_{t-1} = z_t - \epsilon (scaled)
+
+Final Latent (z_0): (1, 4, 64, 64) <-- Denoised Latent
+
+--- 3. Image Decoding ---
+Input to VAE  : (1, 4, 64, 64)
+VAE Decoder   : -> (1, 3, 512, 512)
+Output Image  : 512x512 RGB Image
+```
+
+## 7. Mathematical Foundations
+
+**Latent Diffusion Objective:**
+Instead of calculating the loss on the pixel space $x$, we calculate it on the encoded latent space $z = E(x)$ (where $E$ is the VAE encoder).
+$$ L_{LDM} = \mathbb{E}_{E(x), \epsilon \sim \mathcal{N}(0, 1), t} \left[ \parallel \epsilon - \epsilon_\theta(z_t, t, \tau_\theta(y)) \parallel^2 \right] $$
+Where:
+*   $z_t$ is the noisy latent at step $t$.
+*   $\epsilon_\theta$ is the U-Net.
+*   $y$ is the text prompt.
+*   $\tau_\theta$ is the CLIP text encoder.
+
+**Classifier-Free Guidance (CFG):**
+During training, the text prompt $y$ is randomly dropped (replaced with an empty string) 10% of the time. This teaches the U-Net how to generate unconditionally.
+During inference, we run the U-Net *twice* per step: once with the prompt ($\epsilon_{cond}$), and once with an empty prompt ($\epsilon_{uncond}$). We then extrapolate the noise prediction away from the unconditional prediction:
+$$ \hat{\epsilon} = \epsilon_{uncond} + w \cdot (\epsilon_{cond} - \epsilon_{uncond}) $$
+Where $w$ is the CFG scale (usually 7.0). This mathematically forces the image to adhere strongly to the text prompt, drastically improving visual alignment.
+
+## 8. Forward Pass (Inference)
+
+1.  User inputs "A photo of an astronaut riding a horse."
+2.  CLIP converts the text into $77 \times 768$ embeddings.
+3.  We generate a random $64 \times 64 \times 4$ tensor of static (noise).
+4.  The Scheduler (e.g., Euler, DDIM) defines 50 time steps.
+5.  For each step, the U-Net looks at the noisy latent, reads the CLIP embeddings, and predicts the noise.
+6.  The Scheduler subtracts the noise.
+7.  After 50 steps, the clean latent is passed through the VAE Decoder to produce the final image.
+
+## 9. Training Process
+
+*   **Dataset:** Stable Diffusion 1.5 was trained on the LAION-5B dataset (a massive scrape of images and their alt-text captions from the internet).
+*   **Two-Stage Training:** First, the VAE is trained on images to learn optimal compression. Once trained, the VAE weights are frozen. Second, the U-Net is trained on the latent vectors produced by the frozen VAE.
+*   **Compute:** Training SD 1.4 took roughly 150,000 A100 GPU hours.
+
+## 10. Complexity Analysis
+
+| Component | Architecture | Parameters | Memory/Compute during Inference |
+| :--- | :--- | :--- | :--- |
+| CLIP Encoder | Transformer | ~123M | Run once, fast. |
+| U-Net | ResNet + Attention | ~860M | Run 50 times. ~4GB VRAM. |
+| VAE Decoder | ConvNet | ~84M | Run once, fast. |
+
+**Insight:** Because the U-Net only operates on $64 \times 64$ matrices, it requires vastly less VRAM and compute per step than a pixel-space diffusion model, making it perfectly suited for consumer hardware.
+
+## 11. Advantages
+
+*   **Democratized AI:** Can be run completely offline on a standard gaming PC, unlike closed APIs like Midjourney or DALL-E.
+*   **Extensibility:** Because it is open-source, the community has built massive ecosystems around it, including ControlNet (for pose control), LoRAs (for fine-tuning specific characters/styles), and custom samplers.
+*   **Compute Efficiency:** Latent space diffusion is vastly more efficient than pixel space.
+
+## 12. Limitations
+
+*   **Text Rendering:** Historically terrible at spelling words or generating legible text, because the CLIP encoder doesn't understand character-level spelling, only semantic meaning.
+*   **Anatomy:** Often struggles with hands, extra limbs, and complex spatial relationships (e.g., "A red cube on top of a blue sphere").
+*   **Resolution Limits:** Because the VAE was trained at $512 \times 512$, asking the model to natively generate a $1024 \times 1024$ image often results in duplicated subjects (e.g., a person with two heads), though newer versions (SDXL) have fixed this by training at higher resolutions.
+
+## 13. Real World Applications
+
+*   **Concept Art & Design:** Rapid prototyping of visual ideas for game development, architecture, and marketing.
+*   **Inpainting & Outpainting:** Seamlessly editing existing photos by masking out areas and allowing the diffusion model to fill in the missing latent data.
+
+## 14. Interview Questions
+
+1.  **What makes a "Latent" Diffusion Model different from a standard Diffusion Model?**
+    *   *Standard diffusion operates in the high-dimensional pixel space. Latent diffusion uses a pre-trained Variational AutoEncoder (VAE) to compress the image into a tiny latent space first, and performs the entire diffusion process there, vastly reducing computational cost.*
+2.  **How does the text prompt influence the image generation?**
+    *   *The text is encoded by a CLIP Transformer into dense vector embeddings. Inside the U-Net, Cross-Attention layers use the latent image features as Queries, and the CLIP text embeddings as Keys and Values. This allows the image features to "attend" to the text semantics.*
+3.  **Explain Classifier-Free Guidance (CFG).**
+    *   *During generation, the U-Net predicts the noise twice: once conditioned on the prompt, and once unconditioned (empty prompt). We subtract the unconditioned prediction from the conditioned one to find the "direction" of the prompt, and multiply that vector by a scale factor. This forces the generated image to heavily obey the text prompt.*
+
+## 15. Related Papers
+
+*   *High-Resolution Image Synthesis with Latent Diffusion Models* (Rombach et al., 2022)
+*   *Learning Transferable Visual Models From Natural Language Supervision* (Radford et al., 2021) - The CLIP paper.
+*   *Classifier-Free Diffusion Guidance* (Ho & Salimans, 2022)
+
+## 16. Related Problems
+
+*   Implementing Cross-Attention
+*   [Attention Calculation](/problems/attention-calculation)
+*   Latent Space Math
+
+## 17. Related Learning Track Nodes
+
+*   Latent Diffusion
+*   Text-to-Image Pipelines
+*   Cross-Attention Mechanisms

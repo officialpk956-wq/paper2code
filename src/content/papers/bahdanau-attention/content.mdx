@@ -1,0 +1,160 @@
+# Neural Machine Translation by Jointly Learning to Align and Translate
+
+**Bahdanau, Cho, Bengio · ICLR 2015 · arXiv:1409.0473 · ~35,000 citations**
+
+---
+
+## 1. Overview
+
+This landmark paper revolutionized Neural Machine Translation (NMT) by introducing the first **attention mechanism** for sequence-to-sequence models. Published by Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio, it challenged the traditional encoder-decoder architecture where the input sentence was compressed into a fixed-length vector, pointing out that this compression created an information bottleneck that severely degraded translation quality on longer sentences.
+
+Rather than forcing the model to squeeze the entire meaning of a sentence into a single vector, the authors proposed a method where the decoder dynamically searches for parts of the source sentence that are relevant to predicting a target word. This process of jointly learning to align and translate marked the birth of modern attention.
+
+---
+
+## 2. Historical Context
+
+In 2014, NMT systems relied on basic Recurrent Neural Networks (RNNs) or LSTMs to map input sequences to output sequences. The standard pipeline consisted of:
+- An encoder RNN processing the input tokens one by one and outputting the final hidden state vector $v$.
+- A decoder RNN taking $v$ as its initial hidden state and generating output tokens autoregressively.
+
+This design worked reasonably well for short sentences but failed catastrophically as sequence lengths grew. A fixed-length hidden vector (typically 512 or 1024 dimensions) lacked the capacity to represent the precise details, syntax, and semantics of sentences longer than 20-30 words, leading to forgotten contexts and gibberish translations.
+
+---
+
+## 3. Research Problem
+
+Can an encoder-decoder network translate variable-length sentences without compressing the input into a single fixed-length vector? Specifically:
+1. How can a model focus selectively on different parts of the input sequence during generation?
+2. Can we learn the alignment between words in the source and target languages implicitly during backpropagation?
+3. Will this attention mechanism resolve the degradation of sequence models on long sentences?
+
+---
+
+## 4. Prior Work
+
+| Model | Year | Sequence Bottleneck | Context Generation |
+|:---|:---|:---|:---|
+| Seq2Seq (Sutskever et al.) | 2014 | Yes (fixed-size vector) | Initial state only |
+| Recurrent Translation (Cho et al.) | 2014 | Yes (fixed-size vector) | Conditional input at each step |
+| Statistical MT (Phrase-based) | 2003 | No | Hardcoded alignment tables |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**The Fixed-Length Bottleneck:** In standard Seq2Seq models, the final hidden state of the encoder must represent the entire source sequence. As the length of the sentence increases, the performance of the model drops exponentially because it cannot retain all necessary information in a static vector.
+
+**Rigid Alignments:** Traditional phrase-based translation systems relied on separate, manual alignment algorithms (like IBM Models) to map source words to target words. These systems were complex, prone to compounding errors, and could not be optimized end-to-end.
+
+---
+
+## 6. Core Innovation
+
+The core innovation is **Additive (Bahdanau) Attention**. Instead of passing only the final hidden state of the encoder, the encoder passes all its hidden states $h_1, h_2, \ldots, h_{T_x}$ (the annotations) to the decoder.
+
+At each step $i$ of the decoder:
+1. The model computes an alignment score $e_{ij}$ comparing the current decoder state $s_{i-1}$ and the encoder annotation $h_j$:
+   $$e_{ij} = v_a^T \tanh(W_a s_{i-1} + U_a h_j)$$
+2. These scores are normalized using softmax to get attention weights $\alpha_{ij}$:
+   $$\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k=1}^{T_x} \exp(e_{ik})}$$
+3. The context vector $c_i$ is computed as the weighted sum of encoder annotations:
+   $$c_i = \sum_{j=1}^{T_x} \alpha_{ij} h_j$$
+
+---
+
+## 7. Architecture Breakdown
+
+**Bidirectional Encoder:**
+- Processes input using a forward RNN ($\overrightarrow{h}_j$) and a backward RNN ($\overleftarrow{h}_j$).
+- The annotation vector $h_j$ is the concatenation of the two directions: $h_j = [\overrightarrow{h}_j^T; \overleftarrow{h}_j^T]^T$. This ensures each position has context from both left and right.
+
+**Decoder with Attention:**
+- Decodes output tokens using hidden state $s_i$, dependent on the previous state $s_{i-1}$, the previous generated word $y_{i-1}$, and the computed context vector $c_i$.
+- State update: $s_i = f(s_{i-1}, y_{i-1}, c_i)$.
+
+---
+
+## 8. Mathematical Foundations
+
+The alignment model $a$ is a feedforward neural network parameterized by $v_a$, $W_a$, and $U_a$, which is jointly trained with the rest of the model:
+$$e_{ij} = a(s_{i-1}, h_j) = v_a^T \tanh(W_a s_{i-1} + U_a h_j)$$
+
+Since the alignment model is differentiable, gradients can flow back from the loss function through the context vectors $c_i$, the attention weights $\alpha_{ij}$, and into both the encoder and decoder networks. This allows the model to learn linguistic alignments entirely without manual supervision.
+
+---
+
+## 9. Key Experiments
+
+The authors evaluated the model on English-to-French translation using the ACL WMT 2014 corpus.
+- **RNNsearch-30 / RNNsearch-50**: Models with attention trained on sentences of max length 30 and 50.
+- **RNNencdec-30 / RNNencdec-50**: Baseline models without attention (standard Seq2Seq).
+
+Models were evaluated using BLEU scores.
+
+---
+
+## 10. Benchmark Results
+
+| Model | Sentence Length Limit | BLEU (All Sentences) | BLEU (Length <= 30) |
+|:---|:---|:---|:---|
+| RNNencdec-30 (No attention) | 30 | 13.93 | 24.00 |
+| RNNencdec-50 (No attention) | 50 | 17.82 | 26.71 |
+| **RNNsearch-30 (With attention)** | 30 | 29.97 | 34.30 |
+| **RNNsearch-50 (With attention)** | 50 | **32.68** | **36.15** |
+
+**RNNsearch-50 outperformed the baseline by nearly 15 BLEU points on all sentences**, proving that attention completely mitigates the sequence length bottleneck.
+
+---
+
+## 11. Ablation Studies
+
+Visualizing the alignment matrix $\alpha_{ij}$ (attention weights) showed that the model placed high weight on corresponding translated words. For example, when translating "l'accord sur la zone de libre-échange", the model aligned "zone" with "area", "libre-échange" with "free trade", demonstrating the network's capacity to handle non-monotonic alignments (word reordering) dynamically.
+
+---
+
+## 12. Implementation Details
+
+- **Encoder GRU:** 1000 hidden units for both forward and backward layers.
+- **Decoder GRU:** 1000 hidden units.
+- **Attention MLP:** 1000 hidden units in the tanh layer.
+- **Optimizer:** Adadelta ($\epsilon = 10^{-6}$, $\rho = 0.95$) with minibatch size 80.
+- **Vocabulary:** 30,000 most frequent words for both languages; remaining words mapped to `<UNK>` token.
+
+---
+
+## 13. Engineering Insights
+
+- **Context acts as a soft alignment:** The attention weights represent the probability of aligning the $i$-th target word with the $j$-th source word. Because this alignment is continuous ("soft"), it is differentiable, unlike phrase-based SMT which uses discrete ("hard") alignments.
+- **Bidirectionality is required:** Concatenating forward and backward RNN states is critical; it ensures that the annotation for word $j$ contains information about both its past and future sequence context.
+- **The alignment network is cheap:** The alignment model $a$ is simple (a single hidden layer feedforward network), meaning the attention overhead is small compared to the recurrent state updates.
+
+---
+
+## 14. Limitations
+
+- **Quadratic Complexity:** The calculation of $e_{ij}$ requires computing an alignment score for every decoder step $i$ against every encoder step $j$. The complexity is $O(U_x \cdot U_y)$, which limits performance on very long sequences.
+- **Strictly Sequential:** Because it relies on GRU states ($s_i$, $h_j$), the model cannot parallelize during training over sequence positions.
+- **Additive Overhead:** The $\tanh$ operation in additive attention is slower to compute on GPUs than matrix multiplications.
+
+---
+
+## 15. Influence on Later Research
+
+- **Multiplicative (Luong) Attention (2015):** Simplified the alignment function using dot products, improving computation speeds.
+- **Transformer (2017):** Discarded recurrence and generalized attention to **self-attention** where queries, keys, and values are generated from the same sequence, enabling full parallelism.
+- **Explainable AI:** Attention weights became the first widely adopted mechanism for visualizing and explaining the internal decisions of sequence models.
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer) — uses self-attention instead of additive attention over RNN states.
+- [seq2seq](/architectures/seq2seq) — the baseline encoder-decoder framework without attention.
+
+---
+
+## 17. Related Problems
+
+- [scaled-dot-product-attention](/problems/scaled-dot-product-attention) — implementation of attention scaled by key dimension.
+- [multi-head-attention](/problems/multi-head-attention) — parallelized attention subspaces.

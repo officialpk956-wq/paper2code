@@ -1,0 +1,210 @@
+# Improving Language Understanding by Generative Pre-Training (GPT-1)
+
+**Radford, Narasimhan, Salimans & Sutskever · OpenAI Technical Report · 2018**
+
+---
+
+## 1. Overview
+
+GPT-1 established the **pre-train then fine-tune** paradigm that would define NLP for the next decade. Published by OpenAI in June 2018, four months before BERT, it demonstrated that a large decoder-only Transformer trained on unsupervised language modeling could transfer to diverse supervised tasks with minimal architectural modification.
+
+While BERT would surpass GPT-1's scores two months later, GPT-1 planted the seed for GPT-2, GPT-3, and ChatGPT. More importantly, it made the foundational architectural choice that has proven most consequential: the **decoder-only Transformer**, trained autoregressively. Every frontier language model today — GPT-4, Claude, LLaMA, Gemini, Mistral — descends from this paper's architectural blueprint.
+
+---
+
+## 2. Historical Context
+
+In mid-2018, NLP was in a productive but fragmented state. The Transformer (Vaswani et al., 2017) had proven its power for translation, but each new NLP task (sentiment, entailment, reading comprehension) still required a bespoke architecture and large task-specific labeled datasets.
+
+Transfer learning had worked brilliantly in computer vision (ImageNet pre-training → fine-tune for any vision task). The NLP equivalent was weak: Word2Vec/GloVe embeddings were frozen, context-free vectors that served as input features but couldn't be fine-tuned end-to-end.
+
+The question OpenAI's team addressed: can we pre-train a large Transformer on raw text with a simple self-supervised objective, then fine-tune the *entire model* on a small labeled dataset?
+
+---
+
+## 3. Research Problem
+
+Two fundamental challenges:
+
+1. **What objective?** What self-supervised pre-training task uses unlabeled text and produces representations that transfer broadly across NLP tasks?
+
+2. **How to fine-tune?** For tasks with different input structures (single sentences, sentence pairs, multiple-choice questions), how do you adapt a single pre-trained model without task-specific architecture changes?
+
+---
+
+## 4. Prior Work
+
+| Method | Pre-training | Fine-tuning | Limitation |
+|:---|:---|:---|:---|
+| Word2Vec/GloVe | Shallow self-supervised | N/A (fixed embeddings) | Context-free; can't fine-tune |
+| ELMo (2018) | Bidirectional LSTM LM | Feature extraction | Shallow architecture; feature-based |
+| CoVe (2017) | Translation encoder | Feature extraction | Task-dependent representations |
+| ULMFiT (2018) | LSTM LM | End-to-end fine-tune | LSTM capacity limits; sequential |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Shallow architectures:** Word2Vec and GloVe produce fixed embeddings — the same "bank" regardless of context. They can't learn the compositional semantics required for complex NLP tasks.
+
+**Feature-based approach:** ELMo generates contextual representations but the model is frozen. The downstream task model can't leverage the full depth of the representation through gradient flow.
+
+**No unified framework:** Every NLP task had its own model. Reading comprehension used attention over passages; entailment used siamese networks; NER used CRFs. The community lacked a single transferable representation.
+
+---
+
+## 6. Core Innovation
+
+**Two-stage training framework:**
+
+**Stage 1 — Unsupervised Pre-training (Language Modeling):**
+Train a multi-layer Transformer decoder on a large text corpus to predict the next token:
+$$L_1(\mathcal{U}) = \sum_i \log P(u_i | u_{i-k}, \dots, u_{i-1}; \Theta)$$
+
+**Stage 2 — Supervised Fine-tuning:**
+Add a simple linear classification head on top of the final Transformer layer's output at the last token. Minimize:
+$$L_2(\mathcal{C}) = \sum_{(x,y)} \log P(y | x^1, \dots, x^m)$$
+
+The joint objective adds the LM loss as an auxiliary term:
+$$L_3(\mathcal{C}) = L_2(\mathcal{C}) + \lambda \cdot L_1(\mathcal{C})$$
+
+**Input transformation for diverse tasks** (the key engineering insight): Instead of modifying the architecture, transform the task's input into a sequence the pre-trained model understands:
+- **Classification:** `[Start] text [Extract]` → linear layer on last token
+- **Entailment:** `[Start] premise [Delim] hypothesis [Extract]` → linear layer
+- **Multiple choice:** Process each answer separately; softmax over scores
+
+---
+
+## 7. Architecture Breakdown
+
+GPT-1 is a 12-layer Transformer **decoder** (masked self-attention only — no cross-attention):
+
+| Component | Value |
+|:---|:---|
+| Layers | 12 |
+| Hidden size | 768 |
+| Attention heads | 12 |
+| Context window | 512 tokens |
+| Vocabulary | ~40K BPE tokens |
+| Parameters | ~117M |
+
+**Key difference from BERT:** No bidirectional attention. Each token attends only to itself and preceding tokens (causal mask). This is what makes the architecture generative but limits its bidirectionality.
+
+See [GPT architecture page](/architectures/gpt) for full breakdown.
+
+---
+
+## 8. Mathematical Foundations
+
+**Causal Language Modeling Objective:**
+$$L_1(\mathcal{U}) = \sum_i \log P(u_i | u_{i-k}, \dots, u_{i-1}; \Theta)$$
+
+Where $k$ is the context window size and $\Theta$ are the Transformer parameters.
+
+**Causal Mask in Attention:**
+
+The attention mask $M \in \{0, -\infty\}^{n \times n}$ is:
+$$M_{ij} = \begin{cases} 0 & i \geq j \\ -\infty & i < j \end{cases}$$
+
+So attention at position $i$ can only attend to positions $j \leq i$. After softmax, $e^{-\infty} = 0$.
+
+**Fine-tuning objective with auxiliary LM loss:**
+$$L_3(\mathcal{C}) = \sum_{(x,y)} \log P(y|x^1,\dots,x^m;\Theta) + \lambda \sum_i \log P(x^1_i|x^1_1,\dots,x^1_{i-1};\Theta)$$
+
+---
+
+## 9. Key Experiments
+
+GPT-1 was evaluated on 12 tasks across 4 categories:
+
+| Category | Tasks | GPT-1 vs SOTA |
+|:---|:---|:---|
+| Natural Language Inference | MultiNLI, SNLI, SciTail, RTE | +1 to +5% |
+| Reading Comprehension | RACE | +5.7% |
+| Sentence Similarity | STS-B, QQP, MRPC | Mixed |
+| Classification | SST-2, CoLA | +1 to +2% |
+
+**9 out of 12 tasks:** New state-of-the-art at publication time.
+
+---
+
+## 10. Benchmark Results
+
+| Task | Previous SOTA | GPT-1 | Δ |
+|:---|:---|:---|:---|
+| RACE (reading comp.) | 61.7 | **59.0** | (BERT surpassed it) |
+| MultiNLI (entailment) | 80.6 | **82.1** | +1.5% |
+| QNLI | 88.1 | **88.1** | +0.0% |
+| CoLA (linguistics) | 35.0 | **45.4** | +10.4% |
+| SST-2 (sentiment) | 91.3 | **91.3** | Tied |
+
+---
+
+## 11. Ablation Studies
+
+| Configuration | Average Score |
+|:---|:---|
+| Full GPT-1 | +5.6 vs LSTM baseline |
+| Pre-trained Transformer (no LM aux loss) | +4.9 |
+| Transformer trained from scratch (no pre-training) | +1.1 |
+| LSTM + pre-training | +2.1 |
+| Transformer + no pre-training + no aux LM | Baseline |
+
+**Key finding:** Pre-training contributes ~4.5 points. The Transformer architecture contributes ~3 points over LSTM. Both matter independently.
+
+---
+
+## 12. Implementation Details
+
+- **Pre-training corpus:** BooksCorpus (~800M words of novel text)
+- **Tokenizer:** BPE (Byte Pair Encoding), ~40,000 tokens
+- **Pre-training:** Adam, LR 2.5e-4, linear warmup 2000 steps, cosine annealing
+- **Batch size:** 64 random sequences of 512 contiguous tokens
+- **Pre-training compute:** 100 epochs (≈1 month on 8 P600 GPUs)
+- **Fine-tuning:** 3 epochs, LR 6.25e-5, linear warmup
+- **Dropout:** 0.1 throughout
+
+---
+
+## 13. Engineering Insights
+
+- **The input transformation trick is the paper's most practical contribution.** By defining simple text delimiters (`[Start]`, `[Delim]`, `[Extract]`) and adapting the task input into a token sequence, you can apply the same pre-trained model to classification, entailment, similarity, and multiple-choice tasks with zero architectural changes.
+- **Auxiliary LM loss ($\lambda=0.5$) consistently improves fine-tuning.** Keeping the LM objective alive during fine-tuning prevents catastrophic forgetting of the pre-trained knowledge.
+- **BPE tokenization over word-level tokenization.** BPE subword units handle rare words and morphological variations without an OOV problem — this tokenization approach became universal (GPT-2 extended it; LLaMA's SentencePiece is equivalent).
+
+---
+
+## 14. Limitations
+
+- **Unidirectional context.** The causal mask means GPT-1 can't see right context — demonstrably worse than BERT on many understanding tasks requiring bidirectional comprehension.
+- **117M parameters.** This was large in 2018 but small by GPT-3 standards (175B). Most of GPT-1's fine-tuning gains are within ~2% of task-specific models trained from scratch.
+- **BooksCorpus only.** 800M words is tiny. GPT-2 would show that scale of pre-training data is the primary lever.
+- **Fixed context window (512 tokens).** Long documents must be truncated.
+
+---
+
+## 15. Influence on Later Research
+
+| Paper | Year | Direct GPT-1 Contribution |
+|:---|:---|:---|
+| GPT-2 | 2019 | Same architecture, 15B token dataset, 1.5B params |
+| BERT | 2018 | GPT-1's architecture as foil; showed bidirectionality matters |
+| ULMFiT (concurrent) | 2018 | Confirmed pre-train + fine-tune paradigm with LSTM |
+| GPT-3 | 2020 | Same architecture scaled to 175B; zero-shot emergence |
+| LLaMA | 2023 | Same decoder-only blueprint; efficiency-focused |
+
+---
+
+## 16. Related Architectures
+
+- [GPT Architecture](/architectures/gpt) — full decoder-only breakdown
+- [Transformer](/architectures/transformer) — base architecture
+- [BERT](/architectures/bert) — bidirectional encoder counterpart
+
+---
+
+## 17. Related Problems
+
+- [Attention Calculation](/problems/attention-calculation)
+- Implementing the causal self-attention mask
+- Designing input transformations for classification vs. entailment tasks

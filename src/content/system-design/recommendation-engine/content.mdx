@@ -1,0 +1,51 @@
+# System Design: Recommendation Engine
+
+Design a recommender serving personalized feeds to 100M users from a catalog of 10M items, under 100ms.
+
+## The Fundamental Constraint
+
+You cannot score 10M items per request with a heavy model. Every production recommender therefore splits into two stages:
+
+```
+10M items → [Retrieval: cheap, approximate] → ~1k candidates
+          → [Ranking: expensive, precise]   → top 50
+```
+
+## Stage 1: Candidate Generation
+
+**Two-tower model**: a user tower and an item tower each produce an embedding; relevance is their dot product.
+
+$$
+\text{score}(u, i) = f_{\text{user}}(u) \cdot f_{\text{item}}(i)
+$$
+
+Because item embeddings don't depend on the user, they're precomputed and stored in an **approximate nearest neighbor (ANN)** index (HNSW / ScaNN). At request time: embed the user once, query the index, get 1000 candidates in milliseconds.
+
+## Stage 2: Ranking
+
+A heavier model (often gradient-boosted trees or a deep cross network) scores the ~1000 candidates with rich features:
+
+- User features: history, demographics, session context
+- Item features: popularity, freshness, category
+- Cross features: user-category affinity, time since last interaction
+
+## Feature Store
+
+The same features must be available at training time (batch) and serving time (low-latency) — inconsistency here ("training-serving skew") is the most common production failure.
+
+:::warning
+Log the *exact* feature values used at serving time and train on those logs. Recomputing features later from raw data almost always introduces skew.
+:::
+
+## Feedback Loop
+
+```
+Impressions/Clicks → Event Stream (Kafka) → Training Pipeline → Daily model refresh
+                                          → Near-real-time user embedding updates
+```
+
+## Interview Discussion Points
+
+1. Cold start: how do you recommend for a brand-new user? A brand-new item?
+2. Why not rank everything with the two-tower model since it's already fast?
+3. How do you prevent filter bubbles / feedback loops where the model only learns from what it already shows?
