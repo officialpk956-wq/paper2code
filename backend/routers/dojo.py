@@ -1,10 +1,11 @@
 import logging
-from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Header, Query, Request
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 import datetime as _dt
+from slowapi.util import get_remote_address
 from backend.server import limiter
 
 from backend.database import get_db
@@ -18,8 +19,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Dojo"])
 
 @router.get("/problems")
-def get_problems(db: Session = Depends(get_db)):
-    return db.query(Problem).filter(Problem.is_retired == False).all()
+def get_problems(
+    difficulty: Optional[str] = Query(None, description="Filter by difficulty: Easy, Medium, Hard"),
+    category:   Optional[str] = Query(None, description="Filter by category (partial match)"),
+    q:          Optional[str] = Query(None, min_length=2, max_length=200, description="Full-text search"),
+    db: Session = Depends(get_db),
+):
+    """List active problems with optional filtering."""
+    query = db.query(Problem).filter(Problem.is_retired == False)
+    if difficulty:
+        query = query.filter(Problem.difficulty.ilike(difficulty))
+    if category:
+        query = query.filter(Problem.category.ilike(f"%{category}%"))
+    if q:
+        pat = f"%{q}%"
+        query = query.filter(or_(
+            Problem.title.ilike(pat),
+            Problem.description.ilike(pat),
+            Problem.category.ilike(pat),
+        ))
+    problems = query.all()
+    return [
+        {
+            "id":              p.id,
+            "slug":            p.slug,
+            "title":           p.title,
+            "difficulty":      p.difficulty,
+            "category":        p.category,
+            "estimated_time":  p.estimated_time,
+            "tags":            p.tags,
+            "is_retired":      p.is_retired,
+            "version":         p.version,
+            "time_limit_ms":   p.time_limit_ms,
+            "acceptance_rate": float(p.acceptance_rate) if p.acceptance_rate is not None else None,
+        }
+        for p in problems
+    ]
 
 @router.get("/problems/{problem_id}")
 def get_problem(problem_id: str, db: Session = Depends(get_db)):
@@ -181,13 +216,78 @@ def problem_stats(problem_id: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/dojo/submissions")
+def user_submission_history(
+    problem_id: Optional[str] = Query(None, description="Filter to a specific problem"),
+    limit:  int = Query(20, ge=1, le=100),
+    offset: int = Query(0,  ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the current user's submission history (all problems unless problem_id given), newest first."""
+    query = (
+        db.query(DojoSubmission)
+        .filter_by(user_id=current_user.id)
+    )
+    if problem_id:
+        query = query.filter(DojoSubmission.problem_id == problem_id)
+    total = query.count()
+    rows = (
+        query
+        .order_by(DojoSubmission.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "submissions": [
+            {
+                "id":              s.id,
+                "problem_id":      s.problem_id,
+                "passed":          s.passed,
+                "is_best":         s.is_best,
+                "time_ms":         s.time_ms,
+                "problem_version": s.problem_version,
+                "created_at":      s.created_at.isoformat() if s.created_at else None,
+                "stdout":          (s.stdout or "")[:500],
+                "stderr":          (s.stderr or "")[:300],
+            }
+            for s in rows
+        ],
+    }
+
+
+def _dojo_user_key(request: Request) -> str:
+    """Per-user rate limit key for dojo code submission — falls back to IP."""
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            import jwt as _jwt
+            from backend.services.auth_service import SECRET_KEY, ALGORITHM
+            payload = _jwt.decode(
+                auth[7:],
+                SECRET_KEY,
+                algorithms=[ALGORITHM],
+                options={"verify_aud": False, "verify_iss": False, "verify_exp": False},
+            )
+            uid = payload.get("user_id")
+            if uid is not None:
+                return f"dojo:{uid}"
+        except Exception:
+            pass
+    return get_remote_address(request)
+
+
 class DojoCodeSubmitRequest(BaseModel):
     problem_id: str
     code: str
     stdin: Optional[str] = None
 
 @router.post("/dojo/submit")
-@limiter.limit("60/hour")
+@limiter.limit("30/hour", key_func=_dojo_user_key)
 async def submit_dojo_code(
     req: DojoCodeSubmitRequest,
     request: Request,

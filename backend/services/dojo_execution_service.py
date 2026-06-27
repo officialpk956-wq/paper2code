@@ -17,10 +17,11 @@ from typing import Any
 
 import httpx
 
-PISTON_URL          = os.getenv("PISTON_URL", "http://localhost:2000")
-EXECUTION_TIMEOUT_S = 20.0       # httpx client timeout (must exceed run_timeout_ms)
-RUN_TIMEOUT_MS      = 10_000     # 10 s — matches the old subprocess timeout=10
-MEMORY_LIMIT_BYTES  = 67_108_864  # 64 MB per execution
+PISTON_URL            = os.getenv("PISTON_URL", "http://localhost:2000")
+EXECUTION_TIMEOUT_S   = 40.0        # httpx client timeout (must exceed max run_timeout_ms)
+RUN_TIMEOUT_MS        = 10_000      # 10 s — global default; can be overridden per-problem
+MEMORY_LIMIT_BYTES    = 67_108_864  # 64 MB per execution
+OUTPUT_LIMIT_BYTES    = 65_536      # 64 KB stdout cap — prevents infinite-print DoS
 
 
 from tenacity import (
@@ -43,7 +44,11 @@ async def _call_piston(payload: dict) -> dict:
         resp.raise_for_status()
     return resp.json()
 
-async def execute_python(code: str, stdin: str = "") -> dict[str, Any]:
+async def execute_python(
+    code: str,
+    stdin: str = "",
+    run_timeout_ms: int = RUN_TIMEOUT_MS,
+) -> dict[str, Any]:
     """
     Execute user-submitted Python code in the Piston sandbox.
 
@@ -67,9 +72,10 @@ async def execute_python(code: str, stdin: str = "") -> dict[str, Any]:
         "stdin": stdin,
         "args": [],
         "compile_timeout": 5_000,
-        "run_timeout": RUN_TIMEOUT_MS,
+        "run_timeout": run_timeout_ms,
         "compile_memory_limit": -1,
         "run_memory_limit": MEMORY_LIMIT_BYTES,
+        "output_limit": OUTPUT_LIMIT_BYTES,   # cap stdout at 64 KB
     }
 
     try:
