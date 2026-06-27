@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 from collections import defaultdict
 
 from backend.database import get_db
-from backend.dependencies import get_current_user
+from backend.dependencies import get_current_user, get_optional_user
 from backend.models import (
     LearnerProgress, Paper, PaperModule, AssessmentAttempt, TutorAnalytics,
     InterviewQuestion, Roadmap, TutorFeedback, TutorSessionRecord,
 )
 from backend.services.tutor_session_store import tutor_session_store
+from backend.services.progress_service import award_xp
 
 from core.analytics.adaptive_engine import adaptive_engine
 from core.analytics.recommendation_engine import recommendation_engine
@@ -32,8 +33,8 @@ class ValidateRequest(BaseModel):
     user_answer: str
 
 class ProgressUpdateRequest(BaseModel):
-    paper_id: int
-    module_id: int
+    entity_type: str
+    entity_id: str
     status: str
 
 class TutorAskRequest(BaseModel):
@@ -122,15 +123,15 @@ def update_progress(
 def update_learner_progress(
     request: ProgressUpdateRequest,
     db: Session = Depends(get_db),
-    x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    current_user=Depends(get_current_user)
 ):
     try:
         progress = (
             db.query(LearnerProgress)
             .filter(
-                LearnerProgress.learner_id == x_learner_id,
-                LearnerProgress.paper_id == request.paper_id,
-                LearnerProgress.module_id == request.module_id
+                LearnerProgress.learner_id == str(current_user.id),
+                LearnerProgress.entity_type == request.entity_type,
+                LearnerProgress.entity_id == request.entity_id
             )
             .first()
         )
@@ -146,9 +147,9 @@ def update_learner_progress(
             db.refresh(progress)
         else:
             progress = LearnerProgress(
-                learner_id=x_learner_id,
-                paper_id=request.paper_id,
-                module_id=request.module_id,
+                learner_id=str(current_user.id),
+                entity_type=request.entity_type,
+                entity_id=request.entity_id,
                 status=request.status,
                 started_at=now if request.status in ("in_progress", "completed") else None,
                 completed_at=now if request.status == "completed" else None
@@ -337,7 +338,7 @@ def get_adaptive_recommendations(
     x_learner_id: str = Header(alias="X-Learner-ID", default="")
 ):
     try:
-        recs = adaptive_engine.generate_recommendations(db, x_learner_id)
+        recs = adaptive_engine.get_personalized_recommendations(db, x_learner_id)
         return {"recommendations": recs}
     except Exception as e:
         logger.error(f"Adaptive recommendations error: {str(e)}")
@@ -530,7 +531,8 @@ def get_assessment_challenge(
 def validate_assessment_challenge(
     request: ValidateRequest,
     db: Session = Depends(get_db),
-    x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
+    current_user=Depends(get_optional_user)
 ):
     try:
         challenge = request.challenge
@@ -571,6 +573,14 @@ def validate_assessment_challenge(
             )
             db.add(attempt)
             db.commit()
+            
+        if current_user and val_res["is_correct"]:
+            award_xp(
+                db, 
+                current_user.id, 
+                "assessment.completed",
+                question_text
+            )
             
         return val_res
     except Exception as e:

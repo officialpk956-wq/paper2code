@@ -135,6 +135,13 @@ def _build_response(spec, result, code, code_source):
     }
 
 
+def _assert_paper_readable(p, current_user) -> None:
+    """Raise 403 if the paper is private and the caller is not the owner."""
+    if p.visibility == "private":
+        if not current_user or current_user.id != p.uploaded_by:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+
 def get_paper_info(paper) -> tuple[str, str, str, str]:
     arch_graph = paper.architecture_graph or {}
     classification = arch_graph.get("classification")
@@ -339,14 +346,19 @@ def list_papers(
                 most_complex_model = {"name": title, "flops": flops}
         
         results.append({
-            "id": p.id,
-            "title": title,
+            "id":              p.id,
+            "title":           title,
+            "authors":         p.authors,
+            "abstract":        p.abstract,
+            "visibility":      p.visibility,
+            "uploaded_by":     p.uploaded_by,
+            "created_at":      p.created_at.isoformat() if p.created_at else None,
             "architecture_type": arch_type,
-            "module_count": modules_count,
+            "module_count":    modules_count,
             "parameter_count": params,
-            "flops": flops,
-            "status": status,
-            "support_level": support_level
+            "flops":           flops,
+            "status":          status,
+            "support_level":   support_level,
         })
         
     return {
@@ -396,11 +408,16 @@ async def get_upload_url(
 
 
 @router.get("/papers/{paper_id}")
-def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
+def get_paper_details(
+    paper_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
     from backend.models import Paper
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
 
     title, arch_type, status, support_level = get_paper_info(p)
     flops_analysis = p.flops_analysis or {}
@@ -421,16 +438,19 @@ def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
     ingestion_data = (p.architecture_graph or {}).get("ingestion", {})
     return {
         "metadata": {
-            "id": p.id,
-            "title": title,
-            "full_title": p.title,
-            "authors": p.authors,
-            "abstract": p.abstract,
+            "id":               p.id,
+            "title":            title,
+            "full_title":       p.title,
+            "authors":          p.authors,
+            "abstract":         p.abstract,
+            "visibility":       p.visibility,
+            "uploaded_by":      p.uploaded_by,
+            "created_at":       p.created_at.isoformat() if p.created_at else None,
             "architecture_type": arch_type,
-            "status": status,
-            "source_filename": ingestion_data.get("source_filename"),
-            "figure_count": ingestion_data.get("figure_count", 0),
-            "equation_count": ingestion_data.get("equation_count", 0),
+            "status":           status,
+            "source_filename":  ingestion_data.get("source_filename"),
+            "figure_count":     ingestion_data.get("figure_count", 0),
+            "equation_count":   ingestion_data.get("equation_count", 0),
         },
         "module_summary": modules_summary,
         "architecture_statistics": {
@@ -445,11 +465,16 @@ def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/papers/{paper_id}/modules")
-def list_paper_modules(paper_id: int, db: Session = Depends(get_db)):
+def list_paper_modules(
+    paper_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
     from backend.models import Paper, PaperModule
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
 
     title, arch_type, status, _ = get_paper_info(p)
     total = len(p.modules)
@@ -467,11 +492,19 @@ def list_paper_modules(paper_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/modules/{module_id}")
-def get_module(module_id: int, db: Session = Depends(get_db)):
+def get_module(
+    module_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user)
+):
     from backend.models import PaperModule, Paper
     m = db.query(PaperModule).filter(PaperModule.id == module_id).first()
     if not m:
         raise HTTPException(status_code=404, detail="Module not found")
+
+    paper = db.query(Paper).filter_by(id=m.paper_id).first()
+    if paper:
+        _assert_paper_readable(paper, current_user)
 
     siblings = (
         db.query(PaperModule)
@@ -609,6 +642,11 @@ async def confirm_upload(
     _check_paper_quota(db, current_user.id)
     _check_storage_quota(db, current_user.id, additional_bytes=body.file_size_bytes)
 
+    from backend.models import Paper
+    paper = db.query(Paper).filter(Paper.r2_key == body.key).first()
+    if paper and paper.uploaded_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     storage_ref = f"r2://{body.key}"
     task = TaskRepository(db).create("paper.codegen", current_user.id, body.paper_name)
     generate_code_from_pdf_task.delay(
@@ -682,11 +720,16 @@ async def download_paper(
 
 
 @router.get("/papers/{paper_id}/blueprint")
-def get_architecture_blueprint(paper_id: int, db: Session = Depends(get_db)):
+def get_architecture_blueprint(
+    paper_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
     from backend.models import Paper
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
     bp = (p.architecture_graph or {}).get("ingestion", {}).get("architecture_blueprint")
     if not bp:
         raise HTTPException(status_code=404, detail="Blueprint not generated yet")
@@ -694,11 +737,16 @@ def get_architecture_blueprint(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/papers/{paper_id}/executable-graph")
-def get_executable_graph(paper_id: int, db: Session = Depends(get_db)):
+def get_executable_graph(
+    paper_id: int, 
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user)
+):
     from backend.models import Paper
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
     eg = (p.architecture_graph or {}).get("ingestion", {}).get("executable_graph")
     if not eg:
         raise HTTPException(status_code=404, detail="Executable graph not generated yet")
@@ -710,6 +758,7 @@ def export_paper_graph(
     paper_id: int,
     format: str = "json",
     db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user)
 ):
     from backend.models import Paper
     from backend.services.architecture_graph_compiler import (
@@ -720,6 +769,7 @@ def export_paper_graph(
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
     eg_dict = (p.architecture_graph or {}).get("ingestion", {}).get("executable_graph")
     if not eg_dict:
         raise HTTPException(status_code=404, detail="Executable graph not generated yet")
@@ -737,21 +787,32 @@ def export_paper_graph(
 
 
 @router.get("/papers/{paper_id}/knowledge-graph")
-def get_knowledge_graph(paper_id: int, db: Session = Depends(get_db)):
+def get_knowledge_graph(
+    paper_id: int, 
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user)
+):
     from backend.models import Paper
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
     kg = (p.architecture_graph or {}).get("ingestion", {}).get("knowledge_graph", {})
     return {"nodes": kg.get("nodes", []), "edges": kg.get("edges", [])}
 
 
 @router.post("/papers/{paper_id}/publish")
-def publish_paper(paper_id: int, db: Session = Depends(get_db)):
+def publish_paper(
+    paper_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     from backend.models import Paper
     paper = db.query(Paper).filter(Paper.id == paper_id).first()
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+    if paper.uploaded_by != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not your paper")
         
     arch_graph = dict(paper.architecture_graph) if paper.architecture_graph else {}
     arch_graph["status"] = "Published"
@@ -763,3 +824,157 @@ def publish_paper(paper_id: int, db: Session = Depends(get_db)):
     db.commit()
     logger.info("Paper Published: %s", paper.title)
     return {"status": "success", "paper_id": paper.id}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/papers/{id}/visibility  — change visibility (P0, ownership req.)
+# ---------------------------------------------------------------------------
+
+class VisibilityUpdate(BaseModel):
+    visibility: str
+
+
+@router.patch("/papers/{paper_id}/visibility")
+def update_paper_visibility(
+    paper_id: int,
+    body: VisibilityUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if body.visibility not in _VALID_VISIBILITY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"visibility must be one of: {', '.join(_VALID_VISIBILITY)}",
+        )
+    from backend.models import Paper
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper.uploaded_by != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not your paper")
+    paper.visibility = body.visibility
+    db.commit()
+    return {"paper_id": paper_id, "visibility": body.visibility}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/papers/{id}  — delete own paper, R2 object, free quota (P1)
+# ---------------------------------------------------------------------------
+
+@router.delete("/papers/{paper_id}", status_code=200)
+def delete_paper(
+    paper_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.models import Paper, User as _User
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if paper.uploaded_by != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not your paper")
+
+    # Free storage quota
+    if paper.file_size_bytes and paper.uploaded_by:
+        owner = db.query(_User).filter_by(id=paper.uploaded_by).first()
+        if owner:
+            owner.storage_bytes_used = max(0, (owner.storage_bytes_used or 0) - paper.file_size_bytes)
+
+    # Delete R2 object (best-effort)
+    try:
+        from backend.services import storage_service
+        if paper.r2_key:
+            storage_service.cleanup(f"r2://{paper.r2_key}")
+    except Exception:
+        pass
+
+    db.delete(paper)
+    db.commit()
+    return {"deleted": True, "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/{id}/flag  — user reports a paper for review (P1)
+# ---------------------------------------------------------------------------
+
+class PaperFlagRequest(BaseModel):
+    reason: str = "inappropriate"
+
+
+@router.post("/papers/{paper_id}/flag", status_code=200)
+def flag_paper(
+    paper_id: int,
+    body: PaperFlagRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.models import Paper
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    paper.is_flagged = True
+    paper.flag_reason = body.reason
+    db.commit()
+    return {"paper_id": paper_id, "flagged": True, "reason": body.reason}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/{id}/similar  — architecture-type similarity (P2)
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/{paper_id}/similar")
+def similar_papers(
+    paper_id: int,
+    limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    from backend.models import Paper
+    from sqlalchemy import or_
+    p = db.query(Paper).filter_by(id=paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
+
+    _, arch_type, _, _ = get_paper_info(p)
+
+    vis_filter = Paper.visibility != "private"
+    if current_user:
+        vis_filter = or_(Paper.visibility != "private", Paper.uploaded_by == current_user.id)
+
+    candidates = (
+        db.query(Paper)
+        .filter(Paper.id != paper_id, vis_filter)
+        .limit(200)
+        .all()
+    )
+
+    def _similarity(arch_a: str | None, arch_b: str | None) -> float:
+        if not arch_a or not arch_b:
+            return 0.1
+        if arch_a == arch_b:
+            return 1.0
+        if arch_a.split("-")[0] == arch_b.split("-")[0]:
+            return 0.5
+        return 0.1
+
+    scored = []
+    for c in candidates:
+        _, c_arch, _, _ = get_paper_info(c)
+        score = _similarity(c_arch, arch_type)
+        scored.append((score, c))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    return {
+        "paper_id": paper_id,
+        "similar": [
+            {
+                "id":                c.id,
+                "title":             c.title,
+                "architecture_type": get_paper_info(c)[1],
+                "similarity_score":  round(score, 4),
+            }
+            for score, c in scored[:limit]
+        ],
+    }
