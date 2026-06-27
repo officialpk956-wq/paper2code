@@ -107,3 +107,42 @@ def r2_key_from_ref(storage_ref: str):
     if storage_ref.startswith("r2://"):
         return storage_ref[5:]
     return None
+
+
+def generate_presigned_upload_url(
+    filename: str,
+    content_type: str = "application/pdf",
+    expires_in: int = 900,
+) -> dict:
+    """
+    Generate a presigned S3 PUT URL for direct client → R2 upload.
+    The API server never touches the bytes; only the key is queued to Celery.
+    Returns {url, key, expires_in} or raises RuntimeError if R2 not configured.
+    """
+    if not R2_AVAILABLE:
+        raise RuntimeError("R2 not configured — presigned uploads unavailable")
+    safe = os.path.basename(filename).replace(" ", "_")
+    key = f"papers/{uuid.uuid4().hex}_{safe}"
+    url = _r2_client().generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": _R2_BUCKET_NAME,
+            "Key": key,
+            "ContentType": content_type,
+        },
+        ExpiresIn=expires_in,
+    )
+    log.info("Generated presigned upload URL for key: %s", key)
+    return {"url": url, "key": key, "expires_in": expires_in}
+
+
+def get_object_size(key: str) -> int:
+    """Return the byte size of an R2 object, or 0 on error."""
+    if not R2_AVAILABLE:
+        return 0
+    try:
+        resp = _r2_client().head_object(Bucket=_R2_BUCKET_NAME, Key=key)
+        return resp.get("ContentLength", 0)
+    except Exception as exc:
+        log.warning("get_object_size failed for %s: %s", key, exc)
+        return 0
