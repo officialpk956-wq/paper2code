@@ -182,6 +182,56 @@ def send_streak_at_risk_email_sync(to: str, name: str, streak: int) -> bool:
         return False
 
 
+def send_weekly_digest_email_sync(to: str, name: str, stats: dict) -> bool:
+    if not RESEND_API_KEY:
+        log.warning("[email] RESEND_API_KEY not set — skipping digest to %s", to)
+        return False
+    problems_solved = stats.get("problems_solved", 0)
+    xp_earned       = stats.get("xp_earned", 0)
+    rank_change      = stats.get("rank_change", 0)
+    rank_icon = "▲" if rank_change > 0 else ("▼" if rank_change < 0 else "—")
+    html = f"""
+    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
+      <h1 style="font-size:24px;color:#0F172A">Your weekly summary, {name}</h1>
+      <table style="width:100%;border-collapse:collapse;margin:24px 0">
+        <tr>
+          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
+            <div style="font-size:32px;font-weight:700;color:#7C3AED">{problems_solved}</div>
+            <div style="color:#64748B;font-size:13px">Problems Solved</div>
+          </td>
+          <td style="width:16px"></td>
+          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
+            <div style="font-size:32px;font-weight:700;color:#7C3AED">+{xp_earned}</div>
+            <div style="color:#64748B;font-size:13px">XP Earned</div>
+          </td>
+          <td style="width:16px"></td>
+          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
+            <div style="font-size:32px;font-weight:700;color:#7C3AED">{rank_icon}{abs(rank_change)}</div>
+            <div style="color:#64748B;font-size:13px">Rank Change</div>
+          </td>
+        </tr>
+      </table>
+      <a href="{FRONTEND_URL}/dojo" style="display:inline-block;margin:24px 0;padding:12px 24px;
+         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
+        Keep Practicing →
+      </a>
+      <p style="color:#94A3B8;font-size:12px">Paper2Code — your weekly research-to-code digest.</p>
+    </div>"""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.post(
+                RESEND_URL,
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                json={"from": FROM_ADDRESS, "to": [to],
+                      "subject": f"Your Paper2Code week: {problems_solved} problems, +{xp_earned} XP", "html": html},
+            )
+            r.raise_for_status()
+            return True
+    except Exception as exc:
+        log.error("[email] digest failed to %s: %s", to, exc)
+        return False
+
+
 def send_paper_done_email_sync(to: str, paper_name: str, paper_id: int) -> bool:
     """Synchronous wrapper for use inside Celery tasks."""
     if not RESEND_API_KEY:
