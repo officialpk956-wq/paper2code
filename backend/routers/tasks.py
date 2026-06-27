@@ -16,8 +16,9 @@ def get_task(
     task = TaskRepository(db).get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.user_id is not None and task.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    if not getattr(current_user, "is_admin", False):
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
     return {
         "id": task.id,
         "status": task.status,

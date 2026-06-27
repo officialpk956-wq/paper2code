@@ -2,6 +2,21 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 
+# Initialize Sentry in the Celery worker process when DSN is configured.
+# FastAPI server has its own init in server.py; this covers the worker side.
+_sentry_dsn = os.getenv("SENTRY_DSN", "")
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[CeleryIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+        environment=os.getenv("ENVIRONMENT", "development"),
+        release=os.getenv("APP_VERSION", ""),
+    )
+
 celery_app = Celery(
     "p2c",
     broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),

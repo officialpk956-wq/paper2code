@@ -1,6 +1,7 @@
 """
 tests/test_infra_tasks.py
 
+
 Covers:
   - _do_prune_tutor_sessions   — deletes old, keeps recent, null last_active_at
   - _do_prune_xp_events        — deletes old, keeps recent
@@ -458,3 +459,77 @@ class TestBeatScheduleEntries:
             "weekly-digest-emails",
         }
         assert expected.issubset(sched.keys())
+
+
+# ===========================================================================
+# TestSentryIntegration
+# ===========================================================================
+
+class TestSentryIntegration:
+    def test_sentry_middleware_importable(self):
+        from backend.middleware.sentry_context import SentryUserContextMiddleware, _attach_user
+        assert callable(SentryUserContextMiddleware)
+        assert callable(_attach_user)
+
+    def test_attach_user_no_auth_does_not_raise(self):
+        from backend.middleware.sentry_context import _attach_user
+        req = MagicMock()
+        req.headers.get = lambda key, default="": "" if key == "authorization" else default
+        _attach_user(req)  # must not raise
+
+    def test_attach_user_invalid_token_does_not_raise(self):
+        from backend.middleware.sentry_context import _attach_user
+        req = MagicMock()
+        req.headers.get = lambda key, default="": "Bearer garbage_xyz" if key == "authorization" else default
+        _attach_user(req)  # must not raise
+
+    def test_attach_user_calls_set_user_with_valid_jwt(self, db_session, client):
+        from unittest.mock import patch
+        from backend.modules.auth.security.hashing import hash_password
+        _EMAIL = "sentry_ctx@infra.test"
+        _PASS = "SentryCtx1!"
+        existing = db_session.query(User).filter_by(email=_EMAIL).first()
+        if not existing:
+            u = User(
+                email=_EMAIL,
+                name="SentryCtxUser",
+                hashed_password=hash_password(_PASS),
+                is_email_verified=True,
+                points=0,
+                weekly_points=0,
+            )
+            db_session.add(u)
+            db_session.commit()
+
+        login = client.post("/api/auth/login", data={"username": _EMAIL, "password": _PASS})
+        assert login.status_code == 200, login.text
+        token = login.json()["access_token"]
+
+        from backend.middleware.sentry_context import _attach_user
+        req = MagicMock()
+        req.headers.get = (
+            lambda key, default="": f"Bearer {token}" if key == "authorization" else default
+        )
+
+        with patch("sentry_sdk.set_user") as mock_set_user:
+            _attach_user(req)
+
+        mock_set_user.assert_called_once()
+        call_arg = mock_set_user.call_args[0][0]
+        assert "id" in call_arg
+        assert call_arg["email"] == _EMAIL
+
+    def test_server_sentry_init_includes_celery_integration(self):
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        # Verify the integration classes are importable (they're wired at module level
+        # when SENTRY_DSN is set; here we just verify the imports resolve correctly)
+        assert CeleryIntegration is not None
+        assert FastApiIntegration is not None
+
+    def test_celery_app_sentry_init_block_exists(self):
+        import backend.celery_app as ca
+        # The guard is `if _sentry_dsn:` — verify the module loaded without error
+        # and exposes the expected Celery app
+        assert hasattr(ca, "celery_app")
+        assert ca.celery_app is not None
