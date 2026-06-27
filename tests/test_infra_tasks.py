@@ -295,6 +295,7 @@ class TestLeaderboardAchievement:
         assert "leaderboard-top-10" not in result
 
     def test_context_passed_through(self, db_session):
+        from backend.models import Achievement
         seed_achievements(db_session)
         user = _make_user(db_session, points=1000)
         ctx = {"rank": 3}
@@ -302,13 +303,12 @@ class TestLeaderboardAchievement:
         result = check_and_award(db_session, user.id, "leaderboard.top10", ctx)
 
         assert "leaderboard-top-10" in result
-        ua = (
-            db_session.query(UserAchievement)
-            .join(UserAchievement.achievement)
-            .filter(UserAchievement.user_id == user.id)
-            .first()
-        )
+        ach = db_session.query(Achievement).filter_by(slug="leaderboard-top-10").first()
+        ua = db_session.query(UserAchievement).filter_by(
+            user_id=user.id, achievement_id=ach.id
+        ).first()
         assert ua is not None
+        assert ua.payload == ctx
 
 
 # ===========================================================================
@@ -358,21 +358,27 @@ class TestWeeklyLeaderboardResetAchievement:
 
 class TestDojoUserRateKey:
     def test_returns_user_key_for_valid_jwt(self, db_session, client):
-        reg = client.post("/api/auth/register", json={
-            "email": "ratekey_test@infra.test",
-            "name": "RateKeyUser",
-            "password": "Pass1234!",
-        })
-        assert reg.status_code in (200, 201)
+        from backend.modules.auth.security.hashing import hash_password
+        _EMAIL = "ratekey_infra@test.com"
+        _PASS = "RateKey999!"
+        existing = db_session.query(User).filter_by(email=_EMAIL).first()
+        if not existing:
+            u = User(
+                email=_EMAIL,
+                name="RateKeyUser",
+                hashed_password=hash_password(_PASS),
+                is_email_verified=True,
+                points=0,
+                weekly_points=0,
+            )
+            db_session.add(u)
+            db_session.commit()
 
-        u = db_session.query(User).filter_by(email="ratekey_test@infra.test").first()
-        u.is_email_verified = True
-        db_session.commit()
-
-        login = client.post("/api/auth/login", json={
-            "email": "ratekey_test@infra.test",
-            "password": "Pass1234!",
-        })
+        login = client.post(
+            "/api/auth/login",
+            data={"username": _EMAIL, "password": _PASS},
+        )
+        assert login.status_code == 200, login.text
         token = login.json()["access_token"]
 
         from backend.routers.dojo import _dojo_user_key
@@ -384,7 +390,7 @@ class TestDojoUserRateKey:
         key = _dojo_user_key(req)
 
         assert key.startswith("dojo:")
-        expected_uid = db_session.query(User).filter_by(email="ratekey_test@infra.test").first().id
+        expected_uid = db_session.query(User).filter_by(email=_EMAIL).first().id
         assert key == f"dojo:{expected_uid}"
 
     def test_falls_back_to_ip_without_auth(self):
