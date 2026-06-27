@@ -36,5 +36,29 @@ celery_app.conf.beat_schedule = {
         "task": "backend.tasks.growth_tasks.send_streak_at_risk",
         "schedule": crontab(hour=18, minute=0),  # 18:00 UTC daily
     },
+    "weekly-leaderboard-reset": {
+        "task": "backend.tasks.growth_tasks.weekly_leaderboard_reset",
+        "schedule": crontab(day_of_week=1, hour=0, minute=0),  # Mon 00:00 UTC
+    },
+    "monthly-quota-reset": {
+        "task": "backend.tasks.growth_tasks.monthly_quota_reset",
+        "schedule": crontab(day_of_month=1, hour=0, minute=1),  # 1st of month 00:01 UTC
+    },
+    "weekly-digest-emails": {
+        "task": "backend.tasks.growth_tasks.weekly_digest",
+        "schedule": crontab(day_of_week=0, hour=8, minute=0),  # Sun 08:00 UTC
+    },
+    "prune-old-tutor-sessions": {
+        "task": "backend.tasks.scheduled_tasks.prune_old_tutor_sessions",
+        "schedule": crontab(day_of_week=2, hour=2, minute=0),  # Tue 02:00 UTC
+    },
+    "prune-old-xp-events": {
+        "task": "backend.tasks.scheduled_tasks.prune_old_xp_events",
+        "schedule": crontab(day_of_month=2, hour=1, minute=0),  # 2nd of month 01:00 UTC
+    },
+    "recalc-acceptance-rates-nightly": {
+        "task": "backend.tasks.scheduled_tasks.recalc_all_acceptance_rates",
+        "schedule": crontab(hour=4, minute=0),  # 04:00 UTC nightly
+    },
 }
 celery_app.conf.timezone = "UTC"

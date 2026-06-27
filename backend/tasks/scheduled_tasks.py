@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 
 ZOMBIE_THRESHOLD_HOURS = int(os.getenv("ZOMBIE_THRESHOLD_HOURS", "2"))
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+TUTOR_SESSION_RETENTION_DAYS = int(os.getenv("TUTOR_SESSION_RETENTION_DAYS", "90"))
+XP_EVENT_RETENTION_DAYS = int(os.getenv("XP_EVENT_RETENTION_DAYS", "365"))
 
 
 def _do_cleanup_zombie_tasks(db) -> dict:
@@ -98,3 +100,122 @@ def _do_daily_db_backup() -> dict:
 def daily_db_backup():
     """Dump PostgreSQL DB → R2 as a dated .dump. Skipped on SQLite/no R2. Runs at 03:00 UTC."""
     return _do_daily_db_backup()
+
+
+# ---------------------------------------------------------------------------
+# Prune old tutor sessions  (Tue 02:00 UTC)
+# ---------------------------------------------------------------------------
+
+def _do_prune_tutor_sessions(db) -> dict:
+    from backend.models import TutorSessionRecord
+    from sqlalchemy import or_, and_
+
+    cutoff = datetime.datetime.utcnow() - timedelta(days=TUTOR_SESSION_RETENTION_DAYS)
+    deleted = (
+        db.query(TutorSessionRecord)
+        .filter(
+            or_(
+                TutorSessionRecord.last_active_at < cutoff,
+                and_(
+                    TutorSessionRecord.last_active_at.is_(None),
+                    TutorSessionRecord.created_at < cutoff,
+                ),
+            )
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    log.info("prune_tutor_sessions: deleted %d old session records", deleted)
+    return {"deleted": deleted, "cutoff_days": TUTOR_SESSION_RETENTION_DAYS}
+
+
+@celery_app.task(name="backend.tasks.scheduled_tasks.prune_old_tutor_sessions")
+def prune_old_tutor_sessions():
+    """Delete TutorSessionRecord rows older than TUTOR_SESSION_RETENTION_DAYS. Runs Tue 02:00 UTC."""
+    db = SessionLocal()
+    try:
+        return _do_prune_tutor_sessions(db)
+    except Exception as exc:
+        log.error("prune_tutor_sessions error: %s", exc)
+        return {"error": str(exc)}
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Prune old XP events  (2nd of month 01:00 UTC)
+# ---------------------------------------------------------------------------
+
+def _do_prune_xp_events(db) -> dict:
+    from backend.models import XPEvent
+
+    cutoff = datetime.datetime.utcnow() - timedelta(days=XP_EVENT_RETENTION_DAYS)
+    deleted = (
+        db.query(XPEvent)
+        .filter(XPEvent.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    log.info("prune_xp_events: deleted %d XP events older than %d days", deleted, XP_EVENT_RETENTION_DAYS)
+    return {"deleted": deleted, "cutoff_days": XP_EVENT_RETENTION_DAYS}
+
+
+@celery_app.task(name="backend.tasks.scheduled_tasks.prune_old_xp_events")
+def prune_old_xp_events():
+    """Delete XPEvent rows older than XP_EVENT_RETENTION_DAYS. Runs 2nd of month 01:00 UTC."""
+    db = SessionLocal()
+    try:
+        return _do_prune_xp_events(db)
+    except Exception as exc:
+        log.error("prune_xp_events error: %s", exc)
+        return {"error": str(exc)}
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Nightly acceptance-rate reconciliation  (04:00 UTC)
+# ---------------------------------------------------------------------------
+
+def _do_recalc_acceptance_rates(db) -> dict:
+    from backend.models import Problem, DojoSubmission
+    from sqlalchemy import func
+
+    problem_ids = [
+        row[0]
+        for row in db.query(DojoSubmission.problem_id).distinct().all()
+    ]
+    updated = 0
+    for pid in problem_ids:
+        total = (
+            db.query(func.count(func.distinct(DojoSubmission.user_id)))
+            .filter(DojoSubmission.problem_id == pid)
+            .scalar()
+        ) or 0
+        passed = (
+            db.query(func.count(func.distinct(DojoSubmission.user_id)))
+            .filter(DojoSubmission.problem_id == pid, DojoSubmission.passed == True)
+            .scalar()
+        ) or 0
+        rate = round(passed / total, 4) if total > 0 else 0.0
+        problem = db.query(Problem).filter_by(id=pid).first()
+        if problem is not None and float(problem.acceptance_rate or 0) != rate:
+            problem.acceptance_rate = rate
+            updated += 1
+    if updated:
+        db.commit()
+    log.info("recalc_acceptance_rates: reconciled %d / %d problems", updated, len(problem_ids))
+    return {"problems_checked": len(problem_ids), "problems_updated": updated}
+
+
+@celery_app.task(name="backend.tasks.scheduled_tasks.recalc_all_acceptance_rates")
+def recalc_all_acceptance_rates():
+    """Reconcile Problem.acceptance_rate for all problems with submissions. Runs 04:00 UTC."""
+    db = SessionLocal()
+    try:
+        return _do_recalc_acceptance_rates(db)
+    except Exception as exc:
+        log.error("recalc_acceptance_rates error: %s", exc)
+        return {"error": str(exc)}
+    finally:
+        db.close()
