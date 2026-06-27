@@ -18,10 +18,15 @@ Usage:
 """
 
 import os
+import logging
 from typing import Generator
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, DeclarativeBase
+
+class Base(DeclarativeBase):
+    __allow_unmapped__ = True
+
 
 # ---------------------------------------------------------------------------
 # Connection URL
@@ -71,6 +76,8 @@ SessionLocal = sessionmaker(
 # FastAPI dependency injection
 # ---------------------------------------------------------------------------
 
+logger = logging.getLogger(__name__)
+
 def get_db() -> Generator[Session, None, None]:
     """
     Yield a SQLAlchemy Session and guarantee cleanup on request teardown.
@@ -84,6 +91,10 @@ def get_db() -> Generator[Session, None, None]:
     db: Session = SessionLocal()
     try:
         yield db
+    except Exception as exc:
+        logger.error("DB session rollback due to exception: %s", exc, exc_info=True)
+        db.rollback()
+        raise
     finally:
         db.close()
 

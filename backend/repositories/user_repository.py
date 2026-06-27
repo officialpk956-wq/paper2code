@@ -56,6 +56,7 @@ class UserRepository:
         *,
         email: str,
         name: str,
+        hashed_password: Optional[str] = None,
         avatar_url: Optional[str] = None,
     ) -> User:
         """
@@ -67,6 +68,7 @@ class UserRepository:
         user = User(
             email=email,
             name=name,
+            hashed_password=hashed_password,
             avatar_url=avatar_url,
             points=0,
             streak=0,
