@@ -71,6 +71,9 @@ class User(Base):
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     lockout_until         = Column(DateTime, nullable=True)
 
+    # Notification preferences (Sprint H)
+    email_drip_opt_out    = Column(Boolean, nullable=False, default=False, server_default='false')
+
     submissions: list["DojoSubmission"] = relationship(
         "DojoSubmission", back_populates="user", cascade="all, delete-orphan"
     )
@@ -186,6 +189,7 @@ class AssessmentAttempt(Base):
     attempt_count   = Column(Integer, default=1, nullable=False)
     is_correct      = Column(Boolean, default=False, nullable=False)
     created_at      = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at      = Column(DateTime, nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +267,9 @@ class DojoSubmission(Base):
     # Sprint G: best-submission tracking and problem version snapshotting
     is_best         = Column(Boolean, nullable=False, default=False, server_default='false')
     problem_version = Column(Integer, nullable=True)
+    # Sprint H: public sharing
+    is_public       = Column(Boolean, nullable=False, default=False, server_default='false')
+    review_text     = Column(Text, nullable=True)
 
     user:    "User"    = relationship("User", back_populates="submissions")
     problem: "Problem" = relationship("Problem", back_populates="submissions")

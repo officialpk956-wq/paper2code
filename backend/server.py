@@ -3,6 +3,7 @@ import os
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sentry_sdk.integrations.celery import CeleryIntegration
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,9 +19,11 @@ _dsn = os.getenv("SENTRY_DSN", "")
 if _dsn:
     sentry_sdk.init(
         dsn=_dsn,
-        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
-        traces_sample_rate=0.05,
+        integrations=[FastApiIntegration(), SqlalchemyIntegration(), CeleryIntegration()],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.01")),
         environment=os.getenv("ENVIRONMENT", "development"),
+        release=os.getenv("APP_VERSION", ""),
     )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -30,6 +33,7 @@ from backend.routers.oauth import router as oauth_router
 from backend.routers.announcements import router as announcements_router
 from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from backend.middleware.alerting import SlackAlertingMiddleware
+from backend.middleware.sentry_context import SentryUserContextMiddleware
 from backend.logging_config import RequestIDMiddleware, JSONFormatter
 
 # Configure JSON Logging
@@ -67,6 +71,7 @@ from backend.modules.security.middleware.security_headers import SecurityHeaders
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(SlackAlertingMiddleware)
+app.add_middleware(SentryUserContextMiddleware)
 
 # Strict CORS settings
 from backend.modules.security.cors import (
@@ -93,6 +98,7 @@ app.include_router(learning.router)
 app.include_router(lab.router)
 app.include_router(tasks.router)
 app.include_router(user.router)
+app.include_router(user.me_router)
 app.include_router(admin.router)
 app.include_router(search.router)
 app.include_router(leaderboard.router)
