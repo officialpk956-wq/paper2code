@@ -340,6 +340,9 @@ async def submit_dojo_code(
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 
+    if len(req.code.encode('utf-8')) > 10000:
+        raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10KB")
+
     task = TaskRepository(db).create(
         "dojo.execute",
         current_user.id,
@@ -413,16 +416,17 @@ def problem_solutions(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/dojo/stats  — global aggregate stats (P2)
+# GET /api/dojo/global-stats  — global aggregate stats (P2)
 # ---------------------------------------------------------------------------
 
+@router.get("/dojo/global-stats")
 @router.get("/dojo/stats")
 def dojo_global_stats(db: Session = Depends(get_db)):
-    total_problems = db.query(func.count(Problem.id)).filter(
-        Problem.is_retired == False
-    ).scalar() or 0
+    total_users = db.query(func.count(User.id)).scalar() or 0
 
     total_submissions = db.query(func.count(DojoSubmission.id)).scalar() or 0
+
+    total_problems = db.query(func.count(Problem.id)).filter(Problem.is_retired == False).scalar() or 0
 
     rates = [
         float(r[0])
@@ -436,8 +440,10 @@ def dojo_global_stats(db: Session = Depends(get_db)):
     return {
         "total_problems":      total_problems,
         "total_submissions":   total_submissions,
+        "total_users":         total_users,
         "avg_acceptance_rate": avg_acceptance,
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -459,10 +465,13 @@ def my_dojo_stats(
 
     # Count solved problems by difficulty
     solved_by_difficulty: dict = {}
-    for pid in solved_problem_ids:
-        prob = db.query(Problem).filter_by(id=pid).first()
-        if prob:
-            diff = prob.difficulty or "Unknown"
+    
+    if solved_problem_ids:
+        problems = db.query(Problem.id, Problem.difficulty).filter(
+            Problem.id.in_(solved_problem_ids)
+        ).all()
+        for pid, diff_val in problems:
+            diff = diff_val or "Unknown"
             solved_by_difficulty[diff] = solved_by_difficulty.get(diff, 0) + 1
 
     total_submissions = db.query(func.count(DojoSubmission.id)).filter_by(

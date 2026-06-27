@@ -63,8 +63,8 @@ class ChangeEmailRequest(BaseModel):
     password: str
 
 class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1)
-    avatar_url: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    avatar_url: Optional[str] = Field(None, max_length=512)
 
 class SessionResponse(BaseModel):
     id: str

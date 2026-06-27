@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+import time
+from collections import defaultdict
 
 from backend.database import get_db
 from backend.models import (
@@ -11,9 +13,12 @@ from backend.models import (
     Paper,
     Achievement,
     UserAchievement,
+    LearnerProgress,
+    AssessmentAttempt,
 )
 from backend.modules.auth.dependencies import get_current_user
 from backend.modules.auth.schemas import UpdateProfileRequest
+from core.agents.learning_path_agent import generate_learning_path
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
 me_router = APIRouter(prefix="/api/me", tags=["Profile"])
@@ -134,6 +139,64 @@ def get_xp_history(
     }
 
 
+@me_router.get("/learning-path")
+def get_learning_path(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate a personalized learning path. Cached in memory for 1 hour."""
+    # Simple in-process cache
+    cache_key = f"lp_{current_user.id}"
+    cache = getattr(get_learning_path, "_cache", {})
+    cached = cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < 3600:
+        return cached["data"]
+        
+    # Completed architectures
+    completed = [
+        r.entity_id for r in
+        db.query(LearnerProgress)
+        .filter_by(learner_id=str(current_user.id), status="completed")
+        .all()
+    ]
+    
+    # Weak topics
+    attempts = db.query(AssessmentAttempt).filter_by(
+        learner_id=str(current_user.id)
+    ).all()
+    arch_results = defaultdict(list)
+    for a in attempts:
+        if a.architecture:
+            arch_results[a.architecture].append(a.is_correct)
+    weak = [k for k, v in arch_results.items() if v and sum(v)/len(v) < 0.5]
+    
+    # Solved problems
+    solved = [
+        s.problem_id for s in
+        db.query(DojoSubmission)
+        .filter_by(user_id=current_user.id, passed=True, is_best=True)
+        .all()
+    ]
+    
+    # Available papers (public only)
+    papers = db.query(Paper).filter(Paper.visibility == "public").limit(50).all()
+    paper_list = [{"id": p.id, "title": p.title} for p in papers]
+    
+    # Available unsolved problems
+    probs = db.query(Problem).filter(
+        Problem.is_retired == False,
+        ~Problem.id.in_(solved)
+    ).limit(30).all()
+    prob_list = [{"id": p.id, "title": p.title, "difficulty": p.difficulty} for p in probs]
+    
+    result = generate_learning_path(completed, weak, solved, paper_list, prob_list)
+    
+    if not hasattr(get_learning_path, "_cache"):
+        get_learning_path._cache = {}
+    get_learning_path._cache[cache_key] = {"ts": time.time(), "data": result}
+    return result
+
+
 @me_router.get("/papers")
 def get_my_papers(
     page: int = Query(1, ge=1),
@@ -173,25 +236,54 @@ def get_my_papers(
         ],
     }
 
-@me_router.get("/notification-prefs")
+@me_router.get("/notification-preferences")
 def get_notification_prefs(current_user: User = Depends(get_current_user)):
     return {
-        "email_drip_opt_out": getattr(current_user, "email_drip_opt_out", False)
+        "email_drip_opt_out": getattr(current_user, "email_drip_opt_out", False),
+        "email_digest": getattr(current_user, "email_digest", False),
     }
 
 from pydantic import BaseModel
-class NotificationPrefsUpdate(BaseModel):
-    email_drip_opt_out: bool
+from typing import Optional
 
-@me_router.patch("/notification-prefs")
+class NotificationPrefsUpdate(BaseModel):
+    email_drip_opt_out: Optional[bool] = None
+    email_digest: Optional[bool] = None
+
+@me_router.patch("/notification-preferences")
 def patch_notification_prefs(
     prefs: NotificationPrefsUpdate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    current_user.email_drip_opt_out = prefs.email_drip_opt_out
+    if prefs.email_drip_opt_out is not None:
+        current_user.email_drip_opt_out = prefs.email_drip_opt_out
+    if prefs.email_digest is not None:
+        current_user.email_digest = prefs.email_digest
     db.commit()
     db.refresh(current_user)
     return {
-        "email_drip_opt_out": current_user.email_drip_opt_out
+        "email_drip_opt_out": current_user.email_drip_opt_out,
+        "email_digest": current_user.email_digest,
     }
+
+@me_router.get("/achievements")
+def get_my_achievements(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user_achievements = db.query(UserAchievement, Achievement).join(
+        Achievement, UserAchievement.achievement_id == Achievement.id
+    ).filter(
+        UserAchievement.user_id == current_user.id
+    ).all()
+    
+    earned = []
+    for ua, ach in user_achievements:
+        earned.append({
+            "slug": ach.slug,
+            "title": ach.title,
+            "description": ach.description,
+            "earned_at": ua.earned_at
+        })
+    return {"earned": earned}

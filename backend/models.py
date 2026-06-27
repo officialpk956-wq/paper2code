@@ -45,6 +45,9 @@ class Difficulty(enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_user_points_desc", "points"),
+    )
 
     id              = Column(Integer, primary_key=True, index=True)
     email           = Column(String(255), unique=True, nullable=False, index=True)
@@ -73,6 +76,7 @@ class User(Base):
 
     # Notification preferences (Sprint H)
     email_drip_opt_out    = Column(Boolean, nullable=False, default=False, server_default='false')
+    email_digest          = Column(Boolean, nullable=False, default=False, server_default='false')
 
     submissions: list["DojoSubmission"] = relationship(
         "DojoSubmission", back_populates="user", cascade="all, delete-orphan"

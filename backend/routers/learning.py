@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from collections import defaultdict
 
 from backend.database import get_db
@@ -169,29 +170,40 @@ def get_analytics_dashboard(
 ):
     try:
         # Overview
-        papers = db.query(Paper).all()
-        total_papers = len(papers)
+        total_papers = db.query(func.count(Paper.id)).scalar() or 0
+        total_modules_count = db.query(func.count(PaperModule.id)).scalar() or 0
         
-        progress_records = db.query(LearnerProgress).filter(LearnerProgress.learner_id == x_learner_id).all()
-        progress_by_module = {p.module_id: p.status for p in progress_records}
+        modules_completed = db.query(func.count(LearnerProgress.id)).filter(
+            LearnerProgress.learner_id == x_learner_id,
+            LearnerProgress.status == "completed"
+        ).scalar() or 0
         
         papers_started = 0
         papers_completed = 0
-        modules_completed = 0
-        total_modules_count = 0
         
-        for p in papers:
-            p_mods = p.modules
-            if not p_mods:
-                continue
-            total_modules_count += len(p_mods)
-            mod_statuses = [progress_by_module.get(m.id, "not_started") for m in p_mods]
+        if total_modules_count > 0:
+            papers_with_modules = db.query(
+                PaperModule.paper_id, func.count(PaperModule.id)
+            ).group_by(PaperModule.paper_id).all()
+            paper_module_counts = {p_id: count for p_id, count in papers_with_modules}
+
+            learner_progress = db.query(
+                PaperModule.paper_id, LearnerProgress.status
+            ).join(
+                PaperModule, PaperModule.id == LearnerProgress.module_id
+            ).filter(
+                LearnerProgress.learner_id == x_learner_id
+            ).all()
             
-            if any(s in ("in_progress", "completed") for s in mod_statuses):
-                papers_started += 1
-            if all(s == "completed" for s in mod_statuses):
-                papers_completed += 1
-            modules_completed += sum(1 for s in mod_statuses if s == "completed")
+            progress_by_paper = defaultdict(list)
+            for p_id, status in learner_progress:
+                progress_by_paper[p_id].append(status)
+                
+            for p_id, statuses in progress_by_paper.items():
+                if any(s in ("in_progress", "completed") for s in statuses):
+                    papers_started += 1
+                if all(s == "completed" for s in statuses) and len(statuses) == paper_module_counts.get(p_id, -1):
+                    papers_completed += 1
             
         completion_pct = round(modules_completed / total_modules_count * 100, 1) if total_modules_count > 0 else 0.0
         
@@ -404,11 +416,14 @@ def tutor_ask(
         learner_key = x_learner_id or str(current_user.id)
         profile = adaptive_engine.compute_knowledge_profile(db, learner_key)
 
-        response, updated_history = tutor_manager.ask_with_history(
-            context_type=request.context_type,
-            context_data=request.context_data,
+        from core.agents.agentic_tutor import AgenticTutor
+        agentic_tutor = AgenticTutor(db)
+        response, updated_history = agentic_tutor.ask(
             query=request.query,
             history=history,
+            context_type=request.context_type,
+            context_data=request.context_data,
+            user_id=current_user.id if current_user else None,
             knowledge_profile=profile,
         )
         tutor_session_store.update_history(session_id, updated_history)

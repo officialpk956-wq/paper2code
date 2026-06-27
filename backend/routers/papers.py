@@ -12,6 +12,7 @@ import dataclasses
 import base64
 
 from backend.database import get_db
+from backend.models import Paper
 from backend.services.paper_ingestion_service import ingest_pdf_paper
 from core.orchestrator.pipeline import Paper2CodePipeline
 from core.paper_to_code_generator import PaperToCodeGenerator
@@ -564,7 +565,7 @@ async def upload_paper(
     logger.info("Upload Started for file: %s", file.filename)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         logger.warning("Upload Failed: non-PDF file: %s", file.filename)
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
     if not terms_accepted:
         raise HTTPException(status_code=400, detail="You must accept the Terms of Service to upload a paper.")
@@ -978,3 +979,31 @@ def similar_papers(
             for score, c in scored[:limit]
         ],
     }
+
+class PaperAskRequest(BaseModel):
+    question: str
+
+@router.post("/papers/{paper_id}/ask")
+def ask_paper(
+    paper_id: int,
+    body: PaperAskRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    from core.agents.research_rag_agent import ask_about_paper
+    p = db.query(Paper).filter_by(id=paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    _assert_paper_readable(p, current_user)
+
+    all_papers = db.query(Paper).filter(Paper.visibility == "public").limit(100).all()
+    paper_dicts = [
+        {"id": pp.id, "title": pp.title, "abstract": pp.abstract,
+         "architecture_graph": pp.architecture_graph}
+        for pp in all_papers
+    ]
+    target = {"id": p.id, "title": p.title, "abstract": p.abstract,
+              "architecture_graph": p.architecture_graph}
+    result = ask_about_paper(target, paper_dicts, body.question)
+    return result
+
