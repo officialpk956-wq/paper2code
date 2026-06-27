@@ -12,6 +12,7 @@ import datetime
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
+from backend.services.email_service import send_drip_email_sync, send_streak_at_risk_email_sync
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ _DRIP_DAYS = (1, 3, 7)
 
 def _do_onboarding_drips(db) -> dict:
     from backend.models import User, EmailDripLog
-    from backend.services.email_service import send_drip_email_sync
 
     today = datetime.date.today()
     sent = 0
@@ -43,7 +43,7 @@ def _do_onboarding_drips(db) -> dict:
             )
             .all()
         )
-        for user in users:
+            for user in users:
             already_sent = db.query(EmailDripLog).filter_by(
                 user_id=user.id, drip_day=day
             ).first()
@@ -80,7 +80,6 @@ def send_onboarding_drips():
 
 def _do_streak_at_risk(db) -> dict:
     from backend.models import User
-    from backend.services.email_service import send_streak_at_risk_email_sync
 
     today     = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)

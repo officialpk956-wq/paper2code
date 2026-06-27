@@ -469,11 +469,20 @@ class TestSubmissionHistory:
     def test_02_history_returns_own_submissions(self, client: TestClient, db_session: Session):
         u = _seed_user(db_session, self.EMAIL)
         prob = _seed_problem(db_session, "ci-hist-prob-02")
-        self._seed_submissions(db_session, u, prob, [
-            {"passed": True, "time_ms": 120},
+        # Seed with explicit timestamps to ensure ordering in SQLite
+        now = datetime.datetime.utcnow()
+        for i, rec in enumerate([
+            {"passed": True,  "time_ms": 120},
             {"passed": False, "time_ms": 80},
-            {"passed": True, "time_ms": 95},
-        ])
+            {"passed": True,  "time_ms": 95},
+        ]):
+            s = DojoSubmission(
+                user_id=u.id, problem_id=prob.id,
+                code="pass", passed=rec["passed"], time_ms=rec["time_ms"],
+                created_at=now + datetime.timedelta(seconds=i),
+            )
+            db_session.add(s)
+        db_session.commit()
 
         token = _login(client, self.EMAIL)
         r = client.get(f"/api/problems/{prob.id}/submissions", headers=_auth(token))
@@ -482,7 +491,7 @@ class TestSubmissionHistory:
         assert body["total"] == 3
         assert all("passed" in s and "time_ms" in s and "created_at" in s
                    for s in body["submissions"])
-        # newest first
+        # newest first: last seeded (time_ms=95, +2s) should be first
         assert body["submissions"][0]["time_ms"] == 95
 
     def test_03_history_404_on_unknown_problem(self, client: TestClient, db_session: Session):

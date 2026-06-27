@@ -143,7 +143,7 @@ def _award(db: Session, user_id: int, slug: str, payload: dict | None = None) ->
     try:
         from backend.services.progress_service import award_xp
         award_xp(db, user_id, "achievement.earned")
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if user:
             user.points = (user.points or 0) + ach.xp_reward
     except Exception:
