@@ -3,33 +3,11 @@
 import { motion } from 'framer-motion';
 import { Flame, Trophy, CheckSquare, Target, Zap, Star } from 'lucide-react';
 import { useUserStats } from '@/hooks/use-user-stats';
+import { getContributionGrid, getCompletionRate, getCompletedCount } from '@/lib/progress';
+import { getDisplayName, getBio } from '@/lib/persistence';
+import { useState, useEffect } from 'react';
 
-/* ─── Streak Heatmap (7×6 grid) ─────────────────────────────── */
-const HEATMAP = [
-  [0,1,1,0,2,2,1],
-  [1,0,1,2,1,0,2],
-  [2,1,2,1,1,2,1],
-  [0,1,0,2,2,1,0],
-  [1,2,1,1,0,2,1],
-  [1,1,2,1,2,1,2],
-];
-const DAYS = ['M','T','W','T','F','S','S'];
 const HEAT_COLORS = ['rgba(255,255,255,0.06)', 'rgba(139,92,246,0.35)', 'rgba(139,92,246,0.8)'];
-
-/* ─── Daily tasks ────────────────────────────────────────────── */
-const TASKS = [
-  { label: 'Read 1 paper',         done: true },
-  { label: 'Solve 1 problem',       done: true },
-  { label: 'Review flashcards',     done: false },
-  { label: 'Watch architecture vid',done: false },
-];
-
-/* ─── Goals ──────────────────────────────────────────────────── */
-const GOALS = [
-  { label: 'Finish Transformers track',  progress: 34, color: '#8B5CF6' },
-  { label: 'Solve 100 problems',         progress: 47, color: '#06B6D4' },
-  { label: 'Read 20 papers',             progress: 60, color: '#10B981' },
-];
 
 /* ─── Achievements ───────────────────────────────────────────── */
 const ACHIEVEMENTS = [
@@ -40,7 +18,40 @@ const ACHIEVEMENTS = [
 
 export function RightInsightsPanel() {
   const stats = useUserStats();
+  const [grid, setGrid] = useState<number[]>([]);
+  const [bio, setBio] = useState('Loading bio...');
+  const [displayName, setDisplayName] = useState('Researcher');
+  const [goals, setGoals] = useState([
+    { label: 'Finish topics', progress: 0, color: '#8B5CF6' },
+    { label: 'Solve problems', progress: 0, color: '#06B6D4' },
+    { label: 'Read papers', progress: 0, color: '#10B981' },
+  ]);
+  const [tasks, setTasks] = useState([
+    { label: 'Read 1 paper', done: false },
+    { label: 'Solve 1 problem', done: false },
+    { label: 'Review flashcards', done: false },
+    { label: 'Watch architecture vid', done: false },
+  ]);
   
+  useEffect(() => {
+    setGrid(getContributionGrid(52));
+    setBio(getBio());
+    setDisplayName(getDisplayName());
+    
+    setGoals([
+      { label: 'Finish topics', progress: getCompletionRate('topic'), color: '#8B5CF6' },
+      { label: 'Solve problems', progress: getCompletionRate('problem'), color: '#06B6D4' },
+      { label: 'Read papers', progress: getCompletionRate('paper'), color: '#10B981' },
+    ]);
+
+    setTasks([
+      { label: 'Read 1 paper', done: getCompletedCount('paper') > 0 },
+      { label: 'Solve 1 problem', done: getCompletedCount('problem') > 0 },
+      { label: 'Review flashcards', done: false },
+      { label: 'Watch architecture vid', done: getCompletedCount('architecture') > 0 },
+    ]);
+  }, []);
+
   const xpCurrent = stats.xp;
   const xpForNextLevel = stats.level * 200;
   const xpProgress = xpCurrent > 0 ? (xpCurrent / xpForNextLevel) * 100 : 0;
@@ -55,6 +66,18 @@ export function RightInsightsPanel() {
       }}
       aria-label="Insights panel"
     >
+      {/* ── Profile Card ─────────────── */}
+      <div className="rounded-xl p-4 flex flex-col items-center text-center gap-2" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        <div className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold text-white mb-1 shadow-lg shadow-[#8B5CF6]/20" style={{ background: 'linear-gradient(135deg, #7C3AED, #8B5CF6)' }}>
+          {stats.loaded ? displayName.charAt(0).toUpperCase() : 'R'}
+        </div>
+        <h3 className="text-white font-bold">{stats.loaded ? displayName : 'Researcher'}</h3>
+        <div className="text-[11px] font-semibold tracking-wide uppercase" style={{ color: '#A78BFA' }}>Level {stats.loaded ? stats.level : '-'}</div>
+        <p className="text-[11px] text-slate-400 mt-1 italic px-2">
+          {stats.loaded ? bio : 'Loading bio...'}
+        </p>
+      </div>
+
       {/* ── Streak banner ─────────────── */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
@@ -76,14 +99,18 @@ export function RightInsightsPanel() {
       {/* ── Activity Heatmap ──────────── */}
       <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}>
         <div className="text-[12px] font-bold text-white mb-3">Activity</div>
-        <div className="flex gap-0.5">
-          {DAYS.map((d, di) => (
-            <div key={di} className="flex flex-col gap-0.5 flex-1">
-              <div className="text-[9px] text-slate-700 text-center mb-0.5">{d}</div>
-              {HEATMAP.map((row, ri) => (
-                <div key={ri} className="rounded-[2px] w-full aspect-square"
-                  style={{ background: HEAT_COLORS[row[di]] }} />
-              ))}
+        <div className="flex gap-[2px] items-start">
+          {/* We have 52 weeks, each week is a column of 7 days */}
+          {Array.from({ length: 52 }).map((_, w) => (
+            <div key={w} className="flex flex-col gap-[2px]">
+              {Array.from({ length: 7 }).map((_, d) => {
+                const idx = w * 7 + d;
+                const val = grid[idx] ?? 0;
+                return (
+                  <div key={d} className="w-[3px] h-[3px] rounded-[1px]"
+                    style={{ background: HEAT_COLORS[val] }} />
+                );
+              })}
             </div>
           ))}
         </div>
@@ -133,7 +160,7 @@ export function RightInsightsPanel() {
           </span>
         </div>
         <div className="space-y-2">
-          {TASKS.map((t, i) => (
+          {tasks.map((t, i) => (
             <div key={i} className="flex items-center gap-2.5">
               <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
                 style={{
@@ -157,7 +184,7 @@ export function RightInsightsPanel() {
           <span className="text-[12px] font-bold text-white">Weekly Goals</span>
         </div>
         <div className="space-y-3">
-          {GOALS.map((g, i) => (
+          {goals.map((g, i) => (
             <div key={i}>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[11px] text-slate-500 truncate pr-2">{g.label}</span>

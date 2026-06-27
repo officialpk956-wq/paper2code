@@ -9,7 +9,6 @@ import { TrendingTopics } from '@/components/learn/TrendingTopics';
 import { Recommendations } from '@/components/learn/Recommendations';
 import { RecentlyAdded } from '@/components/learn/RecentlyAdded';
 import { KnowledgeGraphPreview } from '@/components/learn/KnowledgeGraphPreview';
-
 import { DOMAINS } from '@/data/learn/domains';
 import { LEARNING_PATHS } from '@/data/learn/paths';
 import { TRENDING_TOPICS } from '@/data/learn/topics';

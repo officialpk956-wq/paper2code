@@ -3,12 +3,7 @@
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 
-const TRACKS = [
-  { label: 'Transformers',       progress: 34, color: '#8B5CF6', modules: 12, done: 4,  href: '/learn/deep-learning' },
-  { label: 'Reinforcement Learn', progress: 12, color: '#06B6D4', modules: 9,  done: 1,  href: '/learn/reinforcement-learning' },
-  { label: 'Computer Vision',    progress: 60, color: '#10B981', modules: 8,  done: 5,  href: '/learn/computer-vision' },
-  { label: 'System Design',      progress: 22, color: '#F59E0B', modules: 15, done: 3,  href: '/system-design' },
-];
+// Track Definitions are now loaded from LEARNING_TRACKS
 
 function CircleProgress({ value, color, size = 52 }: { value: number; color: string; size?: number }) {
   const r = (size / 2) - 5;
@@ -33,7 +28,36 @@ function CircleProgress({ value, color, size = 52 }: { value: number; color: str
   );
 }
 
+import { useState, useEffect } from 'react';
+import { LEARNING_TRACKS } from '@/data/learning-tracks';
+import { getCompletedProblems } from '@/lib/persistence';
+
 export function LearningProgress() {
+  const [tracks, setTracks] = useState<{ id: string; label: string; color: string; modules: number; href: string; progress: number; done: number }[]>([]);
+
+  useEffect(() => {
+    const colors = ['#8B5CF6', '#06B6D4', '#10B981', '#F59E0B'];
+    const completed = new Set(getCompletedProblems());
+    
+    const realTracks = LEARNING_TRACKS.map((t, index) => {
+      const doneCount = t.problems.filter(p => completed.has(p.problemId)).length;
+      const totalCount = t.problems.length;
+      const progress = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+      
+      return {
+        id: t.id,
+        label: t.title,
+        color: colors[index % colors.length],
+        modules: totalCount,
+        href: `/learning-tracks/${t.slug}`,
+        progress: progress,
+        done: doneCount
+      };
+    });
+    
+    setTracks(realTracks);
+  }, []);
+
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}>
       <div className="px-4 pt-4 pb-2">
@@ -42,7 +66,7 @@ export function LearningProgress() {
       </div>
 
       <div className="px-4 pb-4 space-y-3">
-        {TRACKS.map((track, i) => (
+        {tracks.map((track, i) => (
           <motion.div
             key={track.label}
             initial={{ opacity: 0, x: -10 }}

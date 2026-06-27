@@ -1,6 +1,7 @@
 'use client';
 
 import type { TestResult } from '@/lib/dojo';
+import type { TestCase } from '@/data/problems';
 
 interface TestResultPanelProps {
   results: TestResult[];
@@ -11,6 +12,7 @@ interface TestResultPanelProps {
   passedTests?: number;
   totalTests?: number;
   runtimeMs?: number | null;
+  testCases?: TestCase[];
 }
 
 const STATUS_CONFIG = {
@@ -29,6 +31,7 @@ export function TestResultPanel({
   passedTests,
   totalTests,
   runtimeMs,
+  testCases,
 }: TestResultPanelProps) {
   if (isRunning) {
     return (
@@ -64,6 +67,33 @@ export function TestResultPanel({
   }
 
   if (results.length === 0) {
+    if (testCases && testCases.length > 0) {
+      const visibleCases = testCases.filter((tc) => tc.visible);
+      return (
+        <div className="p-4 space-y-3 overflow-y-auto h-full">
+          <div className="text-sm font-medium text-[--color-text-secondary] mb-2">
+            Sample Test Cases
+          </div>
+          <div className="space-y-2">
+            {visibleCases.map((tc, i) => (
+              <div
+                key={i}
+                className="rounded-lg overflow-hidden border border-[--color-border] bg-[--bg-surface]"
+              >
+                <div className="px-3 py-2 border-b border-[--color-border] bg-[rgba(255,255,255,0.02)]">
+                  <span className="text-xs font-medium text-[--color-text-primary]">Case {i + 1}</span>
+                </div>
+                <div className="px-3 py-3 space-y-2">
+                  <InfoRow label="Input" value={JSON.stringify(tc.input)} />
+                  <InfoRow label="Expected" value={JSON.stringify(tc.output)} color="var(--accent-cyan)" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex items-center justify-center h-full text-sm text-[--color-text-muted]">
         Run your code to see test results

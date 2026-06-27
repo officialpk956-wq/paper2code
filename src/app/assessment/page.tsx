@@ -62,7 +62,7 @@ export default function AssessmentPage() {
       <div className="max-w-2xl mx-auto py-16 px-4">
         <h1 className="text-3xl font-bold text-[--color-text-primary] mb-2">Assessment Complete</h1>
         <p className="text-lg text-[--color-text-secondary] mb-8">
-          You're a <span className="font-bold text-[--accent-primary] capitalize">{result.level.replace('-', ' ')}</span> — your path: <span className="font-bold text-[--color-text-primary]">{result.goal}</span>
+          You&apos;re a <span className="font-bold text-[--accent-primary] capitalize">{result.level.replace('-', ' ')}</span> — your path: <span className="font-bold text-[--color-text-primary]">{result.goal}</span>
         </p>
         
         <div className="space-y-4 mb-8">

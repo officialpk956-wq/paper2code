@@ -26,7 +26,7 @@ export function DomainProgressRings() {
 
     // Wait, if an alias is completed, the canonical is too? The progress is stored under the canonical slug if we use it, or under the aliased slug.
     // Usually progress is tied to the slug visited. Let's just check the unique slugs.
-    const uniqueSlugs = new Set(Object.values(topics).map(t => (t as any).id || Object.keys(topics).find(k => topics[k] === t)));
+    const uniqueSlugs = new Set(Object.values(topics).map(t => t.meta.slug));
     const total = uniqueSlugs.size;
     completed = 0;
     for (const slug of uniqueSlugs) {

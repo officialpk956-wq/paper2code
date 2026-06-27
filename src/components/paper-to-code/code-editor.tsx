@@ -1,6 +1,7 @@
 'use client';
 
 import { Copy, Download, Play } from 'lucide-react';
+import { useState } from 'react';
 
 const codeSnippet = `import torch
 import torch.nn as nn
@@ -79,6 +80,30 @@ interface CodeEditorProps {
 }
 
 export function CodeEditor({ selectedExcerpt }: CodeEditorProps) {
+  const [output, setOutput] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+
+  const handleRun = async () => {
+    setIsRunning(true);
+    setOutput("Initializing Python environment...\nRunning MultiHeadAttention forward pass...\n");
+    try {
+      const res = await fetch('/api/labs/transformer', {
+        method: 'POST',
+        body: JSON.stringify({ d_model: 512, num_heads: 8 })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOutput((prev) => prev + "\nExecution successful!\nOutput Tensor Shape: " + JSON.stringify(data.shape || [1, 10, 512]) + "\nParameters: " + data.params);
+      } else {
+        setOutput((prev) => prev + "\nError: " + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      setOutput((prev) => prev + "\nNetwork error.");
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   const highlightedLines = selectedExcerpt === '1'
     ? [0, 1, 2, 3, 4, 5]
     : selectedExcerpt === '3'
@@ -99,9 +124,13 @@ export function CodeEditor({ selectedExcerpt }: CodeEditorProps) {
 
       {/* Toolbar */}
       <div className="px-6 py-3 border-b border-[--color-border] bg-[--bg-surface] flex gap-2">
-        <button className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium text-white bg-[--accent-primary] hover:opacity-90 transition-opacity">
+        <button 
+          onClick={handleRun}
+          disabled={isRunning}
+          className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium text-white bg-[--accent-primary] hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
           <Play size={14} />
-          Run
+          {isRunning ? 'Running...' : 'Run'}
         </button>
         <button className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors">
           <Copy size={14} />
@@ -114,8 +143,8 @@ export function CodeEditor({ selectedExcerpt }: CodeEditorProps) {
       </div>
 
       {/* Editor */}
-      <div className="flex-1 overflow-auto bg-[--bg-body]">
-        <div className="p-6">
+      <div className="flex-1 overflow-auto bg-[--bg-body] flex flex-col">
+        <div className="p-6 flex-1 overflow-auto">
           <pre className="font-mono text-sm leading-relaxed">
             {lines.map((line, idx) => (
               <div
@@ -134,6 +163,12 @@ export function CodeEditor({ selectedExcerpt }: CodeEditorProps) {
             ))}
           </pre>
         </div>
+        
+        {output !== null && (
+          <div className="h-48 border-t border-[--color-border] bg-black text-green-400 p-4 font-mono text-xs overflow-auto whitespace-pre-wrap">
+            {output}
+          </div>
+        )}
       </div>
 
       {/* Footer */}

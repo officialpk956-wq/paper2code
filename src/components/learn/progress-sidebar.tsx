@@ -60,8 +60,8 @@ export function ProgressSidebar() {
   const stats = useUserStats();
   
   // Fabricated tasks and achievements removed
-  const tasks: any[] = [];
-  const achievements: any[] = [];
+  const tasks: { done: boolean; label: string; xp: number }[] = [];
+  const achievements: { color: string; icon: string; label: string; earnedAt: string }[] = [];
   const doneTasks = 0;
 
   return (

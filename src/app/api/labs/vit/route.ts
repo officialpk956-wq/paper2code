@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execFile } from 'child_process';
 import { join } from 'path';
+import { existsSync } from 'fs';
 
 const TIMEOUT_MS = 30_000;
 const PROJECT_ROOT = join(process.cwd());
@@ -22,7 +23,9 @@ function runPython(p: Record<string, number>): Promise<string> {
   return new Promise((resolve, reject) => {
     const scriptPath = join(PROJECT_ROOT, 'backend', 'services', 'lab_service.py');
     const timer = setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS);
-    execFile('python', [
+    const pythonPath = process.platform === 'win32' ? join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe') : join(PROJECT_ROOT, '.venv', 'bin', 'python');
+    const pythonCmd = existsSync(pythonPath) ? pythonPath : 'python';
+    execFile(pythonCmd, [
       scriptPath, '--lab', 'vit',
       '--image_size',  String(p.image_size),
       '--patch_size',  String(p.patch_size),

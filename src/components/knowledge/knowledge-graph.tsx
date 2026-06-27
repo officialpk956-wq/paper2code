@@ -8,6 +8,7 @@ import { isCompleted } from '@/lib/progress';
 import { isUnlocked } from '@/lib/learning-graph';
 import { getIndexEntry } from '@/lib/content/relationships';
 import { TOPIC_REGISTRY, resolveTopicPath } from '@/data/topics';
+import type { TopicData } from '@/data/topics/types';
 
 // ---------------------------------------------------------------------------
 // Build graph from real EVOLUTION_NODES data + TOPIC_REGISTRY
@@ -79,7 +80,7 @@ function buildNodes(): GraphNode[] {
   });
 
   // 2. Add topic nodes
-  const topicsMap = new Map<string, any>();
+  const topicsMap = new Map<string, TopicData>();
   for (const domainTopics of Object.values(TOPIC_REGISTRY)) {
     for (const topic of Object.values(domainTopics)) {
       if (!topicsMap.has(topic.meta.slug)) {

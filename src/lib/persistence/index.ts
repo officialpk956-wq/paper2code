@@ -72,6 +72,8 @@ export const KEYS = {
   displayName: 'p2c:display-name',
   // Diagnostic skill profile
   userProfile: 'p2c:profile',
+  // User bio
+  bio: 'p2c:bio',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,16 @@ export function getDisplayName(): string {
 
 export function setDisplayName(name: string): void {
   save(KEYS.displayName, name.trim() || 'Researcher');
+}
+
+// --- Bio ---
+
+export function getBio(): string {
+  return load<string>(KEYS.bio) ?? 'Exploring the frontiers of AI Engineering.';
+}
+
+export function setBio(bio: string): void {
+  save(KEYS.bio, bio.trim());
 }
 
 // --- Progress summary (for dashboard) ---

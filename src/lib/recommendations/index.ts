@@ -30,7 +30,7 @@ export type RecommendationCategory =
   | 'suggested_revision';
 
 export interface Recommendation {
-  type: 'problem' | 'paper' | 'architecture' | 'roadmap' | 'track';
+  type: 'problem' | 'paper' | 'architecture' | 'roadmap' | 'track' | 'topic';
   slug: string;
   title: string;
   description: string;

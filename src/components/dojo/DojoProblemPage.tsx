@@ -231,10 +231,10 @@ export function DojoProblemPage({ problem }: DojoProblemPageProps) {
         <div className="flex items-center gap-2 min-w-0">
           <Link
             href="/dojo"
-            aria-label="Back to Dojo"
+            aria-label="Back to Problems"
             className="text-xs text-[--color-text-muted] hover:text-[--accent-primary] transition-colors flex-shrink-0"
           >
-            ← Dojo
+            ← Problems
           </Link>
           <span className="text-[--color-text-muted]">/</span>
           <span className="text-sm font-medium text-[--color-text-primary] truncate">
@@ -380,6 +380,7 @@ export function DojoProblemPage({ problem }: DojoProblemPageProps) {
                   error={runError}
                   isRunning={runState === 'running'}
                   mode="run"
+                  testCases={problem.testCases}
                 />
               ) : (
                 <TestResultPanel
@@ -391,6 +392,7 @@ export function DojoProblemPage({ problem }: DojoProblemPageProps) {
                   passedTests={submitPassedTests}
                   totalTests={submitTotalTests}
                   runtimeMs={submitRuntimeMs}
+                  testCases={problem.testCases}
                 />
               )}
             </div>

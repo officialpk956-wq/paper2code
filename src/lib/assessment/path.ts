@@ -51,7 +51,7 @@ export function generateYourPath(profile: Profile, limit = 5): Recommendation[] 
           if (!isCompleted(type, slug)) {
             // Found a valid, incomplete item
             validItems.push({
-              type: type as any,
+              type,
               slug,
               title: res.title,
               description: node.title,

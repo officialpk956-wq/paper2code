@@ -284,3 +284,44 @@ export function getKnowledgeCoverage(): Record<ProgressContentType, number> {
   }
   return coverage as Record<ProgressContentType, number>;
 }
+
+export function getContributionGrid(weeks: number = 52, endDateMs?: number): number[] {
+  const all = Object.values(loadAll());
+  
+  // Calculate activity per day string (YYYY-MM-DD)
+  const activityMap = new Map<string, number>();
+  for (const p of all) {
+    if (p.startedAt) {
+      const d = new Date(p.startedAt);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      activityMap.set(key, (activityMap.get(key) ?? 0) + 1);
+    }
+    if (p.completedAt && p.completedAt !== p.startedAt) {
+      const d = new Date(p.completedAt);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      activityMap.set(key, (activityMap.get(key) ?? 0) + 1);
+    }
+  }
+
+  const grid: number[] = [];
+  const days = weeks * 7;
+  // If endDateMs is not provided, we still need a date. The prompt says "No Date.now() calls"
+  // Let's use a fixed date fallback if not provided to ensure stable SSR, but typically it should be provided by client.
+  const end = endDateMs ? new Date(endDateMs) : new Date(1717200000000); // stable date if none provided
+  end.setHours(0, 0, 0, 0);
+
+  // We want the last day to be `end`. We need `days` items.
+  // Start from (end - days + 1)
+  const start = new Date(end);
+  start.setDate(start.getDate() - days + 1);
+
+  for (let i = 0; i < days; i++) {
+    const curr = new Date(start);
+    curr.setDate(curr.getDate() + i);
+    const key = `${curr.getFullYear()}-${curr.getMonth() + 1}-${curr.getDate()}`;
+    const count = activityMap.get(key) ?? 0;
+    grid.push(count === 0 ? 0 : count === 1 ? 1 : 2);
+  }
+
+  return grid;
+}

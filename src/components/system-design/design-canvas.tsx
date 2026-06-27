@@ -68,9 +68,10 @@ const sampleElements: CanvasElement[] = [
 
 interface DesignCanvasProps {
   selectedPattern?: string;
+  onSelectElement?: (id: string, type: string) => void;
 }
 
-export function DesignCanvas({ selectedPattern }: DesignCanvasProps) {
+export function DesignCanvas({ selectedPattern, onSelectElement }: DesignCanvasProps) {
   return (
     <div className="flex flex-col h-full bg-[--bg-body]">
       {/* Toolbar */}
@@ -125,8 +126,9 @@ export function DesignCanvas({ selectedPattern }: DesignCanvasProps) {
           {sampleElements.map((element) => (
             <div
               key={element.id}
+              onClick={() => onSelectElement?.(element.id, element.type)}
               className={`absolute group p-3 rounded-lg border-2 border-[--color-border] bg-gradient-to-br ${element.color} cursor-move
-                         hover:border-[--accent-primary] hover:shadow-lg transition-all hover:scale-105`}
+                         hover:border-[--accent-primary] hover:shadow-lg transition-all hover:scale-105 ${selectedPattern === element.type ? 'ring-2 ring-[--accent-primary]' : ''}`}
               style={{
                 left: `${element.x}px`,
                 top: `${element.y}px`,

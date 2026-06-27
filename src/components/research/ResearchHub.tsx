@@ -510,7 +510,7 @@ export function ResearchHub({
             : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredUploaded.map(p => <UploadedPaperCard key={p.id} paper={p} />)}
-                {filteredUploaded.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No uploaded papers found for "{search}"</div>}
+                {filteredUploaded.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No uploaded papers found for &quot;{search}&quot;</div>}
               </div>
             )
         )}
@@ -519,7 +519,7 @@ export function ResearchHub({
         {activeTab === 'library' && (
           <div id="library" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredLibrary.map(p => <ContentPaperCard key={p.slug} paper={p} />)}
-            {filteredLibrary.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No library papers found for "{search}"</div>}
+            {filteredLibrary.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No library papers found for &quot;{search}&quot;</div>}
           </div>
         )}
 
@@ -527,7 +527,7 @@ export function ResearchHub({
         {activeTab === 'implementations' && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredImpls.map(i => <ImplCard key={i.slug} impl={i} />)}
-            {filteredImpls.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No implementations found for "{search}"</div>}
+            {filteredImpls.length === 0 && search && <div className="col-span-full text-center py-10 text-slate-500 text-sm">No implementations found for &quot;{search}&quot;</div>}
           </div>
         )}
 
