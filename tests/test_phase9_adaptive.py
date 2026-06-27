@@ -22,9 +22,9 @@ def test_learner_knowledge_profiles_distinct():
         AssessmentAttempt(learner_id="learner_a", question_text="A Conv2D layer...", is_correct=True, assessment_type="tensor"),
         AssessmentAttempt(learner_id="learner_a", question_text="Attention block...", is_correct=False, assessment_type="architecture")
     ]
-    progress_a = [
-        LearnerProgress(learner_id="learner_a", status="completed", module_id=101)  # matching conv
-    ]
+    p_a = LearnerProgress(learner_id="learner_a", status="completed", entity_type="paper_module", entity_id="101")
+    p_a.module_id = 101
+    progress_a = [p_a]
     tutor_a = []
 
     # Learner B: Weak in Convolutions (0% correct), Strong in Attention (100% correct)
@@ -32,9 +32,9 @@ def test_learner_knowledge_profiles_distinct():
         AssessmentAttempt(learner_id="learner_b", question_text="A Conv2D layer...", is_correct=False, assessment_type="tensor"),
         AssessmentAttempt(learner_id="learner_b", question_text="Attention block...", is_correct=True, assessment_type="architecture")
     ]
-    progress_b = [
-        LearnerProgress(learner_id="learner_b", status="completed", module_id=102)  # matching attention
-    ]
+    p_b = LearnerProgress(learner_id="learner_b", status="completed", entity_type="paper_module", entity_id="102")
+    p_b.module_id = 102
+    progress_b = [p_b]
     tutor_b = []
 
     # Mock DB modules matching concepts

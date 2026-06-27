@@ -59,7 +59,7 @@ describe('generateYourPath', () => {
     });
     
     vi.mocked(rels.getIndexEntry).mockImplementation((type, slug) => {
-      if (type === 'paper' && slug === 'attention-is-all-you-need') return {} as any;
+      if (type === 'paper' && slug === 'attention-is-all-you-need') return {} as unknown;
       return null;
     });
 
