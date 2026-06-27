@@ -146,7 +146,7 @@ def test_api_endpoints():
     assert "expected_outputs" in body and "reference_solution" not in body
 
     r = c.get("/api/dojo/exercises/softmax/solution")
-    assert r.status_code == 200 and "np.exp" in r.json()["reference_solution"]
+    assert r.status_code in (401, 403)
 
     assert c.get("/api/dojo/exercises/does_not_exist").status_code == 404
 

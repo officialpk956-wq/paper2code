@@ -61,7 +61,29 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
     prob = db.query(Problem).filter_by(id=problem_id).first()
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
-    return prob
+    return {
+        "id":                    prob.id,
+        "slug":                  prob.slug,
+        "title":                 prob.title,
+        "difficulty":            prob.difficulty,
+        "category":              prob.category,
+        "description":           prob.description,
+        "estimated_time":        prob.estimated_time,
+        "tags":                  prob.tags,
+        "related_architectures": prob.related_architectures,
+        "related_papers":        prob.related_papers,
+        "related_math":          prob.related_math,
+        "learning_points":       prob.learning_points,
+        "visualization_url":     prob.visualization_url,
+        "python_template":       prob.python_template,
+        "test_cases":            prob.test_cases,
+        "hints":                 prob.hints,
+        "explanation":           prob.explanation,
+        "is_retired":            prob.is_retired,
+        "version":               prob.version,
+        "time_limit_ms":         prob.time_limit_ms,
+        "acceptance_rate":       float(prob.acceptance_rate) if prob.acceptance_rate is not None else None,
+    }
 
 
 class DojoExerciseSubmitRequest(BaseModel):
@@ -81,7 +103,21 @@ def dojo_get_exercise(exercise_id: str):
     return ex
 
 @router.get("/dojo/exercises/{exercise_id}/solution")
-def dojo_get_solution(exercise_id: str):
+def dojo_get_solution(
+    exercise_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from backend.models import DojoSubmission
+    passed = db.query(DojoSubmission).filter(
+        DojoSubmission.user_id == current_user.id,
+        DojoSubmission.problem_id == exercise_id,
+        DojoSubmission.passed == True
+    ).first()
+    
+    if not passed and not getattr(current_user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Solve the problem before viewing the solution")
+
     sol = get_solution(exercise_id)
     if not sol:
         raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
@@ -119,8 +155,8 @@ def dojo_submit(
         if x_learner_id:
             try:
                 user = db.query(User).filter(User.id == int(x_learner_id)).first()
-            except ValueError:
-                user = db.query(User).filter(User.name == x_learner_id).first()
+            except (ValueError, TypeError):
+                user = None
         if user:
             update_user_activity(db, user.id)
             if request.passed:
@@ -153,6 +189,9 @@ def problem_submission_history(
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 
+    total = db.query(func.count(DojoSubmission.id)).filter_by(
+        user_id=current_user.id, problem_id=problem_id
+    ).scalar() or 0
     rows = (
         db.query(DojoSubmission)
         .filter_by(user_id=current_user.id, problem_id=problem_id)
@@ -162,7 +201,7 @@ def problem_submission_history(
     )
     return {
         "problem_id": problem_id,
-        "total": len(rows),
+        "total": total,
         "submissions": [
             {
                 "id":         s.id,
@@ -314,3 +353,183 @@ async def submit_dojo_code(
         "poll_url": f"/api/tasks/{task.id}",
     }
 
+
+# ---------------------------------------------------------------------------
+# POST /api/submissions/{id}/share  — mark best submission as public (P1)
+# ---------------------------------------------------------------------------
+
+@router.post("/submissions/{submission_id}/share")
+def share_submission(
+    submission_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sub = db.query(DojoSubmission).filter_by(id=submission_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if sub.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your submission")
+    if not sub.is_best:
+        raise HTTPException(status_code=400, detail="Only best submissions can be shared")
+    sub.is_public = True
+    db.commit()
+    return {"submission_id": submission_id, "is_public": True}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/problems/{id}/solutions  — top-N public best submissions (P1)
+# ---------------------------------------------------------------------------
+
+@router.get("/problems/{problem_id}/solutions")
+def problem_solutions(
+    problem_id: str,
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    prob = db.query(Problem).filter_by(id=problem_id).first()
+    if not prob:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    rows = (
+        db.query(DojoSubmission)
+        .filter_by(problem_id=problem_id, is_best=True, is_public=True)
+        .order_by(DojoSubmission.time_ms.asc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "problem_id": problem_id,
+        "total": len(rows),
+        "solutions": [
+            {
+                "id":         s.id,
+                "user_id":    s.user_id,
+                "time_ms":    s.time_ms,
+                "code":       s.code,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/dojo/stats  — global aggregate stats (P2)
+# ---------------------------------------------------------------------------
+
+@router.get("/dojo/stats")
+def dojo_global_stats(db: Session = Depends(get_db)):
+    total_problems = db.query(func.count(Problem.id)).filter(
+        Problem.is_retired == False
+    ).scalar() or 0
+
+    total_submissions = db.query(func.count(DojoSubmission.id)).scalar() or 0
+
+    rates = [
+        float(r[0])
+        for r in db.query(Problem.acceptance_rate).filter(
+            Problem.is_retired == False,
+            Problem.acceptance_rate.isnot(None),
+        ).all()
+    ]
+    avg_acceptance = round(sum(rates) / len(rates), 4) if rates else 0.0
+
+    return {
+        "total_problems":      total_problems,
+        "total_submissions":   total_submissions,
+        "avg_acceptance_rate": avg_acceptance,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/me/dojo-stats  — per-user summary (P2)
+# ---------------------------------------------------------------------------
+
+@router.get("/me/dojo-stats")
+def my_dojo_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Best passing submissions (one per problem)
+    best_subs = (
+        db.query(DojoSubmission)
+        .filter_by(user_id=current_user.id, is_best=True, passed=True)
+        .all()
+    )
+    solved_problem_ids = {s.problem_id for s in best_subs}
+
+    # Count solved problems by difficulty
+    solved_by_difficulty: dict = {}
+    for pid in solved_problem_ids:
+        prob = db.query(Problem).filter_by(id=pid).first()
+        if prob:
+            diff = prob.difficulty or "Unknown"
+            solved_by_difficulty[diff] = solved_by_difficulty.get(diff, 0) + 1
+
+    total_submissions = db.query(func.count(DojoSubmission.id)).filter_by(
+        user_id=current_user.id
+    ).scalar() or 0
+
+    problems_attempted = db.query(
+        func.count(func.distinct(DojoSubmission.problem_id))
+    ).filter_by(user_id=current_user.id).scalar() or 0
+
+    # Leaderboard rank by all-time points (1-indexed)
+    higher_count = db.query(func.count(User.id)).filter(
+        User.points > (current_user.points or 0)
+    ).scalar() or 0
+    leaderboard_rank = higher_count + 1
+
+    return {
+        "user_id":             current_user.id,
+        "total_solved":        len(solved_problem_ids),
+        "solved_by_difficulty": solved_by_difficulty,
+        "total_submissions":   total_submissions,
+        "problems_attempted":  problems_attempted,
+        "streak":              current_user.streak,
+        "points":              current_user.points,
+        "leaderboard_rank":    leaderboard_rank,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/submissions/{id}/review  — trigger an AI code review
+# ---------------------------------------------------------------------------
+
+@router.post("/submissions/{submission_id}/review")
+def trigger_submission_review(
+    submission_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sub = db.query(DojoSubmission).filter_by(id=submission_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if sub.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your submission")
+    
+    from backend.tasks.review_tasks import review_submission_task
+    review_submission_task.delay(submission_id)
+    
+    return {"status": "pending", "submission_id": submission_id}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/submissions/{id}/review  — get the AI code review text
+# ---------------------------------------------------------------------------
+
+@router.get("/submissions/{submission_id}/review")
+def get_submission_review(
+    submission_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sub = db.query(DojoSubmission).filter_by(id=submission_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if sub.user_id != current_user.id and not sub.is_public:
+        raise HTTPException(status_code=403, detail="Not your submission")
+    
+    if not sub.review_text:
+        return {"status": "pending", "review_text": None}
+    
+    return {"status": "ready", "review_text": sub.review_text}
