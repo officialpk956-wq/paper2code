@@ -478,8 +478,8 @@ class TestTutorSecurity:
         _seed_user(db_session, self.EMAIL_A)
         token = _login(client, self.EMAIL_A)
         fake_sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        with patch("core.agents.tutor_agent.llm_complete",
-                   return_value='{"answer":"ok","source_context":"x","confidence":"High","reasoning_type":"Structural"}'):
+        with patch("core.agents.agentic_tutor.AgenticTutor.ask",
+                   return_value=({"answer":"ok","reasoning_type":"Agentic"}, [])):
             r = client.post("/api/tutor/ask", headers=_auth(token), json={
                 "session_id": fake_sid,
                 "context_type": "module",
@@ -501,8 +501,8 @@ class TestTutorSecurity:
     def test_06_rate_info_returned_in_ask_response(self, client: TestClient, db_session: Session):
         _seed_user(db_session, self.EMAIL_A)
         token = _login(client, self.EMAIL_A)
-        with patch("core.agents.tutor_agent.llm_complete",
-                   return_value='{"answer":"ok","source_context":"x","confidence":"Low","reasoning_type":"Fallback"}'):
+        with patch("core.agents.agentic_tutor.AgenticTutor.ask",
+                   return_value=({"answer":"ok","reasoning_type":"Agentic"}, [])):
             r = client.post("/api/tutor/ask", headers=_auth(token), json={
                 "context_type": "module",
                 "context_data": {"paper_title": "VGG", "layer_name": "L1", "module_type": "conv",
