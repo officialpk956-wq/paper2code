@@ -219,4 +219,8 @@ def check_and_award(db: Session, user_id: int, event: str, context: dict | None 
         if total_users <= 100 and _award(db, user_id, "early-adopter"):
             awarded.append("early-adopter")
 
+    elif event == "leaderboard.top10":
+        if _award(db, user_id, "leaderboard-top-10", context):
+            awarded.append("leaderboard-top-10")
+
     return awarded
