@@ -30,7 +30,7 @@ _DRIP_DAYS = (1, 3, 7)
 def _do_onboarding_drips(db) -> dict:
     from backend.models import User, EmailDripLog
 
-    today = datetime.date.today()
+    today = datetime.datetime.utcnow().date()
     sent = 0
     errors = 0
 
@@ -85,7 +85,7 @@ def send_onboarding_drips():
 def _do_streak_at_risk(db) -> dict:
     from backend.models import User
 
-    today     = datetime.date.today()
+    today     = datetime.datetime.utcnow().date()
     yesterday = today - datetime.timedelta(days=1)
 
     # Users with streak > 0 whose last_active was yesterday (not yet active today)

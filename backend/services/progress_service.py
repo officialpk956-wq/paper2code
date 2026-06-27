@@ -37,7 +37,7 @@ def update_user_activity(db: Session, user_id: int) -> None:
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         return
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     last = user.last_active.date() if user.last_active else None
     if last == today:
         return  # already active today, no change
