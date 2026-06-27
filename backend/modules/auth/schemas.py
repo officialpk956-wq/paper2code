@@ -13,8 +13,12 @@ class UserResponse(BaseModel):
     name: str
     avatar_url: Optional[str] = None
     points: int
+    weekly_points: int = 0
+    storage_bytes_used: int = 0
     streak: int
     xp_level: int
+    last_active: Optional[datetime] = None
+    is_admin: bool = False
     is_verified: bool
     mfa_enabled: bool
     is_email_verified: bool = False

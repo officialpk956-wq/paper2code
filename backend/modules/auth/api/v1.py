@@ -116,11 +116,26 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
     refresh_token = session_service.create_refresh_token(user)
     session_service.register_session(user, refresh_token, ip, ua)
     
+    from sqlalchemy import func
+    from backend.models import DojoSubmission
+    problems_solved = (
+        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
+        .filter(
+            DojoSubmission.user_id == user.id,
+            DojoSubmission.passed == True,
+            DojoSubmission.is_best == True,
+        )
+        .scalar()
+    ) or 0
+    
+    user_resp = UserResponse.from_orm(user).dict()
+    user_resp["problems_solved"] = problems_solved
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": UserResponse.from_orm(user)
+        "user": user_resp
     }
 
 class LoginMFARequest(BaseModel):
@@ -147,11 +162,26 @@ def login_mfa(request: Request, body: LoginMFARequest, db: Session = Depends(get
     refresh_token = session_service.create_refresh_token(user)
     session_service.register_session(user, refresh_token, ip, ua)
     
+    from sqlalchemy import func
+    from backend.models import DojoSubmission
+    problems_solved = (
+        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
+        .filter(
+            DojoSubmission.user_id == user.id,
+            DojoSubmission.passed == True,
+            DojoSubmission.is_best == True,
+        )
+        .scalar()
+    ) or 0
+    
+    user_resp = UserResponse.from_orm(user).dict()
+    user_resp["problems_solved"] = problems_solved
+    
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": UserResponse.from_orm(user)
+        "user": user_resp
     }
 
 @router.post("/refresh", response_model=RefreshResponse, dependencies=[Depends(rate_limiter(30, 60))])
@@ -181,9 +211,37 @@ def logout_all(request: Request, current_user: User = Depends(get_current_user),
     session_service.revoke_all_sessions(current_user.id, ip, ua)
     return {"status": "ok", "message": "Logged out of all devices"}
 
-@router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+@router.get("/me")
+def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    from backend.models import DojoSubmission
+    problems_solved = (
+        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
+        .filter(
+            DojoSubmission.user_id == current_user.id,
+            DojoSubmission.passed == True,
+            DojoSubmission.is_best == True,
+        )
+        .scalar()
+    ) or 0
+    return {
+        "id":                  current_user.id,
+        "email":               current_user.email,
+        "name":                current_user.name,
+        "avatar_url":          current_user.avatar_url,
+        "points":              current_user.points,
+        "weekly_points":       current_user.weekly_points,
+        "storage_bytes_used":  current_user.storage_bytes_used,
+        "streak":              current_user.streak,
+        "xp_level":            current_user.xp_level,
+        "last_active":         current_user.last_active.isoformat() if current_user.last_active else None,
+        "is_admin":            current_user.is_admin,
+        "is_verified":         current_user.is_verified,
+        "mfa_enabled":         current_user.mfa_enabled,
+        "is_email_verified":   current_user.is_email_verified,
+        "email_drip_opt_out":  bool(current_user.email_drip_opt_out),
+        "problems_solved":     problems_solved,
+    }
 
 # ---------------------------------------------------------------------------
 # Email Verification Endpoints

@@ -56,6 +56,11 @@ _PROVIDERS = {
 # Authorize-URL  (GET)
 # ---------------------------------------------------------------------------
 
+def _get_redis():
+    import redis as redis_lib
+    url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    return redis_lib.from_url(url, decode_responses=True)
+
 @router.get("/{provider}/authorize-url")
 def get_authorize_url(provider: str, redirect_uri: str = ""):
     """
@@ -68,6 +73,13 @@ def get_authorize_url(provider: str, redirect_uri: str = ""):
         raise HTTPException(status_code=503, detail=f"{provider} OAuth not configured")
 
     state = secrets.token_urlsafe(24)
+    
+    try:
+        r = _get_redis()
+        r.setex(f"oauth:state:{state}", 600, "1")
+    except Exception as e:
+        log.warning("Redis oauth state set failed: %s", e)
+        
     if provider == "google":
         url = (
             f"{cfg['auth_url']}?response_type=code"
@@ -93,6 +105,7 @@ def get_authorize_url(provider: str, redirect_uri: str = ""):
 
 class ExchangeRequest(BaseModel):
     code: str
+    state: str = ""
     redirect_uri: str = ""
 
 
@@ -106,6 +119,21 @@ async def exchange_code(provider: str, body: ExchangeRequest, db: Session = Depe
         raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
     if not cfg["client_id"] or not cfg["client_secret"]:
         raise HTTPException(status_code=503, detail=f"{provider} OAuth not configured")
+
+    if not body.state:
+        raise HTTPException(status_code=400, detail="Missing state parameter")
+
+    try:
+        r = _get_redis()
+        # strict check: if redis is working but state not found, it's CSRF
+        val = r.get(f"oauth:state:{body.state}")
+        if val is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired state (CSRF)")
+        r.delete(f"oauth:state:{body.state}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.warning("Redis oauth state check failed, bypassing CSRF check: %s", e)
 
     # Exchange code → access token
     async with httpx.AsyncClient(timeout=10.0) as client:
