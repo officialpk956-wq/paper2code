@@ -255,14 +255,25 @@ def ingest_pdf_paper(
     result_dict = _GENERATOR.from_pdf(io.BytesIO(pdf_bytes), title)
 
     spec = result_dict.get("spec", {})
-    graph = result_dict["graph"]
-    classification = classify_architecture(graph)
+    from backend.schemas.architecture_spec import ArchitectureSpec
+    from pydantic import ValidationError
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        validated_spec = ArchitectureSpec(**spec)
+        spec = validated_spec.model_dump()
+    except ValidationError as e:
+        logger.warning("Architecture spec validation failed: %s — using partial spec", e)
+        spec = {"family": "unknown", "layers": [], "input_shape": [3, 224, 224]}
 
     paper_meta, learning_modules = generate_modules(
         paper_name=title,
         schema=spec,
         pipeline_result=result_dict,
     )
+
+    graph = result_dict["graph"]
+    classification = classify_architecture(graph)
 
     knowledge_graph = build_knowledge_graph(
         paper_title=title,
