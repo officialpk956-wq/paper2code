@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem
+from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem, LeaderboardArchive
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +210,7 @@ class AdminProblemCreate(BaseModel):
     learning_points: List[Any] = []
     estimated_time: Optional[int] = None
     visualization_url: Optional[str] = None
+    time_limit_ms: Optional[int] = None   # None → global default (10 000 ms)
 
 
 class AdminProblemUpdate(BaseModel):
@@ -229,6 +230,7 @@ class AdminProblemUpdate(BaseModel):
     learning_points: Optional[List[Any]] = None
     estimated_time: Optional[int] = None
     visualization_url: Optional[str] = None
+    time_limit_ms: Optional[int] = None
 
 
 def _problem_to_dict(p: Problem) -> dict:
@@ -241,6 +243,9 @@ def _problem_to_dict(p: Problem) -> dict:
         "description": p.description,
         "estimated_time": p.estimated_time,
         "is_retired": p.is_retired,
+        "version": p.version,
+        "time_limit_ms": p.time_limit_ms,
+        "acceptance_rate": float(p.acceptance_rate) if p.acceptance_rate is not None else None,
         "tags": p.tags,
         "test_cases": p.test_cases,
     }
@@ -288,6 +293,8 @@ def admin_create_problem(
         learning_points=body.learning_points,
         estimated_time=body.estimated_time,
         visualization_url=body.visualization_url,
+        time_limit_ms=body.time_limit_ms,
+        version=1,
         is_retired=False,
     )
     db.add(problem)
@@ -307,7 +314,11 @@ def admin_update_problem(
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    updates = body.model_dump(exclude_none=True)
+    # Auto-bump version when test_cases are changed
+    if "test_cases" in updates:
+        problem.version = (problem.version or 1) + 1
+    for field, value in updates.items():
         setattr(problem, field, value)
     db.commit()
     db.refresh(problem)
@@ -340,3 +351,181 @@ def admin_restore_problem(
     problem.is_retired = False
     db.commit()
     return {"id": problem.id, "is_retired": False}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/users/{user_id}  (individual detail)
+# ---------------------------------------------------------------------------
+
+@router.get("/users/{user_id}", include_in_schema=False)
+def admin_get_user(
+    user_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter_by(id=user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    papers_count = db.query(func.count(Task.id)).filter(
+        Task.user_id == user_id, Task.type == "paper.codegen"
+    ).scalar() or 0
+    submissions_count = db.query(func.count(DojoSubmission.id)).filter_by(
+        user_id=user_id
+    ).scalar() or 0
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "avatar_url": user.avatar_url,
+        "is_admin": user.is_admin,
+        "is_email_verified": user.is_email_verified,
+        "streak": user.streak,
+        "points": user.points,
+        "weekly_points": user.weekly_points,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_active": user.last_active.isoformat() if user.last_active else None,
+        "stats": {
+            "papers_uploaded": papers_count,
+            "dojo_submissions": submissions_count,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/users/{user_id}
+# ---------------------------------------------------------------------------
+
+@router.delete("/users/{user_id}", include_in_schema=False, status_code=200)
+def admin_delete_user(
+    user_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
+    user = db.query(User).filter_by(id=user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
+    return {"deleted": True, "user_id": user_id}
+
+
+# ---------------------------------------------------------------------------
+# Paper moderation: GET /api/admin/papers, DELETE, POST flag
+# ---------------------------------------------------------------------------
+
+@router.get("/papers", include_in_schema=False)
+def admin_list_papers(
+    page: int = 1,
+    limit: int = 50,
+    flagged_only: bool = False,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Paper)
+    if flagged_only:
+        query = query.filter(Paper.is_flagged == True)
+    total = query.count()
+    # Flagged papers first, then newest
+    papers = (
+        query.order_by(Paper.is_flagged.desc(), Paper.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "papers": [
+            {
+                "id": p.id,
+                "title": p.title,
+                "visibility": p.visibility,
+                "is_flagged": p.is_flagged,
+                "flag_reason": p.flag_reason,
+                "uploaded_by": p.uploaded_by,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in papers
+        ],
+    }
+
+
+class PaperFlagRequest(BaseModel):
+    reason: str = "policy_violation"
+
+
+@router.post("/papers/{paper_id}/flag", include_in_schema=False)
+def admin_flag_paper(
+    paper_id: int,
+    body: PaperFlagRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    paper.is_flagged = True
+    paper.flag_reason = body.reason
+    db.commit()
+    return {"paper_id": paper_id, "is_flagged": True, "flag_reason": body.reason}
+
+
+@router.delete("/papers/{paper_id}", include_in_schema=False, status_code=200)
+def admin_delete_paper(
+    paper_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    # Decrement uploader's storage quota before deleting
+    if paper.uploaded_by and paper.file_size_bytes:
+        owner = db.query(User).filter_by(id=paper.uploaded_by).first()
+        if owner:
+            owner.storage_bytes_used = max(0, (owner.storage_bytes_used or 0) - paper.file_size_bytes)
+    # Clean up R2/storage before deleting DB record
+    try:
+        from backend.services import storage_service
+        if paper.r2_key:
+            storage_service.cleanup(f"r2://{paper.r2_key}")
+    except Exception:
+        pass
+    db.delete(paper)
+    db.commit()
+    return {"deleted": True, "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard archive: GET /api/admin/leaderboard/archive
+# ---------------------------------------------------------------------------
+
+@router.get("/leaderboard/archive", include_in_schema=False)
+def admin_leaderboard_archive(
+    weeks: int = 4,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
+    rows = (
+        db.query(LeaderboardArchive)
+        .filter(LeaderboardArchive.week_start >= since)
+        .order_by(LeaderboardArchive.week_start.desc(), LeaderboardArchive.rank)
+        .limit(500)
+        .all()
+    )
+    return {
+        "weeks": weeks,
+        "entries": [
+            {
+                "week_start": r.week_start.isoformat(),
+                "user_id": r.user_id,
+                "weekly_points": r.weekly_points,
+                "rank": r.rank,
+            }
+            for r in rows
+        ],
+    }
