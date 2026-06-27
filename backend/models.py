@@ -52,7 +52,9 @@ class User(Base):
     name            = Column(String(255), nullable=False)
     avatar_url      = Column(String(512))
     points          = Column(Integer, default=0, nullable=False)
-    streak          = Column(Integer, default=0, nullable=False)
+    weekly_points        = Column(Integer, default=0, nullable=False, server_default='0')
+    storage_bytes_used   = Column(Integer, default=0, nullable=False, server_default='0')
+    streak               = Column(Integer, default=0, nullable=False)
     last_active     = Column(DateTime, nullable=True)
     created_at      = Column(DateTime, server_default=func.now(), nullable=False)
     
@@ -101,6 +103,13 @@ class Paper(Base):
     terms_accepted_at = Column(DateTime, nullable=True)
     uploaded_by       = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     r2_key            = Column(String(512), nullable=True)
+
+    # Sprint E: content moderation
+    is_flagged        = Column(Boolean, nullable=False, default=False, server_default='false')
+    flag_reason       = Column(String(255), nullable=True)
+
+    # Storage infra: track file size for quota accounting
+    file_size_bytes   = Column(Integer, nullable=True)
 
     modules: list["PaperModule"] = relationship(
         "PaperModule",
@@ -221,6 +230,10 @@ class Problem(Base):
     explanation           = Column(JSON)
     # Sprint B: soft-delete for admin-managed problems
     is_retired            = Column(Boolean, nullable=False, default=False, server_default='false')
+    # Sprint G: versioning, per-problem timeout, acceptance rate
+    version               = Column(Integer, nullable=False, default=1, server_default='1')
+    time_limit_ms         = Column(Integer, nullable=True)          # None → use global 10 000 ms
+    acceptance_rate       = Column(Numeric(5, 4), nullable=True)    # 0.0000–1.0000
 
     submissions: list["DojoSubmission"] = relationship(
         "DojoSubmission", back_populates="problem", cascade="all, delete-orphan"
@@ -238,15 +251,18 @@ class DojoSubmission(Base):
         Index("ix_submission_created", "created_at"),
     )
 
-    id         = Column(Integer, primary_key=True, index=True)
-    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    problem_id = Column(String(50), ForeignKey("problems.id", ondelete="CASCADE"), nullable=False, index=True)
-    code       = Column(Text, nullable=False)
-    passed     = Column(Boolean, nullable=False, default=False)
-    stdout     = Column(Text, nullable=True)
-    stderr     = Column(Text, nullable=True)
-    time_ms    = Column(Integer, nullable=True)
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    id              = Column(Integer, primary_key=True, index=True)
+    user_id         = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    problem_id      = Column(String(50), ForeignKey("problems.id", ondelete="CASCADE"), nullable=False, index=True)
+    code            = Column(Text, nullable=False)
+    passed          = Column(Boolean, nullable=False, default=False)
+    stdout          = Column(Text, nullable=True)
+    stderr          = Column(Text, nullable=True)
+    time_ms         = Column(Integer, nullable=True)
+    created_at      = Column(DateTime, server_default=func.now(), nullable=False)
+    # Sprint G: best-submission tracking and problem version snapshotting
+    is_best         = Column(Boolean, nullable=False, default=False, server_default='false')
+    problem_version = Column(Integer, nullable=True)
 
     user:    "User"    = relationship("User", back_populates="submissions")
     problem: "Problem" = relationship("Problem", back_populates="submissions")
@@ -426,6 +442,81 @@ class EmailDripLog(Base):
     user_id  = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     drip_day = Column(Integer, nullable=False)    # 1, 3, or 7
     sent_at  = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Sprint E: Leaderboard archive (weekly snapshots)
+# ---------------------------------------------------------------------------
+
+class LeaderboardArchive(Base):
+    __tablename__ = "leaderboard_archive"
+    __table_args__ = (
+        UniqueConstraint("week_start", "user_id", name="uq_lb_archive_week_user"),
+        Index("ix_lb_archive_week", "week_start"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    week_start    = Column(DateTime, nullable=False)   # Monday 00:00 UTC
+    user_id       = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    weekly_points = Column(Integer, nullable=False, default=0)
+    rank          = Column(Integer, nullable=True)
+    snapshot_at   = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Sprint F: XP event log
+# ---------------------------------------------------------------------------
+
+class XPEvent(Base):
+    __tablename__ = "xp_events"
+    __table_args__ = (
+        Index("ix_xp_events_user_created", "user_id", "created_at"),
+    )
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    action     = Column(String(100), nullable=False)
+    amount     = Column(Integer, nullable=False)
+    entity_id  = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Sprint F: Tutor message feedback (thumbs up/down)
+# ---------------------------------------------------------------------------
+
+class TutorFeedback(Base):
+    __tablename__ = "tutor_feedback"
+    __table_args__ = (
+        UniqueConstraint("session_id", "message_index", "user_id", name="uq_tutor_feedback"),
+        Index("ix_tutor_feedback_user", "user_id"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_id       = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    session_id    = Column(String(36), nullable=False, index=True)
+    message_index = Column(Integer, nullable=False)
+    rating        = Column(Integer, nullable=False)   # 1 = thumbs up, -1 = thumbs down
+    created_at    = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Sprint F: Tutor session record (persistent conversation history)
+# ---------------------------------------------------------------------------
+
+class TutorSessionRecord(Base):
+    __tablename__ = "tutor_session_records"
+    __table_args__ = (
+        Index("ix_tutor_session_record_user_created", "user_id", "created_at"),
+    )
+
+    id             = Column(Integer, primary_key=True, index=True)
+    user_id        = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id     = Column(String(36), unique=True, nullable=False, index=True)
+    context_type   = Column(String(100), nullable=True)
+    messages       = Column(JSON, nullable=True)       # [{role, content}]
+    created_at     = Column(DateTime, server_default=func.now(), nullable=False)
+    last_active_at = Column(DateTime, nullable=True)
 
 
 # Register modular authentication models

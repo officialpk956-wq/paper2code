@@ -27,6 +27,9 @@ limiter = Limiter(key_func=get_remote_address)
 
 from backend.routers import health, auth, papers, dojo, learning, lab, tasks, user, admin, search, leaderboard, notifications, achievements
 from backend.routers.oauth import router as oauth_router
+from backend.routers.announcements import router as announcements_router
+from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
+from backend.middleware.alerting import SlackAlertingMiddleware
 from backend.logging_config import RequestIDMiddleware, JSONFormatter
 
 # Configure JSON Logging
@@ -62,6 +65,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(RequestIDMiddleware)
 from backend.modules.security.middleware.security_headers import SecurityHeadersMiddleware
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(PrometheusMiddleware)
+app.add_middleware(SlackAlertingMiddleware)
 
 # Strict CORS settings
 from backend.modules.security.cors import (
@@ -94,6 +99,13 @@ app.include_router(leaderboard.router)
 app.include_router(notifications.router)
 app.include_router(achievements.router)
 app.include_router(oauth_router)
+app.include_router(announcements_router)
+
+# Prometheus metrics endpoint (restricted to internal IPs by Nginx in production)
+from fastapi import Request as _Req
+@app.get("/metrics", include_in_schema=False)
+def get_metrics(_: _Req):
+    return metrics_endpoint()
 
 if __name__ == "__main__":
     import uvicorn
