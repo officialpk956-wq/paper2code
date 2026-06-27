@@ -13,7 +13,7 @@ import re
 import json
 import inspect
 import importlib
-import requests
+import httpx
 from typing import Optional, Dict, Any
 
 from core.section_splitter import process_text
@@ -97,7 +97,7 @@ class PaperToCodeGenerator:
 
         # Fetch PDF from arXiv
         pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        response = requests.get(pdf_url, timeout=30)
+        response = httpx.get(pdf_url, timeout=30.0)
         response.raise_for_status()
 
         import io

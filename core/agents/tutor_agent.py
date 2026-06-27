@@ -71,6 +71,89 @@ class TutorSessionManager:
         else:
             return str(context_data)[:500]
 
+    def ask_with_history(
+        self,
+        context_type: str,
+        context_data: Dict[str, Any],
+        query: str,
+        history: List[Dict[str, str]],
+        knowledge_profile: Dict[str, float] = None,
+    ) -> tuple:
+        """
+        Stateless variant — caller supplies history, gets back (response_dict, updated_history).
+        Used by the secured /tutor/ask endpoint which manages sessions via TutorSessionStore.
+        """
+        if not context_data:
+            resp = {
+                "answer": "I don't have enough architecture context.",
+                "source_context": "None",
+                "confidence": "Low",
+                "reasoning_type": "Fallback",
+            }
+            return resp, history
+
+        context_summary = self._build_context_summary(context_type, context_data)
+        history_text = "\n".join(
+            f"{m['role'].capitalize()}: {m['content']}" for m in history
+        )
+
+        profile_instructions = ""
+        if knowledge_profile:
+            mastered = [c for c, s in knowledge_profile.items() if s >= 0.7]
+            weak = [c for c, s in knowledge_profile.items() if s < 0.3]
+            if mastered:
+                profile_instructions += f"\n- The learner has already mastered: {', '.join(mastered)}. Keep explanations concise."
+            if weak:
+                profile_instructions += f"\n- The learner struggles with: {', '.join(weak)}. Explain with detailed math, code, and structural context."
+
+        prompt = f"""
+You are the Paper2Code AI Architecture Tutor.
+Answer the user's question about the provided architecture context.
+Identify the architecture or module by name in your answer.
+{profile_instructions}
+
+You MUST respond with valid JSON matching exactly this schema:
+{{
+    "answer": "Your detailed explanation here, mentioning the specific architecture or module used.",
+    "source_context": "The specific parts of the context you used to answer.",
+    "confidence": "High/Medium/Low",
+    "reasoning_type": "Structural/Mathematical/Intuitive"
+}}
+
+Context Type: {context_type}
+Context Data:
+{context_summary}
+
+Chat History:
+{history_text}
+
+User Query: {query}
+"""
+        try:
+            response_text = llm_complete(prompt)
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            parsed = json.loads(response_text)
+            if "i don't have enough" in parsed.get("answer", "").lower():
+                parsed["answer"] = "I don't have enough architecture context."
+
+            updated = list(history) + [
+                {"role": "user", "content": query},
+                {"role": "tutor", "content": parsed["answer"]},
+            ]
+            return parsed, updated[-6:]
+        except Exception as exc:
+            fallback = {
+                "answer": f"I don't have enough architecture context. (Error: {exc})",
+                "source_context": "Error Fallback",
+                "confidence": "Low",
+                "reasoning_type": "Fallback",
+            }
+            return fallback, history
+
     def ask(self, session_id: str, context_type: str, context_data: Dict[str, Any], query: str, knowledge_profile: Dict[str, float] = None) -> Dict[str, Any]:
         if not context_data:
             return {
