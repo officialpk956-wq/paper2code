@@ -41,10 +41,29 @@ def generate_code_from_pdf_task(
 
         # ── Stage 2: run the generator ────────────────────────────────────────
         repo.set_stage(task_id, "analyzing")
-        generator = PaperToCodeGenerator()
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text_pages = [page.extract_text() for page in pdf.pages[:30] if page.extract_text()]
+        extracted_text = "\n\n".join(text_pages)
 
         repo.set_stage(task_id, "generating")
-        result = generator.from_pdf(io.BytesIO(pdf_bytes), paper_name)
+        from core.agents.ingestion_agent import run_ingestion
+        agent_result = run_ingestion(
+            paper_id=0,
+            paper_name=paper_name,
+            raw_text=extracted_text,
+        )
+        generated_code = agent_result["final_code"]
+        if agent_result.get("error"):
+            log.warning("Ingestion agent error for paper %s: %s",
+                           0, agent_result["error"])
+                           
+        result = {
+            "graph": {},
+            "code": generated_code,
+            "code_source": "agent",
+            "family": "unknown"
+        }
 
         # ── Stage 3: persist Paper row ────────────────────────────────────────
         repo.set_stage(task_id, "saving")

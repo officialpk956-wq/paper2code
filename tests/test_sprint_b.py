@@ -331,7 +331,7 @@ class TestTutorSessionSecurity:
     ):
         _create_user(db_session, USER_EMAIL)
         token = _login(client, USER_EMAIL)
-        with patch("core.agents.tutor_agent.llm_complete", return_value='{"answer":"ok","source_context":"ctx","confidence":"High","reasoning_type":"Structural"}'):
+        with patch("core.agents.agentic_tutor.AgenticTutor.ask", return_value=({"answer":"ok","reasoning_type":"Agentic"}, [])):
             r = client.post(
                 "/api/tutor/ask",
                 headers={"Authorization": f"Bearer {token}"},
@@ -377,7 +377,7 @@ class TestTutorSessionSecurity:
     def test_invalid_session_gets_new_one(self, client: TestClient, db_session: Session):
         _create_user(db_session, USER_EMAIL)
         token = _login(client, USER_EMAIL)
-        with patch("core.agents.tutor_agent.llm_complete", return_value='{"answer":"ok","source_context":"ctx","confidence":"High","reasoning_type":"Structural"}'):
+        with patch("core.agents.agentic_tutor.AgenticTutor.ask", return_value=({"answer":"ok","reasoning_type":"Agentic"}, [])):
             r = client.post(
                 "/api/tutor/ask",
                 headers={"Authorization": f"Bearer {token}"},
