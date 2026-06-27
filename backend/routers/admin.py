@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem, LeaderboardArchive
+from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem, LeaderboardArchive, XPEvent
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +372,27 @@ def admin_get_user(
     submissions_count = db.query(func.count(DojoSubmission.id)).filter_by(
         user_id=user_id
     ).scalar() or 0
+    recent_xp = (
+        db.query(XPEvent)
+        .filter_by(user_id=user_id)
+        .order_by(XPEvent.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_papers = (
+        db.query(Paper)
+        .filter_by(uploaded_by=user_id)
+        .order_by(Paper.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_submissions = (
+        db.query(DojoSubmission)
+        .filter_by(user_id=user_id)
+        .order_by(DojoSubmission.created_at.desc())
+        .limit(20)
+        .all()
+    )
     return {
         "id": user.id,
         "email": user.email,
@@ -388,6 +409,37 @@ def admin_get_user(
             "papers_uploaded": papers_count,
             "dojo_submissions": submissions_count,
         },
+        "xp_events": [
+            {
+                "id": e.id,
+                "action": e.action,
+                "amount": e.amount,
+                "entity_id": e.entity_id,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in recent_xp
+        ],
+        "papers": [
+            {
+                "id": p.id,
+                "title": p.title,
+                "visibility": p.visibility,
+                "is_flagged": p.is_flagged,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in recent_papers
+        ],
+        "submissions": [
+            {
+                "id": s.id,
+                "problem_id": s.problem_id,
+                "passed": s.passed,
+                "time_ms": s.time_ms,
+                "is_best": s.is_best,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in recent_submissions
+        ],
     }
 
 
@@ -453,6 +505,43 @@ def admin_list_papers(
     }
 
 
+# ---------------------------------------------------------------------------
+# GET /api/admin/papers/moderation-queue
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/moderation-queue", include_in_schema=False)
+def admin_moderation_queue(
+    page: int = 1,
+    limit: int = 50,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Paper).filter(Paper.is_flagged == True)
+    total = query.count()
+    papers = (
+        query.order_by(Paper.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "papers": [
+            {
+                "id": p.id,
+                "title": p.title,
+                "visibility": p.visibility,
+                "flag_reason": p.flag_reason,
+                "uploaded_by": p.uploaded_by,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in papers
+        ],
+    }
+
+
 class PaperFlagRequest(BaseModel):
     reason: str = "policy_violation"
 
@@ -497,6 +586,46 @@ def admin_delete_paper(
     db.delete(paper)
     db.commit()
     return {"deleted": True, "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/xp-events  — audit trail of all XP events
+# ---------------------------------------------------------------------------
+
+@router.get("/xp-events", include_in_schema=False)
+def admin_xp_events(
+    page: int = 1,
+    limit: int = 100,
+    user_id: Optional[int] = None,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(XPEvent)
+    if user_id is not None:
+        query = query.filter(XPEvent.user_id == user_id)
+    total = query.count()
+    events = (
+        query.order_by(XPEvent.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "events": [
+            {
+                "id": e.id,
+                "user_id": e.user_id,
+                "action": e.action,
+                "amount": e.amount,
+                "entity_id": e.entity_id,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
