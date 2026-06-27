@@ -1,7 +1,8 @@
 import logging
 import os
 import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import json
@@ -27,6 +28,7 @@ from backend.models import Task
 logger = logging.getLogger(__name__)
 
 _PAPER_MONTHLY_LIMIT = int(os.getenv("PAPER_MONTHLY_LIMIT", "0"))  # 0 = unlimited
+_STORAGE_QUOTA_BYTES = int(os.getenv("STORAGE_QUOTA_MB", "500")) * 1024 * 1024  # default 500 MB
 
 
 def _check_paper_quota(db: Session, user_id: int) -> None:
@@ -54,6 +56,23 @@ def _check_paper_quota(db: Session, user_id: int) -> None:
                 "Upgrade your plan for unlimited uploads."
             ),
         )
+
+def _check_storage_quota(db: Session, user_id: int, additional_bytes: int = 0) -> None:
+    """Raise 429 if user would exceed their storage quota."""
+    if _STORAGE_QUOTA_BYTES <= 0:
+        return
+    from backend.models import User
+    user = db.query(User).filter_by(id=user_id).first()
+    if not user:
+        return
+    used = (user.storage_bytes_used or 0) + additional_bytes
+    if used > _STORAGE_QUOTA_BYTES:
+        limit_mb = _STORAGE_QUOTA_BYTES // (1024 * 1024)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Storage quota exceeded ({limit_mb} MB limit). Delete papers to free space.",
+        )
+
 
 router = APIRouter(prefix="/api", tags=["Papers"])
 
@@ -269,7 +288,12 @@ def analyze_graph(request: GraphRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/papers")
-def list_papers(db: Session = Depends(get_db), current_user=Depends(get_optional_user)):
+def list_papers(
+    q:      Optional[str] = Query(None, min_length=2, max_length=200, description="Search title/abstract"),
+    domain: Optional[str] = Query(None, description="Filter by architecture type / domain tag"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
     from backend.models import Paper
     from sqlalchemy import or_
     query = db.query(Paper)
@@ -284,7 +308,13 @@ def list_papers(db: Session = Depends(get_db), current_user=Depends(get_optional
     else:
         # Unauthenticated: only public + unlisted
         query = query.filter(Paper.visibility != "private")
+    if q:
+        pat = f"%{q}%"
+        query = query.filter(or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat)))
     papers = query.all()
+    if domain:
+        domain_lower = domain.lower()
+        papers = [p for p in papers if domain_lower in get_paper_info(p)[1].lower()]
     results = []
     
     categories = {}
@@ -329,6 +359,41 @@ def list_papers(db: Session = Depends(get_db), current_user=Depends(get_optional
         },
         "papers": results
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/upload-url  — presigned R2 PUT URL for direct client upload
+# IMPORTANT: must be registered BEFORE GET /papers/{paper_id} to avoid 422
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/upload-url")
+@limiter.limit("20/hour")
+async def get_upload_url(
+    request: Request,
+    filename: str,
+    content_type: str = "application/pdf",
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    P0 Fix: Client uploads directly to R2 via presigned PUT URL.
+    API server never touches the PDF bytes — only a 50-byte key enters Redis.
+    """
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    _check_paper_quota(db, current_user.id)
+    _check_storage_quota(db, current_user.id)
+
+    from backend.services.storage_service import generate_presigned_upload_url, R2_AVAILABLE
+    if not R2_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Direct upload not available — R2 not configured. Use /api/papers/upload instead.",
+        )
+
+    return generate_presigned_upload_url(filename, content_type)
+
 
 @router.get("/papers/{paper_id}")
 def get_paper_details(paper_id: int, db: Session = Depends(get_db)):
@@ -512,6 +577,109 @@ async def upload_paper(
     except Exception as e:
         logger.error("Upload Failed: %s", str(e))
         raise HTTPException(status_code=400, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/confirm-upload  — confirm direct upload, queue processing
+# ---------------------------------------------------------------------------
+
+class ConfirmUploadRequest(BaseModel):
+    key: str
+    paper_name: str
+    visibility: str = "public"
+    terms_accepted: bool = False
+    file_size_bytes: int = 0
+
+
+@router.post("/papers/confirm-upload")
+@limiter.limit("10/hour")
+async def confirm_upload(
+    request: Request,
+    body: ConfirmUploadRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Confirm that the client has finished uploading to R2 and queue processing."""
+    if not body.terms_accepted:
+        raise HTTPException(status_code=400, detail="You must accept the Terms of Service.")
+    if body.visibility not in _VALID_VISIBILITY:
+        raise HTTPException(status_code=400, detail=f"visibility must be one of: {', '.join(_VALID_VISIBILITY)}")
+    if not body.key.startswith("papers/"):
+        raise HTTPException(status_code=400, detail="Invalid R2 key.")
+
+    _check_paper_quota(db, current_user.id)
+    _check_storage_quota(db, current_user.id, additional_bytes=body.file_size_bytes)
+
+    storage_ref = f"r2://{body.key}"
+    task = TaskRepository(db).create("paper.codegen", current_user.id, body.paper_name)
+    generate_code_from_pdf_task.delay(
+        task.id,
+        storage_ref,
+        body.paper_name,
+        current_user.id,
+        body.visibility,
+        body.terms_accepted,
+    )
+
+    # Increment user storage quota counter
+    if body.file_size_bytes > 0:
+        from backend.models import User
+        user = db.query(User).filter_by(id=current_user.id).first()
+        if user:
+            user.storage_bytes_used = (user.storage_bytes_used or 0) + body.file_size_bytes
+            db.commit()
+
+    from backend.services.progress_service import update_user_activity, award_xp
+    update_user_activity(db, current_user.id)
+    award_xp(db, current_user.id, "paper.uploaded")
+    try:
+        from backend.services.analytics_service import track
+        from backend.services.achievement_service import check_and_award
+        track(current_user.id, "paper_uploaded", {"visibility": body.visibility, "via": "presigned"})
+        check_and_award(db, current_user.id, "paper.uploaded")
+    except Exception:
+        pass
+
+    return {
+        "task_id": task.id,
+        "status": "pending",
+        "poll_url": f"/api/tasks/{task.id}",
+        "message": "Upload confirmed. Poll poll_url every 3s for generated code.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/{paper_id}/download  — presigned R2 download URL (1h expiry)
+# ---------------------------------------------------------------------------
+
+@router.get("/papers/{paper_id}/download")
+async def download_paper(
+    paper_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """
+    Returns a 302 redirect to a time-limited R2 presigned download URL.
+    Private papers require ownership. Zero API server bandwidth.
+    """
+    from backend.models import Paper
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    if p.visibility == "private":
+        if not current_user or current_user.id != p.uploaded_by:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    if not p.r2_key:
+        raise HTTPException(status_code=404, detail="PDF not available for download")
+
+    from backend.services.storage_service import presigned_download_url
+    url = presigned_download_url(f"r2://{p.r2_key}", expires_in=3600)
+    if not url:
+        raise HTTPException(status_code=503, detail="Download not available — R2 not configured")
+
+    return RedirectResponse(url=url, status_code=302)
+
 
 @router.get("/papers/{paper_id}/blueprint")
 def get_architecture_blueprint(paper_id: int, db: Session = Depends(get_db)):

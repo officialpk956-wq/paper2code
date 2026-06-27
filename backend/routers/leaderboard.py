@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func, desc
 
 from backend.database import get_db
-from backend.models import User, DojoSubmission
+from backend.models import User, DojoSubmission, Problem
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +43,25 @@ def _solved_count_subquery():
     )
 
 
+def _category_user_ids(db: Session, category: str) -> set[int]:
+    """Return IDs of users who passed at least one problem in `category`."""
+    rows = (
+        db.query(func.distinct(DojoSubmission.user_id))
+        .join(Problem, Problem.id == DojoSubmission.problem_id)
+        .filter(
+            DojoSubmission.passed == True,
+            Problem.category.ilike(f"%{category}%"),
+        )
+        .all()
+    )
+    return {r[0] for r in rows}
+
+
 @router.get("/leaderboard")
 def get_leaderboard(
-    period: str = Query("all", description="all | weekly | monthly"),
-    limit: int = Query(50, ge=1, le=200),
+    period:   str = Query("all", description="all | weekly | monthly"),
+    category: str = Query("",    description="Filter to users who solved problems in this category"),
+    limit:    int = Query(50,    ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     if period not in _VALID_PERIODS:
@@ -64,16 +79,27 @@ def get_leaderboard(
         solved_sq.label("problems_solved"),
     )
 
-    # For period filters, restrict to users active within the window
     if since is not None:
         query = query.filter(
             User.last_active.isnot(None),
             User.last_active >= since,
         )
 
+    if category:
+        cat_user_ids = _category_user_ids(db, category)
+        if not cat_user_ids:
+            return {
+                "period": period,
+                "category": category,
+                "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "total_ranked": 0,
+                "leaders": [],
+            }
+        query = query.filter(User.id.in_(cat_user_ids))
+
     rows = (
         query
-        .filter(User.points > 0)           # exclude zero-point ghosts
+        .filter(User.points > 0)
         .order_by(desc(User.points))
         .limit(limit)
         .all()
@@ -95,6 +121,7 @@ def get_leaderboard(
 
     return {
         "period": period,
+        "category": category or None,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
         "total_ranked": len(leaders),
         "leaders": leaders,

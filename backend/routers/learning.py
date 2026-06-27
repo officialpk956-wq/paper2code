@@ -8,7 +8,10 @@ from collections import defaultdict
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import LearnerProgress, Paper, PaperModule, AssessmentAttempt, TutorAnalytics, InterviewQuestion, Roadmap
+from backend.models import (
+    LearnerProgress, Paper, PaperModule, AssessmentAttempt, TutorAnalytics,
+    InterviewQuestion, Roadmap, TutorFeedback, TutorSessionRecord,
+)
 from backend.services.tutor_session_store import tutor_session_store
 
 from core.analytics.adaptive_engine import adaptive_engine
@@ -51,13 +54,20 @@ def get_progress(entity_type: str, current_user = Depends(get_current_user), db:
     return progress
 
 @router.post("/progress/{entity_type}/{entity_id}")
-def update_progress(entity_type: str, entity_id: str, update: ProgressUpdate, current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_progress(
+    entity_type: str,
+    entity_id: str,
+    update: ProgressUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     prog = db.query(LearnerProgress).filter_by(
         learner_id=str(current_user.id),
         entity_type=entity_type,
-        entity_id=entity_id
+        entity_id=entity_id,
     ).first()
-    
+
+    newly_completed = False
     if not prog:
         prog = LearnerProgress(
             learner_id=str(current_user.id),
@@ -65,17 +75,47 @@ def update_progress(entity_type: str, entity_id: str, update: ProgressUpdate, cu
             entity_id=entity_id,
             status=update.status,
             time_spent_seconds=update.time_spent_seconds,
-            started_at=datetime.datetime.utcnow()
+            started_at=datetime.datetime.utcnow(),
         )
+        if update.status == "completed":
+            prog.completed_at = datetime.datetime.utcnow()
+            newly_completed = True
         db.add(prog)
     else:
-        prog.status = update.status
         prog.time_spent_seconds += update.time_spent_seconds
         if update.status == "completed" and not prog.completed_at:
             prog.completed_at = datetime.datetime.utcnow()
-            
+            newly_completed = True
+        prog.status = update.status
+
     db.commit()
     db.refresh(prog)
+
+    # ── XP + streak on topic / architecture completion ───────────────────────
+    if newly_completed and entity_type in ("topic", "architecture"):
+        try:
+            from backend.services.progress_service import update_user_activity, award_xp, check_domain_completion
+            update_user_activity(db, current_user.id)
+            award_xp(db, current_user.id, "topic.completed", entity_id=entity_id)
+
+            completed_domain = check_domain_completion(db, current_user.id, entity_id)
+            if completed_domain:
+                award_xp(db, current_user.id, "domain.completed", entity_id=completed_domain)
+                try:
+                    from backend.models import Notification
+                    db.add(Notification(
+                        user_id=current_user.id,
+                        type="domain.completed",
+                        title=f"Domain complete: {completed_domain.replace('-', ' ').title()}",
+                        body="You've mastered all architectures in this domain! +500 XP awarded.",
+                        payload={"domain": completed_domain},
+                    ))
+                    db.commit()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("XP award failed for user %s: %s", current_user.id, exc)
+
     return prog
 
 @router.post("/progress/update")
@@ -392,6 +432,23 @@ def tutor_ask(
                 reasoning_type=reasoning_type,
                 question_count=1,
             ))
+
+        # ── Persist session record (for /api/tutor/sessions history) ─────────
+        history_snapshot = tutor_session_store.get_history(session_id)
+        now = datetime.datetime.utcnow()
+        rec = db.query(TutorSessionRecord).filter_by(session_id=session_id).first()
+        if rec:
+            rec.messages = history_snapshot
+            rec.last_active_at = now
+        else:
+            db.add(TutorSessionRecord(
+                user_id=current_user.id,
+                session_id=session_id,
+                context_type=request.context_type,
+                messages=history_snapshot,
+                last_active_at=now,
+            ))
+
         db.commit()
 
         return {
@@ -527,4 +584,213 @@ def get_interview_questions(db: Session = Depends(get_db)):
 @router.get("/roadmaps")
 def get_roadmaps(db: Session = Depends(get_db)):
     return db.query(Roadmap).all()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/recommendations  — personalised next actions (Sprint F)
+# ---------------------------------------------------------------------------
+
+@router.get("/recommendations")
+def get_recommendations(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Personalised next-action recommendations for the authenticated user."""
+    learner_key = str(current_user.id)
+    try:
+        recs = recommendation_engine.compute(db, learner_key)
+        adaptive = adaptive_engine.get_personalized_recommendations(db, learner_key)
+        return {
+            "user_id": current_user.id,
+            "recommendations": recs,
+            "adaptive": adaptive,
+        }
+    except Exception as exc:
+        logger.error("Recommendations error for user %s: %s", current_user.id, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# GET /api/learning-paths  — curated learning sequences (Sprint F)
+# ---------------------------------------------------------------------------
+
+_LEARNING_PATHS = [
+    {
+        "id": "ai-engineer",
+        "title": "AI Engineer",
+        "description": "From ML fundamentals to production-ready transformer systems.",
+        "icon": "🤖",
+        "steps": [
+            {"id": "resnet",      "type": "architecture", "title": "ResNet",       "domain": "cnns"},
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "bert",        "type": "architecture", "title": "BERT",         "domain": "transformers"},
+            {"id": "gpt",         "type": "architecture", "title": "GPT",          "domain": "transformers"},
+            {"id": "vit",         "type": "architecture", "title": "Vision Transformer", "domain": "transformers"},
+            {"id": "stable-diffusion", "type": "architecture", "title": "Stable Diffusion", "domain": "diffusion"},
+        ],
+    },
+    {
+        "id": "llm-specialist",
+        "title": "LLM Specialist",
+        "description": "Deep dive into large language models and alignment.",
+        "icon": "🧠",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "bert",        "type": "architecture", "title": "BERT",         "domain": "transformers"},
+            {"id": "gpt",         "type": "architecture", "title": "GPT",          "domain": "transformers"},
+            {"id": "llama",       "type": "architecture", "title": "LLaMA",        "domain": "transformers"},
+            {"id": "clip",        "type": "architecture", "title": "CLIP",         "domain": "transformers"},
+        ],
+    },
+    {
+        "id": "vision-engineer",
+        "title": "Vision Engineer",
+        "description": "Computer vision from classic CNNs to diffusion models.",
+        "icon": "👁️",
+        "steps": [
+            {"id": "alexnet",     "type": "architecture", "title": "AlexNet",      "domain": "cnns"},
+            {"id": "resnet",      "type": "architecture", "title": "ResNet",       "domain": "cnns"},
+            {"id": "vit",         "type": "architecture", "title": "Vision Transformer", "domain": "transformers"},
+            {"id": "clip",        "type": "architecture", "title": "CLIP",         "domain": "transformers"},
+            {"id": "ddpm",        "type": "architecture", "title": "DDPM",         "domain": "diffusion"},
+            {"id": "stable-diffusion", "type": "architecture", "title": "Stable Diffusion", "domain": "diffusion"},
+        ],
+    },
+    {
+        "id": "research-track",
+        "title": "Research Track",
+        "description": "Broad survey of modern architectures for aspiring ML researchers.",
+        "icon": "🔬",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "gan",         "type": "architecture", "title": "GAN",          "domain": "generative"},
+            {"id": "vae",         "type": "architecture", "title": "VAE",          "domain": "generative"},
+            {"id": "gcn",         "type": "architecture", "title": "GCN",          "domain": "graph"},
+            {"id": "ddpm",        "type": "architecture", "title": "DDPM",         "domain": "diffusion"},
+            {"id": "ppo",         "type": "architecture", "title": "PPO",          "domain": "rl"},
+        ],
+    },
+    {
+        "id": "interview-prep",
+        "title": "Interview Prep",
+        "description": "Targeted practice problems for ML engineering interviews.",
+        "icon": "💼",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Implement Attention", "domain": "transformers"},
+            {"id": "resnet",      "type": "architecture", "title": "Implement ResNet Block", "domain": "cnns"},
+            {"id": "vae",         "type": "architecture", "title": "Implement VAE Loss",  "domain": "generative"},
+            {"id": "ppo",         "type": "architecture", "title": "Policy Gradient",     "domain": "rl"},
+        ],
+    },
+]
+
+
+@router.get("/learning-paths")
+def get_learning_paths(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Curated learning sequences with per-step completion status overlaid."""
+    completed_ids = {
+        r.entity_id
+        for r in db.query(LearnerProgress).filter_by(
+            learner_id=str(current_user.id),
+            entity_type="architecture",
+            status="completed",
+        ).all()
+    }
+
+    result = []
+    for path in _LEARNING_PATHS:
+        steps_with_status = []
+        done = 0
+        for step in path["steps"]:
+            is_done = step["id"] in completed_ids
+            if is_done:
+                done += 1
+            steps_with_status.append({**step, "completed": is_done})
+        result.append({
+            **path,
+            "steps": steps_with_status,
+            "progress_pct": round(done / len(path["steps"]) * 100) if path["steps"] else 0,
+        })
+    return {"paths": result}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/tutor/feedback  — thumbs up/down on a tutor message (Sprint F)
+# ---------------------------------------------------------------------------
+
+class TutorFeedbackRequest(BaseModel):
+    session_id:    str
+    message_index: int
+    rating:        int   # 1 = thumbs up, -1 = thumbs down
+
+
+@router.post("/tutor/feedback", status_code=201)
+def tutor_feedback(
+    body: TutorFeedbackRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if body.rating not in (1, -1):
+        raise HTTPException(status_code=400, detail="rating must be 1 (up) or -1 (down)")
+    if body.message_index < 0:
+        raise HTTPException(status_code=400, detail="message_index must be non-negative")
+    if not tutor_session_store.validate_ownership(body.session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Session not found or not owned by you")
+
+    existing = db.query(TutorFeedback).filter_by(
+        session_id=body.session_id,
+        message_index=body.message_index,
+        user_id=current_user.id,
+    ).first()
+    if existing:
+        existing.rating = body.rating
+    else:
+        db.add(TutorFeedback(
+            user_id=current_user.id,
+            session_id=body.session_id,
+            message_index=body.message_index,
+            rating=body.rating,
+        ))
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"recorded": True, "session_id": body.session_id, "message_index": body.message_index, "rating": body.rating}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/tutor/sessions  — conversation history (Sprint F)
+# ---------------------------------------------------------------------------
+
+@router.get("/tutor/sessions")
+def tutor_sessions(
+    limit: int = 20,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List the authenticated user's persisted tutor sessions, newest first."""
+    rows = (
+        db.query(TutorSessionRecord)
+        .filter_by(user_id=current_user.id)
+        .order_by(TutorSessionRecord.created_at.desc())
+        .limit(min(limit, 100))
+        .all()
+    )
+    return {
+        "total": len(rows),
+        "sessions": [
+            {
+                "session_id":     r.session_id,
+                "context_type":   r.context_type,
+                "message_count":  len(r.messages or []),
+                "created_at":     r.created_at.isoformat() if r.created_at else None,
+                "last_active_at": r.last_active_at.isoformat() if r.last_active_at else None,
+            }
+            for r in rows
+        ],
+    }
 
