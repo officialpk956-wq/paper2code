@@ -15,10 +15,16 @@ const NAV_LINKS = [
 
 export function LandingNav() {
   const [scrolled, setScrolled] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener('scroll', onScroll, { passive: true });
+    
+    // Check if user is logged in
+    const token = localStorage.getItem("access_token");
+    setIsLoggedIn(!!token);
+    
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
@@ -61,18 +67,43 @@ export function LandingNav() {
       </div>
 
       {/* CTA */}
-      <Link
-        href="/dashboard"
-        className="hidden md:inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold text-white
-          bg-gradient-to-r from-violet-600 to-cyan-500
-          hover:from-violet-500 hover:to-cyan-400
-          shadow-[0_0_20px_rgba(139,92,246,0.3)]
-          hover:shadow-[0_0_28px_rgba(139,92,246,0.5)]
-          transition-all duration-200"
-      >
-        Start Learning
-        <ArrowRight size={14} />
-      </Link>
+      <div className="hidden md:flex items-center gap-3">
+        {!isLoggedIn ? (
+          <>
+            <Link
+              href="/login"
+              className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+            >
+              Log In
+            </Link>
+            <Link
+              href="/signup"
+              className="inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold text-white
+                bg-gradient-to-r from-violet-600 to-cyan-500
+                hover:from-violet-500 hover:to-cyan-400
+                shadow-[0_0_20px_rgba(139,92,246,0.3)]
+                hover:shadow-[0_0_28px_rgba(139,92,246,0.5)]
+                transition-all duration-200"
+            >
+              Start Learning
+              <ArrowRight size={14} />
+            </Link>
+          </>
+        ) : (
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold text-white
+              bg-gradient-to-r from-violet-600 to-cyan-500
+              hover:from-violet-500 hover:to-cyan-400
+              shadow-[0_0_20px_rgba(139,92,246,0.3)]
+              hover:shadow-[0_0_28px_rgba(139,92,246,0.5)]
+              transition-all duration-200"
+          >
+            Dashboard
+            <ArrowRight size={14} />
+          </Link>
+        )}
+      </div>
 
       {/* Mobile menu button */}
       <button className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors">

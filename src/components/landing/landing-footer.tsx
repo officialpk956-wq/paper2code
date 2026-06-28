@@ -17,6 +17,10 @@ const LINKS = {
     { label: 'Roadmaps', href: '/roadmaps' },
     { label: 'Dashboard', href: '/dashboard' },
   ],
+  Legal: [
+    { label: 'Privacy Policy', href: '/privacy' },
+    { label: 'Terms of Service', href: '/terms' },
+  ],
 };
 
 export function LandingFooter() {

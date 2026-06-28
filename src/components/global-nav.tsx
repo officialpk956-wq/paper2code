@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Search, Bell, Settings, LogOut, User } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -16,10 +16,24 @@ const NAV_ITEMS = [
 
 export function GlobalNav() {
   const pathname = usePathname();
+  const router = useRouter();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    // Check if user is logged in
+    const token = localStorage.getItem("access_token");
+    setIsLoggedIn(!!token);
+  }, [pathname]); // Re-check on navigation
 
   const isActive = (href: string) => {
     return pathname.startsWith(href);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    setIsLoggedIn(false);
+    router.push("/login");
   };
 
   return (
@@ -80,59 +94,80 @@ export function GlobalNav() {
             <Search className="w-4 h-4" />
           </button>
 
-          {/* Notifications */}
-          <button className="relative p-2 rounded-md hover:bg-[--bg-surface] transition-colors">
-            <Bell className="w-4 h-4" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-[--color-hard] rounded-full" />
-          </button>
+          {!isLoggedIn ? (
+            <div className="flex items-center gap-2">
+              <Link href="/login" className="px-3 py-1.5 text-sm font-medium text-[--color-text-secondary] hover:text-white transition-colors">
+                Log In
+              </Link>
+              <Link href="/signup" className="px-3 py-1.5 text-sm font-medium bg-[--accent-primary] text-white rounded-md hover:bg-[--accent-light] transition-colors">
+                Sign Up
+              </Link>
+            </div>
+          ) : (
+            <>
+              {/* Dashboard Link */}
+              <Link href="/dashboard" className="hidden lg:block px-3 py-1.5 text-sm font-medium text-[--color-text-secondary] hover:text-white transition-colors">
+                Dashboard
+              </Link>
 
-          {/* Profile Menu */}
-          <div className="relative">
-            <button
-              onClick={() => setProfileOpen(!profileOpen)}
-              className="w-8 h-8 rounded-full bg-gradient-to-r from-[--accent-primary] to-[--accent-cyan] flex items-center justify-center text-white text-xs font-bold hover:opacity-80 transition-opacity"
-            >
-              A
-            </button>
+              {/* Notifications */}
+              <button className="relative p-2 rounded-md hover:bg-[--bg-surface] transition-colors">
+                <Bell className="w-4 h-4" />
+                <span className="absolute top-1 right-1 w-2 h-2 bg-[--color-hard] rounded-full" />
+              </button>
 
-            {/* Dropdown Menu */}
-            {profileOpen && (
-              <div className="absolute right-0 mt-2 w-48 bg-[--bg-surface] border border-[--color-border] rounded-lg shadow-lg overflow-hidden animate-in fade-in-0 slide-in-from-top-2 duration-200">
-                <div className="px-4 py-3 border-b border-[--color-border]">
-                  <p className="text-sm font-semibold text-[--color-text-primary]">
-                    Alice Chen
-                  </p>
-                  <p className="text-xs text-[--color-text-tertiary]">
-                    alice@example.com
-                  </p>
-                </div>
+              {/* Profile Menu */}
+              <div className="relative">
+                <button
+                  onClick={() => setProfileOpen(!profileOpen)}
+                  className="w-8 h-8 rounded-full bg-gradient-to-r from-[--accent-primary] to-[--accent-cyan] flex items-center justify-center text-white text-xs font-bold hover:opacity-80 transition-opacity"
+                >
+                  A
+                </button>
 
-                <div className="py-2">
-                  <a
-                    href="#"
-                    className="flex items-center gap-3 px-4 py-2 text-sm text-[--color-text-secondary] hover:bg-[--bg-panel] hover:text-[--color-text-primary] transition-colors"
-                  >
-                    <User className="w-4 h-4" />
-                    Profile
-                  </a>
-                  <a
-                    href="#"
-                    className="flex items-center gap-3 px-4 py-2 text-sm text-[--color-text-secondary] hover:bg-[--bg-panel] hover:text-[--color-text-primary] transition-colors"
-                  >
-                    <Settings className="w-4 h-4" />
-                    Settings
-                  </a>
-                </div>
+                {/* Dropdown Menu */}
+                {profileOpen && (
+                  <div className="absolute right-0 mt-2 w-48 bg-[--bg-surface] border border-[--color-border] rounded-lg shadow-lg overflow-hidden animate-in fade-in-0 slide-in-from-top-2 duration-200">
+                    <div className="px-4 py-3 border-b border-[--color-border]">
+                      <p className="text-sm font-semibold text-[--color-text-primary]">
+                        User
+                      </p>
+                      <p className="text-xs text-[--color-text-tertiary]">
+                        user@example.com
+                      </p>
+                    </div>
 
-                <div className="border-t border-[--color-border] py-2">
-                  <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[--color-hard] hover:bg-[--bg-panel] transition-colors text-left">
-                    <LogOut className="w-4 h-4" />
-                    Sign out
-                  </button>
-                </div>
+                    <div className="py-2">
+                      <Link
+                        href="/dashboard"
+                        className="flex items-center gap-3 px-4 py-2 text-sm text-[--color-text-secondary] hover:bg-[--bg-panel] hover:text-[--color-text-primary] transition-colors"
+                      >
+                        <User className="w-4 h-4" />
+                        Dashboard
+                      </Link>
+                      <Link
+                        href="#"
+                        className="flex items-center gap-3 px-4 py-2 text-sm text-[--color-text-secondary] hover:bg-[--bg-panel] hover:text-[--color-text-primary] transition-colors"
+                      >
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </Link>
+                    </div>
+
+                    <div className="border-t border-[--color-border] py-2">
+                      <button 
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[--color-hard] hover:bg-[--bg-panel] transition-colors text-left"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        Sign out
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
       </div>
     </nav>

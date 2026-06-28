@@ -134,18 +134,18 @@ export function Footer() {
             © {currentYear} Paper2Code. All rights reserved.
           </p>
           <div className="flex gap-6 text-xs">
-            <a
-              href="#"
+            <Link
+              href="/privacy"
               className="text-[--color-text-tertiary] hover:text-[--color-text-secondary] transition-colors"
             >
               Privacy
-            </a>
-            <a
-              href="#"
+            </Link>
+            <Link
+              href="/terms"
               className="text-[--color-text-tertiary] hover:text-[--color-text-secondary] transition-colors"
             >
               Terms
-            </a>
+            </Link>
             <a
               href="#"
               className="text-[--color-text-tertiary] hover:text-[--color-text-secondary] transition-colors"
