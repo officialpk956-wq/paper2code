@@ -316,8 +316,21 @@ def list_papers(
     else:
         # Unauthenticated: only public + unlisted
         query = query.filter(Paper.visibility != "private")
+        
     if q:
-        pat = f"%{q}%"
+        from backend.services.vector_service import semantic_search
+        paper_ids = semantic_search(q, limit=20)
+        if paper_ids:
+            # Reorder SQL results to match Qdrant ranking
+            from sqlalchemy.sql.expression import case
+            ordering = case(
+                {_id: index for index, _id in enumerate(paper_ids)},
+                value=Paper.id
+            )
+            query = query.filter(Paper.id.in_(paper_ids)).order_by(ordering)
+        else:
+            # Fallback to ILIKE if vector search returns nothing (or fails)
+            pat = f"%{q}%"
         query = query.filter(or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat)))
     papers = query.all()
     if domain:
@@ -1007,3 +1020,42 @@ def ask_paper(
     result = ask_about_paper(target, paper_dicts, body.question)
     return result
 
+
+@router.get('/tasks/{task_id}/stream')
+def stream_task_status(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    "Server-Sent Events endpoint for real-time task status."
+    from fastapi.responses import StreamingResponse
+    import json
+    import asyncio
+    from backend.repositories.task_repository import TaskRepository
+    repo = TaskRepository(db)
+    
+    async def event_generator():
+        last_status = None
+        while True:
+            task = repo.get(task_id)
+            if not task:
+                yield f"data: {json.dumps({'status': 'error', 'error': 'Task not found'})}\n\n"
+                break
+                
+            current_status = task.status
+            if current_status != last_status:
+                payload = {
+                    'id': task.id,
+                    'status': task.status,
+                    'result': task.result,
+                    'error': task.error
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+                last_status = current_status
+                
+            if current_status in ('complete', 'failed'):
+                break
+                
+            await asyncio.sleep(1.0)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
