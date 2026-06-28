@@ -102,9 +102,14 @@ Code:
         "revision_count": state.get("revision_count", 0) + 1,
     }
 
+from core.agents.code_safety import _check_code_safety
+
+
 def commit_result(state: IngestionState) -> dict:
     """Store final code (lint passed or max revisions reached)."""
-    return {"final_code": state.get("code", "")}
+    code = state.get("code", "")
+    _check_code_safety(code)
+    return {"final_code": code}
 
 def should_revise(state: IngestionState) -> str:
     if state.get("error"):
