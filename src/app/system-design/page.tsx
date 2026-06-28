@@ -17,7 +17,7 @@ export default function SystemDesignPage() {
           onAddPattern={setSelectedPattern}
         />
       }
-      center={<DesignCanvas selectedPattern={selectedPattern} onSelectElement={(id, type) => setSelectedPattern(type)} />}
+      center={<DesignCanvas selectedPattern={selectedPattern} onSelectElement={(_, type) => setSelectedPattern(type)} />}
       right={<DesignProperties selectedPattern={selectedPattern} />}
       leftWidth="w-80"
       rightWidth="w-80"
