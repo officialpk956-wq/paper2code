@@ -177,6 +177,7 @@ def dojo_submit(
         logger.error(f"Dojo submit error: {str(e)}")
         return {"status": "ok", "recorded": False, "detail": str(e)}
 
+
 @router.get("/problems/{problem_id}/submissions")
 def problem_submission_history(
     problem_id: str,

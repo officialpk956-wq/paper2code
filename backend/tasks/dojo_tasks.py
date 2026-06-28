@@ -84,9 +84,15 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
             finally:
                 loop.close()
 
-        t = threading.Thread(target=target)
+        t = threading.Thread(target=target, daemon=True)
         t.start()
-        t.join()
+        join_timeout = run_timeout_ms / 1000 + 30  # 30s grace beyond code run timeout
+        t.join(timeout=join_timeout)
+        if t.is_alive():
+            raise TimeoutError(
+                f"Execution thread did not finish within {join_timeout:.0f}s — "
+                "Piston may be unresponsive"
+            )
         if err:
             raise err[0]
         result = res[0]
@@ -135,7 +141,11 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
             _update_acceptance_rate(db, task.input_ref)
 
     except Exception as e:
-        TaskRepository(db).set_failed(task_id, str(e))
+        try:
+            TaskRepository(db).set_failed(task_id, str(e))
+            db.commit()
+        except Exception:
+            db.rollback()
         raise self.retry(exc=e, countdown=3)
     finally:
         db.close()
