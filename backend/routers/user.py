@@ -237,6 +237,7 @@ def get_my_papers(
     }
 
 @me_router.get("/notification-preferences")
+@me_router.get("/notification-prefs")
 def get_notification_prefs(current_user: User = Depends(get_current_user)):
     return {
         "email_drip_opt_out": getattr(current_user, "email_drip_opt_out", False),
@@ -251,6 +252,7 @@ class NotificationPrefsUpdate(BaseModel):
     email_digest: Optional[bool] = None
 
 @me_router.patch("/notification-preferences")
+@me_router.patch("/notification-prefs")
 def patch_notification_prefs(
     prefs: NotificationPrefsUpdate,
     current_user: User = Depends(get_current_user),

@@ -262,6 +262,9 @@ def get_analytics_dashboard(
         }
         
         # Learning Path
+        progress_records = db.query(LearnerProgress).filter(
+            LearnerProgress.learner_id == x_learner_id
+        ).all()
         active_sorted = sorted(
             [p for p in progress_records if p.started_at],
             key=lambda x: x.started_at,
@@ -269,6 +272,7 @@ def get_analytics_dashboard(
         )
         current_position = "Get started by reading a paper!"
         next_recommended = "None"
+        first_paper = db.query(Paper).order_by(Paper.id.asc()).first()
         if active_sorted:
             latest = active_sorted[0]
             m = db.query(PaperModule).filter(PaperModule.id == latest.module_id).first()
@@ -294,10 +298,8 @@ def get_analytics_dashboard(
                         next_recommended = f"{next_paper.title} - {next_paper.modules[0].layer_name}"
                     else:
                         next_recommended = "You have completed all available papers!"
-        elif papers:
-            first_paper = papers[0]
-            if first_paper.modules:
-                next_recommended = f"{first_paper.title} - {first_paper.modules[0].layer_name}"
+        elif first_paper and first_paper.modules:
+            next_recommended = f"{first_paper.title} - {first_paper.modules[0].layer_name}"
                 
         learning_path = {
             "current_position": current_position,
