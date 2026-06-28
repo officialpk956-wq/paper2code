@@ -6,17 +6,30 @@ from typing import Dict, Any, Optional
 
 # Env configuration
 JWT_ACTIVE_KEY_ID = os.getenv("JWT_ACTIVE_KEY_ID", "key_v1")
-# Default key ring for local dev
-DEFAULT_KEY_RING = {"key_v1": "super_secret_dev_key_v1_change_in_production"}
 JWT_KEY_RING_RAW = os.getenv("JWT_KEY_RING")
 
+_WEAK_KEY_FRAGMENT = "change_in_production"
+
 def get_key_ring() -> Dict[str, str]:
-    if JWT_KEY_RING_RAW:
-        try:
-            return json.loads(JWT_KEY_RING_RAW)
-        except Exception:
-            pass
-    return DEFAULT_KEY_RING
+    if not JWT_KEY_RING_RAW:
+        if os.getenv("ENVIRONMENT", "development") == "production":
+            raise RuntimeError(
+                "JWT_KEY_RING env var is not set. "
+                "Refusing to start with no signing key in production."
+            )
+        return {"key_v1": "dev_only_key_not_for_production"}
+    try:
+        ring = json.loads(JWT_KEY_RING_RAW)
+    except Exception as exc:
+        raise RuntimeError(f"JWT_KEY_RING is not valid JSON: {exc}") from exc
+    for kid, secret in ring.items():
+        if _WEAK_KEY_FRAGMENT in secret:
+            raise RuntimeError(
+                f"JWT key ring contains the default placeholder key (kid={kid!r}). "
+                "Set a strong random key before deploying to production."
+            )
+    return ring
+
 
 def get_active_secret() -> str:
     ring = get_key_ring()
