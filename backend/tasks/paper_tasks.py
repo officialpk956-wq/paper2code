@@ -99,16 +99,29 @@ def generate_code_from_pdf_task(
             "stage":       "complete",
         })
 
+        # ── Stage 5: index in vector store ───────────────────────────────────
+        try:
+            from backend.services.vector_service import index_paper
+            index_paper(
+                paper_id=paper.id,
+                title=paper_name,
+                abstract=getattr(paper, "abstract", "") or "",
+                authors=getattr(paper, "authors", "") or "",
+            )
+        except Exception as _ve:
+            log.warning("vector index failed (non-fatal): %s", _ve)
+
         # ── Stage 4: notify user ──────────────────────────────────────────────
         if user_id:
             _notify_paper_done(db, user_id, paper_name, paper.id)
 
     except Exception as exc:
         repo.set_failed(task_id, str(exc))
+        if self.request.retries >= self.max_retries:
+            cleanup(storage_ref)
         raise self.retry(exc=exc)
     finally:
         db.close()
-        cleanup(storage_ref)
 
 
 def _notify_paper_done(db, user_id: int, paper_name: str, paper_id: int) -> None:
