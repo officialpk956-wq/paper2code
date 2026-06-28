@@ -190,9 +190,10 @@ def get_analytics_dashboard(
             learner_progress = db.query(
                 PaperModule.paper_id, LearnerProgress.status
             ).join(
-                PaperModule, PaperModule.id == LearnerProgress.module_id
+                PaperModule, PaperModule.id == LearnerProgress.entity_id
             ).filter(
-                LearnerProgress.learner_id == x_learner_id
+                LearnerProgress.learner_id == x_learner_id,
+                LearnerProgress.entity_type == "paper_module",
             ).all()
             
             progress_by_paper = defaultdict(list)
@@ -480,6 +481,91 @@ def tutor_ask(
     except Exception as exc:
         logger.error("Tutor ask error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post("/tutor/stream")
+def tutor_stream(
+    request: TutorAskRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
+):
+    """
+    SSE endpoint for streaming tutor responses via real LiteLLM token streaming.
+    Uses a stateless system prompt with conversation history — no tool-use agentic
+    loop (that remains in /tutor/ask). First token arrives in ~300ms.
+
+    Event stream format:
+      data: {"type": "meta",  "session_id": "<id>"}
+      data: {"type": "chunk", "text": "<token>"}
+      data: {"type": "done"}
+      data: {"type": "error", "detail": "<msg>"}
+    """
+    from fastapi.responses import StreamingResponse
+    import json as _json
+    import os
+
+    # ── Session security ──────────────────────────────────────────────────────
+    session_id = request.session_id
+    if session_id and not tutor_session_store.validate_ownership(session_id, current_user.id):
+        session_id = tutor_session_store.create_session(current_user.id)
+    elif not session_id:
+        session_id = tutor_session_store.create_session(current_user.id)
+
+    allowed, _count, limit = tutor_session_store.check_and_incr_rate(current_user.id)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Daily tutor limit of {limit} reached")
+
+    history  = tutor_session_store.get_history(session_id)
+    ctx_data = request.context_data or {}
+    arch     = str(ctx_data.get("architecture", ctx_data.get("title", "")))[:200]
+    ctx_type = str(request.context_type or "general")[:100]
+
+    system_msg = (
+        f"You are an expert AI tutor for deep learning architectures.\n"
+        f"<context_type>{ctx_type}</context_type>\n"
+        f"<context_subject>{arch}</context_subject>\n"
+        "Be educational and specific. Never give away full solutions to coding problems."
+    )
+    messages = (
+        [{"role": "system", "content": system_msg}]
+        + list(history)
+        + [{"role": "user", "content": request.query}]
+    )
+
+    async def event_generator():
+        yield f"data: {_json.dumps({'type': 'meta', 'session_id': session_id})}\n\n"
+        collected: list[str] = []
+        try:
+            from litellm import acompletion
+            model = os.getenv("LLM_PRIMARY_MODEL", "groq/llama-3.3-70b-versatile")
+            fallback = os.getenv("LLM_FALLBACK_MODEL", "gemini/gemini-2.0-flash")
+            resp = await acompletion(
+                model=model,
+                messages=messages,
+                stream=True,
+                temperature=0.3,
+                fallbacks=[fallback] if model != fallback else [],
+            )
+            async for chunk in resp:
+                token = chunk.choices[0].delta.content or ""
+                if token:
+                    collected.append(token)
+                    yield f"data: {_json.dumps({'type': 'chunk', 'text': token})}\n\n"
+        except Exception as exc:
+            logger.error("tutor_stream error: %s", exc)
+            yield f"data: {_json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
+            return
+
+        # Persist conversation history (last 6 turns)
+        full_answer = "".join(collected)
+        new_history = list(history) + [
+            {"role": "user",      "content": request.query},
+            {"role": "assistant", "content": full_answer},
+        ]
+        tutor_session_store.update_history(session_id, new_history[-6:])
+        yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/tutor/quiz")
 def tutor_quiz(
