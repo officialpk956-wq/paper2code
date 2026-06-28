@@ -7,6 +7,7 @@ and seeds the SQLite database with support_level="verified".
 """
 
 import sys
+import os
 from pathlib import Path
 
 # Add project root to path if needed
@@ -274,6 +275,11 @@ def process_and_persist():
     pipeline = Paper2CodePipeline(parsing_agent=ParsingAgentImpl(use_llm=False))
     
     # We will reset DB to ensure clean state
+    if os.getenv("ALLOW_DB_RESET", "").lower() != "true":
+        raise RuntimeError(
+            "Database wipe blocked. Set ALLOW_DB_RESET=true to allow. "
+            "NEVER do this in production."
+        )
     print("Resetting database...")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
