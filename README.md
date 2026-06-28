@@ -83,9 +83,250 @@ Research Paper (ambiguous PDF)
 └─────────────┬───────────────┘
               ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Interactive SPA  ·  AI Tutor  ·  Dojo  ·  Assessments  │
+│  Interactive SPA  ·  AI Tutor  ·  Dojo  ·  Assessments │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🔄 System Workflow Diagram
+
+The diagram below shows every major path through the platform — from user action to response — covering paper ingestion, AI tutoring, Dojo code execution, assessments, and the auth layer.
+
+```mermaid
+flowchart TD
+    %% ─────────────────────────────────────────
+    %% USER ENTRY POINTS
+    %% ─────────────────────────────────────────
+    USER(["👤 User / Browser\nVanilla JS SPA"])
+
+    USER -->|"Upload PDF"| UPLOAD
+    USER -->|"Browse Library"| LIBRARY
+    USER -->|"Ask Tutor"| TUTOR_REQ
+    USER -->|"Submit Dojo Code"| DOJO_SUB
+    USER -->|"Take Assessment"| ASSESS_REQ
+    USER -->|"Build in Playground"| PLAY_REQ
+    USER -->|"Compare Architectures"| COMP_REQ
+    USER -->|"Register / Login"| AUTH_REQ
+
+    %% ─────────────────────────────────────────
+    %% FASTAPI BACKEND GATEWAY
+    %% ─────────────────────────────────────────
+    subgraph BACKEND ["⚙️  FastAPI Backend  ·  backend/server.py"]
+        direction TB
+        RATE["SlowAPI\nRate Limiter"]
+        AUTH_MW["JWT Middleware\nget_current_user()"]
+        ROUTER["16 API Routers"]
+        RATE --> AUTH_MW --> ROUTER
+    end
+
+    UPLOAD --> BACKEND
+    LIBRARY --> BACKEND
+    TUTOR_REQ --> BACKEND
+    DOJO_SUB --> BACKEND
+    ASSESS_REQ --> BACKEND
+    PLAY_REQ --> BACKEND
+    COMP_REQ --> BACKEND
+    AUTH_REQ --> BACKEND
+
+    %% ─────────────────────────────────────────
+    %% AUTH MODULE
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/auth/..."| AUTH_MODULE
+
+    subgraph AUTH_MODULE ["🔐  Auth Module  ·  backend/modules/auth/"]
+        direction TB
+        AUTH_SVC["AuthService\nbcrypt · token_version"]
+        SESS_SVC["SessionService\nRefresh rotation · device tracking"]
+        MFA_SVC["MFAService\nTOTP · backup codes (hashed)"]
+        OAUTH_SVC["OAuthService\nGoogle · GitHub"]
+        AUDIT["AuditService\nSecurity event log"]
+        AUTH_SVC --- SESS_SVC --- MFA_SVC --- OAUTH_SVC --- AUDIT
+    end
+
+    AUTH_MODULE -->|"UserSession\nVerificationToken\nResetToken\nAuditLog"| DB
+
+    %% ─────────────────────────────────────────
+    %% PAPER INGESTION PIPELINE
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/papers/upload"| CELERY
+
+    subgraph CELERY ["⚡  Celery Worker  ·  Async Task Queue"]
+        INGEST_TASK["ingest_paper_async"]
+    end
+
+    CELERY --> INGEST_AGENT
+
+    subgraph INGEST_AGENT ["🤖  LangGraph Ingestion Agent  ·  ingestion_agent.py"]
+        direction LR
+        EXTRACT["Stage 1\nPDF Extraction\npdfplumber + PyMuPDF"]
+        SECTION["Stage 2\nSection Splitter\nHeading detection"]
+        CLASSIFY["Stage 3\nArchitecture\nClassifier"]
+        PARSE["Stage 4\nParsing Agent\nconfig_extractor.py\n632 lines · 200+ synonyms"]
+        TENSOR["Stage 5\nTensorTracker\nSymbolic forward-pass\n(B,C,H,W) · (B,N,D)"]
+        FLOPS["Stage 6\nFLOPs Engine\nClosed-form per layer"]
+        KAG["Stage 7\nKAG Grounding\nknowledge_graph.py\n1,000+ DL rules"]
+        CODEGEN["Stage 8\nCode Generator\nEducational PyTorch"]
+        EXTRACT --> SECTION --> CLASSIFY --> PARSE --> TENSOR --> FLOPS --> KAG --> CODEGEN
+    end
+
+    CODEGEN -->|"Paper + PaperModule\narchitecture_graph JSON\nflops_context JSON\ntensor_flow JSON"| DB
+
+    %% ─────────────────────────────────────────
+    %% LIBRARY / EXPLORER / COMPARISON
+    %% ─────────────────────────────────────────
+    ROUTER -->|"GET /api/papers\nGET /api/papers/{id}/modules\nGET /api/papers/{a}/compare/{b}"| PAPER_SVC
+
+    subgraph PAPER_SVC ["📚  Paper Services"]
+        DIFF["diff_engine.py\nStructural comparison"]
+        VIZ["visualization_agent_impl.py\nCytoscape.js elements"]
+        EXPLAINER["semantic_explainer.py\nPer-node explanations"]
+        HEATMAP["Compute Heatmap\nFLOPs · Params · Memory\nClient-side only"]
+    end
+
+    PAPER_SVC --> DB
+    PAPER_SVC -->|"Graph JSON\nModule list\nDiff result"| USER
+
+    %% ─────────────────────────────────────────
+    %% AI TUTOR
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/papers/{id}/tutor\nPOST /api/tutor/agentic"| TUTOR_ENGINE
+
+    subgraph TUTOR_ENGINE ["🧠  AI Tutor Engines"]
+        direction TB
+        TUTOR_GROUNDED["Grounded Tutor\ntutor_agent.py · 5 modes\nModule · Architecture\nNode · Playground · Comparison"]
+        TUTOR_AGENTIC["Agentic Tutor\nagentic_tutor.py\nAnthropic tool-use API"]
+        LEARN_PATH["Learning Path Agent\nlearning_path_agent.py\n5-step curriculum"]
+        RAG_AGENT["Research RAG Agent\nresearch_rag_agent.py\nCross-paper search"]
+
+        subgraph GROUNDING ["Grounding Context (before every LLM call)"]
+            G1["Architecture Graph"]
+            G2["TensorTracker Trace\nshape at every layer"]
+            G3["FLOPs / Params\nper layer"]
+            G4["User Knowledge\nProfile"]
+        end
+
+        GROUNDING --> TUTOR_GROUNDED
+        GROUNDING --> TUTOR_AGENTIC
+    end
+
+    DB -->|"Paper · Modules\nProgress profile"| TUTOR_ENGINE
+    TUTOR_ENGINE -->|"Groq / Anthropic\nLLM call"| LLM_API[("☁️ LLM API\nGroq · Anthropic")]
+    LLM_API -->|"Grounded narrative\n(no numerical hallucination)"| USER
+    TUTOR_ENGINE -->|"TutorSessionRecord\nTutorFeedback\nUsageLog"| DB
+
+    %% ─────────────────────────────────────────
+    %% DOJO
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/problems/{id}/submit"| DOJO_ENGINE
+
+    subgraph DOJO_ENGINE ["🥋  Dojo Engine"]
+        SIZE_CHECK["10 KB size check"]
+        PISTON["Piston\nCode Execution Engine\nSandboxed · time-limited"]
+        REVIEW_AGENT["Code Review Agent\ncode_review_agent.py\nPost-submission LLM review"]
+        XP_AWARD["XP Award\n50 XP first solve\nLeaderboard update"]
+        SIZE_CHECK --> PISTON --> REVIEW_AGENT --> XP_AWARD
+    end
+
+    DOJO_ENGINE -->|"DojoSubmission\nreview_text\nXPEvent"| DB
+    DOJO_ENGINE -->|"pass/fail\nstdout · stderr\ntime_ms · review"| USER
+
+    %% ─────────────────────────────────────────
+    %% ASSESSMENTS
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/assessments/{id}/submit"| ASSESS_ENGINE
+
+    subgraph ASSESS_ENGINE ["📝  Assessment Engine  ·  core/assessment/"]
+        direction LR
+        ARCH_CH["Architecture\nChallenges\n100+ questions"]
+        TENSOR_CH["Tensor Shape\nChallenges\nSymbolic eval"]
+        FLOPS_CH["FLOPs\nChallenges\nFormula graded"]
+        COMP_CH["Comparison\nChallenges\nDiff graded"]
+        ADAPTIVE["Adaptive Engine\nadaptive_engine.py\n9 concept areas"]
+        ARCH_CH & TENSOR_CH & FLOPS_CH & COMP_CH --> ADAPTIVE
+    end
+
+    ASSESS_ENGINE -->|"AssessmentAttempt\nLearnerProgress\nXPEvent"| DB
+    ASSESS_ENGINE -->|"Correct answer\nExplanation\nMastery delta"| USER
+
+    %% ─────────────────────────────────────────
+    %% PLAYGROUND
+    %% ─────────────────────────────────────────
+    ROUTER -->|"POST /api/playground/validate"| PLAYGROUND
+
+    subgraph PLAYGROUND ["🛝  Playground + Architecture Lab"]
+        VALIDATOR["TensorTracker\nLive validation"]
+        MUTATOR["mutator.py\nStructured mutations"]
+        HYPOTHESIS["hypothesis_engine.py\n'What if?' engine"]
+        TRADEOFF["tradeoff_analyzer.py\nFLOPs vs accuracy"]
+    end
+
+    PLAYGROUND -->|"Validation result\nInsights"| USER
+
+    %% ─────────────────────────────────────────
+    %% DATABASE
+    %% ─────────────────────────────────────────
+    subgraph DB ["🗄️  Database  ·  SQLAlchemy + Alembic  ·  20 ORM Models"]
+        direction LR
+        T1["users\npapers\npaper_modules"]
+        T2["dojo_submissions\nproblems\nxp_events"]
+        T3["learner_progress\nassessment_attempts\ntutor_session_records"]
+        T4["notifications\nachievements\nleaderboard_archive"]
+        T5["user_sessions\naudit_logs\nusage_log"]
+    end
+
+    %% ─────────────────────────────────────────
+    %% SCHEDULED CELERY TASKS
+    %% ─────────────────────────────────────────
+    subgraph CRON ["🕐  Scheduled Celery Tasks"]
+        DRIP["send_drip_email\nDay 1 · 3 · 7"]
+        PRUNE["prune_old_xp_events\nweekly · >90 days"]
+        LB_ARCH["archive_leaderboard\nMonday 00:01 UTC"]
+        ACC_RATE["compute_acceptance_rates\nhourly"]
+    end
+
+    CRON --> DB
+
+    %% ─────────────────────────────────────────
+    %% ADMIN PANEL
+    %% ─────────────────────────────────────────
+    ROUTER -->|"is_admin=True"| ADMIN
+
+    subgraph ADMIN ["🛡️  Admin Panel  ·  22 endpoints"]
+        A1["User CRUD\nban · verify · role"]
+        A2["Paper moderation\nflag · unflag · delete"]
+        A3["Problem management\ncreate · retire · edit"]
+        A4["Analytics dashboard\nLLM cost tracking"]
+    end
+
+    ADMIN --> DB
+
+    %% ─────────────────────────────────────────
+    %% STYLES
+    %% ─────────────────────────────────────────
+    classDef userNode fill:#6366f1,stroke:#4f46e5,color:#fff,rx:12
+    classDef engineNode fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef dbNode fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    classDef llmNode fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef cronNode fill:#064e3b,stroke:#059669,color:#e2e8f0
+    classDef adminNode fill:#7f1d1d,stroke:#dc2626,color:#e2e8f0
+
+    class USER userNode
+    class DB dbNode
+    class LLM_API llmNode
+    class CRON cronNode
+    class ADMIN adminNode
+```
+
+> **Reading the diagram:**
+> - **Purple** — user / browser entry point
+> - **Dark navy boxes** — backend engines and agents (fully deterministic where noted)
+> - **Dark blue** — the database (20 ORM models, Alembic-managed)
+> - **Violet** — external LLM API (called only for narrative generation, never for facts)
+> - **Green** — scheduled background tasks
+> - **Red** — admin-only paths (require `is_admin = True` on JWT)
+>
+> The critical design rule visible in the diagram: **every path that calls the LLM API first passes through a Grounding Context block** — the LLM never sees a question without deterministic facts already assembled.
 
 ---
 
