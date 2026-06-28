@@ -1,264 +1,154 @@
-import httpx
 import os
 import logging
 from typing import Optional
+import resend
 
-
-
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-RESEND_URL = "https://api.resend.com/emails"
-FROM_ADDRESS = os.getenv("EMAIL_FROM", "Paper2Code <noreply@paper2code.com>")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+FROM_EMAIL     = os.getenv("FROM_EMAIL", "Paper2Code <noreply@paper2code.com>")
+FRONTEND_URL   = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-async def _send(to: str, subject: str, html: str) -> bool:
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+
+def send_email_sync(to_email: str, subject: str, html_body: str) -> bool:
     if not RESEND_API_KEY:
-        log.warning(f"[email] RESEND_API_KEY not set — would send '{subject}' to {to}")
-        return False
+        logger.info("MOCK EMAIL to %s: %s", to_email, subject)
+        return True
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(
-                RESEND_URL,
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json={"from": FROM_ADDRESS, "to": [to],
-                      "subject": subject, "html": html},
-            )
-            r.raise_for_status()
-            return True
+        resend.Emails.send({"from": FROM_EMAIL, "to": to_email, "subject": subject, "html": html_body})
+        return True
     except Exception as e:
-        log.error(f"[email] send failed to {to}: {e}")
+        logger.error("Failed to send email to %s: %s", to_email, e)
         return False
 
-async def send_verification_email(to: str, token: str) -> bool:
-    link = f"{FRONTEND_URL}/auth/verify-email?token={token}"
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Verify your Paper2Code account</h1>
-      <p style="color:#475569">Click the button below to confirm your email address.
-         This link expires in 24 hours.</p>
-      <a href="{link}" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
+
+def _base_template(content: str) -> str:
+    """Branded wrapper applied to every outgoing email."""
+    return f"""
+<div style="font-family:Inter,system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px">
+  <div style="background:#7C3AED;padding:24px 32px;border-radius:12px 12px 0 0">
+    <h1 style="margin:0;color:#fff;font-size:20px;font-weight:700">Paper2Code</h1>
+  </div>
+  <div style="background:#fff;border:1px solid #E2E8F0;border-top:none;
+              border-radius:0 0 12px 12px;padding:32px">
+    {content}
+  </div>
+  <p style="text-align:center;color:#94A3B8;font-size:11px;margin-top:16px">
+    © 2025 Paper2Code ·
+    <a href="{FRONTEND_URL}/unsubscribe" style="color:#94A3B8">Unsubscribe</a>
+  </p>
+</div>"""
+
+
+# --- TEMPLATES ---
+
+def send_verification_email_sync(to_email: str, token: str) -> bool:
+    link = f"{FRONTEND_URL}/verify-email?token={token}"
+    html = _base_template(f"""
+      <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Verify your email</h2>
+      <p style="color:#475569;margin:0 0 24px">
+        One click and you're in. This link expires in 24 hours.
+      </p>
+      <a href="{link}" style="display:inline-block;padding:12px 28px;background:#7C3AED;
+         color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
         Verify Email →
       </a>
-      <p style="color:#94A3B8;font-size:12px">If you didn't create an account, ignore this email.</p>
-    </div>"""
-    return await _send(to, "Verify your Paper2Code email", html)
+      <p style="color:#94A3B8;font-size:12px;margin-top:24px">
+        Didn't create an account? You can ignore this email.
+      </p>""")
+    return send_email_sync(to_email, "Verify your Paper2Code email", html)
 
-async def send_password_reset_email(to: str, token: str) -> bool:
-    link = f"{FRONTEND_URL}/auth/reset-password?token={token}"
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Reset your password</h1>
-      <p style="color:#475569">Click below to set a new password. 
-         This link expires in <strong>15 minutes</strong> and can only be used once.</p>
-      <a href="{link}" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
+
+def send_welcome_email_sync(to_email: str, name: str = "there") -> bool:
+    html = _base_template(f"""
+      <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Welcome, {name}!</h2>
+      <p style="color:#475569;margin:0 0 16px">
+        You're now part of Paper2Code. Here's how to get started:
+      </p>
+      <ul style="color:#475569;padding-left:20px;line-height:1.8">
+        <li><strong>Upload a paper</strong> — we generate PyTorch code for you</li>
+        <li><strong>Try the Dojo</strong> — coding challenges ranked by difficulty</li>
+        <li><strong>Ask the Tutor</strong> — instant explanations of any architecture</li>
+      </ul>
+      <a href="{FRONTEND_URL}/papers/upload"
+         style="display:inline-block;margin-top:24px;padding:12px 28px;background:#7C3AED;
+                color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+        Upload your first paper →
+      </a>""")
+    return send_email_sync(to_email, f"Welcome to Paper2Code, {name}!", html)
+
+
+def send_paper_done_email_sync(to_email: str, paper_name: str, paper_id) -> bool:
+    link = f"{FRONTEND_URL}/papers/{paper_id}"
+    html = _base_template(f"""
+      <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Your paper is ready</h2>
+      <p style="color:#475569;margin:0 0 8px">
+        We've finished processing <strong>{paper_name}</strong>.
+      </p>
+      <p style="color:#475569;margin:0 0 24px">
+        PyTorch code has been generated. Open it to explore the architecture.
+      </p>
+      <a href="{link}" style="display:inline-block;padding:12px 28px;background:#7C3AED;
+         color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+        View Paper →
+      </a>""")
+    return send_email_sync(to_email, f"✅ {paper_name} is ready", html)
+
+
+def send_achievement_unlocked_email_sync(
+    to_email: str, achievement_name: str, description: str, name: str = "there"
+) -> bool:
+    html = _base_template(f"""
+      <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Achievement unlocked 🏆</h2>
+      <p style="color:#475569;margin:0 0 24px">Great work, {name}! You just earned:</p>
+      <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;
+                  padding:20px 24px;margin-bottom:16px">
+        <p style="margin:0;font-size:18px;font-weight:700;color:#7C3AED">{achievement_name}</p>
+        <p style="margin:8px 0 0;color:#6B7280;font-size:14px">{description}</p>
+      </div>
+      <a href="{FRONTEND_URL}/profile"
+         style="display:inline-block;padding:12px 28px;background:#7C3AED;
+                color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+        See your profile →
+      </a>""")
+    return send_email_sync(to_email, f"🏆 You earned: {achievement_name}", html)
+
+
+def send_password_reset_email_sync(to_email: str, token: str) -> bool:
+    link = f"{FRONTEND_URL}/reset-password?token={token}"
+    html = _base_template(f"""
+      <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Reset your password</h2>
+      <p style="color:#475569;margin:0 0 24px">
+        Click below to choose a new password. This link expires in 1 hour.
+      </p>
+      <a href="{link}" style="display:inline-block;padding:12px 28px;background:#7C3AED;
+         color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
         Reset Password →
       </a>
-      <p style="color:#94A3B8;font-size:12px">If you didn't request this, you can safely ignore it.
-         Your password won't change.</p>
-    </div>"""
-    return await _send(to, "Reset your Paper2Code password", html)
-
-async def send_welcome_email(to: str, name: str) -> bool:
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Welcome to Paper2Code, {name}!</h1>
-      <p style="color:#475569">You're all set. Here's what to try first:</p>
-      <ul style="color:#475569;line-height:2">
-        <li>Upload a research paper and get PyTorch code in minutes</li>
-        <li>Solve a Dojo problem to test your ML skills</li>
-        <li>Ask the AI Tutor anything about an architecture</li>
-      </ul>
-      <a href="{FRONTEND_URL}/dashboard" style="display:inline-block;margin:24px 0;
-         padding:12px 24px;background:#7C3AED;color:#fff;border-radius:8px;
-         text-decoration:none;font-weight:600">
-        Open Dashboard →
-      </a>
-    </div>"""
-    return await _send(to, "Welcome to Paper2Code", html)
+      <p style="color:#94A3B8;font-size:12px;margin-top:24px">
+        Didn't request this? You can safely ignore this email.
+      </p>""")
+    return send_email_sync(to_email, "Reset your Paper2Code password", html)
 
 
-async def send_paper_done_email(to: str, paper_name: str, paper_id: int) -> bool:
-    link = f"{FRONTEND_URL}/papers/{paper_id}"
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Your paper is ready</h1>
-      <p style="color:#475569">
-        <strong>{paper_name}</strong> has been processed and PyTorch code has been generated.
-      </p>
-      <a href="{link}" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
-        View Code →
-      </a>
-      <p style="color:#94A3B8;font-size:12px">Paper2Code — turn research into runnable code.</p>
-    </div>"""
-    return await _send(to, f"Paper ready: {paper_name}", html)
+def send_drip_email_sync(to_email: str, name: str, day: int):
+    return send_email_sync(to_email, f"Day {day} at Paper2Code", f"<p>Hi {name}</p>")
+
+def send_streak_at_risk_email_sync(to_email: str, name: str, streak: int):
+    return send_email_sync(to_email, "Keep your streak alive!", f"<p>Hi {name}, you have a {streak} day streak at risk.</p>")
+
+def send_weekly_digest_email_sync(to_email: str, name: str, stats: dict):
+    return send_email_sync(to_email, "Your Weekly Digest", f"<p>Hi {name}, here are your stats: {stats}</p>")
+
+
 
 
 _DRIP_TEMPLATES = {
-    1: {
-        "subject": "Welcome! Here's how to get started with Paper2Code",
-        "cta_text": "Upload Your First Paper →",
-        "cta_url": "/papers",
-        "body": "Start by uploading any research paper PDF. We'll extract the architecture and generate PyTorch code within minutes.",
-    },
-    3: {
-        "subject": "Ready to test your ML skills? Try the Dojo",
-        "cta_text": "Open the Dojo →",
-        "cta_url": "/dojo",
-        "body": "The Coding Dojo has hand-crafted problems on Transformers, CNNs, and more. Solve one today to build your streak.",
-    },
-    7: {
-        "subject": "7 days with Paper2Code — check the leaderboard",
-        "cta_text": "View Leaderboard →",
-        "cta_url": "/leaderboard",
-        "body": "You've been with us for a week! See how you rank against other researchers and practitioners.",
-    },
+    1: {'subject': 'Day 1', 'cta_text': 'Start', 'body': '...'},
+    3: {'subject': 'Day 3', 'cta_text': 'Continue', 'body': '...'},
+    7: {'subject': 'Day 7', 'cta_text': 'Finish', 'body': '...'},
 }
 
-
-def send_drip_email_sync(to: str, name: str, day: int) -> bool:
-    tpl = _DRIP_TEMPLATES.get(day)
-    if not tpl:
-        return False
-    if not RESEND_API_KEY:
-        log.warning("[email] RESEND_API_KEY not set — skipping drip day=%d to %s", day, to)
-        return False
-    link = f"{FRONTEND_URL}{tpl['cta_url']}"
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Hi {name}!</h1>
-      <p style="color:#475569">{tpl['body']}</p>
-      <a href="{link}" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
-        {tpl['cta_text']}
-      </a>
-      <p style="color:#94A3B8;font-size:12px">Paper2Code — turn research into runnable code.</p>
-    </div>"""
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.post(
-                RESEND_URL,
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json={"from": FROM_ADDRESS, "to": [to], "subject": tpl["subject"], "html": html},
-            )
-            r.raise_for_status()
-            return True
-    except Exception as exc:
-        log.error("[email] drip day=%d email failed to %s: %s", day, to, exc)
-        return False
-
-
-def send_streak_at_risk_email_sync(to: str, name: str, streak: int) -> bool:
-    if not RESEND_API_KEY:
-        log.warning("[email] RESEND_API_KEY not set — skipping streak-at-risk email to %s", to)
-        return False
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Your {streak}-day streak is at risk, {name}!</h1>
-      <p style="color:#475569">
-        You haven't been active today. Log in now to keep your streak alive — it resets at midnight UTC.
-      </p>
-      <a href="{FRONTEND_URL}/dojo" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#DC2626;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
-        Save My Streak →
-      </a>
-      <p style="color:#94A3B8;font-size:12px">Paper2Code — daily practice builds expertise.</p>
-    </div>"""
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.post(
-                RESEND_URL,
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json={"from": FROM_ADDRESS, "to": [to],
-                      "subject": f"🔥 Your {streak}-day streak is at risk!", "html": html},
-            )
-            r.raise_for_status()
-            return True
-    except Exception as exc:
-        log.error("[email] streak-at-risk email failed to %s: %s", to, exc)
-        return False
-
-
-def send_weekly_digest_email_sync(to: str, name: str, stats: dict) -> bool:
-    if not RESEND_API_KEY:
-        log.warning("[email] RESEND_API_KEY not set — skipping digest to %s", to)
-        return False
-    problems_solved = stats.get("problems_solved", 0)
-    xp_earned       = stats.get("xp_earned", 0)
-    rank_change      = stats.get("rank_change", 0)
-    rank_icon = "▲" if rank_change > 0 else ("▼" if rank_change < 0 else "—")
-    html = f"""
-    <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-      <h1 style="font-size:24px;color:#0F172A">Your weekly summary, {name}</h1>
-      <table style="width:100%;border-collapse:collapse;margin:24px 0">
-        <tr>
-          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
-            <div style="font-size:32px;font-weight:700;color:#7C3AED">{problems_solved}</div>
-            <div style="color:#64748B;font-size:13px">Problems Solved</div>
-          </td>
-          <td style="width:16px"></td>
-          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
-            <div style="font-size:32px;font-weight:700;color:#7C3AED">+{xp_earned}</div>
-            <div style="color:#64748B;font-size:13px">XP Earned</div>
-          </td>
-          <td style="width:16px"></td>
-          <td style="padding:12px;background:#F8FAFC;border-radius:8px;text-align:center">
-            <div style="font-size:32px;font-weight:700;color:#7C3AED">{rank_icon}{abs(rank_change)}</div>
-            <div style="color:#64748B;font-size:13px">Rank Change</div>
-          </td>
-        </tr>
-      </table>
-      <a href="{FRONTEND_URL}/dojo" style="display:inline-block;margin:24px 0;padding:12px 24px;
-         background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
-        Keep Practicing →
-      </a>
-      <p style="color:#94A3B8;font-size:12px">Paper2Code — your weekly research-to-code digest.</p>
-    </div>"""
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.post(
-                RESEND_URL,
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json={"from": FROM_ADDRESS, "to": [to],
-                      "subject": f"Your Paper2Code week: {problems_solved} problems, +{xp_earned} XP", "html": html},
-            )
-            r.raise_for_status()
-            return True
-    except Exception as exc:
-        log.error("[email] digest failed to %s: %s", to, exc)
-        return False
-
-
-def send_paper_done_email_sync(to: str, paper_name: str, paper_id: int) -> bool:
-    """Synchronous wrapper for use inside Celery tasks."""
-    if not RESEND_API_KEY:
-        log.warning("[email] RESEND_API_KEY not set — skipping paper-done email to %s", to)
-        return False
-    try:
-        link = f"{FRONTEND_URL}/papers/{paper_id}"
-        html = f"""
-        <div style="font-family:Inter,sans-serif;max-width:560px;margin:auto;padding:32px">
-          <h1 style="font-size:24px;color:#0F172A">Your paper is ready</h1>
-          <p style="color:#475569">
-            <strong>{paper_name}</strong> has been processed and PyTorch code has been generated.
-          </p>
-          <a href="{link}" style="display:inline-block;margin:24px 0;padding:12px 24px;
-             background:#7C3AED;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
-            View Code →
-          </a>
-        </div>"""
-        with httpx.Client(timeout=10.0) as client:
-            r = client.post(
-                RESEND_URL,
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json={"from": FROM_ADDRESS, "to": [to],
-                      "subject": f"Paper ready: {paper_name}", "html": html},
-            )
-            r.raise_for_status()
-            return True
-    except Exception as exc:
-        log.error("[email] sync paper-done email failed to %s: %s", to, exc)
-        return False
