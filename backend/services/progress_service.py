@@ -60,12 +60,12 @@ def update_user_activity(db: Session, user_id: int) -> None:
         pass
 
 
-def award_xp(db: Session, user_id: int, event: str, entity_id: str | None = None) -> int:
+def award_xp(db: Session, user_id: int, event: str, entity_id: str | None = None, amount_override: int | None = None) -> int:
     """
     Award XP for an event, log to XPEvent, and return the new total points.
     entity_id is an optional string referencing the triggering resource.
     """
-    amount = XP_AWARDS.get(event, 0)
+    amount = amount_override if amount_override is not None else XP_AWARDS.get(event, 0)
     if not amount:
         return 0
     user = db.query(User).filter_by(id=user_id).first()
