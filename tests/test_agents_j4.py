@@ -20,8 +20,10 @@ def get_token(client, db_session, user_email="test@test.com"):
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}, user
 
-@patch("core.agents.learning_path_agent.llm_complete")
-def test_learning_path_success(mock_llm, client, db_session):
+from core.agents.learning_path_agent import LearningPath, LearningStep
+
+@patch("core.agents.learning_path_agent._client.chat.completions.create")
+def test_learning_path_success(mock_create, client, db_session):
     headers, user = get_token(client, db_session)
     
     prog = LearnerProgress(learner_id=str(user.id), entity_type="architecture", entity_id="resnet", status="completed")
@@ -32,7 +34,10 @@ def test_learning_path_success(mock_llm, client, db_session):
     
     db_session.commit()
     
-    mock_llm.return_value = '```json\n{"steps": [{"step": 1, "type": "concept", "title": "test", "reason": "test"}], "reasoning": "strategy"}\n```'
+    mock_create.return_value = LearningPath(
+        steps=[LearningStep(step=1, type="concept", title="test", reason="test")],
+        reasoning="strategy"
+    )
     
     resp = client.get("/api/me/learning-path", headers=headers)
     assert resp.status_code == 200
@@ -41,24 +46,27 @@ def test_learning_path_success(mock_llm, client, db_session):
     assert len(data["steps"]) == 1
     assert data["reasoning"] == "strategy"
 
-@patch("core.agents.learning_path_agent.llm_complete")
-def test_learning_path_unauthorized(mock_llm, client):
+@patch("core.agents.learning_path_agent._client.chat.completions.create")
+def test_learning_path_unauthorized(mock_create, client):
     resp = client.get("/api/me/learning-path")
     assert resp.status_code == 401
 
-@patch("core.agents.learning_path_agent.llm_complete")
-def test_learning_path_invalid_json(mock_llm, client, db_session):
+@patch("core.agents.learning_path_agent._client.chat.completions.create")
+def test_learning_path_invalid_json(mock_create, client, db_session):
     headers, user = get_token(client, db_session, f"test2_{uuid.uuid4()}@test.com")
     
-    mock_llm.return_value = 'This is not json'
+    mock_create.side_effect = Exception("ValidationError")
     resp = client.get("/api/me/learning-path", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["steps"] == []
     assert "Could not generate" in data["reasoning"]
 
-@patch("core.agents.research_rag_agent.llm_complete")
-def test_ask_paper_success(mock_llm, client, db_session):
+
+from core.agents.research_rag_agent import PaperAnswer
+
+@patch("core.agents.research_rag_agent._client.chat.completions.create")
+def test_ask_paper_success(mock_create, client, db_session):
     headers, user = get_token(client, db_session, f"test3_{uuid.uuid4()}@test.com")
     
     paper_id_1 = random.randint(10000, 99999)
@@ -69,7 +77,7 @@ def test_ask_paper_success(mock_llm, client, db_session):
     db_session.add_all([p1, p2])
     db_session.commit()
 
-    mock_llm.return_value = "This is a great paper. References included."
+    mock_create.return_value = PaperAnswer(answer="This is a great paper. References included.", referenced_papers=[123])
     
     resp = client.post(
         f"/api/papers/{p1.id}/ask", 
