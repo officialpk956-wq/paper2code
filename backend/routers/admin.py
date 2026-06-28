@@ -658,3 +658,108 @@ def admin_leaderboard_archive(
             for r in rows
         ],
     }
+
+# ---------------------------------------------------------------------------
+# Admin Paper Challenges CRUD
+# ---------------------------------------------------------------------------
+
+from backend.models import PaperChallenge, PaperChallengePart
+
+class AdminPaperChallengeCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    order_idx: int = 0
+
+class AdminPaperChallengePartCreate(BaseModel):
+    title: str
+    description_md: str
+    paper_section_md: Optional[str] = None
+    setup_code: Optional[str] = None
+    starter_code: str
+    solution_code: Optional[str] = None
+    test_code: str
+    unlock_requires_part_id: Optional[int] = None
+    xp_reward: int = 50
+    order_idx: int = 0
+
+class AdminPaperChallengePublish(BaseModel):
+    is_published: bool
+
+@router.post("/papers/{paper_id}/challenges", include_in_schema=False, status_code=201)
+def admin_create_paper_challenge(
+    paper_id: int,
+    body: AdminPaperChallengeCreate,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    paper = db.query(Paper).filter_by(id=paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    challenge = PaperChallenge(
+        paper_id=paper_id,
+        title=body.title,
+        description=body.description,
+        order_idx=body.order_idx,
+    )
+    db.add(challenge)
+    db.commit()
+    db.refresh(challenge)
+    return {"id": challenge.id, "title": challenge.title}
+
+@router.post("/challenges/{challenge_id}/parts", include_in_schema=False, status_code=201)
+def admin_create_paper_challenge_part(
+    challenge_id: int,
+    body: AdminPaperChallengePartCreate,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    challenge = db.query(PaperChallenge).filter_by(id=challenge_id).first()
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+
+    part = PaperChallengePart(
+        challenge_id=challenge_id,
+        title=body.title,
+        description_md=body.description_md,
+        paper_section_md=body.paper_section_md,
+        setup_code=body.setup_code,
+        starter_code=body.starter_code,
+        solution_code=body.solution_code,
+        test_code=body.test_code,
+        unlock_requires_part_id=body.unlock_requires_part_id,
+        xp_reward=body.xp_reward,
+        order_idx=body.order_idx,
+    )
+    db.add(part)
+    db.commit()
+    db.refresh(part)
+    return {"id": part.id, "title": part.title}
+
+@router.patch("/challenges/{challenge_id}", include_in_schema=False)
+def admin_publish_challenge(
+    challenge_id: int,
+    body: AdminPaperChallengePublish,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    challenge = db.query(PaperChallenge).filter_by(id=challenge_id).first()
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+
+    challenge.is_published = body.is_published
+    db.commit()
+    return {"id": challenge.id, "is_published": challenge.is_published}
+
+@router.delete("/parts/{part_id}", include_in_schema=False, status_code=200)
+def admin_delete_part(
+    part_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    part = db.query(PaperChallengePart).filter_by(id=part_id).first()
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    db.delete(part)
+    db.commit()
+    return {"deleted": True, "part_id": part_id}
