@@ -1,106 +1,128 @@
 import os
-from anthropic import Anthropic
+import json
+import logging
 
+logger = logging.getLogger(__name__)
+
+_MODEL = os.getenv("LLM_PRIMARY_MODEL", "groq/llama-3.3-70b-versatile")
+_FALLBACK = os.getenv("LLM_FALLBACK_MODEL", "gemini/gemini-2.0-flash")
+
+# OpenAI function-calling format (works with all LiteLLM providers)
 TOOLS = [
     {
-        "name": "lookup_paper_section",
-        "description": "Get raw text of a section from a specific paper by paper_id. Useful when the user asks about a specific paper's content.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "paper_id": {"type": "integer", "description": "The paper's database ID"},
-                "section": {"type": "string", "description": "Section name: abstract, method, experiments, introduction"}
-            },
-            "required": ["paper_id"]
+        "type": "function",
+        "function": {
+            "name": "lookup_paper_section",
+            "description": "Get raw text of a section from a specific paper by paper_id. Use when the user asks about a specific paper's content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_id": {"type": "integer", "description": "The paper's database ID"},
+                    "section": {"type": "string", "description": "Section name: abstract, method, experiments, introduction"}
+                },
+                "required": ["paper_id"]
+            }
         }
     },
     {
-        "name": "get_user_weak_topics",
-        "description": "Get the architectures where this user has low assessment accuracy. Use to personalize the explanation.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer"}
-            },
-            "required": ["user_id"]
+        "type": "function",
+        "function": {
+            "name": "get_user_weak_topics",
+            "description": "Get architectures where this user has low assessment accuracy. Use to personalize explanations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "integer"}
+                },
+                "required": ["user_id"]
+            }
         }
     },
     {
-        "name": "find_related_problem",
-        "description": "Find a dojo problem related to a concept. Return problem id, title, difficulty.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "concept": {"type": "string", "description": "e.g. 'attention mechanism', 'residual connection', 'batch normalization'"}
-            },
-            "required": ["concept"]
+        "type": "function",
+        "function": {
+            "name": "find_related_problem",
+            "description": "Find a dojo problem related to a concept. Return problem id, title, difficulty.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "concept": {"type": "string", "description": "e.g. 'attention mechanism', 'residual connection'"}
+                },
+                "required": ["concept"]
+            }
         }
     },
     {
-        "name": "search_papers_by_concept",
-        "description": "Search papers in the database that mention a concept in their title or abstract.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "concept": {"type": "string"}
-            },
-            "required": ["concept"]
+        "type": "function",
+        "function": {
+            "name": "search_papers_by_concept",
+            "description": "Search papers in the database that mention a concept in their title or abstract.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "concept": {"type": "string"}
+                },
+                "required": ["concept"]
+            }
         }
     }
 ]
 
+_ALLOWED_CONTEXT_KEYS = {"architecture", "title", "domain", "topic"}
+_MAX_CONTEXT_VALUE_LEN = 200
+_MAX_QUERY_LEN = 2000
+
+
+def _safe_context_value(value: str) -> str:
+    clean = str(value).replace("\n", " ").replace("\r", " ").strip()
+    return clean[:_MAX_CONTEXT_VALUE_LEN]
+
+
 class AgenticTutor:
     def __init__(self, db_session):
         self.db = db_session
-        self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "dummy_key"))
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
-        """Execute a tool call and return the result as a string."""
         from backend.models import Paper, Problem, AssessmentAttempt
-        from sqlalchemy import func
-        
+
         if tool_name == "lookup_paper_section":
-            paper = self.db.query(Paper).filter_by(
-                id=tool_input["paper_id"]
-            ).first()
+            paper = self.db.query(Paper).filter_by(id=tool_input["paper_id"]).first()
             if not paper:
                 return "Paper not found."
             section = tool_input.get("section", "abstract")
             content = getattr(paper, section, None) or paper.abstract or ""
             return content[:2000] if content else "No content available."
-            
+
         if tool_name == "get_user_weak_topics":
-            from backend.models import AssessmentAttempt
             attempts = (
                 self.db.query(AssessmentAttempt)
                 .filter_by(learner_id=str(tool_input["user_id"]))
                 .all()
             )
-            arch_results = {}
+            arch_results: dict[str, list[bool]] = {}
             for a in attempts:
                 if a.architecture:
                     arch_results.setdefault(a.architecture, []).append(a.is_correct)
             weak = [
                 arch for arch, results in arch_results.items()
-                if results and sum(results)/len(results) < 0.5
+                if results and sum(results) / len(results) < 0.5
             ]
             return f"Weak topics: {', '.join(weak)}" if weak else "No weak topics found."
-            
+
         if tool_name == "find_related_problem":
-            from backend.models import Problem
             concept = tool_input["concept"].lower()
             prob = (
                 self.db.query(Problem)
                 .filter(
                     Problem.is_retired == False,
-                    Problem.description.ilike(f"%{concept}%")
+                    Problem.description.ilike(f"%{concept}%"),
                 )
                 .first()
             )
             if prob:
                 return f"Problem: {prob.title} (ID: {prob.id}, Difficulty: {prob.difficulty})"
             return "No related problem found."
-            
+
         if tool_name == "search_papers_by_concept":
             from backend.models import Paper
             concept = tool_input["concept"]
@@ -108,7 +130,7 @@ class AgenticTutor:
                 self.db.query(Paper)
                 .filter(
                     Paper.visibility != "private",
-                    Paper.title.ilike(f"%{concept}%")
+                    Paper.title.ilike(f"%{concept}%"),
                 )
                 .limit(3)
                 .all()
@@ -116,7 +138,7 @@ class AgenticTutor:
             if papers:
                 return "; ".join(f"{p.title} (ID: {p.id})" for p in papers)
             return "No papers found."
-            
+
         return f"Unknown tool: {tool_name}"
 
     def ask(
@@ -129,50 +151,69 @@ class AgenticTutor:
         knowledge_profile: dict | None = None,
     ) -> tuple[dict, list[dict]]:
         """
-        Run the agentic tutor. Returns (response_dict, updated_history).
-        response_dict matches the shape returned by the old ask_with_history:
-          {"answer": str, "reasoning_type": str, ...}
+        Run the agentic tutor via LiteLLM with tool calling.
+        Returns (response_dict, updated_history).
+        response_dict: {"answer": str, "reasoning_type": str}
         """
-        system = f"""You are an expert AI tutor for deep learning and machine learning architectures.
-Context: {context_type} - {context_data.get('architecture', context_data.get('title', ''))}
-You have access to tools to look up paper content, user progress, and related problems.
-Use tools when the question requires specific data. Otherwise answer directly.
-Always be educational and specific. Never give away full solutions to coding problems."""
+        from litellm import completion
 
-        messages = list(history) + [{"role": "user", "content": query}]
-        
+        if len(query) > _MAX_QUERY_LEN:
+            raise ValueError(f"Query exceeds maximum length of {_MAX_QUERY_LEN} characters")
+
+        safe_arch = _safe_context_value(
+            context_data.get("architecture", context_data.get("title", ""))
+        )
+        safe_ctx = _safe_context_value(context_type)
+
+        system = (
+            f"You are an expert AI tutor for deep learning and machine learning architectures.\n"
+            f"<context_type>{safe_ctx}</context_type>\n"
+            f"<context_subject>{safe_arch}</context_subject>\n"
+            "Use tools when the question requires specific data. Otherwise answer directly.\n"
+            "Always be educational and specific. Never give away full solutions to coding problems."
+        )
+
+        messages: list[dict] = (
+            [{"role": "system", "content": system}]
+            + list(history)
+            + [{"role": "user", "content": query}]
+        )
+
         # Agentic loop: max 3 tool-use rounds
         for _ in range(3):
-            response = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=1024,
-                system=system,
-                tools=TOOLS,
+            resp = completion(
+                model=_MODEL,
                 messages=messages,
+                tools=TOOLS,
+                temperature=0,
+                fallbacks=[_FALLBACK] if _MODEL != _FALLBACK else [],
             )
-            messages.append({"role": "assistant", "content": response.content})
-            
-            if response.stop_reason == "end_turn":
+            choice = resp.choices[0]
+            finish_reason = choice.finish_reason
+
+            # Append the assistant turn (with or without tool_calls)
+            messages.append(choice.message.model_dump(exclude_none=True) if hasattr(choice.message, "model_dump") else {"role": "assistant", "content": choice.message.content or "", "tool_calls": getattr(choice.message, "tool_calls", None)})
+
+            if finish_reason != "tool_calls":
                 break
-                
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        result = self._execute_tool(block.name, block.input)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        })
-                messages.append({"role": "user", "content": tool_results})
-                
-        # Extract final text answer
-        final_text = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                final_text = block.text
-                break
-                
-        updated_history = messages[-6:]  # keep last 6 messages as context
+
+            # Execute each tool call and append results
+            tool_calls = choice.message.tool_calls or []
+            for tc in tool_calls:
+                tool_result = self._execute_tool(
+                    tc.function.name,
+                    json.loads(tc.function.arguments),
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_result,
+                })
+
+        # Extract the final text answer
+        final_text = choice.message.content or ""
+        if not final_text:
+            final_text = "I was unable to generate a complete response. Please rephrase your question."
+
+        updated_history = messages[-6:]
         return {"answer": final_text, "reasoning_type": "Agentic"}, updated_history
