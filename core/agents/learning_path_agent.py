@@ -1,5 +1,29 @@
-import json
-from core.llm_client import llm_complete
+import os
+import logging
+from typing import Optional
+from pydantic import BaseModel
+import instructor
+from litellm import completion as litellm_completion
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pydantic schema — LLM output is always validated against this
+# ---------------------------------------------------------------------------
+class LearningStep(BaseModel):
+    step:   int
+    type:   str   # "paper" | "problem" | "concept"
+    id:     Optional[str] = None
+    title:  str
+    reason: str
+
+class LearningPath(BaseModel):
+    steps:     list[LearningStep]
+    reasoning: str
+
+# Instructor client wrapping LiteLLM
+_client = instructor.from_litellm(litellm_completion)
+_MODEL  = os.getenv("LLM_PRIMARY_MODEL", "groq/llama-3.3-70b-versatile")
 
 def generate_learning_path(
     completed_architectures: list[str],
@@ -9,42 +33,34 @@ def generate_learning_path(
     available_problems: list[dict],
 ) -> dict:
     """
-    One-shot LLM call with structured output.
-    Returns: {"steps": [...], "reasoning": str}
+    Returns {"steps": [...], "reasoning": str}
+    Always returns a valid dict — never raises on bad LLM output.
     """
     prompt = f"""You are a machine learning curriculum designer.
 Generate a personalized 5-step learning path for a student.
 
 Student profile:
-
 Completed architectures: {', '.join(completed_architectures) or 'None yet'}
-Weak topics (< 50% assessment accuracy): {', '.join(weak_topics) or 'None identified'}
+Weak topics (< 50% accuracy): {', '.join(weak_topics) or 'None identified'}
 Solved problem IDs: {', '.join(solved_problem_ids[:10]) or 'None yet'}
-Available papers (ID: title):
-{chr(10).join(f" {p['id']}: {p['title']}" for p in available_papers[:20])}
 
-Available problems (ID: title, difficulty):
-{chr(10).join(f" {p['id']}: {p['title']} ({p['difficulty']})" for p in available_problems[:20])}
+Available papers (id: title):
+{chr(10).join(f"  {p['id']}: {p['title']}" for p in available_papers[:20])}
 
-Return ONLY valid JSON in this exact format:
-{{
-"steps": [
-{{
-"step": 1,
-"type": "paper|problem|concept",
-"id": "paper_id_or_problem_id_or_null",
-"title": "short title",
-"reason": "one sentence why this step"
-}}
-],
-"reasoning": "one paragraph explaining overall strategy"
-}}"""
-    raw = llm_complete(prompt)
-    raw = raw.strip()
-    if raw.startswith("```"): raw = raw.split("```")[1]
-    if raw.startswith("json"):
-        raw = raw[4:]
+Available problems (id: title, difficulty):
+{chr(10).join(f"  {p['id']}: {p['title']} ({p['difficulty']})" for p in available_problems[:20])}
+
+Generate exactly 5 steps. Each step must have a clear reason."""
+
     try:
-        return json.loads(raw.strip())
-    except Exception:
-        return {"steps": [], "reasoning": "Could not generate path."}
+        path = _client.chat.completions.create(
+            model=_MODEL,
+            response_model=LearningPath,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_retries=2,
+        )
+        return path.model_dump()
+    except Exception as e:
+        logger.error("generate_learning_path failed: %s", e)
+        return {"steps": [], "reasoning": "Could not generate a learning path at this time."}
