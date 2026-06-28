@@ -31,6 +31,7 @@ limiter = Limiter(key_func=get_remote_address)
 from backend.routers import health, auth, papers, dojo, learning, lab, tasks, user, admin, search, leaderboard, notifications, achievements
 from backend.routers.oauth import router as oauth_router
 from backend.routers.announcements import router as announcements_router
+from backend.routers.paper_challenges import router as paper_challenges_router
 from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from backend.middleware.alerting import SlackAlertingMiddleware
 from backend.middleware.sentry_context import SentryUserContextMiddleware
@@ -106,6 +107,7 @@ app.include_router(notifications.router)
 app.include_router(achievements.router)
 app.include_router(oauth_router)
 app.include_router(announcements_router)
+app.include_router(paper_challenges_router)
 
 # Prometheus metrics endpoint (restricted to internal IPs by Nginx in production)
 from fastapi import Request as _Req
