@@ -278,6 +278,61 @@ class DojoSubmission(Base):
     user:    "User"    = relationship("User", back_populates="submissions")
     problem: "Problem" = relationship("Problem", back_populates="submissions")
 
+# ---------------------------------------------------------------------------
+# Paper Challenges (Implementation Parts)
+# ---------------------------------------------------------------------------
+
+class PaperChallenge(Base):
+    __tablename__ = "paper_challenges"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    paper_id     = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    title        = Column(String(255), nullable=False)
+    description  = Column(Text, nullable=True)
+    is_published = Column(Boolean, nullable=False, default=False)
+    order_idx    = Column(Integer, nullable=False, default=0)
+    created_at   = Column(DateTime, server_default=func.now(), nullable=False)
+
+    paper = relationship("Paper", backref="challenges")
+    parts = relationship("PaperChallengePart", back_populates="challenge", cascade="all, delete-orphan", order_by="PaperChallengePart.order_idx")
+
+class PaperChallengePart(Base):
+    __tablename__ = "paper_challenge_parts"
+
+    id                      = Column(Integer, primary_key=True, index=True)
+    challenge_id            = Column(Integer, ForeignKey("paper_challenges.id", ondelete="CASCADE"), nullable=False, index=True)
+    title                   = Column(String(255), nullable=False)
+    description_md          = Column(Text, nullable=False)
+    paper_section_md        = Column(Text, nullable=True)
+    setup_code              = Column(Text, nullable=True)
+    starter_code            = Column(Text, nullable=False)
+    solution_code           = Column(Text, nullable=True)
+    test_code               = Column(Text, nullable=False)
+    unlock_requires_part_id = Column(Integer, ForeignKey("paper_challenge_parts.id", ondelete="SET NULL"), nullable=True)
+    xp_reward               = Column(Integer, nullable=False, default=50)
+    order_idx               = Column(Integer, nullable=False, default=0)
+    created_at              = Column(DateTime, server_default=func.now(), nullable=False)
+
+    challenge = relationship("PaperChallenge", back_populates="parts")
+
+class PaperPartSubmission(Base):
+    __tablename__ = "paper_part_submissions"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    part_id    = Column(Integer, ForeignKey("paper_challenge_parts.id", ondelete="CASCADE"), nullable=False, index=True)
+    code       = Column(Text, nullable=False)
+    passed     = Column(Boolean, nullable=False, default=False)
+    stdout     = Column(Text, nullable=True)
+    stderr     = Column(Text, nullable=True)
+    time_ms    = Column(Integer, nullable=True)
+    is_best    = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    user = relationship("User")
+    part = relationship("PaperChallengePart")
+
+
 
 # ---------------------------------------------------------------------------
 # Task — async job tracking (paper code generation, etc.)

@@ -52,6 +52,7 @@ _connect_args: dict = (
 # Engine
 # ---------------------------------------------------------------------------
 
+_is_postgres = DATABASE_URL.startswith("postgresql")
 engine = create_engine(
     DATABASE_URL,
     # Echo SQL to stdout when SQLALCHEMY_ECHO is set (dev debugging only)
@@ -60,6 +61,11 @@ engine = create_engine(
     pool_pre_ping=True,          # verify connections before checkout
     pool_recycle=1800,           # recycle connections every 30 min
     connect_args=_connect_args,
+    **({
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "30")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "10")),
+    } if _is_postgres else {}),
 )
 
 # ---------------------------------------------------------------------------
