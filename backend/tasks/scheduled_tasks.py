@@ -78,10 +78,27 @@ def _do_daily_db_backup() -> dict:
     stamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"backup_{stamp}.dump"
     try:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(DATABASE_URL)
+        env = os.environ.copy()
+        if parsed.password:
+            env["PGPASSWORD"] = parsed.password
+        pg_args = ["pg_dump"]
+        if parsed.hostname:
+            pg_args += ["--host", parsed.hostname]
+        if parsed.port:
+            pg_args += ["--port", str(parsed.port)]
+        if parsed.username:
+            pg_args += ["--username", parsed.username]
+        db_name = parsed.path.lstrip("/")
+        if db_name:
+            pg_args += ["--dbname", db_name]
+        pg_args += ["--format=c", "--no-password"]
         result = subprocess.run(
-            ["pg_dump", "--dbname", DATABASE_URL, "--format=c", "--no-password"],
+            pg_args,
             capture_output=True,
             timeout=300,
+            env=env,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.decode(errors="replace"))
