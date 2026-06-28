@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -24,8 +24,7 @@ class UserResponse(BaseModel):
     is_email_verified: bool = False
     email_verification_sent: Optional[bool] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LoginResponse(BaseModel):
     access_token: str
@@ -66,6 +65,17 @@ class UpdateProfileRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     avatar_url: Optional[str] = Field(None, max_length=512)
 
+    @field_validator("avatar_url")
+    @classmethod
+    def avatar_url_no_xss(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        lower = v.lower().lstrip()
+        for dangerous in ("javascript:", "data:", "vbscript:", "<script"):
+            if lower.startswith(dangerous) or dangerous in lower:
+                raise ValueError("avatar_url contains a disallowed URI scheme or script tag")
+        return v
+
 class SessionResponse(BaseModel):
     id: str
     browser: Optional[str] = None
@@ -75,8 +85,7 @@ class SessionResponse(BaseModel):
     last_used_at: datetime
     is_current: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class EnableMFAResponse(BaseModel):
     secret: str

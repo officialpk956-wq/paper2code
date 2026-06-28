@@ -26,10 +26,6 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     Returns True if the request is within limits, False otherwise.
     Uses sliding window log / counter via Redis or fallback memory.
     """
-    import sys
-    if "pytest" in sys.modules:
-        return True
-        
     now = int(time.time())
     
     if _redis_client is not None:

@@ -76,12 +76,12 @@ async def register(request: Request, body: RegisterRequest, background_tasks: Ba
     
     # Create email verification token via TokenRepository
     from backend.repositories.token_repository import TokenRepository
-    from backend.services.email_service import send_verification_email
+    from backend.services.email_service import send_verification_email_sync
     token_repo = TokenRepository(db)
     token = token_repo.create_email_verification(user.id)
     
-    # Fire-and-forget send_verification_email
-    background_tasks.add_task(send_verification_email, user.email, token)
+    # Fire-and-forget send_verification_email_sync
+    background_tasks.add_task(send_verification_email_sync, user.email, token)
 
     # PostHog + early-adopter achievement (non-blocking)
     try:
@@ -128,7 +128,7 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
         .scalar()
     ) or 0
     
-    user_resp = UserResponse.from_orm(user).dict()
+    user_resp = UserResponse.model_validate(user).model_dump()
     user_resp["problems_solved"] = problems_solved
 
     return {
@@ -174,7 +174,7 @@ def login_mfa(request: Request, body: LoginMFARequest, db: Session = Depends(get
         .scalar()
     ) or 0
     
-    user_resp = UserResponse.from_orm(user).dict()
+    user_resp = UserResponse.model_validate(user).model_dump()
     user_resp["problems_solved"] = problems_solved
     
     return {
@@ -295,9 +295,9 @@ async def resend_verification(
     if current_user.is_email_verified:
         raise HTTPException(400, "Email already verified")
     from backend.repositories.token_repository import TokenRepository
-    from backend.services.email_service import send_verification_email
+    from backend.services.email_service import send_verification_email_sync
     token = TokenRepository(db).create_email_verification(current_user.id)
-    background_tasks.add_task(send_verification_email, current_user.email, token)
+    background_tasks.add_task(send_verification_email_sync, current_user.email, token)
     return {"detail": "Verification email sent"}
 
 # ---------------------------------------------------------------------------
@@ -316,9 +316,9 @@ async def forgot_password(
     user = db.query(User).filter_by(email=body.email.lower()).first()
     if user:
         from backend.repositories.token_repository import TokenRepository
-        from backend.services.email_service import send_password_reset_email
+        from backend.services.email_service import send_password_reset_email_sync
         token = TokenRepository(db).create_password_reset(user.id)
-        background_tasks.add_task(send_password_reset_email, user.email, token)
+        background_tasks.add_task(send_password_reset_email_sync, user.email, token)
         
     # Also trigger legacy reset service so verification/audit logs are created correctly
     try:
@@ -367,7 +367,7 @@ def get_sessions(request: Request, current_user: User = Depends(get_current_user
     # Decode authorization header token if needed or find session matching ip/ua
     res = []
     for s in active_sessions:
-        resp_obj = SessionResponse.from_orm(s)
+        resp_obj = SessionResponse.model_validate(s)
         if s.ip_address == ip and s.user_agent == ua:
             resp_obj.is_current = True
         res.append(resp_obj)
@@ -443,7 +443,7 @@ async def oauth_login(request: Request, body: OAuthLoginRequest, db: Session = D
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": UserResponse.from_orm(user)
+        "user": UserResponse.model_validate(user)
     }
 
 # ---------------------------------------------------------------------------

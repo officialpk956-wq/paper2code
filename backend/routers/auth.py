@@ -11,11 +11,12 @@ from pydantic import BaseModel, Field
 from backend.database import get_db
 from backend.dependencies import get_current_user
 from backend.server import limiter
+from backend.modules.auth.middleware.rate_limit import rate_limiter
 from backend.models import User
 from backend.repositories.token_repository import TokenRepository
 from backend.services.email_service import (
-    send_verification_email,
-    send_password_reset_email
+    send_verification_email_sync,
+    send_password_reset_email_sync
 )
 from backend.services.auth_service import get_password_hash
 import sqlalchemy
@@ -48,7 +49,7 @@ async def register_user(
         token = token_repo.create_email_verification(user.id)
         
         # Fire-and-forget email sending
-        background_tasks.add_task(send_verification_email, user.email, token)
+        background_tasks.add_task(send_verification_email_sync, user.email, token)
 
         access = create_access_token({"sub": user.email})
         return {
@@ -66,7 +67,12 @@ async def register_user(
         raise HTTPException(status_code=400, detail="Email already registered")
 
 @router.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    _rl=Depends(rate_limiter(limit=10, window_seconds=60)),
+):
     from backend.repositories.user_repository import UserRepository
     from backend.services.auth_service import verify_password, create_access_token, create_refresh_token
     repo = UserRepository(db)
@@ -93,7 +99,16 @@ def refresh_access_token(body: RefreshRequest, db: Session = Depends(get_db)):
     return {"access_token": new_access, "token_type": "bearer"}
 
 @router.post("/logout")
-def logout():
+def logout(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.repositories.user_repository import UserRepository
+    repo = UserRepository(db)
+    user = repo.get_by_id(current_user.id)
+    if user:
+        user.token_version = (user.token_version or 0) + 1
+        db.commit()
     return {"status": "ok", "message": "Logged out successfully"}
 
 @router.get("/me")
@@ -135,7 +150,7 @@ async def resend_verification(
     if current_user.is_email_verified:
         raise HTTPException(400, "Email already verified")
     token = TokenRepository(db).create_email_verification(current_user.id)
-    background_tasks.add_task(send_verification_email, current_user.email, token)
+    background_tasks.add_task(send_verification_email_sync, current_user.email, token)
     return {"detail": "Verification email sent"}
 
 class ForgotPasswordRequest(BaseModel):
@@ -152,7 +167,7 @@ async def forgot_password(
     user = db.query(User).filter_by(email=body.email.lower()).first()
     if user:
         token = TokenRepository(db).create_password_reset(user.id)
-        background_tasks.add_task(send_password_reset_email, user.email, token)
+        background_tasks.add_task(send_password_reset_email_sync, user.email, token)
     return {"detail": "If that email exists, a reset link has been sent"}
 
 class ResetPasswordRequest(BaseModel):
