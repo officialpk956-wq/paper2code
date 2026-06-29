@@ -9,7 +9,7 @@
   [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0+-red?style=flat-square)](https://www.sqlalchemy.org/)
   [![Cytoscape.js](https://img.shields.io/badge/Cytoscape.js-3.x-F7DF1E?style=flat-square)](https://js.cytoscape.org/)
   [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-6366F1?style=flat-square)](https://langchain-ai.github.io/langgraph/)
-  [![Tests](https://img.shields.io/badge/Tests-1358%20passed-10B981?style=flat-square)]()
+  [![Tests](https://img.shields.io/badge/Tests-1443%20passed-10B981?style=flat-square)]()
   [![Architectures](https://img.shields.io/badge/Architectures-15%20Verified-F59E0B?style=flat-square)]()
   [![Families](https://img.shields.io/badge/Architecture%20Families-14-8B5CF6?style=flat-square)]()
   [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](https://opensource.org/licenses/MIT)
