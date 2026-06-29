@@ -1,0 +1,150 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Attention Mechanisms: MHA, GQA, RoPE, and Flash Attention',
+  description: 'The mechanics of transformer attention — multi-head attention, the KV cache memory problem, grouped-query attention, rotary position embeddings, and Flash Attention as an IO-aware implementation that makes long contexts practical.',
+};
+
+# Attention Mechanisms: MHA, GQA, RoPE, and Flash Attention
+
+<Callout type="tip" title="Key Insight">
+Self-attention is theoretically elegant but practically expensive — O(n²) in sequence length and O(n) memory for the KV cache during inference. Every major LLM in 2023–2024 made the same three engineering choices: GQA to reduce KV cache memory, RoPE for position encoding that extrapolates beyond training length, and Flash Attention for GPU-efficient implementation. Understanding why these choices matter is understanding modern LLM engineering.
+</Callout>
+
+## Multi-Head Self-Attention: The Foundation
+
+The core attention operation takes queries $Q$, keys $K$, and values $V$:
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
+
+For a sequence of length $n$ with model dimension $d_{\text{model}}$ and $H$ heads each with dimension $d_k = d_{\text{model}} / H$:
+
+1. Project input to Q, K, V: three weight matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d}$
+2. Split into $H$ heads
+3. Each head computes attention independently: $O(n^2 d_k)$ operations
+4. Concatenate head outputs, project with $W_O \in \mathbb{R}^{d \times d}$
+
+**Why multiple heads?** Each head can attend to different aspects of the sequence. In a sentence, one head might track syntactic dependencies (subject-verb agreement), another semantic relationships (entity coreference), another positional patterns. Multiple heads learn diverse attention patterns simultaneously.
+
+<SVGDiagram src="/diagrams/attention-mechanisms.svg" caption="Attention mechanism variants: standard MHA (left), GQA for reduced KV cache (center top), RoPE position encoding (center bottom), Flash Attention IO-aware implementation (right), MLA compression (right bottom)." />
+
+## The KV Cache Problem
+
+During autoregressive generation, each new token must attend to all previous tokens. Storing these keys and values is the **KV cache**:
+
+$$\text{KV cache size} = 2 \times n_{\text{layers}} \times n_{\text{heads}} \times d_{\text{head}} \times n_{\text{tokens}} \times \text{bytes}$$
+
+For Llama-3-70B at 4096 token context: $2 \times 80 \times 8 \times 128 \times 4096 \times 2 \text{ bytes} = 13.4 \text{ GB}$. At 128K tokens (the full context window): 420 GB — more than the model's weights themselves.
+
+This is why KV cache size is the primary constraint on LLM serving throughput. Techniques to reduce it:
+
+**Quantizing the KV cache**: store keys and values in INT8 or INT4 instead of FP16. 2–4× compression with minimal quality loss. Used in vLLM and TensorRT-LLM.
+
+**Sliding window**: only cache the most recent $W$ tokens. Each token attends to the nearest window only. Requires the model to be trained with this constraint (Mistral 7B).
+
+**Multi-Query and Grouped-Query Attention**: change the architecture so fewer K/V heads need to be cached.
+
+## GQA and MQA: Shared K/V Heads
+
+**Multi-Query Attention (MQA, Shazeer 2019)** uses a single K/V head shared across all query heads. Instead of $H$ K/V heads, there is 1. The KV cache is $H\times$ smaller:
+
+$$Q_1, Q_2, \ldots, Q_H \quad \text{attend to} \quad K_1 = K_2 = \ldots = K_H, \quad V_1 = V_2 = \ldots = V_H$$
+
+**Grouped-Query Attention (GQA, Ainslie et al. 2023)** is the middle ground: group the $H$ query heads into $G$ groups, each group sharing one K/V head. MQA is $G=1$; standard MHA is $G=H$.
+
+GQA is used in: Llama 2 (70B only), Llama 3 (all sizes), Mistral 7B, Mixtral, Gemma, Qwen 2. The default $G=H/4$ (e.g., 8 Q heads per K/V head in Llama-3-8B) achieves 4× KV cache reduction with <1% quality loss compared to MHA.
+
+<SimpleChart
+  title="KV cache reduction factor vs model quality (% of MHA baseline on MMLU)"
+  data={[
+    { method: 1, cache_factor: 1, quality: 100 },
+    { method: 2, cache_factor: 4, quality: 99.2 },
+    { method: 3, cache_factor: 8, quality: 98.5 },
+    { method: 4, cache_factor: 32, quality: 96.1 },
+  ]}
+  xKey="cache_factor"
+  yKey="quality"
+/>
+
+## Positional Encodings: From Sine to RoPE
+
+The original Transformer used **sinusoidal absolute position encodings** added to token embeddings before attention. The model learns that position matters through this signal. Problem: positions beyond the training context length have never been seen — the model can't generalize.
+
+**Learned absolute positions** (BERT, GPT-2): a trainable embedding for each position. Same problem: positions beyond training length have random embeddings.
+
+**Relative position encodings** (T5, DeBERTa): encode the distance between tokens rather than absolute positions. A token can attend to "the token 3 positions ago" without caring about absolute positions. Generalizes better but adds complexity.
+
+**RoPE (Rotary Position Embedding, Su et al. 2021)** is the current standard. The key idea: rotate the query and key vectors by an angle proportional to their position. The dot product of a query at position $m$ and a key at position $n$ naturally depends on their relative position $m - n$ because of the rotation:
+
+$$\text{RoPE}(x, m) = x \cdot e^{i m \theta}$$
+
+$$\langle \text{RoPE}(q, m), \text{RoPE}(k, n) \rangle = \langle q \cdot e^{im\theta}, k \cdot e^{in\theta} \rangle \propto f(q, k, m-n)$$
+
+The attention score depends on the relative position $m-n$, not absolute positions. This means the model can generalize to context lengths beyond training — the positional signal is relative, so unseen absolute positions still produce valid relative signals.
+
+**YaRN and RoPE scaling**: extend pretrained models to longer contexts by scaling the rotary frequency basis. A model trained at 4K tokens can be extended to 128K tokens by adjusting the angle frequencies. Used in Llama 3 (8K → 128K extension).
+
+<Callout type="info" title="Why RoPE Became Universal">
+RoPE is now used in: Llama, Mistral, Mixtral, Qwen, Gemma, PaLM 2, Falcon, GPT-NeoX, and most new models. Alternatives (ALiBi, T5 relative positions) are still used but less common. The reason: RoPE is fast to compute (just multiply by a rotation matrix), works in the standard attention formula without modification, and the extrapolation to long contexts is well-understood theoretically.
+</Callout>
+
+## Flash Attention: IO-Aware Implementation
+
+Standard attention is memory-bandwidth limited, not compute limited. On an A100 GPU:
+- **HBM bandwidth**: 2 TB/s
+- **SRAM (shared memory) bandwidth**: 19 TB/s — 10× faster
+- **Tensor core throughput**: 312 TFLOPS
+
+Standard attention: read Q, K from HBM → compute $S = QK^T$ → write $S$ to HBM → read $S$ → compute softmax → write $P$ → read $P$, $V$ → compute $O = PV$ → write $O$. Multiple HBM round-trips for an operation that's theoretically cheap.
+
+**Flash Attention (Dao et al. 2022)** fuses all operations into one GPU kernel, keeping intermediate values in SRAM:
+
+1. Tile $Q$ into blocks that fit in SRAM
+2. Load one tile of $Q$ and one tile of $K,V$ at a time
+3. Compute partial attention and maintain a running softmax normalization
+4. Accumulate the output $O$ without materializing the full $N\times N$ attention matrix
+
+The $N\times N$ matrix is never written to HBM — it's computed and consumed in SRAM. Total HBM access: $O(N d)$ instead of $O(N^2)$.
+
+**Flash Attention 2 (2023)** improved GPU utilization by repartitioning the work: different blocks of $Q$ go to different thread blocks, reducing synchronization overhead. 2× faster than Flash Attention 1 on A100.
+
+**Flash Attention 3 (2024)** targets H100 Tensor Cores: overlaps memory transfers with compute using WGMMA instructions, achieving 75% of H100 theoretical maximum throughput.
+
+## Multi-Head Latent Attention (MLA)
+
+**MLA (DeepSeek-V2, 2024)** reduces the KV cache with a different approach than GQA: compress K and V jointly into a low-rank latent vector before caching.
+
+Instead of caching $n_h \times d_h$ values per token per layer (where $n_h$ is number of heads, $d_h$ is head dimension), MLA caches a single latent vector $c_{KV} \in \mathbb{R}^{d_c}$ where $d_c \ll n_h \times d_h$. At attention time, K and V are reconstructed from this latent.
+
+For DeepSeek-V2 (128 heads, 128 head dim): standard MHA KV per token = $128 \times 128 \times 2 = 32,768$ values. MLA with $d_c = 512$ = 512 values. **64× compression**. With further RoPE handling, effective compression is ~6× in practice (accounting for the RoPE component that must be stored separately).
+
+<Quiz
+  question="Grouped-Query Attention uses G < H key-value groups (G groups sharing K/V, H total query heads). What specific resource does this save, and why does it matter for LLM serving?"
+  options={[
+    "It reduces the number of attention computations during the forward pass, making each token faster to generate",
+    "It reduces the KV cache size proportionally to H/G — for long contexts, the KV cache can exceed model weight size, so this directly increases the number of concurrent requests a server can handle",
+    "It reduces the number of parameters in the model, enabling faster loading from disk",
+    "It allows the model to be trained on shorter sequences and still generalize to longer ones"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Flash Attention achieves 2–4× speedup over standard attention without changing the mathematical output. What is the source of this speedup?"
+  options={[
+    "Flash Attention uses a lower-precision data type for the attention computation",
+    "Flash Attention avoids writing the N×N attention matrix to GPU HBM by tiling and fusing all operations in fast SRAM — reducing memory bandwidth consumption which is the actual bottleneck",
+    "Flash Attention approximates attention with random projections to reduce the O(n²) computation",
+    "Flash Attention skips computing attention for padding tokens"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Implement Flash Attention's tiling idea in NumPy: split Q into row tiles, compute attention against all K/V blocks while maintaining a running log-sum-exp for numerical stability, accumulate outputs without materializing the full attention matrix. The reference implementation is ~50 lines. Compare its output to the standard `softmax(QK^T/sqrt(d))V` computation — they should match to floating-point precision.
+</Callout>

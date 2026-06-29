@@ -1,0 +1,145 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Vector Search: HNSW, IVF-PQ, and Approximate Nearest Neighbors',
+  description: 'How vector databases find similar embeddings at scale — the exact vs approximate tradeoff, IVF-PQ clustering and compression, HNSW graph navigation, and the engineering of systems like Pinecone, Weaviate, and pgvector.',
+};
+
+# Vector Search: HNSW, IVF-PQ, and Approximate Nearest Neighbors
+
+<Callout type="tip" title="Key Insight">
+Finding the 10 most similar vectors in a collection of 100 million 1536-dimensional embeddings requires comparing 100 billion values per query with brute force — about 100 seconds. Production systems answer the same query in under 10 milliseconds by trading a few percent recall for speed. HNSW and IVF-PQ are the two dominant data structures that make this tradeoff. Understanding them explains why vector databases exist and when to use each approach.
+</Callout>
+
+## The Similarity Search Problem
+
+Modern AI encodes meaning as vectors. A text embedding model converts "golden retriever puppy" into a 1536-dimensional vector where nearby vectors (by cosine similarity) represent semantically similar concepts. Finding the nearest neighbors of a query vector in a large collection is the core operation of:
+
+- **Retrieval-Augmented Generation**: find relevant documents for an LLM prompt
+- **Semantic search**: return results by meaning, not keyword matching
+- **Recommendation**: find items similar to those a user interacted with
+- **Deduplication**: find near-duplicate images or documents
+- **Anomaly detection**: find vectors far from all others
+
+The challenge: with $N = 10^8$ vectors and $d = 1536$ dimensions, brute-force comparison requires $N \times d = 1.5 \times 10^{11}$ floating-point operations per query.
+
+<SVGDiagram src="/diagrams/ann-search.svg" caption="ANN methods tradeoff: brute force (exact, slow) → IVF-PQ (cluster then search, very compressed) → HNSW (graph navigation, fastest query, highest memory). Bottom table shows practical characteristics." />
+
+## Exact Search Baselines
+
+Before approximation: the exact search landscape.
+
+**Flat index (brute force)**: compute cosine similarity between the query and every vector, return top-k. Exact recall (100%). $O(Nd)$ per query. Fastest for very small $N$ (<100K) due to simplicity. FAISS's `IndexFlatL2` is the reference implementation — cache-friendly SIMD operations on modern hardware achieve ~100 GFLOPS, giving ~1 second for $N=10^7$.
+
+**KD-trees**: recursively partition the space along coordinate axes. Exact, $O(d \log N)$ average query. Works well in low dimensions ($d < 20$). Breaks down in high dimensions — the "curse of dimensionality" means nearly all points end up on the boundaries of every partition. Impractical for text embeddings at $d = 768+$.
+
+## IVF-PQ: Clustering + Compression
+
+**IVF-PQ (Inverted File Index with Product Quantization)** combines two ideas: cluster the vectors to narrow the search space, then compress the vectors to reduce memory and comparison cost.
+
+**IVF (Inverted File Index)**: run K-means clustering on all vectors (typically K=1024 to 65536 clusters). At search time, compute the distance from the query to all cluster centroids and search only the `nprobe` closest clusters (typically 16–64). Instead of comparing against all $N$ vectors, compare against $N/K \times \text{nprobe}$ — a 16–64× reduction.
+
+The tradeoff: if the nearest neighbor happens to be in a cluster whose centroid is not among the top `nprobe` closest to the query, it won't be found. Higher `nprobe` = better recall, more computation.
+
+**PQ (Product Quantization)**: compress each vector from $d$ floats (~6KB for $d=1536$) to a few bytes. Split the vector into $M$ subvectors ($d/M$ dimensions each). For each subvector, assign it to one of $K'$ centroids (trained independently per subspace). Store only the centroid index (typically 1 byte per subvector). For $M=16$ subvectors, 16 bytes instead of 6144 bytes — a **384× compression ratio**.
+
+At search time, precompute distances from the query to all $K'$ centroids per subspace (a lookup table). The distance from the query to any compressed vector is the sum of lookup table entries — a few integer additions instead of $d$ floating-point multiplications. This is called **Asymmetric Distance Computation (ADC)** and is why PQ-compressed vectors can be compared in nanoseconds.
+
+<SimpleChart
+  title="Query latency (ms) at 95% recall for 100M 128-dimensional vectors"
+  data={[
+    { index: 1, latency_ms: 12000 },
+    { index: 2, latency_ms: 85 },
+    { index: 3, latency_ms: 8 },
+    { index: 4, latency_ms: 3 },
+  ]}
+  xKey="index"
+  yKey="latency_ms"
+/>
+
+## HNSW: Graph-Based Navigation
+
+**HNSW (Hierarchical Navigable Small World, Malkov & Yashunin, 2016)** builds a multi-layer graph where:
+- Layer 0 contains all $N$ vectors with dense local connections
+- Higher layers contain progressively fewer vectors with longer-range connections
+
+**Search** starts at the entry point on the highest layer, greedily descends to the nearest neighbor at that layer, then moves to the next layer down. On each layer, it performs local beam search — maintaining a set of $ef$ candidates, always moving to the nearest neighbor of any candidate that hasn't been expanded yet.
+
+This mimics the structure of **small-world networks** from social science: a few "hub" nodes that are far apart but highly connected provide shortcuts that make global navigation fast. You can reach anyone in a large social network in ~6 hops because a few people connect distant clusters.
+
+**Insertion** decides which layers a new node appears in by drawing from an exponential distribution (most nodes are only on layer 0, a few on layer 1, fewer still on higher layers). This random stratification produces the small-world property automatically.
+
+**HNSW characteristics**:
+- Query time: $O(\log N)$ — each layer search takes $O(\log N/N_{layer})$ hops
+- Build time: $O(N \log N)$ — each insertion does a search to find neighbors
+- Memory: ~40 bytes per vector + graph edges (~100–200 bytes per vector total)
+- Recall at ef=200: typically 98–99%
+- Latency at $N=10^7$: 1–5ms per query
+
+**Key hyperparameters**:
+- `M` — max connections per node per layer (8–64, higher = better recall, more memory)
+- `ef_construction` — beam width during index building (100–800, higher = better graph quality, slower build)
+- `ef_search` — beam width during search (50–400, higher = better recall, slower query)
+
+<Callout type="info" title="HNSW vs IVF-PQ: When to Use Each">
+**HNSW**: best when query latency is critical and memory is available. No preprocessing required (new vectors can be inserted incrementally). Recall of 99%+ achievable. Memory cost is 2–3× the raw vectors.
+
+**IVF-PQ**: best when memory is constrained or the dataset is very large (>100M vectors). 10–100× memory compression from PQ. Build requires all vectors upfront (no easy incremental inserts). Recall of 90–96% typical.
+
+Most production systems use HNSW for $N < 50M$ and IVF-PQ (or IVF-HNSW hybrids) for larger collections.
+</Callout>
+
+## Vector Database Landscape
+
+Production vector databases layer additional engineering on top of HNSW and IVF-PQ:
+
+**Pinecone**: fully managed, serverless vector database. Handles sharding, replication, and index updates. Separate storage and compute — hot data in GPU memory, warm data in SSD, cold data on object storage with tiered pricing. Best for teams that don't want to manage infrastructure.
+
+**Weaviate**: open-source vector database with built-in HNSW and optional BM25 hybrid search (combine semantic similarity with keyword matching). Supports filtering (metadata predicates applied before or during ANN search). Pre-filtering vs post-filtering tradeoff: filtering before search (harder, requires filtered HNSW) vs after (easier but misses results filtered out after initial ANN).
+
+**Qdrant**: Rust implementation for high throughput, HNSW with on-disk indexing for large collections. Payload-based filtering integrated into search. Quantization support (scalar and binary).
+
+**pgvector**: PostgreSQL extension adding vector column types and HNSW/IVF-PQ indices. Best for teams already on PostgreSQL who want to avoid operational complexity of a separate vector database. Recall and performance slightly lower than dedicated systems but sufficient for most RAG applications at small-to-medium scale.
+
+**Milvus**: Kubernetes-native, separate components for storage, indexing, and query. Supports GPU-accelerated IVF and flat search. Used at scale (100B+ vectors) at companies like Salesforce.
+
+## Filtered Vector Search
+
+Real applications rarely want "find the 10 most similar vectors globally" — they want "find the 10 most similar vectors from the last 7 days" or "find the 10 most similar vectors in English." This is **filtered ANN search**, and it's harder than it looks.
+
+**Post-filtering**: run ANN search, then filter results. Problem: if the filter removes 90% of results, you need to retrieve 10× more candidates from ANN to get 10 that pass the filter — which defeats the purpose of ANN.
+
+**Pre-filtering**: filter to eligible vectors first, then run exact search on the subset. Works for high-selectivity filters (few eligible vectors) but degrades to brute force when filters are loose.
+
+**Filtered HNSW**: during graph traversal, only consider nodes that pass the filter. Requires additional data structures to maintain connectivity in filtered subgraphs. Weaviate and Qdrant implement this with approximate filter-aware graph traversal.
+
+<Quiz
+  question="IVF-PQ combines clustering (IVF) with compression (PQ). Why does PQ compress vectors by 100× without dramatically reducing recall?"
+  options={[
+    "PQ uses SVD to find a low-rank approximation of the vector space",
+    "PQ approximates each vector as a combination of cluster centroid indices per subspace — the exact centroid positions are precomputed, so distance lookups use integer table lookups rather than float multiplications, preserving ranking accuracy",
+    "PQ discards the lowest-magnitude dimensions which rarely affect similarity rankings",
+    "PQ stores only the sign of each vector dimension, using Hamming distance instead of cosine similarity"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="HNSW achieves O(log N) query time through a hierarchical multi-layer graph. What property of the graph structure enables navigation from any entry point to the nearest neighbor in logarithmic hops?"
+  options={[
+    "The graph uses sorted arrays at each layer, enabling binary search",
+    "The exponential layer probability creates a small-world structure with long-range shortcuts on higher layers — greedy traversal descending through layers converges to the nearest neighbor in O(log N) steps",
+    "HNSW partitions the space into a binary tree, and each layer corresponds to a tree depth",
+    "The M nearest neighbor connections at layer 0 guarantee that search can't get stuck in local optima"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Run a benchmark: generate 1M random 768-dimensional vectors (simulating sentence embeddings), build both an HNSW index (using `hnswlib`) and an IVF-PQ index (using `faiss`), and time 1000 queries at different recall targets. Plot the recall-latency curve. You'll see that HNSW dominates IVF-PQ at high recall, while IVF-PQ wins on memory usage. This empirical comparison builds the intuition for choosing between them in production.
+</Callout>

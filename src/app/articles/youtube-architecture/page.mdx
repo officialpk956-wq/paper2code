@@ -1,0 +1,111 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'YouTube Architecture: How 500 Hours/Minute Scales',
+  description: 'Inside YouTube\'s engineering: video upload pipeline, adaptive bitrate CDN, two-tower recommendations, and real-time view counters at 2 billion user scale.',
+};
+
+# YouTube Architecture: How 500 Hours/Minute Scales
+
+<Callout type="tip" title="Key Insight">
+YouTube uploads 500 hours of video every minute. Every one of those hours must be transcoded into 5–8 different resolutions, distributed to thousands of CDN edge nodes globally, indexed for search, and made discoverable through a recommendation system that serves 2 billion users. No single server can touch any of this at scale — every system is fundamentally distributed.
+</Callout>
+
+## The Upload Pipeline
+
+When a creator clicks "Upload," what happens is far more complex than storing a file.
+
+The raw video file first hits YouTube's **ingestion layer** — a geographically distributed cluster that accepts the upload and writes the raw file to Google's internal distributed filesystem (Colossus, successor to GFS). From there, the **transcoding farm** takes over. A single uploaded video must be encoded into multiple formats: 240p, 360p, 480p, 720p, 1080p, 1440p (2K), and 2160p (4K), plus multiple audio tracks, subtitles, and automatic captions. Each encoding job is independent and runs in parallel on the transcoding farm.
+
+The default codec was H.264 for years. YouTube has since migrated most content to VP9 (a 30–50% bandwidth reduction at equal quality) and is actively transitioning to AV1 (an additional 20% reduction). Converting 800 million+ existing videos to AV1 requires re-transcoding the entire corpus — a multi-year background job running continuously.
+
+<SVGDiagram src="/diagrams/youtube-upload.svg" caption="Upload pipeline (top) and recommendation funnel (bottom). 500 hours/minute become searchable within ~60 seconds of upload." />
+
+## Adaptive Bitrate Streaming
+
+You never download an entire YouTube video. You download small segments (typically 5–10 seconds each), and your video player continuously monitors your network bandwidth and selects the highest quality segment that won't cause buffering.
+
+This is **adaptive bitrate streaming (ABR)**. When your connection is fast, you get 1080p. When it slows (you go through a tunnel), the player switches down to 480p without pausing. When bandwidth recovers, it switches back up.
+
+The video manifest (a DASH or HLS playlist file) tells the player where to find every quality level of every segment. The player fetches it once, then decides which quality to request for each subsequent segment based on its buffer level and bandwidth estimate.
+
+<Callout type="info" title="Why CDNs Exist">
+If every video request hit YouTube's data centers in Oregon and Iowa, a user in Mumbai would experience 200ms+ latency for every segment request, causing constant buffering. Instead, YouTube's CDN caches popular videos at edge nodes inside or near ISPs globally. Popular content achieves near-100% cache hit rates, meaning the edge node already has the video — no round-trip to the origin needed. CDN egress is how YouTube serves petabits of video per day at sub-50ms segment fetch latency.
+</Callout>
+
+## The Recommendation System
+
+YouTube's recommendation engine is the product. 70% of watch time comes from recommendations — not search, not direct links. The system has one job: surface the next video that will make you stay.
+
+The funnel has three stages. **Candidate generation** starts with 800 million videos and produces a candidate set of ~1000 using a two-tower neural model (separate user tower and video tower, dot product similarity, ANN retrieval — identical to the architecture described in the recommendation systems article). **Ranking** applies a deep neural network to score those 1000 candidates using 80+ features including watch time, click-through rate, share rate, freshness, and user-specific signals. **Filtering** removes diversity violations (no more than 2 videos from the same channel), policy violations, and adds freshness bias to favor recently uploaded content.
+
+The key learning from YouTube's 2016 paper was that **watch time beats clicks** as a training label. CTR (click-through rate) optimizes for clickbait thumbnails. Watch time optimizes for videos people actually watch through. YouTube switched their training objective and saw significant improvement in long-term user satisfaction.
+
+<SimpleChart
+  title="Recommendation funnel: candidate count at each stage"
+  data={[
+    { stage: 1, candidates: 800000000 },
+    { stage: 2, candidates: 1000 },
+    { stage: 3, candidates: 50 },
+    { stage: 4, candidates: 20 },
+  ]}
+  xKey="stage"
+  yKey="candidates"
+/>
+
+## The Real-Time View Counter
+
+A viral video can receive 1 million views per minute. A naive approach (increment a counter in a database for every view) would immediately overwhelm any database with write contention.
+
+YouTube's solution has three layers. **Redis increment** — each view atomically increments a counter in Redis (in-memory, single-threaded for atomicity). **Debounced batch writes** — a background job reads the Redis counter every few seconds and writes the delta to Bigtable (the persistent storage). **Periodic reconciliation** — a daily batch job reconciles the approximate Redis counter with an exact count from the raw view event log, correcting any drift.
+
+The counter shown publicly is intentionally approximate (frozen at certain round numbers like 301 for videos under review). YouTube's internal analytics systems see exact counts much faster than the public counter updates.
+
+<Callout type="warning" title="Bot View Detection">
+Not all views are real. YouTube's abuse detection system uses a combination of IP velocity (too many views from one IP), device fingerprinting (same device clicking 1000× per hour), request timing analysis (bots click at mechanically regular intervals), and behavioral signals (real users pause, rewind, and comment; bots don't). Detected bot views are removed from counts during periodic reconciliation. This is why a video's view count sometimes decreases.
+</Callout>
+
+## Content ID: Copyright at Scale
+
+YouTube processes 500 hours/minute of uploads and must check every second of every video against a database of copyrighted content — music, TV shows, movies, sports broadcasts. Manual checking is impossible.
+
+Content ID works by having rights holders upload their content as reference files. YouTube generates an audio fingerprint and video fingerprint for each reference. For every new upload, the same fingerprinting process runs and matches against the reference database. A match within seconds of upload automatically triggers the rights holder's configured policy: monetize the video (take the ad revenue), block it, or track it.
+
+## Real-World Case Studies
+
+**YouTube's 2016 recommendation paper** described replacing matrix factorization with a two-tower deep neural network trained on 80 features. The candidate generation network ran on ~800M videos to produce ~1000 candidates in under 100ms using approximate nearest neighbor retrieval over pre-computed video embeddings. The paper revealed that negative sampling during training (explicitly showing the model what bad recommendations look like) was as important as positive signal.
+
+**YouTube Shorts (2021)** required a completely new recommendation model. Short-form videos (15–60 seconds) have fundamentally different consumption patterns than long-form — users swipe through dozens per session, completion rate means something different at 30 seconds vs 10 minutes, and the signals from swipe-away vs long-press must be calibrated differently. YouTube built separate candidate generation and ranking stacks for Shorts rather than adapting the long-form models.
+
+**The VP9 codec migration** required re-transcoding hundreds of millions of videos. YouTube built a priority queue that processed the most-watched videos first (highest ROI on bandwidth savings) and let long-tail content migrate gradually over years. The total bandwidth reduction across all YouTube traffic was 30–40% — on petabytes-per-day scale, this translated to hundreds of millions of dollars in CDN egress savings annually.
+
+<Quiz
+  question="A viral video gets 500,000 views in one minute. Your naive view counter does a SQL UPDATE counter = counter + 1 per view. What happens?"
+  options={[
+    "The database handles it fine — modern databases handle high write throughput",
+    "The database becomes a write bottleneck — 500K/min = ~8333 writes/second with row-level locks causing contention",
+    "The CDN blocks the requests before they reach the database",
+    "The counter integer overflows"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="YouTube switched from CTR (click-through rate) to watch time as the training label for recommendations. Why?"
+  options={[
+    "Watch time is easier to measure than CTR",
+    "CTR optimizes for clickbait thumbnails while watch time optimizes for videos users actually find valuable",
+    "CTR data is available faster than watch time data",
+    "Watch time is a more stable signal across different video lengths"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The recommendation systems article covers the two-tower model that powers YouTube candidate generation. For the systems design side, the vector databases article explains the ANN retrieval that makes serving 800M video embeddings feasible in under 100ms.
+</Callout>

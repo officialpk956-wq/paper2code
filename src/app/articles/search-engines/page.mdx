@@ -1,0 +1,119 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Search Engines: From BM25 to Neural Ranking',
+  description: 'How search engines work at scale — inverted indexes, BM25 scoring, two-stage ranking, and the neural stack powering modern search.',
+};
+
+# Search Engines: From BM25 to Neural Ranking
+
+<Callout type="tip" title="Key Insight">
+Search is a three-phase problem: **crawl** (discover documents), **index** (build a data structure for fast lookup), and **rank** (sort results by relevance). Every search engine from 1998 to today solves these three problems — the difference is how sophisticated each phase is.
+</Callout>
+
+## The Inverted Index
+
+The core data structure of every search engine is the inverted index. A regular database maps document → words. An inverted index maps word → documents. This inversion is what makes keyword search fast.
+
+When you query "machine learning interview," the search engine looks up all three terms independently in the index, retrieves the postings lists (lists of document IDs where each term appears), and intersects them.
+
+```
+"machine"  → [doc3, doc7, doc12, doc41, ...]
+"learning" → [doc3, doc7, doc19, doc55, ...]
+"interview" → [doc7, doc22, doc55, ...]
+intersection → [doc7] ← relevant to all three terms
+```
+
+Lookup for any term is O(1). Intersecting the k postings lists takes O(k × average list length). For a 3-word query on a trillion-document index, this takes milliseconds.
+
+## BM25: The Standard Ranking Formula
+
+Once you have candidate documents, you need to score them. TF-IDF was the classic approach — multiply how often the term appears in the document (TF) by how rare the term is across all documents (IDF). BM25 (Best Match 25, 1994) improves on TF-IDF in two important ways.
+
+$$\text{BM25}(D, Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{f(q_i, D) \cdot (k_1 + 1)}{f(q_i, D) + k_1 \cdot (1 - b + b \cdot \frac{|D|}{\text{avgdl}})}$$
+
+The two improvements are: **saturation** (the numerator saturates as TF grows — the 5th mention of a word matters less than the 1st) and **length normalization** (longer documents are penalized proportionally, controlled by the parameter $b$).
+
+<Callout type="info" title="Why BM25 over TF-IDF">
+In TF-IDF, a document mentioning "python" 100 times scores 10× higher than one mentioning it 10 times. BM25 caps this effect — beyond a threshold frequency, extra occurrences give diminishing returns. This matches how humans assess relevance.
+</Callout>
+
+## The Two-Stage Ranking Pipeline
+
+BM25 alone retrieves relevant documents efficiently but not precisely. Modern search uses a multi-stage funnel — each stage is slower but more accurate.
+
+<SVGDiagram src="/diagrams/search-pipeline.svg" caption="Three-stage search ranking: BM25 retrieves top-1000, LTR reranks to top-50, neural model selects top-10." />
+
+**L1 — BM25 Retrieval:** Process the full index in ~5ms. Prioritize recall — it's better to retrieve 1000 candidates including the right answer than to miss it. Latency budget: 5–10ms.
+
+**L2 — Learning to Rank (LTR):** A gradient-boosted model (LambdaMART) scores the top-1000 using richer features: exact phrase match, proximity between query terms, document freshness, click-through rate from past queries. Latency budget: 15–25ms.
+
+**L3 — Neural Re-ranker:** A cross-encoder (BERT-class) runs the query and each candidate document together through the same model, computing deep interaction features. Expensive (80–100ms per call), but only runs on the top-50.
+
+<SimpleChart
+  title="NDCG@10 improvement at each ranking stage"
+  data={[
+    { stage: 1, ndcg: 0.42 },
+    { stage: 2, ndcg: 0.61 },
+    { stage: 3, ndcg: 0.74 },
+  ]}
+  xKey="stage"
+  yKey="ndcg"
+/>
+
+## Query Understanding
+
+Before any ranking, the query itself needs to be understood. A user searching for "python" could mean the programming language, the snake, or the movie. The query understanding pipeline resolves this.
+
+**Spell correction** runs first — the user typed "mchine learnign" and the system fixes it before querying the index. **Tokenization** handles multi-word phrases and compound words. **Named entity recognition** identifies that "Apple" is a company, not a fruit. **Intent classification** determines whether the query is informational (looking for an explanation), navigational (looking for a specific website), or transactional (ready to buy).
+
+**Query expansion** adds related terms. A search for "car" might also retrieve documents about "automobile," "vehicle," and "sedan" — increasing recall without the user needing to know the exact vocabulary the documents use.
+
+<Callout type="warning" title="The Vocabulary Mismatch Problem">
+Keyword search fails when the user's words don't match the document's words. A user searching "how to fix headache" won't find a document titled "Treating Cephalgia: Evidence-Based Approaches." Dense vector retrieval (DPR, covered in the vector databases article) solves this — but at 10–100× the latency cost of BM25.
+</Callout>
+
+## Real-World Case Studies
+
+**Google's original architecture (1998):** Sergey Brin and Larry Page's insight wasn't just better keyword matching — it was PageRank. The web's hyperlink graph encodes human judgment: if a respected page links to you, you're probably relevant. PageRank computed an authority score for every page, then combined it with BM25 relevance. AltaVista, which relied only on term frequency, was beaten immediately.
+
+**Bing's neural ranking stack:** Bing uses LambdaMART (gradient-boosted trees) as their L2 ranker across hundreds of features, then a distilled BERT cross-encoder as the L3 re-ranker for the top results. The challenge is serving the BERT re-ranker within a 150ms total latency budget — they use knowledge distillation to compress a 24-layer BERT into a 6-layer model that runs 4× faster with only 3% NDCG loss.
+
+**Elasticsearch at Wikipedia:** Wikipedia serves search across 6.7 million English articles using Elasticsearch, an open-source distributed search platform built on Apache Lucene (the reference BM25 implementation). Their query pipeline includes spell correction, language detection, and a completion suggester that powers the search-as-you-type feature. Lucene's inverted index handles the full 20GB English Wikipedia on a single server with sub-100ms query latency.
+
+## The Freshness Problem
+
+For web and news search, documents are published continuously. Your index must reflect content that appeared seconds ago. This creates a fundamental tension: building an accurate, compressed index takes time, but users expect real-time results.
+
+The production solution is two indexes: a **real-time index** built continuously from incoming documents (small, less optimized, captures recent content) and a **batch index** rebuilt periodically (large, heavily optimized, covers historical content). Every query hits both and merges the results.
+
+<Quiz
+  question="A user searches for 'python' and gets results about the snake. The documents about Python programming are indexed. What is the most likely root cause?"
+  options={[
+    "The inverted index is corrupted",
+    "The query intent classifier failed — it classified the query as about animals, not programming",
+    "BM25 scoring is broken",
+    "The neural re-ranker was not deployed"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="You have 1 billion documents. BM25 retrieval takes 8ms. Your L3 neural re-ranker takes 100ms per document. What is wrong with this system design?"
+  options={[
+    "BM25 is too slow for this scale",
+    "The neural re-ranker must run on all 1B documents, which is computationally impossible",
+    "The neural re-ranker should only run on the top-50 candidates from L2, not on all documents",
+    "Inverted indexes don't scale to 1B documents"
+  ]}
+  answer={2}
+/>
+
+## Practice
+
+<Callout type="info">
+The `/learn/nlp/` track covers BM25 and text retrieval foundations. For implementation practice, try building an inverted index from scratch in the Dojo — it's the fastest path to understanding why search scales the way it does.
+</Callout>

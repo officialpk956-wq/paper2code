@@ -1,0 +1,144 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'LLM Fine-Tuning: LoRA, QLoRA, and Instruction Tuning',
+  description: 'How to efficiently fine-tune large language models — covering full fine-tuning costs, LoRA low-rank adaptation, QLoRA 4-bit quantization, instruction tuning data, DPO alignment, and model merging techniques.',
+};
+
+# LLM Fine-Tuning: LoRA, QLoRA, and Instruction Tuning
+
+<Callout type="tip" title="Key Insight">
+A 70B parameter language model takes ~140GB just to store in 16-bit precision — more than 10 A100 GPUs. Fine-tuning updates all parameters, requiring the same memory again for optimizer states. LoRA makes fine-tuning accessible: freeze the original weights, train tiny rank-8 matrices that modify the model's behavior. Total trainable parameters: 0.01% of the original. Quality: nearly indistinguishable from full fine-tuning on most tasks.
+</Callout>
+
+## The Full Fine-Tuning Problem
+
+Full fine-tuning updates every parameter in the model. For a 70B parameter model:
+
+- **Model weights**: 70B × 2 bytes (float16) = 140 GB
+- **Gradients**: another 140 GB
+- **Optimizer state** (Adam): 2 moments per parameter = 280 GB more
+- **Total**: ~560 GB — requiring 14 A100-80GB GPUs minimum
+
+Even ignoring cost (~$10/hour per 8-GPU node), full fine-tuning has a more fundamental problem: **catastrophic forgetting**. Updating all parameters on a new task can degrade performance on everything else the model previously knew. A model fine-tuned aggressively on medical text forgets how to write code.
+
+<SVGDiagram src="/diagrams/llm-finetuning.svg" caption="Fine-tuning spectrum: full fine-tuning (impractical for most) → LoRA (0.01% trainable params) → QLoRA (4-bit base + LoRA, fits in 48GB). Bottom row: alignment methods — SFT, DPO, and model merging." />
+
+## LoRA: Low-Rank Adaptation
+
+**LoRA (Hu et al., 2021)** is based on the observation that the weight updates during fine-tuning have low intrinsic rank — the update matrix $\Delta W$ can be approximated as the product of two smaller matrices:
+
+$$W' = W_0 + \Delta W = W_0 + BA$$
+
+Where $W_0 \in \mathbb{R}^{d \times k}$ (frozen original weights), $B \in \mathbb{R}^{d \times r}$, and $A \in \mathbb{R}^{r \times k}$. The rank $r \ll \min(d, k)$ — typically 4–64 instead of $d$ (which might be 4096).
+
+**Why this works**: weight updates during fine-tuning concentrate in a low-dimensional subspace. For a model adapting from general text to medical question answering, the change in behavior doesn't require rearranging all 70B parameters — it requires shifting a small set of directions in weight space. The rank-$r$ decomposition captures exactly this.
+
+**Practical consequences**:
+- Only $B$ and $A$ are trained (initialized: $A$ random, $B=0$ so $\Delta W = 0$ at start)
+- For a 4096×4096 weight matrix with rank 8: 4096×8 + 8×4096 = 65,536 vs 16,777,216 original — 0.4% of parameters
+- At inference: merge $W_0 + BA$ once — no latency overhead
+- Switch tasks: swap $B$ and $A$ matrices (~40MB vs full checkpoint of 140GB)
+
+LoRA is typically applied to the attention layers (Q, K, V, O projections). Recent work (DoRA, LoRA+) applies it to MLP layers too and uses separate ranks per layer based on importance.
+
+<SimpleChart
+  title="GPU memory required to fine-tune Llama-2 70B (GB)"
+  data={[
+    { method: 1, memory_gb: 560 },
+    { method: 2, memory_gb: 140 },
+    { method: 3, memory_gb: 48 },
+    { method: 4, memory_gb: 24 },
+  ]}
+  xKey="method"
+  yKey="memory_gb"
+/>
+
+## QLoRA: Sub-50GB Fine-Tuning of 70B Models
+
+**QLoRA (Dettmers et al., 2023)** combines LoRA with 4-bit quantization to enable fine-tuning 65B parameter models on a single 48GB A100.
+
+Three key innovations:
+
+**4-bit NormalFloat (NF4) quantization**: quantize each weight to 4 bits using a data type optimized for normally distributed weights. NF4 preserves more information than uniform 4-bit quantization because pretrained model weights are approximately Gaussian. The quantization is applied blockwise (64 weights per block) to handle local outliers.
+
+**Double quantization**: the quantization constants themselves (one per 64-weight block) are also quantized. This saves 0.37 GB per 1B parameters — significant at scale.
+
+**Paged AdamW**: GPU memory is managed like virtual memory. When GPU memory is full, optimizer states are paged to CPU RAM. This prevents OOM crashes from momentary spikes, at the cost of occasional CPU-GPU transfers.
+
+The result: QLoRA fine-tuning of Llama-65B on a single A100 GPU. The Guanaco models fine-tuned with QLoRA in 24 hours on a single GPU matched ChatGPT performance on the Vicuna benchmark. This made high-quality fine-tuning accessible to researchers without multi-GPU clusters.
+
+<Callout type="info" title="Choosing LoRA Rank">
+Rank $r$ is the main hyperparameter. $r=4$: fast, low memory, works for simple tasks (tone, format). $r=8$: default for most instruction fine-tuning. $r=16$: for tasks requiring learning new concepts. $r=64$: for substantial behavior change, approaching full fine-tuning quality. Higher rank = more parameters = better fit but more memory. In practice, $r=16$ with $\alpha=32$ (the scaling factor, typically $2r$) is the most common starting point.
+</Callout>
+
+## Instruction Fine-Tuning
+
+LoRA and QLoRA are optimization techniques — they tell you *how* to fine-tune efficiently. **Instruction tuning** is the *what* — the data format that teaches models to follow instructions.
+
+The format is simple: `[INST] {user instruction} [/INST] {assistant response}`. During training, loss is computed only on the response tokens (not the instruction), so the model learns to generate helpful completions given arbitrary instructions.
+
+**Key instruction datasets:**
+
+**FLAN (Chung et al., 2022)** — fine-tuned T5 and PaLM on 1836 tasks reformatted into instruction form (National Language Inference, summarization, translation, QA). Showed that zero-shot generalization improves dramatically with diverse instruction data.
+
+**Alpaca (Taori et al., 2023)** — 52K instruction-response pairs generated by prompting GPT-3.5 using the Self-Instruct method. Showed that even GPT-3.5-generated data can meaningfully improve Llama instruction-following. Published as a research artifact showing the viability of synthetic data.
+
+**OpenHermes, SlimOrca, Dolphin** — curated mixtures of GPT-4-generated conversations across coding, math, creative writing, reasoning. Mixed-source datasets that combine FLAN, ShareGPT, and custom generation. Used to produce many open-source "chat" models.
+
+**Data quality > quantity**: A 10K high-quality instruction dataset typically outperforms a 200K low-quality dataset. Filtering for diversity (covering many different instruction types) and quality (removing repetitive, low-effort, or factually wrong responses) is more important than raw size.
+
+## DPO: Alignment Without RL
+
+**DPO (Direct Preference Optimization, Rafailov et al., 2023)** achieves the same goal as RLHF — aligning model output to human preferences — without the complexity of training a reward model and running PPO.
+
+The key mathematical insight: the optimal RLHF policy can be expressed as a closed-form function of the human preference distribution. Instead of learning the reward model explicitly and then optimizing against it, DPO directly optimizes the policy using a loss derived from the preference data:
+
+$$\mathcal{L}_{\text{DPO}} = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right]$$
+
+Where $y_w$ is the preferred response, $y_l$ the dispreferred response, and $\pi_{\text{ref}}$ is the SFT reference model. This loss increases probability of preferred responses while decreasing probability of dispreferred responses, relative to the reference.
+
+DPO advantages: simpler to implement (one fine-tuning run instead of separate RM + PPO), no reward model training, no sampling-heavy PPO loop, often comparable or better quality. Most open-source models fine-tuned for chat use DPO or its variants (SimPO, ORPO).
+
+## Model Merging
+
+**Model merging** combines multiple fine-tuned models without additional training, producing a new model with capabilities of all inputs.
+
+**SLERP (Spherical Linear Interpolation)**: interpolate between two model checkpoints on the unit sphere. `merged = slerp(model_A, model_B, t=0.5)`. Works for combining two closely related models (e.g., same base model fine-tuned on different domains).
+
+**TIES (Trim, Elect Sign, Merge)**: for merging multiple models from the same base. (1) Trim low-magnitude parameter deltas. (2) Elect a sign for each parameter by majority vote. (3) Average only parameters that agree with the elected sign. Handles conflicts between models fine-tuned on different objectives.
+
+**DARE (Drop And Rescale)**: randomly drop parameter deltas with probability $p$, rescale remaining by $1/(1-p)$. Reduces interference when merging models trained on very different tasks.
+
+Merging enables combining a strong math model with a strong code model into a single model that's good at both — at zero training cost. Community repositories (like Hugging Face's merge-kit) have produced hundreds of merged models this way.
+
+<Quiz
+  question="LoRA decomposes weight updates as ΔW = BA where B ∈ R^{d×r} and A ∈ R^{r×k} with r much smaller than d and k. Why is this low-rank decomposition effective for fine-tuning?"
+  options={[
+    "Low-rank matrices are computed faster on GPU than full-rank matrices",
+    "Weight updates during fine-tuning are empirically low-rank — the behavioral change concentrates in a low-dimensional subspace, so the full d×k update is redundant",
+    "Rank r controls the learning rate, so smaller r prevents overfitting",
+    "The decomposition enables gradient checkpointing to reduce memory"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="DPO achieves alignment without training a reward model. What data format does DPO require, and why is this simpler than RLHF?"
+  options={[
+    "DPO requires only prompt-completion pairs with scalar reward scores, and is simpler because no PPO is needed",
+    "DPO requires (prompt, preferred response, dispreferred response) pairs and directly optimizes the policy against preference data — no separate RM training step, no PPO sampling loop",
+    "DPO uses the same data as SFT and requires no human preference labels",
+    "DPO requires ranked lists of 5+ completions per prompt, similar to RLHF but processed differently"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Fine-tune Llama-3 8B with QLoRA on your own data in under 2 hours using the `unsloth` library — it handles quantization, LoRA setup, and flash attention automatically. Start with 100 instruction-response pairs on a topic you know well. After fine-tuning, compare the base model and fine-tuned model responses to your prompts. The difference in a 100-example fine-tune versus 10,000 is the fastest lesson in instruction data quality.
+</Callout>

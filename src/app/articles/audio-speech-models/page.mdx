@@ -1,0 +1,93 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Audio and Speech Models: From CNNs to Whisper',
+  description: 'Understand the architecture behind modern speech recognition, from wav2vec 2.0 to OpenAI Whisper and HuBERT.',
+};
+
+# Audio and Speech Models: From CNNs to Whisper
+
+<Callout type="tip" title="Key Insight">
+Audio processing has shifted from hand-crafted acoustic features (like MFCCs) and Hidden Markov Models to end-to-end deep learning. By treating audio spectrograms as images or continuous 1D sequences, models like Whisper and wav2vec 2.0 have achieved superhuman performance in speech-to-text tasks.
+</Callout>
+
+## The Shift to End-to-End Speech Recognition
+
+Historically, automatic speech recognition (ASR) required complex, multi-stage pipelines: an acoustic model, a pronunciation dictionary, and a language model, all trained separately. Modern ASR uses end-to-end neural networks that map audio directly to text.
+
+The primary input to these networks is typically a log-mel spectrogram—a visual representation of the audio frequencies over time, scaled logarithmically to match human hearing perception.
+
+<SVGDiagram src="/diagrams/audio-speech-models.svg" caption="Evolution of Audio and Speech Models." />
+
+## wav2vec 2.0: Self-Supervised Speech
+
+In 2020, Facebook AI released **wav2vec 2.0**, proving that speech models could be trained largely without labeled data. It relies on a contrastive self-supervised learning task.
+
+1. **CNN Encoder:** Raw audio waveforms are passed through a multi-layer Convolutional Neural Network (CNN) to extract latent representations.
+2. **Masking:** Certain spans of these representations are masked out (similar to BERT in NLP).
+3. **Contrastive Loss:** A Transformer network attempts to predict the true quantized representations of the masked spans, distinguishing them from randomly sampled distractors.
+
+This pre-training is incredibly powerful. By fine-tuning a pre-trained wav2vec 2.0 model on just **10 minutes** of labeled audio, it can achieve state-of-the-art (SOTA) results that previously required hundreds of hours of transcribed data.
+
+## HuBERT: Clustering for Pseudo-Labels
+
+Building on wav2vec 2.0, **HuBERT** (Hidden-Unit BERT) simplified the self-supervised objective. Instead of a complex contrastive loss, HuBERT runs a k-means clustering algorithm on the raw acoustic features to generate discrete "pseudo-labels." 
+
+The model is then trained with a standard masked language modeling loss—predicting the correct k-means cluster for masked audio regions. This approach forced the model to learn both acoustic and linguistic representations simultaneously, matching or beating wav2vec 2.0.
+
+## OpenAI Whisper: The Power of Scale
+
+While wav2vec 2.0 and HuBERT focused on unsupervised learning, OpenAI's **Whisper** took the opposite approach: massive, weakly supervised learning. 
+
+Whisper is an encoder-decoder Transformer. It takes 30-second chunks of log-mel spectrograms, processes them through a CNN patch embedding layer, and then passes them to a standard Transformer encoder-decoder to predict text.
+
+What makes Whisper revolutionary is the dataset: **680,000 hours** of multilingual and multitask supervised data scraped from the web. The largest model (Whisper large-v3) contains 1.5 billion parameters and can transcribe, translate, and perform language identification across 99 different languages with near-human robustness to accents, background noise, and technical jargon.
+
+## Decoders: CTC vs RNN-T vs Attention
+
+When outputting text from audio, models must align the varying length of audio frames with the discrete output characters. 
+- **CTC (Connectionist Temporal Classification):** Predicts a character (or a blank token) at every audio frame, then collapses repeats. It assumes outputs are conditionally independent, which is fast but limits language modeling capability.
+- **Attention-based Decoders (like Whisper):** Cross-attention allows the text decoder to look anywhere in the audio encoder's output. Highly accurate, but struggles with long-form alignment.
+- **RNN-T (Recurrent Neural Network Transducer):** An autoregressive streaming architecture used in Google's voice assistants. It combines an acoustic encoder and a text predictor, making it ideal for real-time dictation.
+
+<SimpleChart
+  title="Hours of Training Data for Major Speech Models"
+  data={[
+    { model: 'DeepSpeech 2 (2015)', hours: 11940 },
+    { model: 'wav2vec 2.0 (2020)', hours: 60000 },
+    { model: 'Whisper (2022)', hours: 680000 }
+  ]}
+  xKey="model"
+  yKey="hours"
+/>
+
+<Quiz
+  question="Why did wav2vec 2.0 represent a breakthrough for low-resource languages?"
+  options={[
+    "It used a massive dictionary of 99 languages.",
+    "It could achieve SOTA performance by fine-tuning on just 10 minutes of labeled data after self-supervised pre-training.",
+    "It ran in real-time on consumer smartphones.",
+    "It bypassed the need for log-mel spectrograms entirely."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Which decoding strategy is most commonly used for real-time, streaming voice assistants (like Google Assistant) due to its autoregressive nature?"
+  options={[
+    "Connectionist Temporal Classification (CTC)",
+    "RNN-Transducer (RNN-T)",
+    "Transformer Cross-Attention",
+    "Hidden Markov Models"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Load the `openai/whisper-tiny` model using the Hugging Face `transformers` library. Record a 5-second audio clip of yourself speaking with background noise, and pass the log-mel spectrogram into the model to observe its robust transcription capabilities.
+</Callout>

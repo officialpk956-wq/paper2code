@@ -1,0 +1,154 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Distributed Training: DDP, ZeRO, Tensor and Pipeline Parallelism',
+  description: 'How large models are trained across hundreds or thousands of GPUs — data parallelism with gradient averaging, ZeRO optimizer sharding, tensor parallelism for single-layer splitting, pipeline parallelism across nodes, and how they combine for 405B+ models.',
+};
+
+# Distributed Training: DDP, ZeRO, Tensor and Pipeline Parallelism
+
+<Callout type="tip" title="Key Insight">
+A Llama-3 405B model requires 810 GB in FP16 — more than 10 A100 80GB GPUs just for weights, before accounting for gradients and optimizer state (which triple that). Training it requires both fitting the model and processing enough data fast enough. Four different parallelism strategies attack four different bottlenecks: data parallelism for throughput, ZeRO for memory efficiency, tensor parallelism for intra-layer splitting, pipeline parallelism for inter-layer distribution.
+</thinking>
+
+## Why Distributed Training Is Hard
+
+Single-GPU training is simple: load model, compute forward pass, compute loss, backpropagate, update weights. Distributed training adds three new problems:
+
+**Memory**: models exceed single GPU memory. Llama-3-405B weights alone = 810 GB (FP16). No single GPU has this.
+
+**Communication**: GPUs must synchronize gradients or activations. Communication costs real time — at 400 Gb/s infiniband, transferring 1 GB takes 20ms.
+
+**Efficiency**: if one GPU waits for another, utilization drops. Pipeline bubbles, AllReduce overhead, and load imbalance all reduce effective GPU utilization.
+
+<SVGDiagram src="/diagrams/distributed-training.svg" caption="Four parallelism strategies: DDP (same model, different data shards, gradient AllReduce), ZeRO (shard model state across DDP workers), Tensor Parallelism (split within a layer), Pipeline Parallelism (split across layers). Production uses all four." />
+
+## Data Parallelism: The Foundation
+
+**Data Parallel (DP)** is the simplest strategy: every GPU holds a full copy of the model. Each GPU processes a different mini-batch. After the backward pass, gradients are averaged across all GPUs (AllReduce). All GPUs then apply the same gradient update, staying in sync.
+
+**PyTorch DDP (DistributedDataParallel)** implements this efficiently:
+1. Each process manages one GPU
+2. Forward passes run independently (no communication)
+3. During backward pass, as each gradient is computed, it's immediately AllReduced (overlapping compute and communication)
+4. All processes update weights identically
+
+AllReduce complexity: $O(\text{params} \times 2(N-1)/N \times \text{bytes})$ — approximately $2 \times \text{model\_size}$ of data per step. For a 7B model (14 GB FP16), AllReduce transfers ~28 GB per training step across the ring.
+
+**DDP limitation**: every GPU must hold the full model. For 70B+ models, this is infeasible on single GPUs.
+
+<SimpleChart
+  title="Training throughput (tokens/sec per GPU) vs GPU count with DDP on Llama-7B"
+  data={[
+    { gpus: 1, throughput: 2800 },
+    { gpus: 8, throughput: 2650 },
+    { gpus: 64, throughput: 2480 },
+    { gpus: 512, throughput: 2200 },
+  ]}
+  xKey="gpus"
+  yKey="throughput"
+/>
+
+## ZeRO: Sharding Optimizer State Across DDP Workers
+
+**ZeRO (Zero Redundancy Optimizer, Rajbhandari et al., Microsoft, 2019)** eliminates the redundancy in DDP: every GPU holds identical copies of weights, gradients, and optimizer state. ZeRO stages progressively partition these:
+
+**ZeRO-1**: partition optimizer state (Adam's two moment tensors) across $N$ GPUs. Each GPU stores $1/N$ of the optimizer state. 4× memory reduction for Adam (optimizer state = 3× weight size).
+
+**ZeRO-2**: partition gradients too. Each GPU is responsible for $1/N$ of gradients. After AllReduce, each GPU keeps only its shard and discards the rest.
+
+**ZeRO-3**: partition model parameters. Each GPU holds $1/N$ of the parameters. Before each layer's forward pass, an AllGather reconstructs the full layer weights on all GPUs. After the backward pass, a ReduceScatter averages and distributes gradients.
+
+For a 70B model with $N=8$ GPUs:
+- DDP: 70B × 16 bytes (weights + gradients + Adam) = 1,120 GB per GPU — impossible
+- ZeRO-3: 1,120 GB / 8 = 140 GB per GPU — fits on two A100-80GBs with overhead
+
+The trade-off: ZeRO-3 requires 2× more AllGather/ReduceScatter communication than DDP. At high GPU counts, this communication overhead can dominate.
+
+**FSDP (Fully Sharded Data Parallel)** is PyTorch's native ZeRO-3 implementation. Meta used FSDP to train Llama 2 and Llama 3. FSDP supports mixed precision, gradient checkpointing, and CPU offloading out of the box.
+
+<Callout type="info" title="Activation Checkpointing: Trading Compute for Memory">
+During a forward pass, all intermediate activations must be stored for the backward pass — for a 70B model, this can exceed the GPU memory even after ZeRO-3. Activation checkpointing (gradient checkpointing) re-computes activations during the backward pass instead of storing them. This doubles the forward compute but reduces activation memory from O(seq × layers) to O(seq × sqrt(layers)). Used in virtually every large model training run.
+</thinking>
+
+## Tensor Parallelism: Splitting Within a Layer
+
+**Tensor Parallelism (Megatron-LM, Shoeybi et al., 2019)** splits individual weight matrices across GPUs. For a feedforward layer $Y = \text{GeLU}(XA)B$:
+
+**Column-parallel**: split $A$ along columns. Each GPU computes $Y_i = \text{GeLU}(XA_i)$. No communication needed for this part.
+
+**Row-parallel**: split $B$ along rows. Each GPU computes $Z_i = Y_i B_i$. An AllReduce sums the partial results: $Z = \sum_i Z_i$.
+
+One transformer block requires exactly 2 AllReduces (one in the MLP, one in the attention output projection). For 8-way tensor parallel on 8 GPUs within a node (connected via NVLink at 600 GB/s), these AllReduces take ~2ms each — acceptable.
+
+**Attention head parallelism**: self-attention heads are split across GPUs. Each GPU computes a subset of heads. No communication during attention; one AllReduce for the output projection.
+
+Tensor parallelism works best within a node (NVLink bandwidth). Across nodes (InfiniBand at 12.5 GB/s), the AllReduce overhead becomes prohibitive — this is why TP is typically limited to 8 (the number of GPUs per node) in practice.
+
+## Pipeline Parallelism: Splitting Across Layers
+
+**Pipeline Parallelism** assigns consecutive layers to consecutive GPUs:
+- GPU 0: layers 0–19 (stage 0)
+- GPU 1: layers 20–39 (stage 1)
+- GPU 2: layers 40–59 (stage 2)
+- GPU 3: layers 60–79 (stage 3)
+
+Forward pass: activations flow from stage 0 → 1 → 2 → 3. Backward pass: gradients flow in reverse.
+
+The problem: **pipeline bubbles**. While GPU 3 runs the forward pass, GPU 0 is idle. The bubble size is $(p-1)/p$ where $p$ is the number of pipeline stages — with 4 stages, 75% of GPU time is bubbles without mitigation.
+
+**Micro-batching** reduces bubbles: split each batch into $m$ micro-batches. GPU 0 processes micro-batch 1 and immediately passes it to GPU 1, then starts micro-batch 2. With $m$ micro-batches, bubble size reduces to $(p-1)/(m+p-1)$. With $m \gg p$, the bubble approaches 0.
+
+**1F1B (One Forward One Backward) schedule**: alternates forward and backward micro-batches in a specific order to keep all stages busy while maintaining correct gradient accumulation.
+
+## 3D Parallelism: Combining All Strategies
+
+Production training of 400B+ models uses all three strategies simultaneously:
+
+```
+Total GPUs = DP × TP × PP
+
+Llama 3.1 405B example:
+TP = 8   (8 GPUs per node, NVLink, split within layers)
+PP = 16  (16 pipeline stages, cross-node)
+DP = 16  (16 data-parallel replicas)
+= 2048 GPUs total
+```
+
+Assignment of strategies to hardware topology:
+- **TP within node** (fast NVLink): frequent AllReduces but short communication time
+- **PP across nodes** (InfiniBand): infrequent communication (activation tensors per microbatch)
+- **DP across node groups** (InfiniBand): gradient AllReduce once per batch, amortized
+
+DeepSeek-V3 used a variation: Expert Parallelism for its MoE layers (each GPU hosts a subset of the 256 experts), combined with standard TP and DP for the attention and dense layers.
+
+<Quiz
+  question="ZeRO-3 partitions model parameters across N GPUs and uses AllGather to reconstruct each layer before its forward pass. Compared to standard DDP, what is the trade-off?"
+  options={[
+    "ZeRO-3 is slower for small models but faster for large models due to better cache utilization",
+    "ZeRO-3 reduces per-GPU memory by N× but requires additional AllGather/ReduceScatter communication not present in DDP — at high GPU counts, this overhead can limit scaling efficiency",
+    "ZeRO-3 requires a different optimizer (not Adam) because standard Adam doesn't support sharded state",
+    "ZeRO-3 only works with pipeline parallelism; it cannot be combined with tensor parallelism"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Pipeline parallelism creates 'pipeline bubbles' where some GPUs sit idle. Why does micro-batching reduce (but not eliminate) this overhead?"
+  options={[
+    "Micro-batches are processed on CPU, freeing GPUs from idle periods",
+    "With m micro-batches, the bubble time is (p-1)/(m+p-1) instead of (p-1)/p — as m grows much larger than p, the idle fraction approaches zero because GPUs can process the next micro-batch while waiting for gradients",
+    "Micro-batches allow stages to communicate gradients at lower precision, reducing communication latency",
+    "Micro-batching enables GPUs to skip backward passes for early micro-batches"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Run DDP training on a small model with PyTorch: use `torchrun --nproc_per_node=2` to launch 2 processes on a dual-GPU machine, wrap your model with `DistributedDataParallel`, and use a `DistributedSampler` to partition the dataset. Monitor GPU utilization with `nvidia-smi dmon` and watch for the AllReduce communication spikes after each backward pass. For ZeRO, replace DDP with `torch.distributed.fsdp.FullyShardedDataParallel` and compare peak memory usage.
+</Callout>

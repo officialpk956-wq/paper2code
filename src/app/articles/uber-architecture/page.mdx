@@ -1,0 +1,114 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Uber Architecture: Real-Time Geospatial Matching at Scale',
+  description: 'How Uber dispatches millions of rides — H3 geospatial indexing, the two-sided marketplace matching problem, ETA prediction, surge pricing, and the ML platform serving 1M+ predictions/second.',
+};
+
+# Uber Architecture: Real-Time Geospatial Matching at Scale
+
+<Callout type="tip" title="Key Insight">
+Uber's core problem sounds simple: connect a rider who needs a car with a nearby driver who has one. In reality, it's a two-sided marketplace matching problem at city scale, requiring sub-second latency, geospatial indexing, real-time ML predictions, and distributed coordination — all happening simultaneously in 70+ countries.
+</Callout>
+
+## The Two-Sided Marketplace
+
+Unlike a search engine or a streaming service, Uber must balance supply and demand in real time. If there are 1000 riders requesting rides and only 100 drivers available, you must decide which 100 riders get a driver and which 900 wait. If 200 drivers are available and only 50 riders are requesting, 150 drivers are idle and losing income.
+
+This supply-demand imbalance varies by city, neighborhood, time of day, weather, and local events. A concert ending at 11pm creates a localized spike in rider demand. A rainstorm increases demand city-wide and also causes drivers to go offline. The system must continuously detect these imbalances and respond — through surge pricing (which both attracts more drivers and suppresses marginal ride demand) and proactive driver positioning (incentivizing drivers to move to areas of predicted future demand).
+
+## H3 Geospatial Indexing
+
+Finding nearby drivers sounds straightforward — just check all drivers within 5km of the rider. But Uber operates in cities with thousands of simultaneous requests. Checking all drivers for every request is O(riders × drivers), which is computationally intractable at scale.
+
+Uber's solution is **H3** — a hexagonal hierarchical grid system they open-sourced in 2018. The earth is divided into a hierarchy of hexagonal cells at different resolutions. At the finest resolution (level 12), each cell is ~0.3 m². At the city-block level (level 9), each cell is ~0.1 km².
+
+Every driver's GPS position maps to an H3 cell. Driver locations are stored in Redis indexed by their H3 cell. Finding drivers near a rider becomes a lookup of nearby H3 cells — a constant-time operation regardless of city size. Nearby cells form a natural radius search without expensive distance calculations.
+
+<SVGDiagram src="/diagrams/uber-dispatch.svg" caption="Uber dispatch: rider request flows through supply service (H3-indexed driver lookup), matching service (ETA-ranked candidates), offer service (driver notification), with GPS updates feeding Redis every 4 seconds." />
+
+## The Dispatch Pipeline
+
+A ride request triggers a cascade of service calls within 500ms.
+
+**Supply Service** queries Redis for all available drivers within the relevant H3 cells. Driver positions are fresh — drivers send GPS updates every 4 seconds via Kafka, and a stream processor writes them to Redis within 100ms. The Supply Service returns ~50 candidate drivers within range.
+
+**ETA Service** computes the estimated time to pickup for each candidate driver. This requires running Dijkstra's algorithm on a live road graph (edge weights updated continuously from real GPS probe data from all active drivers). Historical travel time from millions of past trips biases the estimates by time-of-day and day-of-week.
+
+**Matching Service** ranks candidate drivers by a composite score: ETA (primary), driver rating, vehicle type match, and whether the driver has a long trip preference. The top candidate is offered the trip first.
+
+**Offer Service** sends the offer to the top driver and waits up to 15 seconds for acceptance. If declined (or timed out), the next ranked driver receives the offer. Most trips match within 2–3 offers.
+
+<SimpleChart
+  title="Driver GPS update latency: event to Redis update (ms)"
+  data={[
+    { percentile: 50, latency_ms: 45 },
+    { percentile: 75, latency_ms: 78 },
+    { percentile: 90, latency_ms: 112 },
+    { percentile: 95, latency_ms: 148 },
+    { percentile: 99, latency_ms: 287 },
+  ]}
+  xKey="percentile"
+  yKey="latency_ms"
+/>
+
+## Surge Pricing
+
+When ride demand exceeds driver supply in a geographic area, Uber applies a surge multiplier. Price = base_fare × surge_multiplier. A 2.0× surge means rides cost twice the normal price.
+
+The economic effect is a two-sided demand response: some riders postpone their trip (demand falls), nearby offline drivers see the surge notification and go online (supply rises). Within 5–15 minutes, surge pricing typically resolves itself — the imbalance it was created to solve has been resolved.
+
+The algorithm computes surge per H3 cell: surge_score = demand_rate / supply_rate. Where this ratio exceeds a threshold, a surge multiplier is applied. Multipliers are discretized (1.0, 1.2, 1.5, 2.0, 2.5, 3.0) rather than continuous, because riders respond better to round multipliers and the discretization reduces the frequency of multiplier changes, which looks erratic in the app.
+
+<Callout type="warning" title="The Surge PR Problem">
+Surge pricing is economically rational but socially controversial. During Hurricane Sandy (2012), Uber surged 8× in New York, drawing outrage. The economic argument (surge brought more drivers onto flooded streets) and the PR reality (price gouging during an emergency) pointed in opposite directions. Uber now caps surge multipliers in declared emergencies. This is a case where the algorithmically optimal decision and the socially acceptable decision diverge.
+</Callout>
+
+## ETA Prediction: ML at City Scale
+
+Uber's ETA predictions must be accurate (riders plan around them), fast (must complete in under 100ms), and fresh (traffic changes minute to minute).
+
+The original ETA system was a shortest-path algorithm (Dijkstra) on a road graph with edge weights derived from historical travel times. This worked but missed real-time traffic — your estimated arrival time wouldn't account for the accident on the highway that just happened.
+
+Uber's **DeepETA** (2022) replaced this with a Graph Neural Network that models the road network as a graph, propagates current traffic information across connected edges, and predicts travel time end-to-end. DeepETA achieved 15% MAPE (Mean Absolute Percentage Error) improvement over the gradient boosting baseline. The GNN can capture that the traffic jam on Main St. slows down ETA for trips routed through connected streets even if those streets have no direct congestion.
+
+**Uber Michelangelo** is the ML platform that serves all Uber's ML models — ETA, surge, fraud detection, demand forecasting — at 1 million+ predictions per second with sub-10ms latency. It provides a unified feature store (so training and serving see the same features), model versioning, A/B testing, and monitoring. Building Michelangelo was necessary because each team building their own serving infrastructure was creating N copies of the same infrastructure problems.
+
+## Real-World Case Studies
+
+**DISCO (2017)** was Uber's batch matching system. Instead of the greedy "match the best driver to each rider immediately" approach, DISCO batches incoming ride requests over a 500ms window and solves the global optimal assignment — the assignment that minimizes total expected ETA across all riders simultaneously. The Hungarian algorithm (an O(n³) optimization algorithm) runs on the batch. Result: 20% average ETA improvement versus greedy matching, because globally optimal isn't locally greedy.
+
+**Uber Eats** adapted the dispatch and routing infrastructure for food delivery with one fundamental difference: restaurant preparation time. The ETA for a food delivery has three components: driver-to-restaurant time, restaurant preparation time (unknown, must be predicted), and restaurant-to-customer time. Predicting restaurant prep time requires a separate ML model trained on restaurant-specific data. Multi-stop delivery (picking up from two restaurants, delivering to one customer) extends the matching problem to a variant of the traveling salesman problem.
+
+**Uber's India launch** revealed that the architecture built for US cities broke down under 2G network conditions with poor GPS accuracy. Drivers in India were using low-cost Android phones that sent GPS updates with 50–100 meter accuracy rather than 5–10 meter accuracy. The H3 cell-based matching failed because cell boundaries didn't correlate well with actual road network positions at that precision. Uber built a separate GPS smoothing layer and relaxed the H3 cell resolution for markets with poor GPS hardware.
+
+<Quiz
+  question="Uber checks all drivers within 5km of a rider at query time. In a city with 10,000 simultaneous ride requests and 15,000 active drivers, what is the computational complexity per second?"
+  options={[
+    "O(n) — linear in the number of drivers",
+    "O(riders × drivers) = O(150,000,000) operations per query cycle — computationally intractable",
+    "O(log n) because drivers are sorted by position",
+    "O(1) because the matching is pre-computed"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Surge pricing sends a 2.0× surge notification to nearby offline drivers. From a systems design perspective, what happens to driver supply over the next 10–15 minutes?"
+  options={[
+    "Supply stays flat — offline drivers don't check the app",
+    "Supply decreases because higher prices make driving less attractive",
+    "Supply increases as offline drivers see the surge notification and come online to earn more",
+    "Supply is unaffected — surge only affects demand, not supply"
+  ]}
+  answer={2}
+/>
+
+## Practice
+
+<Callout type="info">
+The vector databases article covers the ANN techniques (similar to H3 cell lookup) for efficient geospatial indexing. For ETA prediction, the DeepETA GNN architecture is covered in the architecture deep-dive section under Graph Neural Networks.
+</Callout>

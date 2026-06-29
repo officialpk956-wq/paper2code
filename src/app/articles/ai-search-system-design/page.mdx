@@ -1,0 +1,87 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'AI Search System Design',
+  description: 'How to design a modern, scalable AI search engine from Query Understanding to Vector Retrieval and Re-Ranking.',
+};
+
+# AI Search System Design
+
+<Callout type="tip" title="Key Insight">
+Modern search is no longer just matching exact keywords. By combining traditional lexical search (BM25) with semantic vector search and aggressive machine-learning-based re-ranking, AI search engines can understand the *intent* of a query, not just the text.
+</Callout>
+
+## Query Understanding
+
+The search pipeline begins the millisecond a user hits "enter". Before touching a database, the system must understand the query:
+- **Spellcheck & Normalization:** Correcting typos using fast edit-distance algorithms or lightweight Seq2Seq models.
+- **Intent & Entity Extraction:** Using a fast NLP model (like a fine-tuned BERT) to tag entities. For example, in the query "Apple laptops under $1000", the system tags `Brand: Apple`, `Category: Laptops`, and `Price: <1000`.
+
+## Hybrid Retrieval
+
+Once the query is understood, the system retrieves a broad set of "candidate" results. Relying on just one retrieval method is a mistake. Modern systems use **Hybrid Retrieval**:
+1. **Lexical Retrieval (ElasticSearch/BM25):** Excellent at exact keyword matches, serial numbers, and specific names.
+2. **Semantic Retrieval (Vector DB):** The query is passed through an Embedding Model. The resulting vector is queried against a Vector Database (like Milvus or Pinecone) using Approximate Nearest Neighbors (ANN) to find conceptually similar documents, even if they don't share any exact keywords.
+
+Both databases retrieve their top 500 candidates.
+
+<SVGDiagram src="/diagrams/ai-search-system-design.svg" caption="A modern AI-powered search pipeline." />
+
+## The Re-Ranking Stage
+
+You now have 1,000 documents. But retrieval systems (especially Vector DBs) are optimized for *speed*, not *precision*. 
+
+To organize the final top 10 results shown to the user, the 1,000 candidates are passed to a heavy **Re-Ranker**:
+- **Cross-Encoders:** A deep Transformer model that takes the `(Query, Document)` pair and computes a highly accurate relevance score. Because it is computationally heavy, it can only be run on a small subset of documents (which is why we do retrieval first).
+- **Learning-to-Rank (LTR):** Often implemented as an XGBoost tree model. It takes the Cross-Encoder score, the BM25 score, and business metrics (like the product's profit margin, popularity, and user click-through rate) to generate the final sort order.
+
+## Latency Budgets
+
+Search is highly latency-sensitive. Amazon famously found that 100ms of latency costs them 1% in sales. A standard AI search pipeline has a strict latency budget of ~200ms:
+- Query Understanding: 20ms
+- Lexical + Vector Retrieval (run in parallel): 50ms
+- Cross-Encoder Re-ranking: 80ms
+- Network / Assembly: 50ms
+
+<SimpleChart
+  title="Search Relevance (NDCG@10) by Architecture"
+  data={[
+    { arch: 'Lexical (BM25)', score: 45 },
+    { arch: 'Vector Only', score: 52 },
+    { arch: 'Hybrid (BM25 + Vector)', score: 68 },
+    { arch: 'Hybrid + Cross-Encoder', score: 85 }
+  ]}
+  xKey="arch"
+  yKey="score"
+/>
+
+<Quiz
+  question="Why do modern search systems use a two-stage approach (Retrieval, then Re-Ranking) instead of just scoring all documents with a Cross-Encoder?"
+  options={[
+    "Because Cross-Encoders are too inaccurate for raw retrieval.",
+    "Because evaluating a massive database of millions of documents with a heavy Cross-Encoder would take minutes or hours, violating the 200ms latency budget.",
+    "Because Vector Databases do not support text.",
+    "Because Lexical search is deprecated."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="What is the benefit of Hybrid Retrieval over pure Semantic (Vector) Retrieval?"
+  options={[
+    "Hybrid retrieval is cheaper to host.",
+    "Semantic retrieval struggles with exact matches (like specific SKUs or rare names), which Lexical retrieval handles perfectly.",
+    "Hybrid retrieval doesn't require a database.",
+    "Vector embeddings cannot understand English."
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Set up a hybrid search index using a local instance of Elasticsearch and a local vector database like Qdrant. Index 1,000 Wikipedia articles using both BM25 and a SentenceTransformer embedding model. Run queries against both and observe how BM25 wins on exact names, while vectors win on abstract concepts.
+</Callout>

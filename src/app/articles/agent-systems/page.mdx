@@ -1,0 +1,134 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Agent Systems: Building Reliable LLM Agents',
+  description: 'How LLM agents work — the ReAct loop, tool use, memory architectures, multi-agent systems, and the engineering challenges of making agents reliable.',
+};
+
+# Agent Systems: Building Reliable LLM Agents
+
+<Callout type="tip" title="Key Insight">
+The difference between a chatbot and an agent is **action**. A chatbot produces text. An agent produces text, then does something with it — calls a tool, writes code, browses the web — and uses the result to decide what to do next. This loop is what makes agents capable of multi-step tasks that no single LLM call could complete.
+</Callout>
+
+## What Makes an Agent an Agent?
+
+An agent has four components working together: **perception** (reading inputs — text, images, tool results), **memory** (storing context within and across conversations), **planning** (deciding what action to take next), and **action** (executing tools that affect the world).
+
+The crucial difference from a pipeline is that the sequence of steps is not predetermined. A pipeline runs step A → B → C regardless of what A produces. An agent looks at what happened in step A and dynamically decides whether to do B, or skip to D, or loop back and try A again.
+
+## The ReAct Loop
+
+ReAct (Reason + Act, 2022) is the foundational pattern for LLM agents. The model alternates between producing reasoning traces ("I should look up the current stock price before answering") and taking actions ("calling the get_stock_price tool with ticker=AAPL").
+
+<SVGDiagram src="/diagrams/react-loop.svg" caption="The ReAct loop: reason → act → observe → reason again until the task is complete." />
+
+The power of explicit reasoning traces is that they keep the model on track. Without them, a model given a complex multi-step task tends to jump to a plausible-sounding answer immediately. With a forced thinking step before each action, the model catches its own errors and changes course when intermediate results don't match expectations.
+
+## Tool Use: How Agents Connect to the World
+
+A tool is a function the LLM can call. Tools are defined by a name, a description (what it does, when to use it), and a parameter schema (what inputs it takes). The model sees the tool definitions and decides when to invoke them.
+
+```json
+{
+  "name": "web_search",
+  "description": "Search the web for current information. Use when you need facts from after your training cutoff.",
+  "parameters": {
+    "query": "the search query string",
+    "num_results": "number of results to return (default: 5)"
+  }
+}
+```
+
+When the model emits a tool call, the execution layer invokes the real function, captures the output, and injects it back into the conversation as an observation. The model then reasons about the result and decides on the next step.
+
+<Callout type="warning" title="Tool Design is Agent Design">
+The biggest lever on agent performance is usually the tool interface, not the model. An agent with a raw bash terminal that can run any shell command has 10% success on software engineering tasks (SWE-bench). The same model with a purpose-built software engineering interface — structured file viewer, targeted code editor, test runner — achieves 50%+ success. Good tools constrain the action space to what actually works.
+</Callout>
+
+## Agent Memory Architecture
+
+Agents need memory at multiple timescales:
+
+**Working memory** — the current context window. Everything the agent can see right now: the original task, all reasoning traces, all tool calls and their results. This is fast but limited to the context window size (typically 100K–1M tokens).
+
+**Episodic memory** — a persistent store of past task outcomes. The agent records what tasks it has completed, what plans worked, and what mistakes it made. Retrieved before planning new tasks so lessons from the past apply.
+
+**Semantic memory** — a vector database of domain knowledge. When the agent is asked about a medical procedure, it retrieves relevant literature from a knowledge base. This is essentially RAG applied to agent long-term knowledge.
+
+**Procedural memory** — stored tool definitions, code snippets, and task templates. The equivalent of the agent's "skills library."
+
+<SimpleChart
+  title="Task completion rate vs agent steps allowed"
+  data={[
+    { max_steps: 1, completion: 0.23 },
+    { max_steps: 3, completion: 0.41 },
+    { max_steps: 5, completion: 0.58 },
+    { max_steps: 10, completion: 0.72 },
+    { max_steps: 20, completion: 0.79 },
+    { max_steps: 50, completion: 0.81 },
+  ]}
+  xKey="max_steps"
+  yKey="completion"
+/>
+
+## Multi-Agent Systems
+
+For complex tasks, one agent isn't enough. Multi-agent systems use an **orchestrator** that decomposes the task and assigns subtasks to specialized **sub-agents**.
+
+A research task might be decomposed as: orchestrator assigns "search academic papers" to a researcher agent, "write the introduction" to a writer agent, and "check citations" to a fact-checker agent. The orchestrator synthesizes their outputs into the final result.
+
+The key advantage is parallelism — the three sub-agents can work simultaneously. A single agent doing all three tasks sequentially might take 10 minutes; three parallel agents might take 4 minutes.
+
+<Callout type="info" title="The Shared Message Bus Pattern">
+In production multi-agent systems, agents don't call each other directly. They post to a shared message bus, and other agents subscribe to relevant message types. This decoupling allows agents to be added, removed, or retried without changing the orchestrator. LangGraph implements this pattern with an explicit state graph.
+</Callout>
+
+## The 4 Failure Modes
+
+**Infinite loops** — the agent keeps trying the same failing action, never recognizing it won't work. Fix: step counter with hard limit; detect repeated identical tool calls.
+
+**Hallucinated tool calls** — the model fabricates a tool that doesn't exist or invokes a real tool with impossible parameters. Fix: strict JSON schema validation before any tool is executed.
+
+**Over-confidence on unknown facts** — the model generates an answer without checking whether the tools could verify it. Fix: force a retrieval step for any factual claim.
+
+**Side effect blindness** — the agent executes an irreversible action (send email, delete file, post to social media) without confirmation. Fix: require explicit human approval for any action tagged as irreversible.
+
+## Real-World Case Studies
+
+**OpenAI's Code Interpreter** is the production exemplar of a constrained, reliable agent. The LLM writes Python code, the code executes in a sandboxed Docker container with no network access and a 5-minute timeout, the stdout/stderr and any generated plots are returned as observations, and the model iterates. The constraints are key: by blocking network access and limiting execution time, OpenAI eliminated two entire categories of failure mode (infinite loops consuming resources, exfiltration via network calls).
+
+**SWE-agent (Princeton, 2024)** demonstrated the tool design principle empirically. They built a custom Agent-Computer Interface (ACI) — not raw bash, but a structured set of commands purpose-built for software engineering: `open file`, `goto line`, `search in file`, `create file`. This agent achieves 12.5% on SWE-bench. The same underlying model with raw bash access scores 3.5%. The interface improvement alone is a 3.5× performance multiplier.
+
+**LangGraph** emerged as the production answer to runaway agents. Instead of an LLM making unbounded decisions at every step, LangGraph defines an explicit state machine: nodes (agent actions) connected by edges (conditions for transitioning). The LLM can only take actions defined in the graph. This eliminates infinite loops by construction — the graph has no cycles unless you explicitly add them with termination conditions.
+
+<Quiz
+  question="An agent is given the task 'Research quantum computing and write a 10-page report.' It writes 3 pages, then starts researching again, then writes 2 more pages, loops back to research 5 more times, and never finishes. What failure mode is this?"
+  options={[
+    "Hallucinated tool calls",
+    "Side effect blindness",
+    "Infinite loop — no termination condition and no step limit",
+    "Working memory overflow"
+  ]}
+  answer={2}
+/>
+
+<Quiz
+  question="Your agent has access to a web_search tool and a send_email tool. A user asks it to 'find the CEO's email and send them a proposal.' What safety mechanism is most critical?"
+  options={[
+    "Rate limiting on web_search calls",
+    "Requiring explicit human confirmation before executing send_email (an irreversible side effect)",
+    "Limiting the agent to 5 total steps",
+    "Restricting the agent to only one tool at a time"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The `/learn/llms/` section covers tool use and function calling at the API level. For a hands-on project, build a ReAct agent from scratch using only the Claude API — no LangChain — with web search and calculator tools. Constraint: no library except the API client.
+</Callout>

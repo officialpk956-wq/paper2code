@@ -1,0 +1,113 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+import { YouTubeEmbed } from '@/components/content/YouTubeEmbed';
+
+export const metadata = {
+  title: "Vector Databases: Similarity Search at Scale",
+  description: "Learn how vector databases work, from embeddings and cosine similarity to HNSW indexes and approximate nearest neighbor search."
+};
+
+# Vector Databases: Similarity Search at Scale
+
+<Callout type="tip" title="Key Insight">
+Traditional databases are great for exact matches, but what if you need to search by meaning? You cannot write a SQL `WHERE` clause for "find me the 10 most semantically similar sentences." Vector databases solve this by storing data as high-dimensional coordinates and searching for proximity.
+</Callout>
+
+## Why Vectors?
+
+In modern machine learning, text, images, and audio are converted into arrays of numbers called embeddings. These embeddings capture the semantic meaning of the original data. When you convert meaning to numbers, distance in the vector space approximates semantic similarity. If two sentences mean the same thing, their vectors will be close together.
+
+To determine how close two vectors are, we often use cosine similarity. This measures the cosine of the angle between two vectors:
+
+$$
+\cos(\mathbf{a}, \mathbf{b}) = \frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\|\|\mathbf{b}\|}
+$$
+
+## The Architecture
+
+A vector database typically consists of three layers: the query layer, the index layer, and the storage layer. The query layer parses and validates the incoming search requests. The index layer is responsible for quickly finding the nearest neighbors in the high-dimensional space. Finally, the storage layer securely persists the raw vectors and their associated metadata payloads.
+
+<SVGDiagram src="/diagrams/vector-db-pipeline.svg" caption="The vector ingest and query pipeline." />
+
+## Approximate Nearest Neighbor (ANN)
+
+Exact search (comparing your query vector to every single vector in the database) is mathematically precise but computationally expensive. It requires $O(n \times d)$ operations per query. For 100 million vectors, that translates to seconds per query.
+
+To achieve millisecond latency, we trade a small amount of accuracy (recall) for a massive speedup (often 1000x or more). This is called Approximate Nearest Neighbor (ANN) search.
+
+<Callout type="info" title="The Recall-Latency Tradeoff">
+In algorithms like HNSW, parameters like `ef_search` govern this tradeoff. A higher `ef_search` means the algorithm will explore more nodes during the search phase. This results in higher accuracy (better recall) but slower query latency.
+</Callout>
+
+<SimpleChart
+  title="HNSW: Recall@10 vs ef_search parameter"
+  data={[
+    { ef_search: 10, recall: 0.71, latency_ms: 0.8 },
+    { ef_search: 50, recall: 0.91, latency_ms: 2.1 },
+    { ef_search: 100, recall: 0.96, latency_ms: 3.8 },
+    { ef_search: 200, recall: 0.99, latency_ms: 7.2 },
+    { ef_search: 400, recall: 0.999, latency_ms: 14.1 }
+  ]}
+  xKey="ef_search"
+  yKey="recall"
+/>
+
+## HNSW: The Dominant Index
+
+Hierarchical Navigable Small World (HNSW) graphs are the most popular indexing algorithm for vector databases today. It builds a multi-layer graph where the top layers have long-range connections, enabling fast traversal across the search space. The bottom layers contain dense connections to ensure you can precisely locate the nearest neighbors.
+
+<Callout type="warning" title="Construction Cost">
+When building an HNSW index, the `M` parameter (number of edges per node) and `ef_construction` dictate how dense and robust the graph is. More edges mean better recall but significantly higher memory consumption. An HNSW index can easily require 2 to 4 times the memory of the raw vector data itself!
+</Callout>
+
+## When to Use Which Distance Metric
+
+Vector databases support multiple ways to measure distance. Choosing the right one depends on your embedding model and use case. 
+
+Cosine similarity is best for normalized vectors and semantic text search (like OpenAI embeddings). It cares about the angle between vectors, not their magnitude.
+Dot product is ideal when the magnitude of the vector carries meaning, such as in recommendation system scores where a larger vector length implies higher user engagement.
+Euclidean distance (L2) is often used for image similarity and traditional geometric data where physical distance is meaningful.
+
+<Callout type="info">
+Rule of thumb: If your embedding model was trained with cosine similarity, use cosine similarity. If it was trained using dot product, use dot product in your index.
+</Callout>
+
+## Real-World Case Studies
+
+At Spotify, track recommendations are powered by embedding both users and songs into the same vector space. By performing a nearest neighbor search around a user's vector, the system can instantly generate the "Recommended for You" playlist, surfacing songs that match the user's semantic taste profile.
+
+Stack Overflow uses semantic search to power queries across over 50 million programming questions. By embedding the questions, they allow developers to find solutions even if their search query doesn't share any exact keywords with the target question, drastically improving search relevance.
+
+Notion AI leverages embedding-based document retrieval to power its in-product search and Q&A features. User workspaces are chunked, embedded, and indexed, allowing the AI to instantly retrieve the most relevant paragraphs when a user asks a question about their company's internal knowledge base.
+
+## Quick Check
+
+<Quiz
+  question="You have a text search system where users search by meaning, not keywords. Which indexing approach is correct?"
+  options={[
+    "B-tree index on the text content",
+    "HNSW index on vector embeddings from a transformer model",
+    "Hash index on TF-IDF scores",
+    "Full-text search with BM25 inverted index"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Your vector search has 99% recall but takes 50ms. The product team needs 10ms. What is the FIRST parameter to tune?"
+  options={[
+    "Reduce the vector dimensions",
+    "Lower ef_search (accept slightly lower recall)",
+    "Switch from HNSW to brute-force",
+    "Add more RAM"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Practice with Dojo problems: np-002 (Cosine Similarity) is a great place to start understanding how we compute the distance between two vectors.
+</Callout>

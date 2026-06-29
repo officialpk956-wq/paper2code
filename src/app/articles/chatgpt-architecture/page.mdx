@@ -1,0 +1,114 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'ChatGPT Architecture: From GPT-4 to a Product',
+  description: 'How OpenAI turned GPT-4 into ChatGPT — RLHF training, session management, streaming tokens, safety layers, and the serving infrastructure behind 100M daily users.',
+};
+
+# ChatGPT Architecture: From GPT-4 to a Product
+
+<Callout type="tip" title="Key Insight">
+GPT-4 (the base model) and ChatGPT are not the same thing. GPT-4 is a language model that predicts the next token. ChatGPT is GPT-4 plus a training procedure that aligns it to follow instructions and stay safe, plus a serving infrastructure that manages sessions, streams responses, enforces content policy, and handles 100 million daily users. The model is 20% of the product. The system is 80%.
+</Callout>
+
+## The Three Training Stages
+
+ChatGPT is built from a GPT-4 base model through three sequential stages.
+
+**Stage 1 — Pretraining:** GPT-4 trains on ~13 trillion tokens of internet text, learning to predict the next token. After pretraining, the model knows about the world but doesn't know how to be helpful — it might complete "Write a poem about..." by generating more prompt text rather than a poem.
+
+**Stage 2 — Supervised Fine-Tuning (SFT):** Human contractors write ideal responses to thousands of prompts. The model is fine-tuned to imitate these demonstrations. After SFT, the model follows instructions better but still lacks nuance about which of two plausible responses is actually better.
+
+**Stage 3 — RLHF (Reinforcement Learning from Human Feedback):** Human raters compare pairs of model responses and indicate which is better. These comparisons train a **reward model** that scores any response. Then PPO (Proximal Policy Optimization) optimizes the LLM to produce responses that score highly on the reward model — without deviating too far from the SFT baseline.
+
+<SVGDiagram src="/diagrams/rlhf-pipeline.svg" caption="The RLHF training pipeline: Base → SFT → Reward Model trained on human comparisons → PPO optimization → ChatGPT." />
+
+The reward model captures human preferences that are hard to specify as rules: responses should be helpful, but not sycophantic; honest, but not blunt; detailed, but not verbose. RLHF learns these tradeoffs from human judgment rather than from explicit coding.
+
+## Session Management
+
+An LLM is stateless — it has no memory between API calls. ChatGPT appears to remember your conversation because the entire conversation history is sent with every request.
+
+Every time you send a message, the serving layer assembles: `[system prompt] + [message 1] + [response 1] + [message 2] + [response 2] + ... + [your new message]`. This concatenated history is the actual input to GPT-4. The model doesn't "remember" — it re-reads the entire conversation from scratch every turn.
+
+This creates a hard constraint: conversations are bounded by the context window (GPT-4 supports 128K tokens). A conversation approaching the limit must be truncated — typically the oldest messages are dropped. The 2024 ChatGPT memory feature sidesteps this by extracting key facts from past sessions and prepending them as a structured memory block at the start of new conversations.
+
+<SimpleChart
+  title="Conversation context size growth over turns (128K token limit)"
+  data={[
+    { turn: 1, tokens: 800 },
+    { turn: 5, tokens: 3200 },
+    { turn: 10, tokens: 7500 },
+    { turn: 20, tokens: 18000 },
+    { turn: 50, tokens: 52000 },
+    { turn: 80, tokens: 98000 },
+    { turn: 100, tokens: 127000 },
+  ]}
+  xKey="turn"
+  yKey="tokens"
+/>
+
+## Streaming: Why Tokens Appear One by One
+
+GPT-4 generates one token at a time. The serving layer doesn't wait for the full response before sending it to you — it streams each token via **Server-Sent Events (SSE)** as it's generated.
+
+This isn't just a UX choice. Streaming is actually faster in practice: the first token appears after a few hundred milliseconds (TTFT — time to first token), and the user starts reading immediately while the model continues generating. For a 500-token response at 50 tokens/second, you'd wait 10 seconds for a non-streaming response but only 200ms for the first word in streaming mode.
+
+The SSE connection stays open for the entire generation. When the model emits the special end-of-sequence token, the server closes the stream. If your network drops, the connection terminates, and you see a truncated response — there's no retry logic for partial responses.
+
+## The Safety Stack
+
+Every ChatGPT request passes through two safety layers: one **before** the model sees the input, and one **after** the model generates output.
+
+The **input classifier** (called the moderation API) detects requests that violate content policy — CSAM requests, detailed instructions for creating weapons, harassment targeting specific individuals. Requests that clearly violate policy return a refusal without ever reaching GPT-4.
+
+The **output filter** checks the model's response before it's returned. Some content is only detectable after generation — the model might produce plausible-sounding medical misinformation or a harmful output that the input didn't obviously signal.
+
+<Callout type="info" title="The Alignment Tax">
+Making a model safer costs some capability. A model trained to refuse harmful requests also sometimes refuses legitimate ones. OpenAI's RLHF process tries to minimize this tradeoff — the reward model penalizes both harmful outputs AND unnecessary refusals. Getting this calibration right requires continuous evaluation as the model evolves.
+</Callout>
+
+## Model Routing
+
+Not every ChatGPT request needs GPT-4o. Simple questions ("what's the capital of France?") can be answered by a much cheaper, faster model. OpenAI routes requests between GPT-4o (high capability, high cost) and GPT-4o-mini (fast, cheap) based on a complexity classifier.
+
+The routing decision affects your experience: GPT-4o-mini has ~300ms TTFT while GPT-4o takes ~800ms. For a fast factual question, routing to mini saves money and feels snappier. For a nuanced creative writing task, routing to the full model produces noticeably better output. The classifier tries to detect which tier is needed without actually running the more expensive model first.
+
+## Real-World Case Studies
+
+**The November 2022 launch** saw 1 million users in 5 days — a rate of growth that broke OpenAI's capacity planning. The serving cluster ran at 100%+ utilization, causing the "at capacity" error messages that made news. OpenAI's response was to implement aggressive rate limiting and waitlists while emergency-scaling GPU capacity. The lesson: product-market fit can arrive faster than infrastructure provisioning timelines.
+
+**ChatGPT's memory feature (2024)** revealed the architecture of long-term memory: as conversations happen, a background model extracts persistent facts ("user prefers metric units," "user is a software engineer in Berlin") and writes them to a user-specific memory store. At the start of each new conversation, relevant memories are retrieved via semantic search and injected into the system prompt as a "What I know about you" block. The user can review and delete memories. This turned a stateless LLM into a system that appears to learn from you over time.
+
+**Code Interpreter** is ChatGPT's most architecturally interesting feature. When you upload a CSV and ask "plot the revenue trend," the model writes Python pandas/matplotlib code, that code executes in a Docker container with no network access and a 120-second timeout, the generated plot image is returned as a tool result, and the model comments on what it sees. The sandboxing is critical — without it, user-submitted data could contain code that exfiltrates other users' data or consumes unlimited compute.
+
+<Quiz
+  question="A user has a 100-turn conversation with ChatGPT, and on turn 101 asks a question. ChatGPT seems to have forgotten something from turn 5. What is the most likely explanation?"
+  options={[
+    "ChatGPT's memory was cleared due to inactivity",
+    "Turn 5's content was truncated from the context window because the conversation exceeded the token limit",
+    "The safety filter removed turn 5's content",
+    "ChatGPT only stores the last 50 turns"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="OpenAI routes some ChatGPT requests to GPT-4o-mini instead of GPT-4o. What is the primary benefit of this routing?"
+  options={[
+    "GPT-4o-mini is more accurate for simple queries",
+    "Routing reduces cost and latency for simple queries while reserving the expensive model for tasks that benefit from it",
+    "GPT-4o-mini has a larger context window",
+    "Routing prevents the safety filter from triggering"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The LLM serving article covers the technical infrastructure (KV cache, continuous batching, PagedAttention) that makes ChatGPT's serving economics work. The RAG systems article covers how memory features are implemented using vector retrieval.
+</Callout>

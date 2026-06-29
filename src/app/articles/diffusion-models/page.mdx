@@ -1,0 +1,140 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Diffusion Models: From DDPM to Stable Diffusion',
+  description: 'How diffusion models work — the forward noising process, reverse denoising, DDIM for fast sampling, latent diffusion, and the lineage from DDPM to Flux and Stable Diffusion 3.',
+};
+
+# Diffusion Models: From DDPM to Stable Diffusion
+
+<Callout type="tip" title="Key Insight">
+Diffusion models generate images by learning to reverse a noise process. If you take an image and add a small amount of Gaussian noise 1000 times, you end up with pure random noise. Diffusion models learn to run this process backward — starting from random noise, iteratively removing noise until a coherent image emerges. The genius is that reversing noise is easier to learn than generating images directly.
+</Callout>
+
+## The Forward Process: Destroying Information
+
+The **forward process** adds noise to an image in $T$ steps (typically $T = 1000$). At each step, a small amount of Gaussian noise is added:
+
+$$q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{1 - \beta_t}\, x_{t-1},\, \beta_t \mathbf{I})$$
+
+Where $\beta_t$ is a small positive constant (the noise schedule) that increases with $t$. After enough steps, $x_T$ is approximately pure Gaussian noise — all structure from the original image is destroyed.
+
+The key mathematical convenience: you can jump directly to any noise level without running all $t$ steps:
+
+$$q(x_t | x_0) = \mathcal{N}\!\left(x_t;\, \sqrt{\bar{\alpha}_t}\, x_0,\, (1 - \bar{\alpha}_t)\mathbf{I}\right)$$
+
+Where $\bar{\alpha}_t = \prod_{s=1}^{t}(1 - \beta_s)$. This means training is efficient — sample a random timestep $t$, add the corresponding amount of noise in one operation, and train the denoising network on the result.
+
+## The Reverse Process: What the Model Learns
+
+The reverse process is what the model must learn — given a noisy image at step $t$, predict what a slightly less noisy image at step $t-1$ should look like. Rather than predicting the denoised image directly, DDPM trains the network to predict the noise that was added:
+
+$$\mathcal{L} = \mathbb{E}_{x_0, \epsilon, t}\left[\left\|\epsilon - \epsilon_\theta(x_t, t)\right\|^2\right]$$
+
+The network $\epsilon_\theta$ takes the noisy image and the timestep as inputs and predicts the noise $\epsilon$. This is a regression objective — the network learns to identify what noise was added. Once you can predict the noise, you can subtract it to recover a cleaner image. Repeat 1000 times, starting from random noise, and you generate a coherent image.
+
+<SVGDiagram src="/diagrams/diffusion-process.svg" caption="Forward process adds noise (T=1000 steps). Reverse process removes noise using a U-Net. Latent Diffusion Models (right) run diffusion in VAE-compressed latent space — 64×64 instead of 512×512." />
+
+## The Architecture: U-Net and DiT
+
+**DDPM** (Ho et al., 2020) used a U-Net as the denoising network. U-Net has skip connections between encoder and decoder at each resolution — perfect for this task because the network needs to preserve fine details (from the encoder) while understanding global structure (from the bottleneck).
+
+The U-Net's bottleneck adds **attention blocks** (self-attention over spatial positions, giving the network a global view of the image). Timestep conditioning is implemented by injecting the timestep embedding into each layer via scale-and-shift (similar to batch normalization but with learned parameters conditioned on $t$).
+
+**DiT (Peebles & Xie, 2022)** replaced the U-Net with a Vision Transformer (ViT). Instead of convolutional layers in U-Net, DiT uses Transformer blocks operating on image patches. The timestep and class conditioning are injected via **adaptive layer normalization (adaLN-Zero)** — the scale and shift parameters of each layer norm are predicted from the conditioning signal.
+
+DiT's advantage: it scales predictably. Every doubling of DiT parameters produces consistent FID (image quality metric) improvement. U-Nets have diminishing returns at scale. Stable Diffusion 3 and Flux both use DiT variants — the architecture has replaced U-Net for large-scale models.
+
+## DDIM: 50× Faster Sampling
+
+DDPM generates images in 1000 steps. At 1 second per step, that's 17 minutes per image — unusable in production.
+
+**DDIM** (Song et al., 2020) solved this by reformulating the sampling process as a non-Markovian process. Instead of requiring that $x_{t-1}$ depends only on $x_t$, DDIM allows direct jumps from $x_t$ to $x_0$, then re-noises to any arbitrary intermediate step. This enables deterministic, large-step sampling: instead of 1000 small steps, take 50 large steps.
+
+DDIM at 50 steps produces images of nearly equal quality to DDPM at 1000 steps, with 20× speed improvement. Most production diffusion pipelines use DDIM or its variants (DPM-Solver, DEIS) with 20–50 steps. Consistency Models push this further — single-step generation — at the cost of some quality.
+
+<SimpleChart
+  title="Image quality (FID↓) vs sampling steps (DDPM vs DDIM)"
+  data={[
+    { steps: 10, fid: 13.4 },
+    { steps: 20, fid: 5.1 },
+    { steps: 50, fid: 3.2 },
+    { steps: 100, fid: 3.1 },
+    { steps: 200, fid: 3.0 },
+    { steps: 1000, fid: 3.0 },
+  ]}
+  xKey="steps"
+  yKey="fid"
+/>
+
+## Latent Diffusion: The Stable Diffusion Breakthrough
+
+Running diffusion in pixel space is expensive. A 512×512×3 image has 786,432 values — each denoising step processes all of them through the U-Net. This is why early diffusion models required $100+ seconds per image.
+
+**Latent Diffusion Models (Rombach et al., 2021)** solved this by running diffusion in a compressed latent space. A pre-trained VAE (Variational Autoencoder) encodes a 512×512 image into a 64×64×4 latent representation — a 48× compression. Diffusion runs on the 64×64 latent, not the 512×512 image. After denoising, the VAE decoder converts the clean latent back to pixels.
+
+This reduces computation by 48× while maintaining quality, because the VAE learns to compress perceptually redundant information (smooth color regions, repeated textures) while preserving semantically important structure.
+
+**Stable Diffusion (2022)** is a Latent Diffusion Model with text conditioning via a CLIP text encoder. The text embedding is injected into the U-Net's attention layers via cross-attention — each spatial position can attend to relevant text tokens. Open-sourced by Stability AI, it democratized high-quality image generation and spawned an ecosystem of fine-tuned models, LoRAs, ControlNets, and applications.
+
+<Callout type="info" title="Classifier-Free Guidance (CFG)">
+Text-conditioned diffusion models are typically trained with 10–20% of samples using null conditioning (empty text). At inference, you run the denoising twice: once with the text prompt and once with empty text. The final noise prediction is: $\hat{\epsilon} = \epsilon_\emptyset + \gamma(\epsilon_\text{text} - \epsilon_\emptyset)$. Higher $\gamma$ (guidance scale) gives more text-adherent but less diverse images. CFG is why "guidance scale" is a slider in Stable Diffusion UIs — it controls the strength of text conditioning.
+</Callout>
+
+## The Architecture Lineage
+
+```
+DDPM (2020) ──────────────────────────────────────────────────┐
+   │                                                          │
+   ├── DDIM (2020) — fast sampling                            │
+   │                                                          ▼
+   └── LDM (2021) ──► Stable Diffusion (2022) ──► SDXL (2023)
+          │
+          ├── DiT (2022) ──► SD3 (2024) ──► Flux (2024)
+          │
+          └── DALL-E 2 (CLIP prior + DDPM decoder)
+               └── Imagen (T5-XXL text encoder + cascaded DDPM)
+```
+
+**SDXL (2023):** Larger U-Net, dual CLIP text encoders, native 1024×1024 generation, a separate refinement model for detail enhancement.
+
+**DiT → Stable Diffusion 3 (2024):** Replaced U-Net with DiT using **Multi-Modal DiT (MMDiT)** — separate streams for text tokens and image patch tokens, with full bidirectional cross-attention between them. Text and image are processed on equal footing.
+
+**Flux (2024, Black Forest Labs):** Flow matching (a generalization of diffusion with a simpler mathematical formulation) + rectified flows (straight-line paths in probability space) + MMDiT. State-of-the-art open-source image generation at 12B parameters.
+
+## ControlNet: Structured Conditioning
+
+**ControlNet (Zhang et al., 2023)** adds controllable conditioning to Stable Diffusion without modifying the pretrained model. A trainable copy of the U-Net encoder is connected to the original via zero-initialized convolutions. The copy processes a conditioning signal (edge map, depth map, pose skeleton, semantic segmentation), and its features are added to the original U-Net's activations at each scale.
+
+Result: you can generate images from a sketch, a depth map, or a human pose while preserving the photorealism of the pretrained model. Zero-initialized connections ensure that at the start of ControlNet training, the model output is identical to the base model — so training starts from a stable baseline.
+
+<Quiz
+  question="DDIM produces images in 50 steps with similar quality to DDPM's 1000 steps. What mathematical insight enables this speedup?"
+  options={[
+    "DDIM uses a smaller U-Net that processes each step faster",
+    "DDIM reformulates sampling as non-Markovian, allowing large deterministic jumps through the noise schedule rather than small sequential steps",
+    "DDIM skips the low-noise steps where changes are smallest",
+    "DDIM trains on more data, requiring fewer inference steps"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Latent Diffusion Models (Stable Diffusion) run diffusion in a 64×64 latent space instead of the 512×512 pixel space. What is the approximate speedup in computation per denoising step?"
+  options={[
+    "2× faster because the image is half the size in each dimension",
+    "8× faster",
+    "48× fewer values to process (512²×3 vs 64²×4) translates to dramatically faster U-Net forward passes",
+    "Same speed — the VAE encoder/decoder adds overhead that cancels out"
+  ]}
+  answer={2}
+/>
+
+## Practice
+
+<Callout type="info">
+The best hands-on introduction is Hugging Face's `diffusers` library — it abstracts DDPM, DDIM, and Stable Diffusion behind a clean API. To understand the math, implement the forward process (add_noise function) and the simple DDPM training loop on MNIST in PyTorch — the full training loop is under 50 lines. The U-Net is the only complex component, and simplified versions exist for 32×32 images.
+</Callout>

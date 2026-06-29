@@ -1,0 +1,124 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+import { YouTubeEmbed } from '@/components/content/YouTubeEmbed';
+
+export const metadata = {
+  title: "LLM Serving: Getting Tokens to Users Fast",
+  description: "Understand the bottlenecks in LLM inference, the KV cache, and how systems like vLLM maximize throughput."
+};
+
+# LLM Serving: Getting Tokens to Users Fast
+
+<Callout type="tip" title="Key Insight">
+LLMs generate one token at a time. Every single token requires a full forward pass through the entire neural network. The job of an LLM serving system is to make this autoregressive loop as fast and efficient as possible for many concurrent users.
+</Callout>
+
+## Training vs Inference
+
+During training, everything happens in parallel. All the tokens are known ahead of time, allowing the GPUs to perform massive matrix multiplications. Training is deeply compute-bound.
+
+Inference is entirely different. It is sequential because each token depends on the previously generated token. You cannot compute the 10th word until you know what the 9th word is. This makes inference heavily memory-bound.
+
+## The KV Cache: What Eats Your GPU Memory
+
+To generate token $N$, the model requires the keys and values from all $N-1$ previous tokens to compute attention. Without caching, you would have to recompute those keys and values at every single step, wasting enormous amounts of compute.
+
+The KV cache stores these past keys and values. But it is huge. The memory required for the KV cache can be calculated exactly:
+
+`KV Cache bytes = batch_size × num_layers × 2 × num_heads × seq_len × head_dim × 2 bytes`
+
+For a model like Llama-3-8B running at batch size 1 with a sequence length of 4096 in FP16, the math is: 32 layers × 2 (for K and V) × 32 heads × 128 dims × 4096 tokens × 2 bytes = ~1GB of GPU memory per request just for the cache!
+
+<SVGDiagram src="/diagrams/kv-cache.svg" caption="How the KV cache prevents redundant computation during autoregressive generation." />
+
+## The Two Latency Metrics That Matter
+
+When serving LLMs, user experience is governed by two distinct phases, each with its own metric:
+- **TTFT (Time to First Token)**: The time it takes for the user to see the very first word. This is dominated by the prefill phase, where the entire input prompt is processed in parallel.
+- **ITL (Inter-Token Latency)**: The time between each subsequent word appearing on the screen. This is dominated by the decode phase.
+
+<Callout type="info" title="Why They're Different">
+The prefill phase is compute-bound because it processes the entire prompt simultaneously. The decode phase is memory-bandwidth-bound because it must load the entire KV cache from HBM into the GPU cores for just one new token.
+</Callout>
+
+## Static Batching vs Continuous Batching
+
+In static batching, the server waits for $N$ requests to arrive, pads them all to the same length, and processes them together. The problem? Short requests waste time sitting idle while they wait for long requests to finish.
+
+Continuous batching (pioneered by Orca) processes requests at the token level. When one request finishes, a new one joins the batch immediately on the very next token generation step, maximizing GPU utilization.
+
+<SimpleChart
+  title="GPU utilization vs concurrent requests (continuous batching)"
+  data={[
+    { concurrency: 1, gpu_util: 12 },
+    { concurrency: 4, gpu_util: 31 },
+    { concurrency: 8, gpu_util: 58 },
+    { concurrency: 16, gpu_util: 79 },
+    { concurrency: 32, gpu_util: 91 },
+    { concurrency: 64, gpu_util: 94 }
+  ]}
+  xKey="concurrency"
+  yKey="gpu_util"
+/>
+
+## PagedAttention: OS-Inspired Memory Management
+
+Without PagedAttention, each request requires a contiguous block of memory allocated upfront for its maximum possible KV cache size. Because generation lengths are unpredictable, this causes severe memory fragmentation, wasting 60-80% of precious GPU memory.
+
+PagedAttention, introduced in the vLLM paper, borrows the concept of virtual memory from operating systems. It divides the KV cache into fixed-size blocks and allocates them non-contiguously, mapping logical blocks to physical memory. The result is near-zero fragmentation, allowing the system to batch many more requests together.
+
+<Callout type="tip" title="vLLM in Production">
+vLLM is now the de facto standard for open-source LLM serving. It implements continuous batching, PagedAttention, and prefix caching out of the box. The original vLLM paper demonstrated a 24× throughput improvement over HuggingFace TGI just by eliminating memory fragmentation.
+</Callout>
+
+## Quantization: More Tokens Per GPU
+
+Because inference is memory-bound, shrinking the weights speeds everything up. We can reduce the precision of the model weights from 16-bit floats (FP16) to 8-bit or 4-bit integers. Memory scales down linearly, and quality usually degrades gracefully.
+
+- **FP16 (baseline)**: 2 bytes per parameter, full quality.
+- **INT8 (bitsandbytes)**: 1 byte per parameter, <1% quality loss, ~1.5× throughput.
+- **INT4 (GPTQ/AWQ)**: 0.5 bytes per parameter, 1-3% quality loss, 2-3× throughput.
+
+<Callout type="warning">
+INT4 quantization on complex coding or deep reasoning tasks can degrade performance significantly more than on standard chat tasks. Always evaluate on your specific use case before deploying heavily quantized models to production.
+</Callout>
+
+## Case Studies
+
+The vLLM PagedAttention paper changed the serving landscape overnight. By treating GPU memory like OS virtual memory and eliminating fragmentation, they demonstrated a 24× throughput improvement over the prevailing HuggingFace TGI implementation, fundamentally shifting how the industry thought about KV cache management.
+
+The Orca paper introduced continuous batching to solve the idle time problem of static batching. By allowing new requests to join a batch at the token level, Orca achieved a 36.9× throughput improvement over static batching systems, setting the standard for modern serving engines.
+
+Anyscale's Ray Serve architecture demonstrates how to handle multi-model serving at scale. By dynamically routing requests and carefully managing GPU memory across a cluster, they can serve hundreds of fine-tuned adapters on top of a single base model without incurring the memory cost of deploying the base model hundreds of times.
+
+## Quick Check
+
+<Quiz
+  question="You're serving Llama-3-70B. Your p99 latency is 8 seconds for a 500-token output. The most likely bottleneck is:"
+  options={[
+    "Tokenization is too slow",
+    "GPU memory bandwidth — the KV cache is too large for fast transfer",
+    "The prompt is too short",
+    "Network latency between client and server"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Continuous batching improves throughput over static batching because:"
+  options={[
+    "It uses larger batch sizes",
+    "It allows new requests to join the batch when a request finishes, token by token",
+    "It compresses the KV cache automatically",
+    "It uses speculative decoding by default"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Relevant Dojo problems include understanding attention. Check out the attention mechanisms topic in `/learn/deep-learning/attention` to see exactly what goes into the KV cache.
+</Callout>

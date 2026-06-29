@@ -1,0 +1,156 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Reinforcement Learning: DQN, PPO, and RLHF',
+  description: 'How reinforcement learning works — from Q-learning and DQN through policy gradient methods, PPO, and the RLHF pipeline that aligns language models — covering what each technique optimizes and when to use it.',
+};
+
+# Reinforcement Learning: DQN, PPO, and RLHF
+
+<Callout type="tip" title="Key Insight">
+Reinforcement learning solves a different problem than supervised learning: instead of learning from labeled examples, an agent learns from the consequences of its own actions. The agent receives a reward signal from the environment and must discover what actions maximize cumulative reward — often with delayed feedback and no direct supervision. Modern AI systems use RL both for game-playing (AlphaGo, OpenAI Five) and for aligning language models to human preferences (RLHF, GRPO).
+</Callout>
+
+## The RL Framework
+
+An RL agent interacts with an environment through a cycle:
+1. Observe state $s_t$
+2. Choose action $a_t$ based on policy $\pi(a|s)$
+3. Receive reward $r_t$ and next state $s_{t+1}$
+4. Update policy to maximize cumulative discounted reward:
+
+$$G_t = \sum_{k=0}^{\infty} \gamma^k r_{t+k}$$
+
+Where $\gamma \in [0, 1)$ is the discount factor (future rewards matter less than immediate rewards). The agent doesn't know the environment's dynamics — it must learn from experience.
+
+<SVGDiagram src="/diagrams/rl-for-ai.svg" caption="RL taxonomy: value-based (Q-learning → DQN) and policy-based (REINFORCE → PPO) methods on the left; RLHF and GRPO for LLM alignment on the right." />
+
+## Value-Based Methods: Q-Learning and DQN
+
+**Q-Learning** defines a Q-function $Q(s, a)$: the expected cumulative reward of taking action $a$ in state $s$ then following the optimal policy. The optimal Q-function satisfies the **Bellman equation**:
+
+$$Q^*(s, a) = r + \gamma \max_{a'} Q^*(s', a')$$
+
+Learning proceeds by storing experience $(s, a, r, s')$ in a table and updating toward the Bellman target:
+
+$$Q(s, a) \leftarrow Q(s, a) + \alpha \left[r + \gamma \max_{a'} Q(s', a') - Q(s, a)\right]$$
+
+Q-learning is provably optimal for finite state and action spaces. The problem: real environments have enormous or continuous state spaces. A video game has ~1.8×10^28 possible pixel configurations — a Q-table is impossible.
+
+**DQN (Deep Q-Network, Mnih et al., DeepMind, 2013)** replaced the Q-table with a neural network: a CNN that takes raw game pixels and outputs Q-values for all actions. Two key innovations made training stable:
+
+**Experience replay**: store transitions in a replay buffer, sample random minibatches for training. This breaks temporal correlations (consecutive transitions are highly correlated, which destabilizes gradient descent) and allows each experience to be learned from multiple times.
+
+**Target network**: use a separate, periodically updated network for the Bellman target $r + \gamma \max_{a'} Q_{\text{target}}(s', a')$. Without this, the target changes every step, creating a moving-target problem where the network chases its own predictions.
+
+DQN achieved human-level performance on 49 Atari games, the first demonstration that a single neural network architecture could learn diverse tasks from raw pixels.
+
+<SimpleChart
+  title="DQN score as % of human performance on Atari games"
+  data={[
+    { game: 1, score_pct: 42 },
+    { game: 2, score_pct: 65 },
+    { game: 3, score_pct: 118 },
+    { game: 4, score_pct: 313 },
+    { game: 5, score_pct: 8209 },
+  ]}
+  xKey="game"
+  yKey="score_pct"
+/>
+
+## Policy Gradient Methods
+
+Q-learning learns a value function and derives a policy (always pick the highest-Q action). **Policy gradient methods** directly optimize the policy $\pi_\theta(a|s)$ by gradient ascent on expected return.
+
+The key result is the **Policy Gradient Theorem**:
+
+$$\nabla_\theta J(\theta) = \mathbb{E}_\pi\left[\nabla_\theta \log \pi_\theta(a|s) \cdot Q^\pi(s, a)\right]$$
+
+Intuitively: increase the probability of actions that led to high returns, decrease the probability of actions that led to low returns.
+
+**REINFORCE (Williams, 1992)** samples trajectories and estimates $Q^\pi$ using the actual return $G_t$. Simple but very high variance — returns can vary wildly, making learning slow. A **baseline** (typically a learned value function $V(s)$) reduces variance without adding bias:
+
+$$\nabla_\theta J(\theta) = \mathbb{E}_\pi\left[\nabla_\theta \log \pi_\theta(a|s) \cdot (G_t - V(s))\right]$$
+
+The term $A(s,a) = G_t - V(s)$ is the **advantage** — how much better than expected was this action?
+
+## PPO: The Gold Standard
+
+**PPO (Proximal Policy Optimization, Schulman et al., OpenAI, 2017)** is the most widely used deep RL algorithm. The core idea: update the policy, but don't change it too much in any single update.
+
+If the policy changes too much at once, the new policy explores regions where the value estimates are inaccurate, destabilizing training. PPO's **clipped surrogate objective** limits the update:
+
+$$\mathcal{L}^{\text{CLIP}} = \mathbb{E}\left[\min\left(r_t(\theta) A_t,\; \text{clip}(r_t(\theta), 1-\varepsilon, 1+\varepsilon) A_t\right)\right]$$
+
+Where $r_t(\theta) = \pi_\theta(a|s) / \pi_{\theta_\text{old}}(a|s)$ is the probability ratio between new and old policy. Clipping prevents the ratio from exceeding $[1-\varepsilon, 1+\varepsilon]$ (typically $\varepsilon=0.2$), ensuring no single update changes the policy drastically.
+
+PPO advantages: simple to implement, parallelizable (collect experience from many workers simultaneously), works with continuous and discrete action spaces, trains stably without careful hyperparameter tuning. It became the default algorithm for:
+- OpenAI Five (Dota 2, 2019)
+- AlphaStar (StarCraft II, 2019)
+- RLHF for ChatGPT and GPT-4
+
+<Callout type="info" title="Why PPO Beat Earlier Methods">
+TRPO (Trust Region Policy Optimization) computed the same update constraint with a second-order optimization, which is theoretically cleaner but computationally expensive and hard to implement. PPO achieves similar stability through the simple clipping trick, making it 10× faster to implement and just as effective empirically. When you see "we used PPO for alignment," they chose it because it's practical, not because it's theoretically optimal.
+</Callout>
+
+## RLHF: Aligning Language Models
+
+**RLHF (Reinforcement Learning from Human Feedback)** is the technique behind ChatGPT, Claude, and Gemini's instruction-following behavior. It uses PPO to fine-tune a language model to maximize a reward model trained on human preferences.
+
+**Stage 1 — Supervised Fine-Tuning (SFT):** Fine-tune the pretrained LLM on a curated dataset of human-written (prompt, response) pairs. This teaches basic instruction-following format. The SFT model is the starting point for RL.
+
+**Stage 2 — Reward Model Training:** Sample multiple completions from the SFT model for the same prompt. Human annotators rank the completions from best to worst. Train a reward model (typically the same architecture as the SFT model with a value head) to predict the human-preferred completion using the Bradley-Terry pairwise ranking model:
+
+$$\mathcal{L}_{\text{RM}} = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma(r_\theta(x, y_w) - r_\theta(x, y_l))\right]$$
+
+**Stage 3 — PPO Fine-Tuning:** Use PPO to optimize the SFT model toward the reward model's scores. A critical addition: a KL penalty term that penalizes the RL model for diverging too far from the SFT model:
+
+$$r = r_{\text{RM}}(x, y) - \beta \cdot \text{KL}[\pi_\theta || \pi_{\text{SFT}}]$$
+
+Without the KL penalty, the model learns to "hack" the reward model by producing text that scores high on the reward model but doesn't actually satisfy human intent.
+
+## GRPO: DeepSeek's Simplified Alignment
+
+**GRPO (Group Relative Policy Optimization, DeepSeek, 2024)** eliminates the reward model entirely for tasks with verifiable answers.
+
+For a math problem, you know if the answer is correct or not — no human ranking needed. GRPO:
+
+1. Sample $G$ completions from the current policy for each prompt
+2. Assign rule-based rewards: +1 for correct answer, -1 for wrong answer (plus format bonuses)
+3. Compute the advantage for each completion relative to the group mean: $A_i = (r_i - \bar{r}) / \text{std}(r)$
+4. Apply PPO-style clipped update
+
+By normalizing within the group, GRPO doesn't need a learned baseline ($V(s)$), and by using rule-based rewards, it doesn't need a reward model. The training signal is clean, verifiable, and scales automatically with problem difficulty.
+
+DeepSeek-R1-Zero trained with GRPO alone on math/coding developed emergent chain-of-thought reasoning — spontaneously generating "wait, let me reconsider" and multi-step reasoning without being explicitly trained to do so.
+
+<Quiz
+  question="DQN uses a 'target network' — a separate network with parameters copied periodically from the main network. What problem does this solve?"
+  options={[
+    "The target network processes batches faster than the main network",
+    "Without a target network, the Bellman target changes every gradient step — the network chases its own moving predictions, making training unstable",
+    "The target network provides dropout-style regularization",
+    "The target network handles the exploration-exploitation tradeoff"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="RLHF adds a KL divergence penalty when fine-tuning the language model with PPO. Why is this penalty critical?"
+  options={[
+    "KL divergence is faster to compute than other regularization terms",
+    "Without it, the model learns to exploit the reward model by producing text that scores high on the reward model but violates the intent of the reward function — so-called 'reward hacking'",
+    "KL divergence limits the learning rate to prevent overfitting",
+    "The KL penalty prevents the model from generating too long responses"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The fastest path to understanding RL: implement Q-learning on CartPole (pole-balancing) using only NumPy — discretize the 4D state space into a grid and train a Q-table. It solves CartPole in under 100 episodes. Then implement DQN replacing the table with a 2-layer MLP. Compare convergence. The difference in sample efficiency you observe is exactly why deep RL is hard: function approximation introduces instability that table lookup doesn't have.
+</Callout>

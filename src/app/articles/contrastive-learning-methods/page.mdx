@@ -1,0 +1,88 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Contrastive Learning Methods',
+  description: 'How AI learns to understand the world without human labels using SimCLR, MoCo, DINO, and I-JEPA.',
+};
+
+# Contrastive Learning Methods
+
+<Callout type="tip" title="Key Insight">
+Labeling datasets by hand is expensive and unscalable. Contrastive learning solves this through self-supervision: it takes an image, alters it in two different ways, and forces the neural network to recognize that both altered images contain the exact same underlying object.
+</Callout>
+
+## The SimCLR Framework
+
+Google's **SimCLR** (A Simple Framework for Contrastive Learning of Visual Representations) proved that contrastive learning could match fully supervised learning without using a single human label.
+
+The algorithm works like this:
+1. **Augmentation:** Take a single image of a dog and create two augmented "views" (e.g., crop and color jitter one, flip and blur the other).
+2. **Encoding:** Pass both views through a shared CNN (like ResNet-50) to get representation vectors.
+3. **Projection:** Pass these representations through a small MLP projection head.
+4. **Contrastive Loss (InfoNCE):** The loss function mathematically *pulls* the vectors of the two dog views closer together (maximizing similarity) and *pushes* the vectors of all other random images in the batch far away.
+
+<SVGDiagram src="/diagrams/contrastive-learning-methods.svg" caption="The SimCLR Contrastive Learning architecture." />
+
+## MoCo: Handling the Batch Size Problem
+
+SimCLR requires a massive batch size (e.g., 4,096 images per batch) so the model sees enough "negative" examples to push away from. This requires massive TPU clusters.
+
+Facebook AI's **MoCo (Momentum Contrast)** solved this by decoupling the negative examples from the batch size. MoCo maintains a "memory bank" (a queue) of tens of thousands of negative features from past batches. To keep these old features mathematically consistent, MoCo uses a **momentum encoder**—a slowly moving average of the main network's weights—to encode the negative samples. This allowed researchers to train SOTA contrastive models on standard 8-GPU servers.
+
+## DINO: Self-Distillation with No Labels
+
+**DINO** (Self-Distillation with No Labels) combined contrastive learning with Vision Transformers (ViT). 
+
+Instead of an explicit contrastive loss pushing negative pairs away, DINO uses a Teacher-Student architecture. The Student model sees a heavily cropped "local" view of an image (e.g., just the dog's ear) and must predict the exact output probability distribution that the Teacher model produces when looking at the "global" view of the whole dog. 
+
+Remarkably, without any labels, DINO models naturally learn semantic segmentation. If you visualize the self-attention maps of a DINO ViT, the model flawlessly highlights the main object in the image, separating it from the background.
+
+## I-JEPA: Predicting in Latent Space
+
+Yann LeCun's **I-JEPA** (Joint-Embedding Predictive Architecture) challenges the entire masking paradigm used by MAE (Masked Autoencoders). 
+
+When MAE masks an image, it forces the network to reconstruct the exact missing pixel values. LeCun argues this is a waste of compute—predicting the exact texture of a blade of grass is irrelevant to understanding a scene. I-JEPA instead masks the image and forces the network to predict the *abstract latent representation* of the missing patch. By predicting in latent space rather than pixel space, I-JEPA learns highly semantic, abstract representations that are far more robust.
+
+<SimpleChart
+  title="Linear Probing Accuracy on ImageNet (Self-Supervised)"
+  data={[
+    { method: 'Random Init', accuracy: 12 },
+    { method: 'SimCLR (2020)', accuracy: 69.3 },
+    { method: 'MoCo v2 (2020)', accuracy: 71.1 },
+    { method: 'DINO (2021)', accuracy: 75.3 },
+    { method: 'I-JEPA (2023)', accuracy: 73.3 }
+  ]}
+  xKey="method"
+  yKey="accuracy"
+/>
+
+<Quiz
+  question="In the SimCLR framework, what is the purpose of the InfoNCE contrastive loss function?"
+  options={[
+    "To reconstruct the original image pixels from a noisy input.",
+    "To classify the image into one of 1000 ImageNet categories.",
+    "To maximize the similarity between two augmented views of the same image while minimizing the similarity with all other images in the batch.",
+    "To translate the image into a text caption."
+  ]}
+  answer={2}
+/>
+
+<Quiz
+  question="How does MoCo avoid the need for massive batch sizes (like 4,096 in SimCLR)?"
+  options={[
+    "It does not use negative examples at all.",
+    "It maintains a queue (memory bank) of past negative features encoded by a slowly updating momentum encoder.",
+    "It uses a Vision Transformer instead of a ResNet.",
+    "It runs the training process locally on smartphones using Federated Learning."
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Data augmentation is the secret sauce of contrastive learning. If you apply the wrong augmentations, the model learns nothing. Write a PyTorch `torchvision.transforms` pipeline that applies random resized cropping, random color jittering, and random horizontal flipping. Visualize the output to see what the two "views" look like to a SimCLR model.
+</Callout>

@@ -1,0 +1,142 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Image Segmentation: U-Net, SegFormer, and SAM',
+  description: 'How image segmentation works — pixel-wise classification, the U-Net encoder-decoder with skip connections, SegFormer\'s efficient Transformer approach, and SAM\'s universal promptable segmentation model.',
+};
+
+# Image Segmentation: U-Net, SegFormer, and SAM
+
+<Callout type="tip" title="Key Insight">
+Detection draws a bounding box around each object. Segmentation labels every pixel in the image with what it belongs to. U-Net solved segmentation by pairing an encoder (compresses to understand what is where) with a decoder (expands back to pixel resolution) connected by skip connections (preserves spatial detail that the encoder would otherwise lose). This encoder-decoder-with-skips pattern appears in diffusion models, medical AI, autonomous driving, and satellite imagery analysis.
+</Callout>
+
+## Types of Segmentation
+
+**Semantic segmentation**: assign a class label to every pixel. All cars are labeled "car" — no distinction between car 1 and car 2. Output is an H×W class map.
+
+**Instance segmentation**: detect and segment each individual object separately. Car 1 gets mask 1, car 2 gets mask 2. Harder than semantic segmentation because it requires understanding object boundaries and identity.
+
+**Panoptic segmentation**: unified task combining semantic (stuff: sky, road, grass) and instance (things: car, person, dog). Every pixel is labeled, and individual instances of thing classes are distinguished.
+
+The core challenge for all three: detection models downsample to understand what is present; but segmentation must output predictions at the original resolution, requiring careful upsampling or decoding.
+
+<SVGDiagram src="/diagrams/unet-segmentation.svg" caption="U-Net architecture: encoder compresses to a bottleneck (1024 channels, 28×28), decoder upsamples back to output resolution. Skip connections from encoder to decoder preserve spatial detail at each scale. Modern variants (SegFormer, SAM) use Transformer encoders." />
+
+## U-Net: The Encoder-Decoder Blueprint
+
+**U-Net (Ronneberger et al., 2015)** was designed for biomedical image segmentation where labeled training data is scarce. The architecture has two paths:
+
+**Contracting (encoder) path**: a series of convolutional blocks, each followed by 2×2 max pooling that halves the spatial resolution and doubles the channel count. Starting from 572×572×1 (one-channel microscopy), each pooling gives 284×284×128, 140×140×256, 68×68×512, and a bottleneck at 28×28×1024. The encoder builds a representation of what is in the image.
+
+**Expanding (decoder) path**: transposed convolutions (learnable upsampling) increase spatial resolution at each step. At each scale, the decoder concatenates features from the corresponding encoder layer via **skip connections** — then convolves to integrate them. The skip connections preserve high-frequency spatial information (edges, textures, precise boundaries) that would be lost in the bottleneck.
+
+**Output**: a 1×1 convolution maps the final feature map to a class probability per pixel.
+
+The skip connections are U-Net's core contribution. Without them, upsampling from the 28×28 bottleneck loses the precise boundary information present at early encoder layers. With them, the decoder can reference the full-resolution encoder features to sharpen its segmentation masks.
+
+**Why U-Net works with little data**: the skip connections make the network structure explicit — the decoder knows where in the image features come from because it has direct access to encoder activations. This inductive bias reduces the amount of data needed to learn good segmentation.
+
+<SimpleChart
+  title="Mean IoU on Cityscapes (autonomous driving segmentation benchmark)"
+  data={[
+    { model: 1, miou: 70.4 },
+    { model: 2, miou: 79.2 },
+    { model: 3, miou: 81.5 },
+    { model: 4, miou: 84.0 },
+    { model: 5, miou: 83.1 },
+  ]}
+  xKey="model"
+  yKey="miou"
+/>
+
+## DeepLab: Dilated Convolutions for Context
+
+**DeepLab (Chen et al., 2014–2018)** tackled a different problem: CNNs with multiple pooling layers have small effective receptive fields at high resolution, limiting the ability to capture long-range context.
+
+**Dilated (atrous) convolutions** expand the receptive field without reducing resolution by inserting holes between filter weights:
+
+```
+Standard 3×3 conv: samples at [−1,0,+1] in each dimension
+Dilated conv with rate 2: samples at [−2,0,+2]
+Dilated conv with rate 4: samples at [−4,0,+4]
+```
+
+An Atrous Spatial Pyramid Pooling (ASPP) module applies dilated convolutions at multiple rates simultaneously and aggregates the results, capturing context at multiple scales in a single layer.
+
+DeepLabv3+ adds a simple decoder with skip connections from the encoder. DeepLabv3+ with ResNet-101 achieves 82.1% mIoU on Cityscapes.
+
+## SegFormer: Transformers for Efficient Segmentation
+
+**SegFormer (Xie et al., Nvidia, 2021)** replaced the CNN encoder with a hierarchical Vision Transformer (MiT — Mix Transformer) and replaced the complex decoder with an all-MLP head.
+
+**MiT encoder**: processes image patches at 4 different scales (1/4, 1/8, 1/16, 1/32 of input resolution). At each scale, uses efficient self-attention with sequence reduction (summarize keys and values from a spatial grid). This produces multi-scale feature maps at a fraction of the cost of full-resolution attention.
+
+**All-MLP decoder**: concatenate feature maps from all four scales, upsample to 1/4 resolution, mix with MLP layers, predict per-pixel classes. No transposed convolutions, no complex upsampling modules.
+
+Why the MLP decoder works: the hierarchical MiT encoder already extracts rich multi-scale features. The decoder only needs to aggregate them — a task simpler MLP layers handle well. SegFormer-B5 achieves 84.0% mIoU on Cityscapes at 1.5× fewer FLOPs than SETR (an earlier ViT-based segmentation model).
+
+<Callout type="info" title="The Cityscapes Benchmark">
+Cityscapes is the standard benchmark for autonomous driving segmentation: 5,000 finely annotated images of European street scenes with 19 semantic classes (road, sidewalk, building, wall, fence, pole, traffic light, traffic sign, vegetation, terrain, sky, person, rider, car, truck, bus, train, motorcycle, bicycle). Mean Intersection over Union (mIoU) across all 19 classes is the primary metric. A 1% mIoU improvement represents a meaningful advance in practice.
+</Callout>
+
+## SAM: Segment Anything with Prompts
+
+**SAM (Segment Anything Model, Kirillov et al., Meta AI, 2023)** takes a fundamentally different approach: train a general-purpose segmentation model that accepts user prompts specifying what to segment.
+
+**Architecture**:
+- **Image Encoder**: ViT-H (632M parameters), processes 1024×1024 image, outputs a 64×64×256 feature map. Runs once per image, result can be cached.
+- **Prompt Encoder**: encodes different prompt types:
+  - Points: learnable embeddings for foreground/background clicks + positional encoding
+  - Boxes: corner point embeddings
+  - Masks: convolution + positional encoding
+  - Text (via CLIP): sparse text embeddings
+- **Mask Decoder**: a 2-layer Transformer that attends to both image features and prompt embeddings, outputs 3 masks (small, medium, large object) with confidence scores.
+
+**Training data**: SA-1B dataset — 1 billion masks from 11 million images, collected in three phases: manual annotation → semi-automatic (model generates candidates, humans verify) → fully automatic (model generates all masks). The iterative data engine is as important as the model.
+
+**Zero-shot transfer**: SAM was trained on SA-1B but has never seen medical images, satellite images, or electron microscopy. On these domains it still segments objects correctly when prompted — the rich visual features learned from SA-1B generalize broadly.
+
+**Automatic mode**: SAM can segment everything in an image by systematically prompting a grid of points and merging/filtering overlapping masks. This produces instance segmentation without class labels — pure mask detection.
+
+## Instance Segmentation: Mask R-CNN
+
+**Mask R-CNN (He et al., Facebook, 2017)** extended Faster R-CNN by adding a segmentation branch:
+1. Extract region proposals (RPN)
+2. RoI Align (improvement over RoI Pooling — uses bilinear interpolation to avoid misalignment)
+3. Two parallel heads: box regression/classification + mask prediction (14×14 binary mask per class)
+
+Key insight: **predict class-agnostic masks** — output a mask for each of the K classes, use the classification head's prediction to select which mask to use. This decouples mask prediction from classification, improving both.
+
+Mask R-CNN achieves 37.1% AP on COCO instance segmentation. It spawned: Cascade Mask R-CNN (multi-stage detection), PointRend (iteratively refines boundary pixels), SOLOv2 (predicts masks directly without bounding box stage).
+
+<Quiz
+  question="U-Net's skip connections copy encoder feature maps directly to the corresponding decoder layers. What specific information do they preserve that the bottleneck loses?"
+  options={[
+    "Global semantic information about the entire image",
+    "High-frequency spatial information — precise object boundaries, texture details, and fine-grained spatial positions that are washed out by pooling in the encoder",
+    "Class probability distributions learned by the encoder",
+    "The number of objects present in the image"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="SAM's architecture runs the image encoder once per image, then handles multiple prompts cheaply. Why is this separation architecturally important for interactive use?"
+  options={[
+    "Running the encoder once allows SAM to cache features for all images in advance",
+    "The heavy ViT-H encoder (632M params) takes ~50ms to run; by running it once and caching the feature map, prompt-conditioned mask generation for interactive editing is nearly instant regardless of how many prompts the user tries",
+    "Separating encoder and decoder allows each to be trained on different datasets",
+    "The mask decoder requires the image encoder to be frozen to prevent interference"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Implement U-Net for binary segmentation in PyTorch: encoder with 4 max-pool levels, decoder with 4 transposed convolution levels, skip connections via `torch.cat`. Train on Oxford Pets (foreground/background masks). Visualize intermediate feature maps at each encoder level to see how spatial detail is preserved in the early layers but lost in the bottleneck — that's what skip connections rescue. Total model can fit in 100MB and train to >90% IoU in 30 minutes on a single GPU.
+</Callout>

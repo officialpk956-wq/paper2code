@@ -1,0 +1,84 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'AI Recommendation System Design',
+  description: 'Designing the architecture that powers platforms like Netflix and TikTok, from Feature Stores to real-time scoring.',
+};
+
+# AI Recommendation System Design
+
+<Callout type="tip" title="Key Insight">
+Recommendation systems are the engines of the engagement economy. Designing them at scale requires orchestrating real-time streaming data, massive offline feature generation, and sub-100ms multi-stage model inference pipelines.
+</Callout>
+
+## The Data Foundation: Feature Stores
+
+A recommendation model is only as good as the context it receives. That context is managed by a **Feature Store**.
+- **Offline Features:** Deep, historical data calculated via massive batch jobs (e.g., Apache Spark). Examples include "User's 30-day click-through rate" or "Item's historical purchase frequency."
+- **Online Features:** Real-time context processed via streaming pipelines (e.g., Kafka + Flink). Examples include "User's last 5 clicks in the current session" or "Current time of day."
+
+When a user requests the homepage, the backend queries the fast Online Feature Store (backed by Redis or Cassandra) to instantly fetch their profile.
+
+## The Multi-Stage Funnel
+
+You cannot run a heavy neural network on 10 million products in 50 milliseconds. Therefore, recommendation systems are designed as a funnel:
+
+1. **Candidate Generation (Retrieval):** The goal is to narrow 10 million items down to 1,000. This is done using highly efficient models like the **Two-Tower architecture** or Collaborative Filtering matrix factorization. The results from multiple candidate generators (e.g., "Trending items", "Similar to past purchases", "New releases") are combined.
+2. **Scoring and Ranking:** The 1,000 candidates are passed to a heavy scoring model (like **Wide & Deep** or **DLRM**). This model looks at the deep interactions between the user's features and the items' features to predict the exact probability of a click or purchase.
+3. **Filtering and Business Logic:** The sorted list is passed through hard business rules. (e.g., "Remove items the user already bought," "Ensure at least 20% of the feed is from new creators," "Remove out-of-stock items").
+
+<SVGDiagram src="/diagrams/ai-recommendation-system-design.svg" caption="The Recommendation System Funnel." />
+
+## Real-Time vs Batch Scoring
+
+Different platforms require different scoring architectures:
+- **Batch (Pre-computed) Recommendations:** A cron job runs every night, scores items for every user, and saves the top 100 list to a database. Fast, but unresponsive to immediate user actions (like a user suddenly searching for "running shoes"). Used for daily email campaigns.
+- **Real-Time Scoring:** The model runs inference the moment the user opens the app, utilizing their most recent clicks. Requires expensive GPU inference clusters but drives massive engagement (the TikTok approach).
+
+## A/B Testing and Shadow Mode
+
+Recommendation models are evaluated in production using rigorous **A/B Testing**. 
+Before a new model is fully deployed, it is run in **Shadow Mode**—it receives live traffic and generates recommendations, but its results are thrown away. Engineers monitor its latency and error rates. Once it passes, it is rolled out to 1% of users, and business metrics (like session length or revenue) are tracked against the control group.
+
+<SimpleChart
+  title="Latency vs Model Complexity (Ranking)"
+  data={[
+    { complexity: 'Logistic Regression', latency_ms: 15 },
+    { complexity: 'Gradient Boosted Trees', latency_ms: 35 },
+    { complexity: 'Deep Neural Network (2-Layer)', latency_ms: 65 },
+    { complexity: 'Heavy DLRM (10-Layer)', latency_ms: 140 }
+  ]}
+  xKey="complexity"
+  yKey="latency_ms"
+/>
+
+<Quiz
+  question="Why must a recommendation system utilize a fast Online Feature Store (like Redis)?"
+  options={[
+    "To store the actual model weights.",
+    "Because fetching a user's pre-computed profile and real-time context from a slow relational database would violate the strict inference latency budget.",
+    "Because neural networks can only process data from Redis.",
+    "To store the raw video files and images being recommended."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="What is the purpose of 'Shadow Mode' deployment?"
+  options={[
+    "To hide the recommendations from the user.",
+    "To test a new model's latency and stability on real production traffic without actually impacting the user experience.",
+    "To train a model on Dark Web data.",
+    "To encrypt the data before it hits the database."
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Design a system architecture diagram for a Spotify-like app. Map out the flow of data from the moment a user clicks "Play" on a song, through a Kafka stream, into a feature store, and how that click instantly influences the next song recommended in their queue.
+</Callout>

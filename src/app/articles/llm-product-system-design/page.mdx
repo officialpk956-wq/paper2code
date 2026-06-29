@@ -1,0 +1,83 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'LLM Product System Design',
+  description: 'How to build production-grade LLM applications, managing cost, caching, rate limits, and streaming architectures.',
+};
+
+# LLM Product System Design
+
+<Callout type="tip" title="Key Insight">
+Wrapping an OpenAI API call in a Python script takes 5 minutes. Building a resilient, cost-effective LLM product for a million users requires robust caching, dynamic rate limiting, token streaming, and continuous evaluation pipelines.
+</Callout>
+
+## The API Gateway: Cost & Rate Limiting
+
+LLM inference is expensive and heavily rate-limited by providers (Tokens Per Minute - TPM). An LLM product must place an intelligent **API Gateway** between the user and the model.
+
+1. **User-Level Rate Limiting:** Prevent a single abusive user from draining your daily token quota using Token Bucket algorithms.
+2. **Cost Tracking:** The gateway intercepts the response, extracts the `prompt_tokens` and `completion_tokens` metadata, multiplies by the exact pricing tier of the model used, and logs the cost to an analytics database before returning the response to the user.
+3. **Fallback Routing:** If GPT-4 hits a rate limit or goes down, the gateway automatically routes the request to Claude 3 or a self-hosted Llama-3 model.
+
+<SVGDiagram src="/diagrams/llm-product-system-design.svg" caption="A production LLM Architecture with Caching and Streaming." />
+
+## Semantic Caching
+
+If 1,000 users ask "What is the capital of France?", you should not pay OpenAI 1,000 times. However, standard Redis caching fails if a user asks "What's the capital of France?" (different string, same meaning).
+
+**Semantic Caching** solves this. The gateway passes the user's prompt through a fast embedding model (like `all-MiniLM-L6-v2`) and searches a vector database for similar past queries. If the cosine similarity is $>0.95$, the system returns the cached response instantly, saving money and reducing latency to under 50ms.
+
+## Token Streaming (Server-Sent Events)
+
+LLM generation is slow (often ~30 tokens per second). If a model generates a 1,000-word essay, the user would stare at a loading spinner for 30 seconds before seeing anything. 
+
+Production systems use **Token Streaming**. The backend establishes a persistent HTTP connection using Server-Sent Events (SSE). As the LLM engine generates each individual token, the backend instantly streams it to the frontend. This reduces the *Time to First Token (TTFT)* from 30 seconds to ~500 milliseconds, radically improving user experience.
+
+## Evaluation Pipelines
+
+Unlike standard software, LLMs are non-deterministic; they give a different answer every time. How do you know if an update to your prompt made the app better or worse?
+
+You must build an **Evaluation Pipeline** (LLM-as-a-Judge). 
+Create a golden dataset of 500 test questions and ideal answers. Whenever you change the system prompt, run all 500 questions through the new prompt. Pass the generated answers and the ideal answers to an "Evaluator LLM" (like GPT-4), asking it to score the new answers for accuracy, tone, and hallucinations. This acts as CI/CD for prompts.
+
+<SimpleChart
+  title="Latency Impact of Semantic Caching"
+  data={[
+    { request_type: 'LLM Generation (Cold)', time_ms: 4500 },
+    { request_type: 'Semantic Cache Hit', time_ms: 45 },
+    { request_type: 'Exact String Match', time_ms: 10 }
+  ]}
+  xKey="request_type"
+  yKey="time_ms"
+/>
+
+<Quiz
+  question="Why is Semantic Caching superior to traditional exact-string caching (like standard Redis keys) for LLM applications?"
+  options={[
+    "It requires less disk space.",
+    "It can match prompts that mean the exact same thing but are phrased slightly differently, drastically increasing the cache hit rate.",
+    "It executes directly on the GPU.",
+    "It prevents prompt injection attacks."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="What technology is most commonly used to implement Token Streaming from the backend to a web frontend?"
+  options={[
+    "SOAP XML",
+    "Server-Sent Events (SSE) or WebSockets",
+    "GraphQL Mutations",
+    "REST POST Requests polling every 1 second"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Set up an Express.js or FastAPI backend. Create an endpoint that calls an LLM API with `stream=True`. Use the framework's streaming response class to pipe the chunks back to a simple React frontend using the `EventSource` API, rendering the text character by character just like ChatGPT.
+</Callout>

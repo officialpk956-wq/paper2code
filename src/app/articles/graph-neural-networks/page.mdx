@@ -1,0 +1,138 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Graph Neural Networks: GCN, GAT, and GraphSAGE',
+  description: 'How graph neural networks work — the message passing framework, GCN spectral convolutions, GAT attention weighting, GraphSAGE inductive learning, and applications in drug discovery, fraud detection, and recommendations.',
+};
+
+# Graph Neural Networks: GCN, GAT, and GraphSAGE
+
+<Callout type="tip" title="Key Insight">
+Most real-world data has structure that tabular or image models miss: molecules are atoms connected by bonds, social networks are people connected by relationships, knowledge bases are entities connected by facts. Graph Neural Networks process this relational structure directly — each node aggregates information from its neighbors, then from its neighbors' neighbors, building representations that capture local and global graph structure. The aggregation operation is the core design choice that differentiates GCN, GAT, and GraphSAGE.
+</Callout>
+
+## Graphs as Data Structures
+
+A graph $G = (V, E)$ has nodes $V$ and edges $E$. Each node $v$ has a feature vector $x_v \in \mathbb{R}^d$. Edges may have features too (relationship type, weight). The challenge: standard neural networks expect fixed-size, ordered inputs. Graphs have variable numbers of nodes, variable connectivity, and no canonical ordering.
+
+GNNs address this by defining operations that are **permutation-invariant** (the output doesn't depend on node ordering) and **local** (each node's computation depends only on its neighborhood).
+
+<SVGDiagram src="/diagrams/gnn-architecture.svg" caption="Message passing framework: each node aggregates neighbor features, then updates its own representation. Repeated K times, a node sees its K-hop neighborhood. GCN uses mean aggregation, GAT uses learned attention weights, GraphSAGE samples neighbors for scalability." />
+
+## The Message Passing Framework
+
+All major GNN architectures are instances of the **message passing neural network (MPNN)** framework:
+
+**Step 1 — Aggregate**: for each node $v$, collect messages from neighbors:
+
+$$m_v^{(k)} = \text{AGG}^{(k)}\left(\{h_u^{(k-1)} : u \in \mathcal{N}(v)\}\right)$$
+
+**Step 2 — Update**: update the node representation using its current representation and the aggregated messages:
+
+$$h_v^{(k)} = \text{UPDATE}^{(k)}\left(h_v^{(k-1)}, m_v^{(k)}\right)$$
+
+After $K$ iterations, $h_v^{(K)}$ captures information from the $K$-hop neighborhood of $v$. The choice of AGG and UPDATE defines the GNN variant.
+
+## GCN: Spectral Graph Convolution
+
+**GCN (Kipf & Welling, 2017)** derives its aggregation from spectral graph theory. The simplified propagation rule:
+
+$$H^{(k)} = \sigma\left(\tilde{D}^{-1/2} \tilde{A} \tilde{D}^{-1/2} H^{(k-1)} W^{(k)}\right)$$
+
+Where $\tilde{A} = A + I$ (adjacency matrix with self-loops), $\tilde{D}$ is the diagonal degree matrix, and $W^{(k)}$ is a trainable weight matrix. In practice, this means each node's new representation is a weighted average of its neighbors' representations (plus itself), followed by a linear transformation and nonlinearity.
+
+The normalization $\tilde{D}^{-1/2} \tilde{A} \tilde{D}^{-1/2}$ ensures that nodes with many neighbors don't dominate — each neighbor contributes $1/\sqrt{d_u d_v}$ where $d_u, d_v$ are degrees.
+
+**GCN limitations**: equal weights to all neighbors (a highly connected hub contributes the same as a rare direct connection), transductive (can't generalize to nodes unseen during training), and the fixed normalization doesn't learn which neighbors matter most.
+
+## GAT: Attention-Weighted Aggregation
+
+**GAT (Graph Attention Networks, Veličković et al., 2018)** assigns different weights to different neighbors using learned attention:
+
+$$\alpha_{ij} = \frac{\exp(\text{LeakyReLU}(\mathbf{a}^T [W h_i \| W h_j]))}{\sum_{k \in \mathcal{N}(i)} \exp(\text{LeakyReLU}(\mathbf{a}^T [W h_i \| W h_k]))}$$
+
+Where $\mathbf{a}$ is a learnable attention vector, $W$ is the feature transformation, and $\|$ denotes concatenation. The attention score $\alpha_{ij}$ measures how important node $j$ is to node $i$. The aggregation becomes:
+
+$$h_i' = \sigma\left(\sum_{j \in \mathcal{N}(i)} \alpha_{ij} W h_j\right)$$
+
+GAT uses **multi-head attention**: compute $K$ independent attention heads, concatenate (or average) the results. Multiple heads allow the model to attend to different aspects of the neighborhood simultaneously — one head for structural similarity, another for feature similarity.
+
+GAT advantages: attention weights are interpretable (which neighbors does the model focus on?), dynamic (the importance of an edge depends on the current features, not just structure), and better handles heterogeneous neighborhoods.
+
+<SimpleChart
+  title="Node classification accuracy on citation network benchmarks (%)"
+  data={[
+    { model: 1, cora: 81.5 },
+    { model: 2, cora: 83.0 },
+    { model: 3, cora: 83.1 },
+    { model: 4, cora: 83.7 },
+  ]}
+  xKey="model"
+  yKey="cora"
+/>
+
+## GraphSAGE: Inductive Learning at Scale
+
+GCN and GAT are **transductive**: they require all nodes to be present during training. Adding a new node requires re-running the full training. This is impractical for industrial applications (Pinterest has 2 billion nodes; new pins are added constantly).
+
+**GraphSAGE (Hamilton et al., 2017)** enables **inductive** learning: train a general aggregation function that can be applied to unseen nodes.
+
+The key change: instead of using all neighbors, **sample a fixed-size subset** of neighbors at each layer (e.g., 25 neighbors at layer 1, 10 at layer 2). This:
+1. Bounds computation per node (independent of degree)
+2. Enables mini-batch training (can process a fixed-size computational subgraph)
+3. Allows generalization to new nodes (the learned aggregation function is applied to any node's sampled neighborhood)
+
+The aggregation choices: mean (like GCN), LSTM (applied to randomly permuted neighbors — violates permutation invariance but works well empirically), max pooling (take element-wise maximum across neighbor representations).
+
+**PinSage (Ying et al., Pinterest, 2018)** applied GraphSAGE at scale: 3 billion nodes, 18 billion edges, used for item recommendation. Generated $10^9$ positive training pairs by random walks. At inference, produced embeddings for all pins and used approximate nearest neighbor search for retrieval. Deployed in Pinterest's recommendation system, improving engagement by 40%.
+
+<Callout type="info" title="The Over-Smoothing Problem">
+Stacking many GNN layers causes over-smoothing: with enough message passing, all node representations converge to a similar vector regardless of their initial features. In practice, 2–4 layers is typically optimal. This is in stark contrast to CNNs and Transformers where more layers generally help. The fix: residual connections (add the input to each layer's output), jumping knowledge networks (use representations from all layers, not just the last), or graph transformers.
+</Callout>
+
+## Applications
+
+**Drug discovery — molecular property prediction**: A molecule is a graph of atoms (nodes) and bonds (edges). GNNs trained to predict molecular properties (solubility, toxicity, binding affinity) replace expensive wet lab experiments for initial screening. Schlichtkrull's relational GCN and Gilmer's MPNN are standard baselines. Practical impact: filtering 10 million candidate molecules in hours rather than decades.
+
+**Fraud detection**: A transaction graph connects users, accounts, merchants, and devices with transfer edges. Fraudsters create ring structures and synthetic accounts with unusual connection patterns. GNNs learn to detect these structural anomalies. PayPal's GNN-based fraud system reduced false positive rates by 70% versus feature-based models because graph features capture collusion that single-transaction features miss.
+
+**Recommendation systems**: User-item interaction graphs, where edges indicate purchases or ratings. GraphSAGE-based approaches (PinSage, LightGCN) learn user and item embeddings by propagating information through the interaction graph. High-degree items (popular products) naturally become "hubs" in the graph, and their information propagates widely — GNNs automatically discover popularity as a structural property.
+
+**Knowledge graphs**: Entities are nodes, relations are typed edges. Relational GCNs model different edge types with different weight matrices. Used for question answering (find the path between entities), link prediction (predict missing relations), and entity alignment (connect knowledge graphs from different sources).
+
+## AlphaFold's GNN Component
+
+AlphaFold 2 uses GNNs as part of its **Evoformer** — a module that jointly processes a multiple sequence alignment (MSA) and a pair representation of residue-residue distances. The pair representation is essentially a fully connected graph where each residue pair has an edge, and the Evoformer iteratively refines node and edge representations through attention.
+
+The structural module then uses these representations to predict atomic coordinates directly, using invariant point attention (IPA) — a GNN variant that maintains SE(3) equivariance (doesn't depend on the reference frame).
+
+<Quiz
+  question="GCN assigns equal normalized weights to all neighbors. GAT learns attention weights. What specific failure mode of GCN does GAT address?"
+  options={[
+    "GCN can't handle graphs with cycles",
+    "In heterogeneous neighborhoods, some neighbors are highly relevant and others are noise — GCN treats them equally, while GAT learns which neighbors to focus on",
+    "GCN requires knowing the node labels during training",
+    "GCN is too slow for large graphs because it computes exact spectral decomposition"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="GraphSAGE enables inductive learning — applying to nodes not seen during training. How does sampling a fixed-size neighborhood enable this, while full-graph GCN cannot?"
+  options={[
+    "Sampling reduces the graph to a size that fits in memory",
+    "By learning an aggregation function on sampled neighborhoods rather than fixed graph structure, GraphSAGE generalizes the function to any node's neighborhood — including new nodes added after training",
+    "Sampling avoids the over-smoothing problem that prevents GCN from generalizing",
+    "Full-graph GCN requires edge weights which new nodes don't have"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Start with the Cora citation network in PyTorch Geometric (`torch_geometric.datasets.Planetoid`). Implement a 2-layer GCN in 20 lines and train for node classification. Then swap GCN for GAT (change one line) and compare. Visualize the attention weights on a small subgraph — you'll see which neighbors the model focuses on for each node's classification. This is the most interpretable GNN experiment for building intuition.
+</Callout>

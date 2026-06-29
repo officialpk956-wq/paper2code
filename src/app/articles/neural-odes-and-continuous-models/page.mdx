@@ -1,0 +1,87 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Neural ODEs and Continuous Models',
+  description: 'Breaking away from discrete layers: How Neural Ordinary Differential Equations model continuous time.',
+};
+
+# Neural ODEs and Continuous Models
+
+<Callout type="tip" title="Key Insight">
+Traditional neural networks are discrete—they process data layer by layer in a rigid sequence. Neural ODEs treat the network as a continuous dynamical system, modeling how the hidden state evolves over time using differential equations.
+</Callout>
+
+## The Connection to ResNets
+
+To understand a Neural ODE, you must look at a standard Residual Network (ResNet). 
+
+A ResNet updates its hidden state $h$ at layer $t$ using a skip connection:
+$h_{t+1} = h_t + f(h_t, \theta_t)$
+
+Mathematicians realized this equation is exactly the Euler method for solving an Ordinary Differential Equation (ODE). If you make the steps between layers infinitely small, the discrete layers disappear, replaced by a continuous differential equation:
+$\frac{dh(t)}{dt} = f(h(t), t, \theta)$
+
+Instead of specifying the number of layers (e.g., ResNet-50), a Neural ODE defines the *derivative* of the hidden state. To find the output, you simply pass the initial input into a black-box ODE Solver (like the Runge-Kutta method).
+
+<SVGDiagram src="/diagrams/neural-odes-and-continuous-models.svg" caption="Comparing a Discrete ResNet to a Continuous Neural ODE." />
+
+## The Adjoint Method (Backpropagation)
+
+The biggest challenge with Neural ODEs was training them. If you run an ODE solver forward, keeping track of every intermediate calculation to perform standard backpropagation requires massive amounts of memory.
+
+The breakthrough in 2018 (which won Best Paper at NeurIPS) was applying the **Adjoint Sensitivity Method**. Instead of tracing the forward pass, you can compute the gradients by running a *second, separate ODE solver backward in time*. This means a Neural ODE uses exactly $O(1)$ constant memory during training, regardless of how complex the solver's path is.
+
+## Continuous Normalizing Flows
+
+Because Neural ODEs define a continuous transformation of space, they are incredibly powerful for generative models, specifically **Continuous Normalizing Flows (CNFs)**.
+
+In discrete Normalizing Flows, you must carefully design layers that are mathematically invertible (which is highly restrictive). With a CNF, you can use almost any standard neural network architecture to define the ODE. By simply running the ODE solver backward, the process is guaranteed to be perfectly invertible. 
+
+## Applications in Time Series
+
+Most real-world data (like patient health records in a hospital) is not sampled at rigid, discrete intervals. A patient might have a blood test at 9:00 AM, a heart rate check at 9:14 AM, and nothing else for three days.
+
+Standard Recurrent Neural Networks (RNNs) struggle with irregularly sampled data. **Latent ODEs** solve this beautifully. The hidden state of the network evolves continuously in time according to the ODE. When a new data point arrives at an arbitrary time $t$, the solver simply integrates up to that exact moment to update the state.
+
+<SimpleChart
+  title="Memory Footprint During Training"
+  data={[
+    { model: 'ResNet-18', memory_mb: 250 },
+    { model: 'ResNet-50', memory_mb: 850 },
+    { model: 'ResNet-152', memory_mb: 2200 },
+    { model: 'Neural ODE', memory_mb: 30 }
+  ]}
+  xKey="model"
+  yKey="memory_mb"
+/>
+
+<Quiz
+  question="What is the primary advantage of the Adjoint Method for training Neural ODEs?"
+  options={[
+    "It allows the model to output text as well as images.",
+    "It allows the model to be trained with O(1) constant memory, regardless of how many steps the ODE solver takes.",
+    "It replaces the need for a GPU entirely.",
+    "It discretizes the network back into a standard ResNet."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="Why are Latent ODEs superior to standard RNNs for analyzing electronic health records?"
+  options={[
+    "They are easier to code in Python.",
+    "They naturally handle irregularly sampled, continuous-time data, whereas RNNs expect rigid, discrete time steps.",
+    "They automatically anonymize the patient data.",
+    "They use a cross-attention mechanism to read doctors' notes."
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Install the `torchdiffeq` library in Python. Write a simple multi-layer perceptron (MLP) to serve as your derivative function $f(h, t)$, and wrap it in the `odeint` function. Train it to model a simple 2D spiral dataset, observing how the ODE solver warps space continuously to separate the data points.
+</Callout>

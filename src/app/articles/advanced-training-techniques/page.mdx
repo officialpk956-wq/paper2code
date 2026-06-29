@@ -1,0 +1,87 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Advanced Training Techniques',
+  description: 'Mastering the dark arts of neural network training: Learning Rate Schedules, Weight Decay, Gradient Clipping, and ZeRO optimization.',
+};
+
+# Advanced Training Techniques
+
+<Callout type="tip" title="Key Insight">
+Writing the architecture of a neural network is only 10% of the battle. The other 90% is stabilizing the training process. Without advanced techniques like gradient clipping, warmup schedules, and distributed optimizers, massive models will simply collapse into `NaN` losses.
+</Callout>
+
+## Learning Rate Schedules
+
+You cannot train a deep neural network with a constant learning rate.
+- **Warmup:** At initialization, the model's weights are completely random. If the learning rate is high, the massive, chaotic gradients will immediately destroy the network (causing loss spikes). A *Warmup Schedule* starts the learning rate at near zero and linearly increases it over the first few thousand steps.
+- **Cosine Annealing:** Once the model finishes warmup, it needs to traverse the loss landscape. *Cosine Annealing* slowly decays the learning rate following a cosine curve. As the model approaches the global minimum, the learning rate becomes microscopic, allowing the model to settle perfectly into the minimum without bouncing out.
+
+<SVGDiagram src="/diagrams/advanced-training-techniques.svg" caption="LR Schedules and ZeRO Optimizer States." />
+
+## Regularization: Weight Decay vs L2
+
+To prevent a model from memorizing the training data (overfitting), we apply regularization. 
+
+Historically, researchers used **L2 Regularization**, which simply adds the sum of squared weights to the loss function. However, in modern optimizers like Adam, L2 regularization interacts poorly with the momentum buffers. 
+
+**Weight Decay** (used in AdamW) fixes this by decoupling the penalty from the gradient calculation. It directly shrinks the weights by a small factor during the parameter update step. This subtle mathematical difference is critical for training state-of-the-art Transformers.
+
+## Gradient Accumulation and Clipping
+
+Large models require massive batch sizes (e.g., 4 million tokens per batch) for stable gradients. But a single GPU can only fit a tiny batch in memory.
+
+- **Gradient Accumulation:** Instead of updating the weights after every small batch, you run multiple forward/backward passes and simply *add* (accumulate) the gradients together. After $N$ steps, you perform a single weight update. This perfectly simulates a massive batch size on limited hardware.
+- **Gradient Clipping:** Sometimes, a bad batch of data will cause a massive gradient explosion, pushing weights to infinity. Gradient Clipping calculates the global norm (the vector length) of all gradients. If the length exceeds a threshold (e.g., $1.0$), it scales the entire gradient vector down, maintaining the *direction* but reducing the *magnitude*, saving the training run from crashing.
+
+## ZeRO (Zero Redundancy Optimizer)
+
+When training a 70B parameter model, the weights take up 140GB. But the Adam Optimizer requires keeping track of momentum and variance for every single weight, tripling the memory requirement. 
+
+Standard Data Parallelism puts a full copy of the model and optimizer on every GPU, which wastes terabytes of memory. Microsoft's **ZeRO** algorithm (used in DeepSpeed) solved this:
+- **ZeRO-1:** Partitions the Optimizer States across GPUs.
+- **ZeRO-2:** Partitions the Optimizer States AND Gradients.
+- **ZeRO-3:** Partitions everything (Opt, Grads, and Weights). A GPU only requests the exact weights it needs for a specific layer just-in-time over the network, completely shattering the memory barrier.
+
+<SimpleChart
+  title="Memory per GPU for a 10B Model"
+  data={[
+    { config: 'Standard Data Parallel', vram_gb: 120 },
+    { config: 'ZeRO Stage 1', vram_gb: 40 },
+    { config: 'ZeRO Stage 2', vram_gb: 20 },
+    { config: 'ZeRO Stage 3', vram_gb: 2 }
+  ]}
+  xKey="config"
+  yKey="vram_gb"
+/>
+
+<Quiz
+  question="Why is a 'Warmup' phase critical for training large language models?"
+  options={[
+    "To physically heat up the GPU to optimal operating temperatures.",
+    "Because randomly initialized weights produce massive, chaotic gradients early on; a low starting learning rate prevents the model from diverging before it stabilizes.",
+    "To slowly load the dataset from the hard drive into RAM.",
+    "To wait for the ZeRO optimizer to partition the weights."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="How does Gradient Accumulation allow you to train models with massive effective batch sizes on a single GPU?"
+  options={[
+    "It compresses the data into 8-bit integers.",
+    "It runs multiple small forward/backward passes, storing and summing the gradients, and only updates the model weights once the accumulated total reaches the target batch size.",
+    "It uses cloud computing to offload the calculations.",
+    "It deletes half the gradients to save memory."
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Open a PyTorch script. Implement Gradient Accumulation by modifying the standard training loop. Instead of calling `optimizer.step()` and `optimizer.zero_grad()` on every iteration, wrap them in an `if (batch_idx + 1) % accumulation_steps == 0:` block. Verify that your GPU memory usage stays low while your effective batch size scales up.
+</Callout>

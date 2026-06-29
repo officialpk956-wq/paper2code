@@ -1,0 +1,134 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Object Detection: R-CNN to YOLO to DETR',
+  description: 'The complete evolution of object detection — from R-CNN (2014) through Fast/Faster R-CNN, YOLO family, and Transformer-based DETR — covering the two-stage vs one-stage tradeoff and the end of hand-engineered post-processing.',
+};
+
+# Object Detection: R-CNN to YOLO to DETR
+
+<Callout type="tip" title="Key Insight">
+Object detection is harder than image classification: you need to both locate (bounding box) and classify (label) every object in an image. The field split into two paradigms — two-stage methods (accurate, slow) and one-stage methods (fast, less accurate). Transformers are now merging these paradigms by eliminating the hand-engineered components that previously defined each approach.
+</Callout>
+
+## What Makes Detection Hard
+
+Classification asks "what is in this image?" Detection asks "what is where in this image?" The difference creates a fundamental tension:
+
+- **Localization** requires high spatial resolution (you need to know where)
+- **Recognition** requires large receptive fields (you need to understand context)
+- **Multiple objects** require handling variable-length output (unknown number of boxes)
+- **Scale variation** requires detecting objects at 10px and 1000px in the same image
+
+The dominant solution until 2020: process proposals first, then classify. This two-stage approach is accurate but slow.
+
+<SVGDiagram src="/diagrams/object-detection.svg" caption="Two-stage detectors (left): R-CNN 47s/img → Faster R-CNN 200ms. One-stage detectors (right): YOLO 22ms real-time. DETR (bottom left) uses Transformers to eliminate hand-engineered components from both." />
+
+## Two-Stage Detectors: R-CNN Family
+
+**R-CNN (Girshick et al., 2014)** was the first deep learning detector. Pipeline: (1) selective search extracts ~2000 region proposals per image, (2) warp each proposal to 227×227, (3) run AlexNet on each, (4) classify with per-class SVMs.
+
+The problem: 2000 CNN forward passes per image. On a GPU, 47 seconds per image — orders of magnitude too slow for real applications.
+
+**Fast R-CNN (Girshick, 2015)** fixed the redundant computation: run the CNN once on the full image, then extract proposal features from the resulting feature map using **RoI Pooling** (project each proposal onto the feature map, pool to fixed size). One CNN forward pass, not 2000. Speed: 2 seconds per image.
+
+The bottleneck: selective search still ran on CPU, taking 2 seconds per image — the CNN was now fast enough that proposal generation dominated.
+
+**Faster R-CNN (Ren et al., 2015)** eliminated selective search with the **Region Proposal Network (RPN)**: a small convolutional network that slides over the feature map and, at each location, proposes anchors (predefined boxes at multiple scales and aspect ratios) with objectness scores. The RPN shares the backbone CNN with the detection head — proposals and detections share computation.
+
+Speed: 200ms per image. Faster R-CNN became the standard detector for years and still underpins many production systems requiring high accuracy.
+
+<Callout type="info" title="Anchors: The Critical Engineering Choice">
+Both Faster R-CNN and early YOLO versions use **anchor boxes** — predefined bounding boxes of multiple sizes and aspect ratios at each grid position. The detector predicts offsets from anchors rather than absolute coordinates. This makes the learning problem easier (predict small deltas from reasonable guesses) but introduces hyperparameters: you must choose anchor sizes and aspect ratios appropriate to your dataset. Anchor-free detectors (FCOS, YOLOv8) eliminate this requirement.
+</Callout>
+
+## One-Stage Detectors: The YOLO Family
+
+**YOLO (You Only Look Once, Redmon et al., 2015)** reframed detection as a single regression problem. Divide the image into an S×S grid (7×7 by default). Each grid cell predicts B bounding boxes and C class probabilities directly, in a single CNN forward pass with no separate proposal step.
+
+The architecture: a custom deep CNN inspired by GoogLeNet, followed by two fully connected layers that output the 7×7×30 prediction tensor (7×7 grid, 2 boxes per cell, 5 box parameters + 20 class scores).
+
+Speed: 45 fps on a Titan X GPU — the first real-time detector. The tradeoff: lower accuracy than Faster R-CNN, especially on small objects (the 7×7 grid means multiple small objects in the same cell compete).
+
+<SimpleChart
+  title="Detection speed (fps) vs mAP on COCO by detector generation"
+  data={[
+    { detector: 1, fps: 0.02, map: 53 },
+    { detector: 2, fps: 0.5, map: 70 },
+    { detector: 3, fps: 5, map: 73 },
+    { detector: 4, fps: 45, map: 57 },
+    { detector: 5, fps: 65, map: 65 },
+    { detector: 6, fps: 50, map: 53 },
+  ]}
+  xKey="fps"
+  yKey="map"
+/>
+
+**YOLOv2/YOLO9000 (2016)** added anchor boxes (stolen from Faster R-CNN), batch normalization, and high-resolution classifier pretraining. Also introduced a joint classification-detection training scheme that enabled detecting 9000 object categories simultaneously.
+
+**YOLOv3 (2018)** added **multi-scale prediction** — detecting at three scales (52×52, 26×26, 13×13 feature maps) to handle objects at different sizes. Used Darknet-53 as backbone (with residual connections). Remained the go-to real-time detector for years.
+
+**YOLOv5–v8 (2020–2023)** — though not from the original authors, these significantly improved the architecture. YOLOv8 is anchor-free (predicting box centers instead of offsets from anchors), uses a CSP backbone, and has separate "decoupled" heads for objectness and classification (previously tangled in the same output layer). Achieves 50ms/image at 53.9 mAP on COCO with a single GPU.
+
+## SSD and Feature Pyramids
+
+**SSD (Liu et al., 2016)** introduced multi-scale detection at different feature map levels within a single network — a key idea that YOLO v3+ later adopted. Predictions at 6 different scales ranging from 38×38 to 1×1. Faster than Faster R-CNN, competitive accuracy.
+
+**Feature Pyramid Networks (Lin et al., 2017)** added top-down connections to backbone feature maps — building a pyramid where each level has access to both high-resolution spatial information (from the bottom-up path) and high-level semantic information (from the top-down path). FPN is now a near-universal component in two-stage detectors and is often integrated into one-stage detectors.
+
+## DETR: End-to-End Transformers
+
+**DETR (Carion et al., Facebook AI, 2020)** eliminated two hand-engineered components that had been in every detector: **anchors** and **NMS (Non-Maximum Suppression)**.
+
+Traditional detectors produce hundreds of overlapping boxes and rely on NMS (a heuristic that greedily removes boxes that overlap too much with higher-confidence boxes) to produce final predictions. This requires tuning an IoU threshold hyperparameter.
+
+DETR replaces the detection head with a Transformer decoder that takes a fixed set of 100 learned **object queries** and attends to the backbone features. Each query predicts exactly one object (or "no object"). The model is trained with **Hungarian matching** — the optimal one-to-one assignment between predicted boxes and ground truth, ensuring no two queries predict the same object. No NMS needed.
+
+The result: a conceptually clean, end-to-end trainable detector. The cost: slow training convergence (500 epochs vs. Faster R-CNN's 36), poor performance on small objects (global self-attention in the encoder is expensive at high resolution), and higher latency than optimized YOLO variants.
+
+**RT-DETR (2023)** solved the speed problem: replace the expensive full attention encoder with a hybrid local attention + cross-scale fusion module. Achieves Faster R-CNN accuracy at real-time speeds, closing the gap with YOLO while retaining the clean end-to-end training.
+
+<Callout type="warning" title="NMS: Why It Matters That DETR Removed It">
+Non-Maximum Suppression is a classical computer vision algorithm from before deep learning. Nearly every detector uses it, but it's a hyperparameter-sensitive heuristic: the IoU threshold determines whether overlapping boxes are suppressed. For densely packed objects (crowds, stacked products, cells under a microscope), NMS tuning is painful. DETR's elimination of NMS is architecturally significant — it means the loss function directly supervises the final output, rather than suppressing post-hoc.
+</Callout>
+
+## The Detection Zoo: Key Variants
+
+| Family | Method | Speed | Accuracy | Best For |
+|--------|--------|-------|----------|---------|
+| Two-stage | Faster R-CNN | ~5 fps | High | Accuracy-critical |
+| One-stage | YOLOv8 | ~50 fps | Good | Real-time embedded |
+| Anchor-free | FCOS | ~20 fps | Good | Avoids anchor tuning |
+| Transformer | DETR | ~28 fps | High | Research baseline |
+| Transformer | RT-DETR | ~30 fps | High | Production Transformers |
+
+<Quiz
+  question="R-CNN ran 2000 CNN forward passes per image (one per region proposal). Fast R-CNN reduced this to one forward pass. How?"
+  options={[
+    "Fast R-CNN uses a smaller, faster CNN architecture",
+    "Fast R-CNN runs the CNN on the whole image once, then extracts proposal features from the resulting feature map via RoI Pooling — reusing shared computation",
+    "Fast R-CNN reduces proposals from 2000 to 10 using a better proposal algorithm",
+    "Fast R-CNN uses knowledge distillation from a pre-trained R-CNN"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="DETR uses Hungarian matching between predictions and ground truth, eliminating NMS. What specific problem does eliminating NMS solve?"
+  options={[
+    "NMS is too slow — removing it speeds up inference 10×",
+    "NMS requires an IoU threshold hyperparameter and can fail on densely packed objects; Hungarian matching gives one-to-one assignment without tuning",
+    "NMS only works for 2D bounding boxes, not 3D or rotated boxes",
+    "NMS prevents DETR from using Transformer attention"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The fastest path to understanding detection: run YOLOv8 on your webcam in 5 lines of Python using the `ultralytics` package. Then visualize what the model sees at different scales by examining the FPN feature maps. For deeper understanding, implement the IoU loss and anchor-matching algorithm from Faster R-CNN — the anchor assignment logic is where most of the engineering complexity lives.
+</Callout>

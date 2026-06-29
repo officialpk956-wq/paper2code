@@ -1,0 +1,122 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+import { YouTubeEmbed } from '@/components/content/YouTubeEmbed';
+
+export const metadata = {
+  title: "RAG: Making LLMs Factually Reliable",
+  description: "Learn how Retrieval-Augmented Generation grounds Large Language Models in factual context to prevent hallucination."
+};
+
+# RAG: Making LLMs Factually Reliable
+
+<Callout type="tip" title="The Core Problem">
+LLMs are trained on data with a specific cutoff date and cannot know facts or proprietary information from after that date. Furthermore, they are prone to hallucinating confident but incorrect answers. RAG (Retrieval-Augmented Generation) solves this by retrieving real documents at query time and grounding the LLM's answer in factual context.
+</Callout>
+
+## Why RAG Works
+
+An LLM relies on its parametric knowledge—the information baked into its weights during training. When you use RAG, you inject retrieved context directly into the prompt. Because the LLM is an incredibly capable reasoning engine, when it sees the relevant document in its context window, it doesn't need to "remember" the fact. It can simply read it directly from the prompt and formulate a correct answer.
+
+## The Complete RAG Pipeline
+
+<SVGDiagram src="/diagrams/rag-pipeline.svg" caption="The RAG Ingestion and Query Pipelines." />
+
+The RAG architecture is split into two halves. In the ingest path, source documents (like PDFs or Markdown files) are processed by a chunker, run through an embedding model, and saved into a vector store. In the query path, the user's question is embedded and used to retrieve the top-K most relevant chunks from the vector store. These chunks are then appended to the prompt, giving the LLM the exact context it needs to generate an accurate answer.
+
+## Chunking Strategy
+
+You cannot embed a 100-page PDF as a single vector and expect good retrieval. The document must be chunked. The chunk size is a critical hyperparameter that dictates the granularity of your retrieval. 
+
+You can use fixed-size chunking, which is simple to implement but often slices through the middle of sentences and loses meaning. Sentence-based or paragraph-based chunking preserves boundaries but results in variable-sized chunks. Semantic chunking uses an LLM or secondary embedding model to group sentences by topic; this yields the best quality but is the most complex to build.
+
+Additionally, chunk overlap is essential. A 20% overlap ensures that if an answer spans the boundary between two chunks, the context isn't lost during retrieval.
+
+<SimpleChart
+  title="Retrieval Precision@3 by Chunk Size (diminishing returns after 512)"
+  data={[
+    { chunk_tokens: 128, precision: 0.68 },
+    { chunk_tokens: 256, precision: 0.79 },
+    { chunk_tokens: 512, precision: 0.84 },
+    { chunk_tokens: 1024, precision: 0.81 },
+    { chunk_tokens: 2048, precision: 0.73 }
+  ]}
+  xKey="chunk_tokens"
+  yKey="precision"
+/>
+
+## Retrieval: BM25 vs Dense vs Hybrid
+
+Retrieval strategies dictate how well you find the needle in the haystack. BM25 is a fast, sparse retrieval algorithm that relies on exact keyword matching. It works exceptionally well when the user searches using the exact terminology found in the document.
+
+Dense retrieval uses vector embeddings to perform semantic search, gracefully handling paraphrasing and synonyms, but it requires GPU resources to compute embeddings. 
+
+Hybrid retrieval combines both using Reciprocal Rank Fusion (RRF). It provides the best of both worlds, ensuring you capture both exact matches and semantic similarity.
+
+<Callout type="info" title="When Dense Retrieval Fails">
+Dense retrieval frequently fails on very specific terms like product codes, version numbers (e.g., "v2.1.4"), or rare proper nouns because the embedding model may not have strong semantic representations for them. Always add BM25 as a fallback in production systems.
+</Callout>
+
+## Advanced: HyDE (Hypothetical Document Embeddings)
+
+Instead of embedding the user's brief and often ambiguous question, HyDE asks the LLM to write a hypothetical answer first, and then embeds *that* hypothetical answer to search the vector database. 
+
+Why does this work? Questions and answers live in entirely different parts of the embedding space. By generating a hypothetical document, you move the search vector closer to the actual documents you want to retrieve. The documents in your database are much more similar to the hypothetical answer than they are to the user's raw question.
+
+## RAG Evaluation with RAGAS
+
+Evaluating RAG systems requires specialized metrics. The RAGAS framework introduces four key metrics:
+- **Context Precision**: Evaluates whether the retrieved chunks are actually relevant to the question.
+- **Context Recall**: Measures if all the information required to answer the question was successfully retrieved.
+- **Faithfulness**: Checks if the LLM's generated answer sticks strictly to the retrieved context without hallucinating.
+- **Answer Relevancy**: Determines if the final answer directly addresses the user's original query.
+
+## Failure Modes
+
+<Callout type="warning" title="5 Ways RAG Fails">
+Even good RAG systems fail. Watch out for:
+1. Perfect retrieval, but the LLM still hallucinates the answer.
+2. The answer spans 3 different chunks, none of which are retrieved together.
+3. The user query is too ambiguous for semantic matching.
+4. The chunk size is too large, diluting the relevance score of the chunk.
+5. The vector index is outdated, retrieving stale information.
+</Callout>
+
+## Case Studies
+
+Notion AI implemented semantic chunking over user workspaces to build their Q&A feature, allowing the system to handle highly variable personal documents effectively.
+
+Anthropic's Contextual Retrieval technique drastically improved retrieval accuracy. By prepending a contextual header (summarizing the document) to each chunk before embedding, they reduced retrieval failure by 49%.
+
+Perplexity.ai operates a massive, real-time RAG pipeline. It performs web searches, scrapes the resulting pages, chunks the content on the fly, and generates highly accurate answers grounded in real-time web data.
+
+## Quick Check
+
+<Quiz
+  question="A user asks 'What did the CEO say about Q3 earnings?' Your RAG system retrieves 3 chunks but the answer is split across 2 of them. What helps most?"
+  options={[
+    "Use larger chunk sizes with more overlap",
+    "Switch to BM25-only retrieval",
+    "Remove duplicate chunks from the index",
+    "Use a larger language model"
+  ]}
+  answer={0}
+/>
+
+<Quiz
+  question="Which RAGAS metric measures whether your LLM's answer invents facts not present in the retrieved context?"
+  options={[
+    "Context Precision",
+    "Answer Relevancy",
+    "Faithfulness",
+    "Context Recall"
+  ]}
+  answer={2}
+/>
+
+## Practice
+
+<Callout type="info">
+Dive into the Dojo challenges to implement the chunking algorithms discussed in this article, or try building a hybrid retrieval pipeline from scratch.
+</Callout>

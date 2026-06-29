@@ -1,0 +1,159 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'Sequence Models: RNN to LSTM to Mamba',
+  description: 'The complete evolution of sequence modeling — from vanilla RNNs through LSTM, GRU, Seq2Seq+Attention, the Transformer, and Mamba — what each solved and the fundamental tradeoffs that still shape the field.',
+};
+
+# Sequence Models: RNN to LSTM to Mamba
+
+<Callout type="tip" title="Key Insight">
+Every sequence model architecture makes a fundamental choice: how much of the past to remember, and how to forget the irrelevant. RNNs compress all history into a fixed-size hidden state — cheap but lossy. Transformers attend to every past token directly — lossless but quadratically expensive. Mamba and state space models try to get both: efficient like RNNs at inference, expressive like Transformers. This tradeoff defines the entire field.
+</Callout>
+
+## The Problem: Dependencies Across Time
+
+Natural language has dependencies that span many positions: "The animal didn't cross the street because **it** was too tired." — "it" refers to "animal," a few tokens back. "The soldiers spoke to the general who **they** had just defeated." — "they" refers to "soldiers," many tokens back.
+
+A good sequence model must track these dependencies regardless of distance. This is the defining challenge the field has wrestled with since the 1980s.
+
+<SVGDiagram src="/diagrams/sequence-models.svg" caption="Sequence model timeline: RNN (1986) → LSTM (1997, solved vanishing gradients) → GRU (2014) → Seq2Seq+Attention (2015) → Transformer (2017, parallel training) → Mamba SSM (2023, O(n) inference)." />
+
+## RNNs (1986): The First Sequence Model
+
+A vanilla Recurrent Neural Network processes sequences by maintaining a hidden state $h_t$ that summarizes everything seen so far:
+
+$$h_t = \tanh(W_{hh} h_{t-1} + W_{xh} x_t + b)$$
+
+The output at each step and the hidden state at the next step both depend on the current hidden state and current input. In principle, $h_t$ contains the full history. In practice, training RNNs with backpropagation through time (BPTT) multiplies gradients across every time step:
+
+$$\frac{\partial \mathcal{L}}{\partial h_0} = \frac{\partial \mathcal{L}}{\partial h_T} \cdot \prod_{t=1}^{T} \frac{\partial h_t}{\partial h_{t-1}}$$
+
+If the repeated matrix multiplication has eigenvalues less than 1, gradients **vanish** (the network can't learn long-range dependencies). If eigenvalues are greater than 1, gradients **explode** (training diverges). For sequences longer than ~10–20 tokens, vanilla RNNs fail to learn dependencies.
+
+## LSTM (1997): Gates That Remember and Forget
+
+**Long Short-Term Memory (Hochreiter & Schmidhuber, 1997)** solved vanishing gradients with an explicit memory mechanism. LSTM maintains two states: the hidden state $h_t$ (like RNN) and a **cell state** $c_t$ (the long-term memory).
+
+The cell state has a nearly linear gradient path — it's updated by addition, not multiplication, so gradients flow backward through it without shrinking:
+
+$$c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t$$
+
+Three **gates** control information flow:
+
+- **Forget gate** $f_t = \sigma(W_f [h_{t-1}, x_t] + b_f)$ — what to erase from cell state
+- **Input gate** $i_t = \sigma(W_i [h_{t-1}, x_t] + b_i)$ — what new information to write
+- **Output gate** $o_t = \sigma(W_o [h_{t-1}, x_t] + b_o)$ — what to expose as hidden state
+
+LSTM learned long-range dependencies that were previously impossible. It dominated sequence tasks (speech recognition, machine translation, language modeling) for nearly 20 years — from 1997 to the Transformer's emergence in 2017.
+
+<Callout type="info" title="Why Gates Work">
+A gate $g \in [0,1]$ (sigmoid output) controls whether information passes. $g = 0$: completely blocked. $g = 1$: fully passes. The key insight: the forget gate can learn to set $f_t = 1$ for an indefinite number of steps, keeping the cell state unchanged while processing irrelevant tokens. This is impossible in a vanilla RNN where every step applies a nonlinear transformation that inevitably degrades the stored information.
+</Callout>
+
+## GRU (2014): Simplified Gates
+
+**GRU (Cho et al., 2014)** simplifies LSTM by merging the cell and hidden state into one, and combining the forget and input gates into a single **update gate**:
+
+$$h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde{h}_t$$
+
+Where $z_t$ is the update gate (how much to update the hidden state) and a **reset gate** $r_t$ controls how much past information to use when computing the candidate $\tilde{h}_t$.
+
+GRU has fewer parameters than LSTM (roughly 75% as many) and trains faster. Performance is comparable on most tasks. GRUs became preferred when compute was limited; LSTMs remained preferred for tasks requiring very long-range memory.
+
+<SimpleChart
+  title="Sequence length at which model retains memory (approximate)"
+  data={[
+    { model: 1, max_length: 20 },
+    { model: 2, max_length: 300 },
+    { model: 3, max_length: 250 },
+    { model: 4, max_length: 500 },
+    { model: 5, max_length: 32000 },
+    { model: 6, max_length: 128000 },
+  ]}
+  xKey="model"
+  yKey="max_length"
+/>
+
+## Seq2Seq + Bahdanau Attention (2014–2015)
+
+For translation, a single LSTM encoder compressing the entire input into a fixed vector becomes a bottleneck: an English sentence of 30 tokens and 100 tokens produce the same size context vector, but the longer sentence has much more information to compress.
+
+**Seq2Seq (Sutskever et al., 2014)** stacked LSTMs for encoder and decoder, significantly improving translation quality. The encoder processes the source sentence and passes the final hidden state to the decoder.
+
+**Bahdanau Attention (2015)** solved the fixed-vector bottleneck. Instead of passing only the final encoder hidden state, the decoder can attend to all encoder hidden states at each decoding step:
+
+$$\alpha_{tj} = \text{softmax}(e_{tj}), \quad e_{tj} = a(s_{t-1}, h_j)$$
+
+$$c_t = \sum_j \alpha_{tj} h_j$$
+
+Where $a$ is a learned alignment model (typically a small feedforward network), $s_{t-1}$ is the decoder's previous hidden state, and $h_j$ are the encoder hidden states. The attention weights $\alpha_{tj}$ reveal which source words the decoder attends to when generating each target word.
+
+This was the first use of attention in sequence models and immediately improved translation quality. Visualizing attention weights also provided interpretability: the model learned to attend to "zone" when translating "zone" to French "zone," to the subject phrase when generating the subject, etc.
+
+## The Transformer (2017): Attention Is All You Need
+
+Vaswani et al.'s key observation: attention is doing most of the work in seq2seq models. What if you build a model that is purely attention, with no recurrence?
+
+**Self-attention** extends attention to attend within a single sequence — each position attends to all other positions in the same sequence, enabling direct modeling of long-range dependencies regardless of distance. All positions are computed in parallel (unlike RNNs, which must process sequentially).
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
+
+The Transformer's impact on sequence modeling:
+
+- **Parallelism**: all positions computed simultaneously — enables training on orders of magnitude more data
+- **Direct connections**: distance between any two positions is O(1) — no vanishing gradient through time
+- **Scalability**: performance improves predictably with more parameters and more data (scaling laws)
+
+The cost: O(n²) in sequence length. A 128K-token context window requires $128000^2 = 16.4$ billion attention operations per layer — feasible with FlashAttention on modern GPUs, but it limits practical context length.
+
+<Callout type="warning" title="Recurrence vs Attention: The Real Tradeoff">
+At inference time, an autoregressive RNN/LSTM is O(1) per token — the entire history is compressed into the hidden state, and generating the next token is a single matrix-vector multiplication. A Transformer is O(n) per token at inference time (attending to all n previous tokens in the KV cache). For very long sequences, this means Transformers have much higher inference cost than RNNs at the same quality level. This is why Mamba was developed.
+</Callout>
+
+## Mamba (2023): State Space Models That Scale
+
+**Mamba (Gu & Dao, 2023)** combines the best of RNNs and Transformers using **selective state space models (SSMs)**.
+
+The core idea: use a structured state space model (SSM) that can be computed in two modes:
+1. **Training time**: run as a convolution over the sequence (parallel, fast like Transformers)
+2. **Inference time**: run as a recurrence (O(1) per token, fast like RNNs)
+
+Previous SSMs (S4, H3) had fixed transition matrices — they couldn't selectively remember or forget based on content. Mamba's key innovation: **selective state spaces** — the transition matrix $A$ and input matrix $B$ depend on the input $x_t$. This input-dependent selectivity lets the model choose what to retain in its hidden state based on content, not just position.
+
+$$h_t = \bar{A}(x_t) h_{t-1} + \bar{B}(x_t) x_t$$
+
+The result: Mamba matches Transformer quality on language modeling while achieving **O(n) inference time** instead of O(n²). For long sequences (>2K tokens), Mamba is significantly faster than Transformers. Mamba-2 added further theoretical connections between SSMs and Transformers.
+
+The open question: do selective SSMs truly match Transformer performance at the very largest scales, or is attention fundamentally more expressive? Active research area.
+
+<Quiz
+  question="Vanilla RNNs fail to learn dependencies beyond ~20 tokens due to vanishing gradients. What specific mechanism in LSTM prevents this?"
+  options={[
+    "LSTM uses larger hidden states, so gradients are distributed across more parameters",
+    "The cell state is updated additively (c_t = f_t * c_{t-1} + i_t * new) rather than through repeated nonlinear multiplication, giving gradients a nearly linear path backward",
+    "LSTM uses batch normalization on the hidden state to stabilize gradient magnitudes",
+    "LSTM clips gradients during backpropagation to prevent vanishing"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="The Transformer processes all tokens in parallel during training. Why can't it also be O(1) per token during inference (like RNNs), requiring instead O(n) per generated token?"
+  options={[
+    "Transformers are inherently slower than RNNs due to matrix multiplications",
+    "Each generated token must attend to all n previous tokens in the KV cache — the O(n) attention cost is the model doing work, not a implementation choice",
+    "Transformers do not support causal masking at inference time",
+    "Transformers require beam search, which is O(n)"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Implement an LSTM from scratch in PyTorch using only tensor operations — no `nn.LSTM`. Write the four gate equations explicitly and the cell state update. Train it on character-level Shakespeare generation. Compare training curves to a vanilla RNN on the same task: the LSTM will learn coherent word-level patterns within an hour; the RNN will produce noise. This 30-minute experiment demonstrates vanishing gradients more vividly than any diagram.
+</Callout>

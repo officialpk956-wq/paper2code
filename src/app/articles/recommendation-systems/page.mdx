@@ -1,0 +1,127 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+import { YouTubeEmbed } from '@/components/content/YouTubeEmbed';
+
+export const metadata = {
+  title: "Recommendation Systems: From Matrix Factorization to Two-Tower Models",
+  description: "Learn how recommendation engines scale to billions of users and items using two-tower neural architectures and multi-stage ranking funnels."
+};
+
+# Recommendation Systems: From Matrix Factorization to Two-Tower Models
+
+<Callout type="tip" title="Key Insight">
+35% of Amazon's revenue comes from recommendations. Netflix saves $1B/year by reducing churn through personalization. Recommendation is one of the highest-ROI ML systems ever built, fundamentally changing how users interact with content and products.
+</Callout>
+
+## Three Approaches to Recommendation
+
+Recommendation systems broadly fall into three categories:
+- **Collaborative Filtering**: "Users like you also liked X." This approach is based purely on interaction history and doesn't require any knowledge of what the item actually is.
+- **Content-Based Filtering**: "This item is similar to items you liked." This relies heavily on item features (genre, director, price, color) rather than user interaction history.
+- **Hybrid Systems**: A weighted combination of both. Every major industrial system uses a hybrid approach.
+
+## The Cold-Start Problem
+
+Recommendation models face a unique challenge: what do you do with new users and new items? 
+
+For a new user, you have no interaction history, which completely breaks collaborative filtering. The fallback is to rely on popularity-based recommendations or demographic rules until they interact with enough items. For a new item, it has no interactions, so it will never be recommended by collaborative filtering. You must rely on content features to push it into user feeds.
+
+<SimpleChart
+  title="Recommendation quality (NDCG@10) vs user interaction count"
+  data={[
+    { interactions: 0, ndcg: 0.21 },
+    { interactions: 1, ndcg: 0.28 },
+    { interactions: 3, ndcg: 0.38 },
+    { interactions: 5, ndcg: 0.48 },
+    { interactions: 10, ndcg: 0.61 },
+    { interactions: 20, ndcg: 0.71 },
+    { interactions: 50, ndcg: 0.79 },
+    { interactions: 100, ndcg: 0.83 }
+  ]}
+  xKey="interactions"
+  yKey="ndcg"
+/>
+
+## Matrix Factorization
+
+The user-item interaction matrix is incredibly sparse; you have likely rated or viewed less than 0.001% of all movies on Netflix. Matrix factorization takes this massive, sparse matrix and factorizes it into two much smaller, dense matrices: a User Matrix ($N \times k$) and an Item Matrix ($k \times M$). 
+
+The value $k$ is the latent dimension (typically 32 to 256). Each row in these matrices is an embedding. Because users and items are projected into the same embedding space, taking the dot product gives the predicted rating or interaction probability:
+
+$$
+\hat{r}_{ui} = \mathbf{u}_u \cdot \mathbf{v}_i
+$$
+
+<Callout type="info" title="Implicit vs Explicit Feedback">
+Explicit feedback consists of direct ratings (like 1-5 stars). It is rare and heavily biased. Implicit feedback consists of clicks, watch time, purchases, and dwell time. It is abundant, continuous, and more honest. Modern recommendation systems almost exclusively optimize for implicit feedback.
+</Callout>
+
+## The Two-Tower Neural Model
+
+Matrix factorization is powerful, but it relies on static lookup tables. The Two-Tower Neural Model replaces these lookup tables with deep neural networks. 
+
+The **user tower** takes user history, demographics, and context as input and outputs a 128-dimensional embedding. The **item tower** takes item features, metadata, and text descriptions as input and outputs a 128-dimensional embedding. Their dot product gives the similarity score.
+
+Why two towers instead of one massive network? Decoupling allows for massive scale. The item embeddings can be pre-computed offline and loaded into an ANN index. At query time, only the user tower runs to generate the user embedding, which is then used to instantly retrieve the top-K items via nearest neighbor search.
+
+<SVGDiagram src="/diagrams/two-tower-model.svg" caption="The architecture of a Two-Tower Neural Recommendation Model." />
+
+## The Industrial Recommendation Funnel
+
+You cannot run a heavy neural network to score 800 million items for a user in 100 milliseconds. Industrial systems use a multi-stage funnel. 
+
+It starts with candidate generation (retrieving the top 1000 items via lightweight collaborative filtering or a two-tower model). Then, a heavier DNN ranking model scores those 1000 items, keeping the top 50. Finally, a business logic layer applies diversity filters, freshness boosts, and deduplication to select the final 20 items shown in the UI. 
+
+## Evaluation Metrics
+
+Evaluating recommendations happens in two phases. Offline evaluation uses historical data to compute metrics like NDCG@K, Precision@K, and Recall@K. Online evaluation puts the model in production and measures actual user behavior (Click-Through Rate, watch time, long-term retention) via A/B testing.
+
+<Callout type="warning" title="Offline vs Online Gap">
+A model that improves offline NDCG@10 by 5% can still decrease engagement in an A/B test. Offline metrics measure historical relevance, while online metrics measure active human behavior. Always A/B test before shipping a model to production.
+</Callout>
+
+## Explore vs Exploit
+
+Recommendation systems must balance exploitation (showing items the model is confident the user will like) with exploration (showing items the model isn't sure about, in order to gather data and learn). 
+
+Without exploration, the model converges on a narrow set of popular items, known as popularity bias. The recommendation feed becomes an echo chamber, and new items never get exposure. Techniques like Thompson Sampling or UCB (Upper Confidence Bound) bandits are used to intelligently inject exploration into the feed.
+
+## Case Studies
+
+Spotify's Discover Weekly transformed music discovery by combining three distinct signals. They layered collaborative filtering (matrix factorization on user playlists) with NLP (running word2vec on playlist titles and track co-occurrences) and raw audio features (processing the spectrogram of the audio itself). This allowed them to recommend a brand new, unheard track simply because its audio profile matched a user's taste vector.
+
+In 2016, YouTube published a seminal paper detailing their transition from matrix factorization to a two-tower DNN architecture. They proved that optimizing for watch time—rather than just clicks—dramatically increased long-term user satisfaction. Their architecture used a deep candidate generator followed by a heavy ranking network that incorporated hundreds of sparse and dense features.
+
+The Netflix Prize was a famous $1 million competition to improve their recommendation algorithm by 10%. While a team eventually won by ensembling over 800 different models, Netflix famously never deployed the winning solution to production. The engineering cost and latency overhead of running 800 models vastly outweighed the business value of the 10% accuracy improvement, perfectly illustrating the tension between research metrics and production constraints.
+
+## Quick Check
+
+<Quiz
+  question="Your recommendation system always suggests the most popular items, even to users with niche tastes. This is called:"
+  options={[
+    "The cold-start problem",
+    "Popularity bias",
+    "Filter bubble",
+    "Exploration failure"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="In a two-tower model, why are the user tower and item tower kept separate instead of combining them into one model?"
+  options={[
+    "One model would be too large to train",
+    "Item embeddings can be pre-computed once and indexed — only the user tower runs at query time",
+    "The dot product would not work with a combined model",
+    "They use different loss functions"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Explore our Dojo and Learn paths to practice implementing collaborative filtering and matrix factorization algorithms from scratch.
+</Callout>

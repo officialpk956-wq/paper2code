@@ -1,0 +1,88 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'MLOps: Taking Models to Production',
+  description: 'Understand the infrastructure required to deploy, monitor, and maintain machine learning models in production.',
+};
+
+# MLOps: Taking Models to Production
+
+<Callout type="tip" title="Key Insight">
+Training a model in a Jupyter notebook is easy. Deploying that model so it can handle 10,000 requests per second, tracking its performance over time, and automatically retraining it when the data distribution changes is incredibly hard. This is the domain of MLOps.
+</Callout>
+
+## The Feature Store
+
+In production, models need data fast. A **Feature Store** serves as a centralized repository for machine learning features, bridging the gap between data engineering and data science. 
+
+It typically has two components:
+- **Offline Store (e.g., Hive, Snowflake):** Used for generating massive training datasets. It allows for "point-in-time" joins to ensure you don't leak future data into past training examples.
+- **Online Store (e.g., Redis, DynamoDB):** Used for ultra-low-latency serving at inference time. When a user logs in, the online store instantly retrieves their pre-computed features (like `days_since_last_purchase`) to feed the model.
+
+## Experiment Tracking and Model Registries
+
+During the R&D phase, a data scientist might train 50 different variations of a model. Tools like **MLflow** or **Weights & Biases (W&B)** track every experiment. They record the hyperparameters used, the resulting evaluation metrics, and the actual model artifact (the weights file).
+
+Once a model is deemed good enough, it is pushed to a **Model Registry**. The registry acts as a version control system for models, tracking their lifecycle stages (e.g., `Staging` → `Production` → `Archived`).
+
+<SVGDiagram src="/diagrams/mlops.svg" caption="The complete MLOps lifecycle from data to monitoring." />
+
+## CI/CD for Machine Learning
+
+Continuous Integration and Continuous Deployment (CI/CD) in software engineering involves running unit tests. In MLOps, CI/CD is significantly more complex because you are testing both code *and* data.
+
+An MLOps pipeline includes:
+- **Data Validation Gates:** Checking for missing values or unexpected data distributions before training begins.
+- **Model Evaluation Gates:** After training, the model is automatically scored on a hold-out set. The CI/CD pipeline will halt deployment if the new model's accuracy is worse than the currently deployed model.
+
+## Monitoring and Drift
+
+A model's performance naturally degrades over time as the real world changes. This is called **Drift**.
+- **Data Drift (Covariate Shift):** The distribution of the input features changes (e.g., a new marketing campaign brings in users from a different demographic).
+- **Concept Drift:** The relationship between the features and the target variable changes (e.g., what constituted a "spam" email in 2015 is different from what constitutes spam today).
+
+MLOps teams monitor this using metrics like the **Population Stability Index (PSI)**, which measures how much a feature's distribution has shifted between the training set and the live production traffic.
+
+<SimpleChart
+  title="Model Degradation Over Time (Concept Drift)"
+  data={[
+    { month: 1, accuracy: 92 },
+    { month: 2, accuracy: 91 },
+    { month: 3, accuracy: 88 },
+    { month: 4, accuracy: 82 },
+    { month: 5, accuracy: 75 }
+  ]}
+  xKey="month"
+  yKey="accuracy"
+/>
+
+<Quiz
+  question="Why is an Online Feature Store typically backed by an in-memory database like Redis?"
+  options={[
+    "Because it needs to store massive, petabyte-scale historical datasets.",
+    "Because it needs to serve features to the model at inference time with single-digit millisecond latency.",
+    "Because Redis automatically performs point-in-time joins.",
+    "Because it is required for MLflow experiment tracking."
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="If the fundamental rules of the system you are modeling change (e.g. user preferences shift due to a global event), causing your model's accuracy to plummet, what kind of drift is this?"
+  options={[
+    "Data Drift (Covariate Shift)",
+    "Concept Drift",
+    "Hardware Drift",
+    "Label Leakage"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+Set up a local MLflow tracking server using `pip install mlflow` and `mlflow ui`. Write a simple scikit-learn script that trains a Random Forest, and use `mlflow.log_param()` and `mlflow.log_metric()` to track your experiments in the UI.
+</Callout>

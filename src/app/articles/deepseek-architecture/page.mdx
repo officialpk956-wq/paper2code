@@ -1,0 +1,112 @@
+import { Callout } from '@/components/content/Callout';
+import { Quiz } from '@/components/content/Quiz';
+import { SVGDiagram } from '@/components/content/SVGDiagram';
+import { SimpleChart } from '@/components/content/SimpleChart';
+
+export const metadata = {
+  title: 'DeepSeek Architecture: $6M Training, GPT-4 Quality',
+  description: 'How DeepSeek trained a GPT-4-class model for 1/10th the cost — Mixture of Experts, Multi-Head Latent Attention, the R1 reasoning breakthrough, and what it means for AI.',
+};
+
+# DeepSeek Architecture: $6M Training, GPT-4 Quality
+
+<Callout type="tip" title="Key Insight">
+In January 2025, DeepSeek released a model matching GPT-4 in most benchmarks, trained for an estimated $6M — versus GPT-4's estimated $100M+ training cost. This wasn't luck. It was the result of three specific architectural innovations: Mixture of Experts (compute efficiency), Multi-Head Latent Attention (memory efficiency), and FP8 training (hardware efficiency). Each addressed a different cost bottleneck.
+</Callout>
+
+## Mixture of Experts: More Capacity, Same FLOPs
+
+A standard transformer has a feedforward layer that activates all its neurons for every token. DeepSeek-V3 uses **Mixture of Experts (MoE)** — the feedforward layer is replaced by 256 expert networks, but only 8 experts are activated per token. The result: 671 billion total parameters but only 37 billion active parameters per forward pass.
+
+For inference, this means you pay the compute cost of a 37B dense model while having the capacity of a 671B model. The different experts specialize implicitly during training: some experts handle code, others handle math, others handle factual recall. This specialization happens without explicit supervision — the router (a small learned network) dispatches tokens to experts and gradient descent teaches which tokens should go to which experts.
+
+<SVGDiagram src="/diagrams/moe-architecture.svg" caption="MoE vs dense transformer: 256 experts, top-8 selected per token. DeepSeek-V3 has 671B total parameters but only 37B active — same FLOPs cost as a 37B dense model." />
+
+**Load balancing** is the critical challenge in MoE training. Without a balancing constraint, the router quickly learns to send all tokens to the 2–3 most capable experts, ignoring the others. The remaining experts receive no gradient signal and never improve — wasting 96% of the model's capacity. DeepSeek adds an auxiliary loss term that penalizes uneven expert utilization, forcing roughly equal token distribution across experts. Monitoring expert utilization during training is essential: a good training run shows all 256 experts receiving roughly 1/256th of tokens; a collapsed training run shows a few experts receiving 80%+ of tokens.
+
+<SimpleChart
+  title="Active vs total parameters: MoE efficiency vs dense models"
+  data={[
+    { model: 1, total_b: 7, active_b: 7 },
+    { model: 2, total_b: 37, active_b: 37 },
+    { model: 3, total_b: 70, active_b: 70 },
+    { model: 4, total_b: 236, active_b: 21 },
+    { model: 5, total_b: 671, active_b: 37 },
+  ]}
+  xKey="model"
+  yKey="active_b"
+/>
+
+## Multi-Head Latent Attention: Compressing the KV Cache
+
+The KV cache (covered in the LLM serving article) stores keys and values from all past tokens so they don't need to be recomputed. For long sequences and large batches, the KV cache becomes the primary memory bottleneck.
+
+Standard Multi-Head Attention with 128 heads and head dimension 128 stores `batch × seq_len × 128 × 128 × 2` values — for a 4K sequence and batch size 1, that's ~100MB per layer. For 61 layers at batch size 16, you're storing 100GB just for KV cache.
+
+DeepSeek's **Multi-Head Latent Attention (MLA)** compresses the keys and values into a single low-dimensional latent vector before storing them in the cache. The latent vector is much smaller than the original K and V tensors. When computing attention for a new token, the stored latent vectors are decompressed back to full K and V. The decompression adds a small compute overhead, but the memory savings are 6×.
+
+At serving time, this means 6× more concurrent requests can be served on the same GPU, or 6× longer context can be handled for the same memory budget. This is why DeepSeek's inference cost is 10–20× lower than a dense model of similar capability — MLA enables dramatically better GPU utilization.
+
+<Callout type="info" title="MLA vs Grouped Query Attention">
+Llama 3 uses Grouped Query Attention (GQA), which reduces KV cache by sharing key/value heads across multiple query heads (e.g., 8 query heads per KV head → 8× reduction). MLA takes a different approach: compress K and V together into a single latent vector via a learned low-rank projection. MLA achieves 6× compression without the quality tradeoff that comes from head-sharing in GQA.
+</Callout>
+
+## DeepSeek-R1: Reasoning from Pure RL
+
+DeepSeek-R1 (January 2025) is architecturally separate from V3 — it's the reasoning model. The remarkable result: training on math and code problems using pure reinforcement learning, without any supervised examples of reasoning traces, spontaneously produced chain-of-thought reasoning.
+
+The training procedure for R1-Zero (the pure RL version): start with a base language model, generate groups of candidate answers to math/code problems, reward correct answers (binary: right or wrong), compute relative rewards within each group, and update the policy using GRPO (Group Relative Policy Optimization). No human-written reasoning examples were needed.
+
+What emerged from this training: the model began inserting extended thinking sequences ("Let me reconsider..." / "Actually, I think..." / "Hmm, that doesn't work, let me try...") before arriving at answers. These thinking tokens — which look like chain-of-thought — were never directly trained. They emerged as a learned strategy because they correlated with correct final answers.
+
+**GRPO** (Group Relative Policy Optimization) differs from standard PPO in a key way: instead of training a separate reward model, GRPO computes rewards relative to other samples in the group. For a batch of 8 candidate answers to the same problem, the reward for each is normalized against the group average: `advantage = (reward - mean(group_rewards)) / std(group_rewards)`. This makes the signal independent of the absolute difficulty of problems — the model learns to produce better-than-average answers regardless of whether the problem is easy or hard.
+
+## The Cost Story: Where the $6M Came From
+
+GPT-4's estimated $100M+ training cost vs. DeepSeek-V3's claimed $6M (for ~2T tokens of pretraining). The gap comes from five engineering decisions:
+
+**FP8 training** — DeepSeek trained in FP8 (8-bit floating point) rather than BF16. FP8 roughly halves memory bandwidth requirements and enables 2× the throughput on H800 GPUs. They handled FP8 instability with tile-wise quantization (quantizing small blocks rather than entire tensors) and falling back to BF16 for sensitive operations.
+
+**H800 instead of H100** — DeepSeek used H800 chips (the export-restricted H100 variant with half the NVLink bandwidth). They compensated with DualPipe, a custom pipeline schedule that overlaps computation and communication to hide the bandwidth bottleneck.
+
+**MoE reduces active compute** — 37B active parameters vs. a hypothetical 671B dense model means ~18× less compute per token.
+
+**MLA reduces memory** — More tokens can be packed into each GPU's KV cache budget, improving batch utilization and throughput.
+
+**Chinchilla-optimal data** — Training on high-quality data for a compute-optimal number of tokens rather than over-training on massive raw datasets.
+
+## Real-World Case Studies
+
+**The disruption moment (January 2025):** DeepSeek-R1's release caused Nvidia stock to drop 17% in a single day — the largest single-day market cap loss in stock market history ($590 billion). The reasoning: if frontier AI can be trained 10–20× more cheaply, the demand trajectory for Nvidia GPUs might be lower than previously assumed. The market reaction illustrated how directly AI infrastructure economics depend on model efficiency.
+
+**R1-Zero's emergent behaviors:** The DeepSeek team documented unexpected emergent behaviors during pure RL training. The model developed what they called "aha moments" — mid-solution self-corrections where the model recognized it was on the wrong path and switched strategies. These weren't trained explicitly. They're a property that emerges when training signal is purely outcome-based — the model discovers that verifying and correcting intermediate steps leads to better final answers.
+
+**Distillation cascade:** DeepSeek-R1's reasoning capabilities can be distilled into much smaller models. Fine-tuning Qwen-7B on DeepSeek-R1's reasoning traces produces a 7B model that outperforms OpenAI's o1-mini on math and coding benchmarks. A 7B model achieving frontier reasoning performance by learning from a larger model's outputs — rather than from expensive RL training — is a significant finding about the relationship between scale and capability.
+
+<Quiz
+  question="DeepSeek-V3 has 671B total parameters but only 37B active per token. What does this mean for training cost compared to a 671B dense model?"
+  options={[
+    "Training cost is proportional to total parameters — 671B dense costs the same",
+    "Training cost scales with active parameters per forward pass, so MoE training is roughly 671/37 ≈ 18× cheaper per token",
+    "MoE models cost more to train because the router adds overhead",
+    "Training cost depends only on dataset size, not model parameters"
+  ]}
+  answer={1}
+/>
+
+<Quiz
+  question="DeepSeek-R1-Zero was trained with pure RL on math/code problems using only binary correct/incorrect reward — no chain-of-thought examples. What emerged?"
+  options={[
+    "The model learned to give shorter answers to avoid being marked wrong",
+    "The model developed extended thinking sequences spontaneously, discovering that verifying intermediate steps improves final answer accuracy",
+    "The model only learned to solve the specific problems in the training set",
+    "Pure RL without supervision produced worse results than SFT baseline"
+  ]}
+  answer={1}
+/>
+
+## Practice
+
+<Callout type="info">
+The LLM serving article covers the KV cache that MLA compresses. The transformer architectures article traces the lineage from the original Transformer through GPT-4 to DeepSeek's architectural innovations. For hands-on exploration, DeepSeek models are open-weight — you can run DeepSeek-V2-Lite locally to observe MoE expert routing patterns.
+</Callout>
