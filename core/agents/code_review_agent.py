@@ -21,16 +21,16 @@ def generate_code_review(
     )
     prompt = f"""You are a senior software engineer reviewing a student's coding solution.
 
-Problem: {problem_title}
-Description: {problem_description[:800]}
+Problem: <problem_title>{problem_title}</problem_title>
+Description: <problem_description>{problem_description[:800]}</problem_description>
 
 Test cases (first 3):
-{tc_summary}
+<test_cases>{tc_summary}</test_cases>
 
 Student's code:
-```python
+<student_code>
 {user_code[:2000]}
-```
+</student_code>
 Execution result: {status}
 stdout: {stdout[:500] if stdout else "(empty)"}
 stderr: {stderr[:500] if stderr else "(empty)"}
