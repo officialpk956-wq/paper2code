@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -12,7 +12,7 @@ from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem,
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 
 # ---------------------------------------------------------------------------
@@ -29,134 +29,18 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 # GET /api/admin/stats
 # ---------------------------------------------------------------------------
 
-@router.get("/stats", include_in_schema=False)
-def admin_stats(
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-    total_users        = db.query(func.count(User.id)).scalar() or 0
-    verified_users     = db.query(func.count(User.id)).filter(User.is_email_verified == True).scalar() or 0
-    users_today        = db.query(func.count(User.id)).filter(User.created_at >= today).scalar() or 0
-    papers_today       = db.query(func.count(Paper.id)).filter(Paper.created_at >= today).scalar() or 0
-    submissions_today  = db.query(func.count(DojoSubmission.id)).filter(DojoSubmission.created_at >= today).scalar() or 0
-    llm_cost_today     = db.query(func.sum(UsageLog.cost_usd)).filter(UsageLog.created_at >= today).scalar() or 0
-    llm_calls_today    = db.query(func.count(UsageLog.id)).filter(UsageLog.created_at >= today).scalar() or 0
-    tasks_running      = db.query(func.count(Task.id)).filter(Task.status == "running").scalar() or 0
-    tasks_failed_today = db.query(func.count(Task.id)).filter(
-        Task.status == "failed", Task.created_at >= today
-    ).scalar() or 0
-
-    return {
-        "users": {
-            "total": total_users,
-            "verified": verified_users,
-            "new_today": users_today,
-            "verification_rate": round(verified_users / max(total_users, 1) * 100, 1),
-        },
-        "content": {
-            "papers_today": papers_today,
-            "submissions_today": submissions_today,
-        },
-        "llm": {
-            "calls_today": llm_calls_today,
-            "cost_today_usd": round(float(llm_cost_today), 4),
-            "avg_cost_per_call": round(float(llm_cost_today) / max(llm_calls_today, 1), 5),
-        },
-        "tasks": {
-            "running": tasks_running,
-            "failed_today": tasks_failed_today,
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 # ---------------------------------------------------------------------------
 # GET /api/admin/costs
 # ---------------------------------------------------------------------------
 
-@router.get("/costs", include_in_schema=False)
-def admin_costs(
-    days: int = 7,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-
-    by_action = db.query(
-        UsageLog.action,
-        func.count(UsageLog.id).label("calls"),
-        func.sum(UsageLog.cost_usd).label("total_cost"),
-    ).filter(UsageLog.created_at >= since).group_by(UsageLog.action).all()
-
-    top_users = db.query(
-        UsageLog.user_id,
-        func.sum(UsageLog.cost_usd).label("total_cost"),
-        func.count(UsageLog.id).label("calls"),
-    ).filter(
-        UsageLog.created_at >= since,
-        UsageLog.user_id.isnot(None),
-    ).group_by(UsageLog.user_id).order_by(
-        func.sum(UsageLog.cost_usd).desc()
-    ).limit(20).all()
-
-    return {
-        "period_days": days,
-        "by_action": [
-            {
-                "action": r.action,
-                "calls": r.calls,
-                "total_cost_usd": round(float(r.total_cost or 0), 4),
-            }
-            for r in by_action
-        ],
-        "top_users_by_cost": [
-            {
-                "user_id": r.user_id,
-                "calls": r.calls,
-                "total_cost_usd": round(float(r.total_cost or 0), 4),
-            }
-            for r in top_users
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
 # GET /api/admin/users
 # ---------------------------------------------------------------------------
 
-@router.get("/users", include_in_schema=False)
-def admin_list_users(
-    page: int = 1,
-    limit: int = 50,
-    q: Optional[str] = None,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    query = db.query(User)
-    if q:
-        query = query.filter(User.email.ilike(f"%{q}%"))
-    total = query.count()
-    users = query.order_by(User.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
-    return {
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "users": [
-            {
-                "id": u.id,
-                "email": u.email,
-                "name": u.name,
-                "is_admin": u.is_admin,
-                "is_email_verified": u.is_email_verified,
-                "streak": u.streak,
-                "points": u.points,
-                "created_at": u.created_at.isoformat() if u.created_at else None,
-            }
-            for u in users
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -168,24 +52,6 @@ class AdminUserUpdate(BaseModel):
     is_email_verified: Optional[bool] = None
 
 
-@router.patch("/users/{user_id}", include_in_schema=False)
-def admin_update_user(
-    user_id: int,
-    body: AdminUserUpdate,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    if user_id == admin.id:
-        raise HTTPException(status_code=400, detail="Cannot modify your own admin account")
-    user = db.query(User).filter_by(id=user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if body.is_admin is not None:
-        user.is_admin = body.is_admin
-    if body.is_email_verified is not None:
-        user.is_email_verified = body.is_email_verified
-    db.commit()
-    return {"id": user.id, "email": user.email, "is_admin": user.is_admin, "is_email_verified": user.is_email_verified}
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +59,13 @@ def admin_update_user(
 # ---------------------------------------------------------------------------
 
 class AdminProblemCreate(BaseModel):
-    id: str
-    slug: str
-    title: str
-    difficulty: str
-    category: str
-    description: str
-    python_template: str = ""
+    id: str = Field(..., max_length=256)
+    slug: str = Field(..., max_length=256)
+    title: str = Field(..., max_length=500)
+    difficulty: str = Field(..., max_length=50)
+    category: str = Field(..., max_length=100)
+    description: str = Field(..., max_length=50000)
+    python_template: str = Field(default="", max_length=65536)
     test_cases: List[Any] = []
     hints: List[Any] = []
     explanation: List[Any] = []
@@ -209,17 +75,17 @@ class AdminProblemCreate(BaseModel):
     related_math: List[Any] = []
     learning_points: List[Any] = []
     estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = None
+    visualization_url: Optional[str] = Field(default=None, max_length=2048)
     time_limit_ms: Optional[int] = None   # None → global default (10 000 ms)
 
 
 class AdminProblemUpdate(BaseModel):
-    slug: Optional[str] = None
-    title: Optional[str] = None
-    difficulty: Optional[str] = None
-    category: Optional[str] = None
-    description: Optional[str] = None
-    python_template: Optional[str] = None
+    slug: Optional[str] = Field(default=None, max_length=256)
+    title: Optional[str] = Field(default=None, max_length=500)
+    difficulty: Optional[str] = Field(default=None, max_length=50)
+    category: Optional[str] = Field(default=None, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=50000)
+    python_template: Optional[str] = Field(default=None, max_length=65536)
     test_cases: Optional[List[Any]] = None
     hints: Optional[List[Any]] = None
     explanation: Optional[List[Any]] = None
@@ -229,7 +95,7 @@ class AdminProblemUpdate(BaseModel):
     related_math: Optional[List[Any]] = None
     learning_points: Optional[List[Any]] = None
     estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = None
+    visualization_url: Optional[str] = Field(default=None, max_length=2048)
     time_limit_ms: Optional[int] = None
 
 
@@ -357,110 +223,12 @@ def admin_restore_problem(
 # GET /api/admin/users/{user_id}  (individual detail)
 # ---------------------------------------------------------------------------
 
-@router.get("/users/{user_id}", include_in_schema=False)
-def admin_get_user(
-    user_id: int,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    user = db.query(User).filter_by(id=user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    papers_count = db.query(func.count(Task.id)).filter(
-        Task.user_id == user_id, Task.type == "paper.codegen"
-    ).scalar() or 0
-    submissions_count = db.query(func.count(DojoSubmission.id)).filter_by(
-        user_id=user_id
-    ).scalar() or 0
-    recent_xp = (
-        db.query(XPEvent)
-        .filter_by(user_id=user_id)
-        .order_by(XPEvent.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    recent_papers = (
-        db.query(Paper)
-        .filter_by(uploaded_by=user_id)
-        .order_by(Paper.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    recent_submissions = (
-        db.query(DojoSubmission)
-        .filter_by(user_id=user_id)
-        .order_by(DojoSubmission.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "avatar_url": user.avatar_url,
-        "is_admin": user.is_admin,
-        "is_email_verified": user.is_email_verified,
-        "streak": user.streak,
-        "points": user.points,
-        "weekly_points": user.weekly_points,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "last_active": user.last_active.isoformat() if user.last_active else None,
-        "stats": {
-            "papers_uploaded": papers_count,
-            "dojo_submissions": submissions_count,
-        },
-        "xp_events": [
-            {
-                "id": e.id,
-                "action": e.action,
-                "amount": e.amount,
-                "entity_id": e.entity_id,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in recent_xp
-        ],
-        "papers": [
-            {
-                "id": p.id,
-                "title": p.title,
-                "visibility": p.visibility,
-                "is_flagged": p.is_flagged,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-            }
-            for p in recent_papers
-        ],
-        "submissions": [
-            {
-                "id": s.id,
-                "problem_id": s.problem_id,
-                "passed": s.passed,
-                "time_ms": s.time_ms,
-                "is_best": s.is_best,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
-            }
-            for s in recent_submissions
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
 # DELETE /api/admin/users/{user_id}
 # ---------------------------------------------------------------------------
 
-@router.delete("/users/{user_id}", include_in_schema=False, status_code=200)
-def admin_delete_user(
-    user_id: int,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    if user_id == admin.id:
-        raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
-    user = db.query(User).filter_by(id=user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    db.delete(user)
-    db.commit()
-    return {"deleted": True, "user_id": user_id}
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +311,7 @@ def admin_moderation_queue(
 
 
 class PaperFlagRequest(BaseModel):
-    reason: str = "policy_violation"
+    reason: str = Field(default="policy_violation", max_length=500)
 
 
 @router.post("/papers/{paper_id}/flag", include_in_schema=False)
@@ -592,72 +360,12 @@ def admin_delete_paper(
 # GET /api/admin/xp-events  — audit trail of all XP events
 # ---------------------------------------------------------------------------
 
-@router.get("/xp-events", include_in_schema=False)
-def admin_xp_events(
-    page: int = 1,
-    limit: int = 100,
-    user_id: Optional[int] = None,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    query = db.query(XPEvent)
-    if user_id is not None:
-        query = query.filter(XPEvent.user_id == user_id)
-    total = query.count()
-    events = (
-        query.order_by(XPEvent.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
-    return {
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "events": [
-            {
-                "id": e.id,
-                "user_id": e.user_id,
-                "action": e.action,
-                "amount": e.amount,
-                "entity_id": e.entity_id,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in events
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
 # Leaderboard archive: GET /api/admin/leaderboard/archive
 # ---------------------------------------------------------------------------
 
-@router.get("/leaderboard/archive", include_in_schema=False)
-def admin_leaderboard_archive(
-    weeks: int = 4,
-    admin: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
-    rows = (
-        db.query(LeaderboardArchive)
-        .filter(LeaderboardArchive.week_start >= since)
-        .order_by(LeaderboardArchive.week_start.desc(), LeaderboardArchive.rank)
-        .limit(500)
-        .all()
-    )
-    return {
-        "weeks": weeks,
-        "entries": [
-            {
-                "week_start": r.week_start.isoformat(),
-                "user_id": r.user_id,
-                "weekly_points": r.weekly_points,
-                "rank": r.rank,
-            }
-            for r in rows
-        ],
-    }
 
 # ---------------------------------------------------------------------------
 # Admin Paper Challenges CRUD
@@ -666,18 +374,18 @@ def admin_leaderboard_archive(
 from backend.models import PaperChallenge, PaperChallengePart
 
 class AdminPaperChallengeCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
+    title: str = Field(..., max_length=500)
+    description: Optional[str] = Field(default=None, max_length=50000)
     order_idx: int = 0
 
 class AdminPaperChallengePartCreate(BaseModel):
-    title: str
-    description_md: str
-    paper_section_md: Optional[str] = None
-    setup_code: Optional[str] = None
-    starter_code: str
-    solution_code: Optional[str] = None
-    test_code: str
+    title: str = Field(..., max_length=500)
+    description_md: str = Field(..., max_length=50000)
+    paper_section_md: Optional[str] = Field(default=None, max_length=50000)
+    setup_code: Optional[str] = Field(default=None, max_length=65536)
+    starter_code: str = Field(..., max_length=65536)
+    solution_code: Optional[str] = Field(default=None, max_length=65536)
+    test_code: str = Field(..., max_length=65536)
     unlock_requires_part_id: Optional[int] = None
     xp_reward: int = 50
     order_idx: int = 0

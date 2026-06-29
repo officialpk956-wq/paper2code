@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Header, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
@@ -87,7 +87,7 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
 
 
 class DojoExerciseSubmitRequest(BaseModel):
-    exercise_id: str
+    exercise_id: str = Field(..., max_length=256)
     passed: bool
     attempts: int = 1
 
@@ -123,7 +123,11 @@ def dojo_get_solution(
         raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
     return sol
 
-@router.post("/dojo/submit_exercise") # Adjusted path slightly to avoid collision with the piston submit
+# deprecated alias, remove after frontend migration
+
+@router.post("/dojo/submissions", deprecated=False)
+
+@router.post("/dojo/submit_exercise", deprecated=True) # Adjusted path slightly to avoid collision with the piston submit
 def dojo_submit(
     request: DojoExerciseSubmitRequest,
     current_user: User = Depends(get_current_user),
@@ -305,7 +309,7 @@ def _dojo_user_key(request: Request) -> str:
     if auth.startswith("Bearer "):
         try:
             import jwt as _jwt
-            from backend.services.auth_service import SECRET_KEY, ALGORITHM
+            from backend.modules.auth.config import SECRET_KEY, ALGORITHM
             payload = _jwt.decode(
                 auth[7:],
                 SECRET_KEY,
@@ -321,11 +325,15 @@ def _dojo_user_key(request: Request) -> str:
 
 
 class DojoCodeSubmitRequest(BaseModel):
-    problem_id: str
-    code: str
-    stdin: Optional[str] = None
+    problem_id: str = Field(..., max_length=256)
+    code: str = Field(..., max_length=65536)
+    stdin: Optional[str] = Field(default=None, max_length=65536)
 
-@router.post("/dojo/submit")
+# deprecated alias, remove after frontend migration
+
+@router.post("/dojo/code-submissions", deprecated=False)
+
+@router.post("/dojo/submit", deprecated=True)
 @limiter.limit("30/hour", key_func=_dojo_user_key)
 async def submit_dojo_code(
     req: DojoCodeSubmitRequest,

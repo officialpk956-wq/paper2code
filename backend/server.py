@@ -28,7 +28,7 @@ if _dsn:
 
 limiter = Limiter(key_func=get_remote_address)
 
-from backend.routers import health, auth, papers, dojo, learning, lab, tasks, user, admin, search, leaderboard, notifications, achievements
+from backend.routers import health, auth, papers, papers_pipeline, papers_analysis, dojo, learning, tutor, assessment, lab, tasks, user, admin, admin_users, admin_metrics, search, leaderboard, notifications, achievements
 from backend.routers.oauth import router as oauth_router
 from backend.routers.announcements import router as announcements_router
 from backend.routers.paper_challenges import router as paper_challenges_router
@@ -68,8 +68,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Add Request ID and Security headers
 app.add_middleware(RequestIDMiddleware)
-from backend.modules.security.middleware.security_headers import SecurityHeadersMiddleware
-app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(SlackAlertingMiddleware)
 app.add_middleware(SentryUserContextMiddleware)
@@ -92,18 +90,27 @@ app.add_middleware(
     allow_headers=get_allowed_headers(),
 )
 
+from backend.middleware.security_headers import SecurityHeadersMiddleware
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Mount Routers
 from backend.modules.auth.api.v1 import router as new_auth_router
 app.include_router(health.router)
 app.include_router(new_auth_router)
+app.include_router(papers_pipeline.router)
+app.include_router(papers_analysis.router)
 app.include_router(papers.router)
 app.include_router(dojo.router)
 app.include_router(learning.router)
+app.include_router(tutor.router)
+app.include_router(assessment.router)
 app.include_router(lab.router)
 app.include_router(tasks.router)
 app.include_router(user.router)
 app.include_router(user.me_router)
 app.include_router(admin.router)
+app.include_router(admin_users.router)
+app.include_router(admin_metrics.router)
 app.include_router(search.router)
 app.include_router(leaderboard.router)
 app.include_router(notifications.router)

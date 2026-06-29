@@ -19,7 +19,8 @@ import secrets
 import logging
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException
+from backend.modules.security.rate_limit import check_sliding_window_rate_limit
+from fastapi import Request, APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -61,10 +62,15 @@ def _get_redis():
     return session_redis
 
 @router.get("/{provider}/authorize-url")
-def get_authorize_url(provider: str, redirect_uri: str = ""):
+def get_authorize_url(provider: str, request: Request, redirect_uri: str = ""):
     """
     Return the OAuth authorization URL the frontend should redirect the user to.
     """
+    from backend.modules.auth.middleware.rate_limit import get_client_ip
+    client_ip = get_client_ip(request)
+    allowed = check_sliding_window_rate_limit(f"oauth:authorize:{client_ip}", limit=10, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many authorization requests. Try again in a minute.")
     cfg = _PROVIDERS.get(provider)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
@@ -109,10 +115,19 @@ class ExchangeRequest(BaseModel):
 
 
 @router.post("/{provider}/exchange")
-async def exchange_code(provider: str, body: ExchangeRequest, db: Session = Depends(get_db)):
+async def exchange_code(provider: str, body: ExchangeRequest, request: Request, db: Session = Depends(get_db)):
     """
     Exchange an authorization code for a JWT. Creates or links the user account.
     """
+    from backend.modules.auth.middleware.rate_limit import get_client_ip
+    client_ip = get_client_ip(request)
+    allowed = check_sliding_window_rate_limit(f"oauth:exchange:{client_ip}", limit=5, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many exchange requests. Try again in a minute.")
+    
+    allowed_state = check_sliding_window_rate_limit(f"oauth:state_attempt:{body.state[:8]}", limit=3, window_seconds=300)
+    if not allowed_state:
+        raise HTTPException(status_code=429, detail="Too many attempts with this state token.")
     cfg = _PROVIDERS.get(provider)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
