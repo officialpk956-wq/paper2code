@@ -21,8 +21,7 @@ _in_memory_store = {}
 
 def check_sliding_window_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     """Redis or in-memory sliding window rate limiter."""
-    import sys
-    if "pytest" in sys.modules and not os.getenv("TEST_RATE_LIMITS"):
+    if os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "false":
         return True
 
     now = int(time.time())
@@ -37,7 +36,7 @@ def check_sliding_window_rate_limit(key: str, limit: int, window_seconds: int) -
             _, current_count, _, _ = pipe.execute()
             return current_count <= limit
         except Exception as e:
-            logger.error(f"Redis rate limit check error: {e}")
+            logger.exception(f"Redis rate limit check error: {e}")
             
     # In-memory fallback
     if key not in _in_memory_store:
