@@ -21,7 +21,7 @@ def send_email_sync(to_email: str, subject: str, html_body: str) -> bool:
         resend.Emails.send({"from": FROM_EMAIL, "to": to_email, "subject": subject, "html": html_body})
         return True
     except Exception as e:
-        logger.error("Failed to send email to %s: %s", to_email, e)
+        logger.exception("Failed to send email to %s: %s", to_email, e)
         return False
 
 
