@@ -95,7 +95,7 @@ def index_paper(paper_id: int, title: str, abstract: str, authors: str = "") -> 
         )
         return True
     except Exception as e:
-        logger.error("index_paper failed for paper %s: %s", paper_id, e)
+        logger.exception("index_paper failed for paper %s: %s", paper_id, e)
         return False
 
 
@@ -119,7 +119,7 @@ def semantic_search(query: str, limit: int = 10) -> list[int]:
         )
         return [int(r.id) for r in results]
     except Exception as e:
-        logger.error("semantic_search failed: %s", e)
+        logger.exception("semantic_search failed: %s", e)
         return []
 
 
@@ -136,5 +136,5 @@ def delete_paper(paper_id: int) -> bool:
         )
         return True
     except Exception as e:
-        logger.error("delete_paper vector failed: %s", e)
+        logger.exception("delete_paper vector failed: %s", e)
         return False

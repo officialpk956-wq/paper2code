@@ -613,6 +613,9 @@ async def upload_paper(
         except Exception:
             pass
 
+        from backend import metrics
+        metrics.increment("papers_uploaded_total")
+
         return {
             "task_id":  task.id,
             "status":   "pending",
