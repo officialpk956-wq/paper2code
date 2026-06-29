@@ -483,7 +483,7 @@ def tutor_ask(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Tutor ask error: %s", exc)
+        logger.exception("Tutor ask error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 @router.post("/tutor/stream")

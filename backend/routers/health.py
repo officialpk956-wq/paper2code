@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from backend.database import ping_db
+import httpx
 
 router = APIRouter(tags=["Health"])
 
@@ -11,10 +12,10 @@ from backend.database import get_db
 
 @router.get("/health")
 @router.get("/api/health")
-async def health_check(db: Session = Depends(get_db)):
+def health_check(db: Session = Depends(get_db)):
     checks = {}
     overall = "healthy"
-    
+
     # Check DB
     try:
         db.execute(text("SELECT 1"))

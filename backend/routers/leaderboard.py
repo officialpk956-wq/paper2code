@@ -67,6 +67,15 @@ def get_leaderboard(
     if period not in _VALID_PERIODS:
         raise HTTPException(400, f"period must be one of: {', '.join(_VALID_PERIODS)}")
 
+    from backend.redis_config import cache_redis
+    import json
+    
+    cache_key = f"leaderboard:{period}:{category}:{limit}"
+    if cache_redis:
+        cached = cache_redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
     since = _period_start(period)
     solved_sq = _solved_count_subquery()
 
@@ -119,10 +128,15 @@ def get_leaderboard(
         for i, r in enumerate(rows)
     ]
 
-    return {
+    result = {
         "period": period,
         "category": category or None,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
         "total_ranked": len(leaders),
         "leaders": leaders,
     }
+    
+    if cache_redis:
+        cache_redis.setex(cache_key, 60, json.dumps(result))
+        
+    return result

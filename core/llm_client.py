@@ -10,6 +10,13 @@ PRIMARY_MODEL  = os.getenv("LLM_PRIMARY_MODEL",  "groq/llama-3.3-70b-versatile")
 FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini/gemini-2.0-flash")
 # Backward-compat alias (some callers do `if GROQ_API_KEY:`)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Simple circuit breaker state
+_circuit_open = False
+_circuit_open_until = 0
+_failure_count = 0
+FAILURE_THRESHOLD = 5
+CIRCUIT_OPEN_DURATION = 60  # seconds
+
 def llm_complete(
     prompt: str,
     user_id: int | None = None,
@@ -19,6 +26,17 @@ def llm_complete(
 ) -> str:
     """Synchronous LLM completion with automatic provider fallback."""
     from litellm import completion, exceptions as litellm_exc
+    import time
+    global _circuit_open, _circuit_open_until, _failure_count
+    
+    now = time.time()
+    if _circuit_open and now < _circuit_open_until:
+        raise RuntimeError("LLM circuit breaker open — service temporarily unavailable")
+    
+    if _circuit_open and now >= _circuit_open_until:
+        _circuit_open = False  # half-open: try again
+        _failure_count = 0
+
     messages = [{"role": "user", "content": prompt}]
     target   = model or PRIMARY_MODEL
     try:
@@ -29,6 +47,13 @@ def llm_complete(
             fallbacks=[FALLBACK_MODEL] if target != FALLBACK_MODEL else [],
         )
         text = resp.choices[0].message.content or ""
+        _failure_count = 0  # success resets counter
+    except (litellm_exc.APIConnectionError, litellm_exc.RateLimitError, litellm_exc.APIError) as e:
+        _failure_count += 1
+        if _failure_count >= FAILURE_THRESHOLD:
+            _circuit_open = True
+            _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+        raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
     except litellm_exc.AuthenticationError as e:
         raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
     except Exception as e:
@@ -44,16 +69,40 @@ async def llm_complete_async(
     db_session=None,
 ) -> str:
     """Async LLM completion with automatic provider fallback."""
-    from litellm import acompletion
+    from litellm import acompletion, exceptions as litellm_exc
+    import time
+    global _circuit_open, _circuit_open_until, _failure_count
+    
+    now = time.time()
+    if _circuit_open and now < _circuit_open_until:
+        raise RuntimeError("LLM circuit breaker open — service temporarily unavailable")
+    
+    if _circuit_open and now >= _circuit_open_until:
+        _circuit_open = False
+        _failure_count = 0
+
     messages = [{"role": "user", "content": prompt}]
     target   = model or PRIMARY_MODEL
-    resp = await acompletion(
-        model=target,
-        messages=messages,
-        temperature=0,
-        fallbacks=[FALLBACK_MODEL] if target != FALLBACK_MODEL else [],
-    )
-    text = resp.choices[0].message.content or ""
+    try:
+        resp = await acompletion(
+            model=target,
+            messages=messages,
+            temperature=0,
+            fallbacks=[FALLBACK_MODEL] if target != FALLBACK_MODEL else [],
+        )
+        text = resp.choices[0].message.content or ""
+        _failure_count = 0
+    except (litellm_exc.APIConnectionError, litellm_exc.RateLimitError, litellm_exc.APIError) as e:
+        _failure_count += 1
+        if _failure_count >= FAILURE_THRESHOLD:
+            _circuit_open = True
+            _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+        raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+    except litellm_exc.AuthenticationError as e:
+        raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
+    except Exception as e:
+        logger.error("llm_complete_async failed: %s", e)
+        raise
     _log_usage(resp, user_id, action, db_session)
     return text
 def classify_section(text_chunk: str, max_retries: int = 3) -> str:

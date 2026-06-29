@@ -7,15 +7,7 @@ from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
-_redis_client = None
-try:
-    _redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    _redis_client.ping()
-except Exception as e:
-    logger.warning(f"Could not connect to Redis at {REDIS_URL}. Falling back to in-memory: {e}")
-    _redis_client = None
+from backend.redis_config import rate_limit_redis as _redis_client
 
 _in_memory_store = {}
 

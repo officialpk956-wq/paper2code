@@ -57,9 +57,8 @@ _PROVIDERS = {
 # ---------------------------------------------------------------------------
 
 def _get_redis():
-    import redis as redis_lib
-    url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    return redis_lib.from_url(url, decode_responses=True)
+    from backend.redis_config import session_redis
+    return session_redis
 
 @router.get("/{provider}/authorize-url")
 def get_authorize_url(provider: str, redirect_uri: str = ""):

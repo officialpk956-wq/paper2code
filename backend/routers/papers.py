@@ -302,6 +302,17 @@ def list_papers(
     db: Session = Depends(get_db),
     current_user=Depends(get_optional_user),
 ):
+    from backend.redis_config import cache_redis
+    import json
+    
+    user_id = current_user.id if current_user else None
+    cache_key = f"papers:list:{q}:{domain}:{user_id}"
+    
+    if cache_redis:
+        cached = cache_redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
     from backend.models import Paper
     from sqlalchemy import or_
     query = db.query(Paper)
@@ -375,8 +386,8 @@ def list_papers(
             "support_level":   support_level,
         })
         
-    return {
-        "statistics": {
+    res = {
+        "summary": {
             "total_papers": sum(1 for p in results if p["status"] != "Draft"),
             "total_modules": total_modules,
             "architecture_categories": categories,
@@ -385,6 +396,11 @@ def list_papers(
         },
         "papers": results
     }
+    
+    if cache_redis:
+        cache_redis.setex(cache_key, 30, json.dumps(res))
+        
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +641,7 @@ async def upload_paper(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Upload Failed: %s", str(e))
+        logger.exception("Upload Failed: %s", str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------------------------------------------------------------------------

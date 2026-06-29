@@ -256,7 +256,7 @@ def lab_mutate(request: LabMutateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Lab mutate error: {str(e)}")
+        logger.exception(f"Lab mutate error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/lab/predict")
@@ -283,7 +283,7 @@ def lab_predict(request: LabPredictRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Lab predict error: {str(e)}")
+        logger.exception(f"Lab predict error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/lab/experiment")
@@ -309,7 +309,7 @@ def lab_experiment(request: LabExperimentRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Lab experiment error: {str(e)}")
+        logger.exception(f"Lab experiment error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/lab/tradeoffs")
@@ -329,7 +329,7 @@ def lab_tradeoffs(architecture: str = "ResNet"):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Lab tradeoffs error: {str(e)}")
+        logger.exception(f"Lab tradeoffs error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/lab/prediction-prompt")

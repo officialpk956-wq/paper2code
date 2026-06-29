@@ -32,13 +32,14 @@ class TutorSessionStore:
 
     def _try_connect(self) -> None:
         try:
-            import redis as redis_lib
-            client = redis_lib.from_url(
-                REDIS_URL, decode_responses=True, socket_connect_timeout=2
-            )
-            client.ping()
-            self._redis = client
-            log.info("TutorSessionStore: Redis connected at %s", REDIS_URL)
+            from backend.redis_config import session_redis
+            if session_redis:
+                session_redis.ping()
+                self._redis = session_redis
+                log.info("TutorSessionStore: Redis connected")
+            else:
+                self._redis = None
+                log.warning("TutorSessionStore: session_redis is None; falling back to in-memory")
         except Exception as exc:
             log.warning(
                 "TutorSessionStore: Redis unavailable (%s); falling back to in-memory", exc

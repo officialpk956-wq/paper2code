@@ -8,14 +8,7 @@ from backend.modules.auth.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
-_redis_client = None
-try:
-    _redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    _redis_client.ping()
-except Exception:
-    _redis_client = None
+from backend.redis_config import rate_limit_redis as _redis_client
 
 # Simple in-memory fallback for lockout
 _in_memory_failed_attempts = {}

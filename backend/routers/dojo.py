@@ -422,6 +422,15 @@ def problem_solutions(
 @router.get("/dojo/global-stats")
 @router.get("/dojo/stats")
 def dojo_global_stats(db: Session = Depends(get_db)):
+    from backend.redis_config import cache_redis
+    import json
+    
+    cache_key = "dojo:global_stats"
+    if cache_redis:
+        cached = cache_redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
     total_users = db.query(func.count(User.id)).scalar() or 0
 
     total_submissions = db.query(func.count(DojoSubmission.id)).scalar() or 0
@@ -437,12 +446,17 @@ def dojo_global_stats(db: Session = Depends(get_db)):
     ]
     avg_acceptance = round(sum(rates) / len(rates), 4) if rates else 0.0
 
-    return {
+    res = {
         "total_problems":      total_problems,
         "total_submissions":   total_submissions,
         "total_users":         total_users,
         "avg_acceptance_rate": avg_acceptance,
     }
+    
+    if cache_redis:
+        cache_redis.setex(cache_key, 300, json.dumps(res))
+        
+    return res
 
 
 
