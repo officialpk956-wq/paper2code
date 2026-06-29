@@ -160,7 +160,7 @@ def update_learner_progress(
             
         return {"status": "success", "progress_id": progress.id}
     except Exception as e:
-        logger.error(f"Progress update error: {str(e)}")
+        logger.exception(f"Progress update error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/analytics/dashboard")
@@ -332,7 +332,7 @@ def get_analytics_dashboard(
             "reviews_and_recommendations": recs
         }
     except Exception as e:
-        logger.error(f"Dashboard error: {str(e)}")
+        logger.exception(f"Dashboard error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/analytics/recommendations")
@@ -344,7 +344,7 @@ def get_analytics_recommendations(
         recs = recommendation_engine.compute(db, x_learner_id)
         return recs
     except Exception as e:
-        logger.error(f"Recommendations error: {str(e)}")
+        logger.exception(f"Recommendations error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/adaptive/recommendations")
@@ -356,7 +356,7 @@ def get_adaptive_recommendations(
         recs = adaptive_engine.get_personalized_recommendations(db, x_learner_id)
         return {"recommendations": recs}
     except Exception as e:
-        logger.error(f"Adaptive recommendations error: {str(e)}")
+        logger.exception(f"Adaptive recommendations error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/adaptive/review-plan")
@@ -368,7 +368,7 @@ def get_adaptive_review_plan(
         plan = adaptive_engine.get_daily_review_plan(db, x_learner_id)
         return plan
     except Exception as e:
-        logger.error(f"Adaptive review plan error: {str(e)}")
+        logger.exception(f"Adaptive review plan error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/adaptive/concept-graph")
@@ -380,13 +380,17 @@ def get_adaptive_concept_graph(
         graph_nodes = adaptive_engine.get_concept_graph(db, x_learner_id)
         return {"nodes": graph_nodes}
     except Exception as e:
-        logger.error(f"Concept graph error: {str(e)}")
+        logger.exception(f"Concept graph error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/tutor/start-session")
 def tutor_start_session(current_user=Depends(get_current_user)):
     """Create a server-generated session ID owned by the authenticated user."""
     session_id = tutor_session_store.create_session(current_user.id)
+    
+    from backend import metrics
+    metrics.increment("tutor_sessions_total")
+    
     return {"session_id": session_id}
 
 
@@ -552,7 +556,7 @@ def tutor_stream(
                     collected.append(token)
                     yield f"data: {_json.dumps({'type': 'chunk', 'text': token})}\n\n"
         except Exception as exc:
-            logger.error("tutor_stream error: %s", exc)
+            logger.exception("tutor_stream error: %s", exc)
             yield f"data: {_json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
             return
 
@@ -580,7 +584,7 @@ def tutor_quiz(
         response = tutor_manager.generate_quiz(request.module_data, weak_topics=weak_list)
         return {"questions": response}
     except Exception as e:
-        logger.error(f"Tutor quiz error: {str(e)}")
+        logger.exception(f"Tutor quiz error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tutor/learning-path")
@@ -592,7 +596,7 @@ def tutor_learning_path(
         path = adaptive_engine.get_adaptive_learning_path(db, x_learner_id)
         return {"learning_path": path}
     except Exception as e:
-        logger.error(f"Tutor learning path error: {str(e)}")
+        logger.exception(f"Tutor learning path error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/assessment/challenge")
@@ -627,7 +631,7 @@ def get_assessment_challenge(
         )
         return challenge
     except Exception as e:
-        logger.error(f"Assessment challenge generation error: {str(e)}")
+        logger.exception(f"Assessment challenge generation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/assessment/validate")
@@ -687,7 +691,7 @@ def validate_assessment_challenge(
             
         return val_res
     except Exception as e:
-        logger.error(f"Assessment validation error: {str(e)}")
+        logger.exception(f"Assessment validation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/interviews/questions")
@@ -719,7 +723,7 @@ def get_recommendations(
             "adaptive": adaptive,
         }
     except Exception as exc:
-        logger.error("Recommendations error for user %s: %s", current_user.id, exc)
+        logger.exception("Recommendations error for user %s: %s", current_user.id, exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
