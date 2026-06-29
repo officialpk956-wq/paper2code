@@ -133,7 +133,11 @@ async def exchange_code(provider: str, body: ExchangeRequest, db: Session = Depe
     except HTTPException:
         raise
     except Exception as e:
-        log.warning("Redis oauth state check failed, bypassing CSRF check: %s", e)
+        log.error("Redis oauth state check failed — returning 503 to prevent CSRF bypass: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Auth service temporarily unavailable. Please try again."
+        )
 
     # Exchange code → access token
     async with httpx.AsyncClient(timeout=10.0) as client:

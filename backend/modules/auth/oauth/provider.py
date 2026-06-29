@@ -45,7 +45,7 @@ class GoogleProvider(OAuthProvider):
                     avatar_url=data.get("picture")
                 )
         except Exception as e:
-            logger.error(f"Error validating Google OAuth token: {e}", exc_info=True)
+            logger.exception(f"Error validating Google OAuth token: {e}", exc_info=True)
             return None
 
 class GitHubProvider(OAuthProvider):
@@ -98,5 +98,5 @@ class GitHubProvider(OAuthProvider):
                     avatar_url=user_data.get("avatar_url")
                 )
         except Exception as e:
-            logger.error(f"Error validating GitHub OAuth token: {e}", exc_info=True)
+            logger.exception(f"Error validating GitHub OAuth token: {e}", exc_info=True)
             return None

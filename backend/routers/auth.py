@@ -78,7 +78,12 @@ def login(
     repo = UserRepository(db)
     user = repo.get_by_email(form_data.username)
     if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
+        from backend import metrics
+        metrics.increment("login_failures_total")
         raise HTTPException(status_code=401, detail="Incorrect email or password")
+    
+    from backend import metrics
+    metrics.increment("logins_total")
     
     access_token = create_access_token({"sub": user.email})
     refresh_token = create_refresh_token({"sub": user.email, "tv": user.token_version})

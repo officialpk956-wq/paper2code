@@ -46,7 +46,7 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
             
             return current_count <= limit
         except Exception as e:
-            logger.error(f"Redis rate limit check error: {e}", exc_info=True)
+            logger.exception(f"Redis rate limit check error: {e}", exc_info=True)
             # Fail open or fallback to in-memory
     
     # In-memory fallback
