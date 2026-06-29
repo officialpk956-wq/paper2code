@@ -141,11 +141,12 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
             _update_acceptance_rate(db, task.input_ref)
 
     except Exception as e:
-        try:
-            TaskRepository(db).set_failed(task_id, str(e))
-            db.commit()
-        except Exception:
-            db.rollback()
+        if self.request.retries >= self.max_retries:
+            try:
+                TaskRepository(db).set_failed(task_id, str(e))
+                db.commit()
+            except Exception:
+                db.rollback()
         raise self.retry(exc=e, countdown=3)
     finally:
         db.close()

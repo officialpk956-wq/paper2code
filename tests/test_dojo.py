@@ -153,4 +153,4 @@ def test_api_endpoints():
     r = c.post("/api/dojo/submit_exercise",
                json={"exercise_id": "relu", "passed": True, "attempts": 1},
                headers={"X-Learner-ID": "pytest"})
-    assert r.status_code == 200 and r.json()["status"] == "ok"
+    assert r.status_code == 401

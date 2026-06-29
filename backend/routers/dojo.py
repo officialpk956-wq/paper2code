@@ -126,15 +126,19 @@ def dojo_get_solution(
 @router.post("/dojo/submit_exercise") # Adjusted path slightly to avoid collision with the piston submit
 def dojo_submit(
     request: DojoExerciseSubmitRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
     if not get_solution(request.exercise_id):
         raise HTTPException(status_code=404, detail=f"Exercise '{request.exercise_id}' not found")
+
+    from backend import metrics
+    metrics.increment("submissions_total")
+
     try:
         from backend.models import AssessmentAttempt
         attempt = AssessmentAttempt(
-            learner_id=x_learner_id or "default",
+            learner_id=current_user.id,
             assessment_type="code",
             architecture=None,
             difficulty=None,
@@ -148,15 +152,10 @@ def dojo_submit(
         )
         db.add(attempt)
         db.commit()
-        
+
         # Award XP and update user activity
         from backend.services.progress_service import update_user_activity, award_xp
-        user = None
-        if x_learner_id:
-            try:
-                user = db.query(User).filter(User.id == int(x_learner_id)).first()
-            except (ValueError, TypeError):
-                user = None
+        user = current_user
         if user:
             update_user_activity(db, user.id)
             if request.passed:
@@ -174,7 +173,7 @@ def dojo_submit(
         return {"status": "ok", "recorded": True, "exercise_id": request.exercise_id, "passed": request.passed}
     except Exception as e:
         db.rollback()
-        logger.error(f"Dojo submit error: {str(e)}")
+        logger.exception(f"Dojo submit error: {str(e)}")
         return {"status": "ok", "recorded": False, "detail": str(e)}
 
 
