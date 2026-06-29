@@ -31,6 +31,6 @@ def review_submission_task(submission_id: int):
         db.commit()
         logger.info("Review generated for submission %s", submission_id)
     except Exception as exc:
-        logger.error("Review task failed for %s: %s", submission_id, exc)
+        logger.exception("Review task failed for %s: %s", submission_id, exc)
     finally:
         db.close()
