@@ -114,3 +114,55 @@ def seeded_db(db_session):
         db_session.add(p)
         db_session.commit()
     return db_session
+
+@pytest.fixture(scope="function")
+def regular_user_headers(db_session, client):
+    from backend.models import User
+    from backend.modules.auth.security.hashing import hash_password
+    import uuid
+    email = f"user_{uuid.uuid4()}@example.com"
+    pwd = "TestPass1!"
+    u = User(email=email, name="reg", hashed_password=hash_password(pwd), is_verified=True, is_admin=False)
+    db_session.add(u)
+    db_session.commit()
+    resp = client.post("/api/auth/login", data={"username": email, "password": pwd})
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture(scope="function")
+def user_a_headers(db_session, client):
+    from backend.models import User
+    from backend.modules.auth.security.hashing import hash_password
+    import uuid
+    email = f"userA_{uuid.uuid4()}@example.com"
+    pwd = "TestPassA!"
+    u = User(email=email, name="userA", hashed_password=hash_password(pwd), is_verified=True, is_admin=False)
+    db_session.add(u)
+    db_session.commit()
+    resp = client.post("/api/auth/login", data={"username": email, "password": pwd})
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture(scope="function")
+def user_b_submission_id(db_session):
+    from backend.models import User, DojoSubmission
+    from backend.modules.auth.security.hashing import hash_password
+    import uuid
+    email = f"userB_{uuid.uuid4()}@example.com"
+    u = User(email=email, name="userB", hashed_password=hash_password("pwd"), is_verified=True)
+    db_session.add(u)
+    db_session.commit()
+    db_session.refresh(u)
+    sub = DojoSubmission(user_id=u.id, problem_id="test-problem-id", code="pass", passed=True)
+    db_session.add(sub)
+    db_session.commit()
+    db_session.refresh(sub)
+    return sub.id
+
+def generate_expired_token():
+    import jwt
+    from datetime import datetime, timedelta
+    from backend.services.auth_service import SECRET_KEY, ALGORITHM
+    expire = datetime.utcnow() - timedelta(hours=1)
+    to_encode = {"sub": "1", "exp": expire}
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

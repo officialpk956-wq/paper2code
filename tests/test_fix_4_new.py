@@ -21,7 +21,8 @@ def test_fix2_health_healthy():
             mock_session.execute.return_value = True
             mock_db_dep.return_value = mock_session
             
-            app.dependency_overrides[mock_db_dep] = lambda: mock_session
+            from backend.database import get_db
+            app.dependency_overrides[get_db] = lambda: mock_session
             
             response = client.get("/health")
             assert response.status_code == 200
@@ -40,7 +41,8 @@ def test_fix2_health_unhealthy():
             mock_session.execute.side_effect = Exception("DB Error")
             mock_db_dep.return_value = mock_session
             
-            app.dependency_overrides[mock_db_dep] = lambda: mock_session
+            from backend.database import get_db
+            app.dependency_overrides[get_db] = lambda: mock_session
             
             response = client.get("/health")
             assert response.status_code == 503
