@@ -214,7 +214,7 @@ def training_cost_estimator(request: CostEstimatorRequest):
         )
         return result
     except Exception as e:
-        logger.error(f"Cost estimator error: {str(e)}")
+        logger.exception(f"Cost estimator error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/reproduction/{paper_id}")
