@@ -98,7 +98,7 @@ def get_db() -> Generator[Session, None, None]:
     try:
         yield db
     except Exception as exc:
-        logger.error("DB session rollback due to exception: %s", exc, exc_info=True)
+        logger.exception("DB session rollback due to exception: %s", exc, exc_info=True)
         db.rollback()
         raise
     finally:

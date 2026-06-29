@@ -74,6 +74,9 @@ app.add_middleware(PrometheusMiddleware)
 app.add_middleware(SlackAlertingMiddleware)
 app.add_middleware(SentryUserContextMiddleware)
 
+from backend.middleware.trace_id import TraceIDMiddleware
+app.add_middleware(TraceIDMiddleware)
+
 # Strict CORS settings
 from backend.modules.security.cors import (
     get_allowed_origins,
