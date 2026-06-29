@@ -80,7 +80,7 @@ class WorkerPool:
                 job_id, payload = task
                 self._execute_job(job_id, payload)
             except Exception as e:
-                logger.error(f"Worker loop error: {e}", exc_info=True)
+                logger.exception(f"Worker loop error: {e}", exc_info=True)
 
     def _execute_job(self, job_id: str, payload: Dict[str, Any]) -> None:
         db = SessionLocal()
@@ -111,7 +111,7 @@ class WorkerPool:
             db.commit()
 
         except Exception as e:
-            logger.error(f"Job execution failed (ID: {job_id}): {e}")
+            logger.exception(f"Job execution failed (ID: {job_id}): {e}")
             db.rollback()
             # Refetch job to avoid stale state in handles
             job = db.get(BackgroundJob, job_id)

@@ -37,7 +37,7 @@ class RedisQueue(QueueBackend):
                 self.client.rpush(self._get_queue_key(queue_name), data)
                 return
             except Exception as e:
-                logger.error(f"Redis enqueue error: {e}")
+                logger.exception(f"Redis enqueue error: {e}")
                 
         # In-memory fallback
         if queue_name not in self._in_memory_queues:
@@ -52,7 +52,7 @@ class RedisQueue(QueueBackend):
                     item = json.loads(data)
                     return item["job_id"], item["payload"]
             except Exception as e:
-                logger.error(f"Redis dequeue error: {e}")
+                logger.exception(f"Redis dequeue error: {e}")
                 
         # In-memory fallback
         if queue_name in self._in_memory_queues and self._in_memory_queues[queue_name]:
