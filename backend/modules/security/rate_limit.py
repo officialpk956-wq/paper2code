@@ -37,6 +37,7 @@ def check_sliding_window_rate_limit(key: str, limit: int, window_seconds: int) -
     history = [t for t in _in_memory_store[key] if t > now - window_seconds]
     _in_memory_store[key] = history
     
+    print(f"In-memory rate limit: {key=} {len(history)=} {limit=}")
     if len(history) < limit:
         _in_memory_store[key].append(now)
         return True

@@ -9,7 +9,7 @@ from backend.modules.auth.models import UserSession
 from backend.models import User
 from backend.modules.auth.repositories.session_repository import SessionRepository, hash_token
 from backend.modules.auth.services.audit_service import AuditService
-from backend.services.auth_service import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
+from backend.modules.auth.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
 
 class SessionService:
     def __init__(self, db: Session):
@@ -18,20 +18,21 @@ class SessionService:
         self.audit_service = AuditService(db)
 
     def create_access_token(self, user: User) -> str:
+        from backend.modules.security.jwt_rotation import encode_rotated_jwt
         now = datetime.datetime.utcnow()
-        expire = now + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        # expire is handled by encode_rotated_jwt if we pass expires_delta
+        expires_delta = datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         payload = {
             "sub": user.email,
             "user_id": user.id,
             "token_version": user.token_version,
-            "exp": expire,
             "iss": "paper2code-auth",
             "aud": "paper2code-app",
             "iat": now,
             "nbf": now,
             "type": "access"
         }
-        return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        return encode_rotated_jwt(payload, expires_delta=expires_delta)
 
     def create_refresh_token(self, user: User) -> str:
         # Generates a random secure string for refresh token, not a JWT payload to avoid JWT leaks

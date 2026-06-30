@@ -4,6 +4,25 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
+# Budget config
+# ---------------------------------------------------------------------------
+class BudgetExceededError(Exception):
+    pass
+
+def check_user_token_budget(get_usage_callback, user_id: int | None) -> None:
+    if user_id is None or get_usage_callback is None:
+        return
+    
+    used = get_usage_callback(user_id)
+    if used < 0:  # Admin bypass returns -1
+        return
+        
+    import os
+    budget = int(os.getenv("LLM_DAILY_TOKEN_BUDGET_PER_USER", "100000"))
+    if used >= budget:
+        raise BudgetExceededError("Daily LLM token budget exceeded. Try again tomorrow.")
+
+# ---------------------------------------------------------------------------
 # Model config — override via env vars
 # ---------------------------------------------------------------------------
 PRIMARY_MODEL  = os.getenv("LLM_PRIMARY_MODEL",  "groq/llama-3.3-70b-versatile")
@@ -21,12 +40,16 @@ def llm_complete(
     prompt: str,
     user_id: int | None = None,
     action: str = "llm.unknown",
-    db_session=None,
+    check_budget_callback=None,
+    db_write_callback=None,
     model: str | None = None,
 ) -> str:
     """Synchronous LLM completion with automatic provider fallback."""
     from litellm import completion, exceptions as litellm_exc
     import time
+    
+    check_user_token_budget(check_budget_callback, user_id)
+    
     global _circuit_open, _circuit_open_until, _failure_count
     
     now = time.time()
@@ -59,18 +82,22 @@ def llm_complete(
     except Exception as e:
         logger.error("llm_complete failed: %s", e)
         raise
-    _log_usage(resp, user_id, action, db_session)
+    _log_usage(resp, user_id, action, db_write_callback)
     return text
 async def llm_complete_async(
     prompt: str,
     model: str | None = None,
     user_id: int | None = None,
     action: str = "llm.unknown",
-    db_session=None,
+    check_budget_callback=None,
+    db_write_callback=None,
 ) -> str:
     """Async LLM completion with automatic provider fallback."""
     from litellm import acompletion, exceptions as litellm_exc
     import time
+    
+    check_user_token_budget(check_budget_callback, user_id)
+    
     global _circuit_open, _circuit_open_until, _failure_count
     
     now = time.time()
@@ -103,7 +130,7 @@ async def llm_complete_async(
     except Exception as e:
         logger.error("llm_complete_async failed: %s", e)
         raise
-    _log_usage(resp, user_id, action, db_session)
+    _log_usage(resp, user_id, action, db_write_callback)
     return text
 def classify_section(text_chunk: str, max_retries: int = 3) -> str:
     """Classify a paper text chunk into a section label. Returns raw LLM text."""
@@ -124,27 +151,27 @@ Text:
                 raise
             logger.warning("classify_section attempt %d failed: %s", attempt, e)
     raise RuntimeError("classify_section failed after retries")
-def _log_usage(resp, user_id, action, db_session):
-    """Write a UsageLog row if db_session is provided."""
-    if db_session is None:
+def _log_usage(resp, user_id, action, db_write_callback):
+    """Call the db_write_callback to write a UsageLog row if provided."""
+    if db_write_callback is None:
         return
     try:
         usage = getattr(resp, "usage", None)
         if usage is None:
             return
-        from backend.models import UsageLog
-        db_session.add(UsageLog(
+        
+        prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", 0)
+        cost_usd = getattr(resp, "_hidden_params", {}).get("response_cost", 0.0)
+        model = getattr(resp, "model", PRIMARY_MODEL)
+        
+        db_write_callback(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+            model=model,
             user_id=user_id,
-            action=action,
-            prompt_tokens=getattr(usage, "prompt_tokens", 0),
-            completion_tokens=getattr(usage, "completion_tokens", 0),
-            cost_usd=getattr(resp, "_hidden_params", {}).get("response_cost", 0),
-            model=getattr(resp, "model", PRIMARY_MODEL),
-        ))
-        db_session.commit()
+            action=action
+        )
     except Exception as e:
         logger.warning("usage log failed: %s", e)
-        try:
-            db_session.rollback()
-        except Exception:
-            pass

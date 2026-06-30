@@ -18,7 +18,6 @@ from backend.services.email_service import (
     send_verification_email_sync,
     send_password_reset_email_sync
 )
-from backend.services.auth_service import get_password_hash
 import sqlalchemy
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
@@ -37,10 +36,12 @@ async def register_user(
     db: Session = Depends(get_db)
 ):
     from backend.repositories.user_repository import UserRepository
-    from backend.services.auth_service import get_password_hash, create_access_token
+    from backend.modules.auth.security.hashing import hash_password
+    from backend.modules.auth.services.session_service import SessionService
     repo = UserRepository(db)
+    session_svc = SessionService(db)
     try:
-        hashed = get_password_hash(req.password)
+        hashed = hash_password(req.password)
         user = repo.create(email=req.email, name=req.name, hashed_password=hashed)
         db.commit()
 
@@ -51,7 +52,7 @@ async def register_user(
         # Fire-and-forget email sending
         background_tasks.add_task(send_verification_email_sync, user.email, token)
 
-        access = create_access_token({"sub": user.email})
+        access = session_svc.create_access_token(user)
         return {
             "access_token": access,
             "token_type": "bearer",
@@ -74,10 +75,18 @@ def login(
     _rl=Depends(rate_limiter(limit=10, window_seconds=60)),
 ):
     from backend.repositories.user_repository import UserRepository
-    from backend.services.auth_service import verify_password, create_access_token, create_refresh_token
+    from backend.modules.auth.security.hashing import verify_password_and_needs_rehash
+    from backend.modules.auth.services.session_service import SessionService
     repo = UserRepository(db)
     user = repo.get_by_email(form_data.username)
-    if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
+    
+    if not user or not user.hashed_password:
+        from backend import metrics
+        metrics.increment("login_failures_total")
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+        
+    is_verified, needs_rehash = verify_password_and_needs_rehash(form_data.password, user.hashed_password)
+    if not is_verified:
         from backend import metrics
         metrics.increment("login_failures_total")
         raise HTTPException(status_code=401, detail="Incorrect email or password")
@@ -85,8 +94,13 @@ def login(
     from backend import metrics
     metrics.increment("logins_total")
     
-    access_token = create_access_token({"sub": user.email})
-    refresh_token = create_refresh_token({"sub": user.email, "tv": user.token_version})
+    session_svc = SessionService(db)
+    access_token = session_svc.create_access_token(user)
+    refresh_token = session_svc.create_refresh_token(user)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    session_svc.register_session(user, refresh_token, ip_address=ip_address, user_agent=user_agent)
+    
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -97,23 +111,25 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 @router.post("/refresh")
-def refresh_access_token(body: RefreshRequest, db: Session = Depends(get_db)):
-    from backend.services.auth_service import verify_refresh_token, create_access_token
-    payload = verify_refresh_token(body.refresh_token, db=db)
-    new_access = create_access_token({"sub": payload["sub"]})
-    return {"access_token": new_access, "token_type": "bearer"}
+def refresh_access_token(request: Request, body: RefreshRequest, db: Session = Depends(get_db)):
+    from backend.modules.auth.services.session_service import SessionService
+    session_svc = SessionService(db)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    new_access, new_refresh = session_svc.rotate_session(body.refresh_token, ip_address, user_agent)
+    return {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}
 
 @router.post("/logout")
 def logout(
+    request: Request,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from backend.repositories.user_repository import UserRepository
-    repo = UserRepository(db)
-    user = repo.get_by_id(current_user.id)
-    if user:
-        user.token_version = (user.token_version or 0) + 1
-        db.commit()
+    from backend.modules.auth.services.session_service import SessionService
+    session_svc = SessionService(db)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    session_svc.revoke_all_sessions(current_user.id, ip_address, user_agent)
     return {"status": "ok", "message": "Logged out successfully"}
 
 @router.get("/me")
@@ -187,8 +203,8 @@ async def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_d
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(404)
-    from backend.services.auth_service import get_password_hash
-    user.hashed_password = get_password_hash(body.new_password)
+    from backend.modules.auth.security.hashing import hash_password
+    user.hashed_password = hash_password(body.new_password)
     user.token_version = (user.token_version or 0) + 1
     db.commit()
     return {"detail": "Password updated. Please log in again."}

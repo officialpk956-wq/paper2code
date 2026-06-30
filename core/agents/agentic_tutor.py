@@ -79,66 +79,22 @@ def _safe_context_value(value: str) -> str:
 
 
 class AgenticTutor:
-    def __init__(self, db_session):
-        self.db = db_session
+    def __init__(self, tool_callbacks: dict):
+        """
+        tool_callbacks should provide:
+        - lookup_paper_section(paper_id: int, section: str) -> str
+        - get_user_weak_topics(user_id: int) -> str
+        - find_related_problem(concept: str) -> str
+        - search_papers_by_concept(concept: str) -> str
+        """
+        self.tool_callbacks = tool_callbacks
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
-        from backend.models import Paper, Problem, AssessmentAttempt
-
-        if tool_name == "lookup_paper_section":
-            paper = self.db.query(Paper).filter_by(id=tool_input["paper_id"]).first()
-            if not paper:
-                return "Paper not found."
-            section = tool_input.get("section", "abstract")
-            content = getattr(paper, section, None) or paper.abstract or ""
-            return content[:2000] if content else "No content available."
-
-        if tool_name == "get_user_weak_topics":
-            attempts = (
-                self.db.query(AssessmentAttempt)
-                .filter_by(learner_id=str(tool_input["user_id"]))
-                .all()
-            )
-            arch_results: dict[str, list[bool]] = {}
-            for a in attempts:
-                if a.architecture:
-                    arch_results.setdefault(a.architecture, []).append(a.is_correct)
-            weak = [
-                arch for arch, results in arch_results.items()
-                if results and sum(results) / len(results) < 0.5
-            ]
-            return f"Weak topics: {', '.join(weak)}" if weak else "No weak topics found."
-
-        if tool_name == "find_related_problem":
-            concept = tool_input["concept"].lower()
-            prob = (
-                self.db.query(Problem)
-                .filter(
-                    Problem.is_retired == False,
-                    Problem.description.ilike(f"%{concept}%"),
-                )
-                .first()
-            )
-            if prob:
-                return f"Problem: {prob.title} (ID: {prob.id}, Difficulty: {prob.difficulty})"
-            return "No related problem found."
-
-        if tool_name == "search_papers_by_concept":
-            from backend.models import Paper
-            concept = tool_input["concept"]
-            papers = (
-                self.db.query(Paper)
-                .filter(
-                    Paper.visibility != "private",
-                    Paper.title.ilike(f"%{concept}%"),
-                )
-                .limit(3)
-                .all()
-            )
-            if papers:
-                return "; ".join(f"{p.title} (ID: {p.id})" for p in papers)
-            return "No papers found."
-
+        if tool_name in self.tool_callbacks:
+            try:
+                return self.tool_callbacks[tool_name](**tool_input)
+            except Exception as e:
+                return f"Error executing tool: {e}"
         return f"Unknown tool: {tool_name}"
 
     def ask(

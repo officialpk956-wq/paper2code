@@ -123,11 +123,9 @@ def dojo_get_solution(
         raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
     return sol
 
-# deprecated alias, remove after frontend migration
-
-@router.post("/dojo/submissions", deprecated=False)
-
-@router.post("/dojo/submit_exercise", deprecated=True) # Adjusted path slightly to avoid collision with the piston submit
+@router.post("/dojo/submissions")
+# deprecated alias
+@router.post("/dojo/submit_exercise", deprecated=True)
 def dojo_submit(
     request: DojoExerciseSubmitRequest,
     current_user: User = Depends(get_current_user),
@@ -329,10 +327,8 @@ class DojoCodeSubmitRequest(BaseModel):
     code: str = Field(..., max_length=65536)
     stdin: Optional[str] = Field(default=None, max_length=65536)
 
-# deprecated alias, remove after frontend migration
-
-@router.post("/dojo/code-submissions", deprecated=False)
-
+@router.post("/dojo/code-submissions")
+# deprecated alias
 @router.post("/dojo/submit", deprecated=True)
 @limiter.limit("30/hour", key_func=_dojo_user_key)
 async def submit_dojo_code(

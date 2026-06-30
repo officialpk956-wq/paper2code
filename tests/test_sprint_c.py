@@ -408,7 +408,7 @@ class TestPaperQuota:
         db_session.commit()
 
         # Patch the module-level limit
-        import backend.routers.papers as papers_mod
+        import backend.routers.papers_pipeline as papers_mod
         papers_mod._PAPER_MONTHLY_LIMIT = 1
 
         r = client.post(

@@ -4,8 +4,8 @@ from datetime import datetime
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    name: str = Field(..., min_length=1)
-    password: str = Field(..., min_length=10)
+    name: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=10, max_length=128)
 
 class UserResponse(BaseModel):
     id: int
@@ -33,7 +33,7 @@ class LoginResponse(BaseModel):
     user: UserResponse
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(..., max_length=2048)
 
 class RefreshResponse(BaseModel):
     access_token: str
@@ -44,26 +44,26 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str = Field(..., min_length=10)
+    token: str = Field(..., max_length=2048)
+    new_password: str = Field(..., min_length=10, max_length=128)
 
 class VerifyEmailRequest(BaseModel):
-    token: str
+    token: str = Field(..., max_length=2048)
 
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=10)
+    current_password: str = Field(..., max_length=128)
+    new_password: str = Field(..., min_length=10, max_length=128)
 
 class ChangeEmailRequest(BaseModel):
     new_email: EmailStr
-    password: str
+    password: str = Field(..., max_length=128)
 
 class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    avatar_url: Optional[str] = Field(None, max_length=512)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    avatar_url: Optional[str] = Field(None, max_length=2048)
 
     @field_validator("avatar_url")
     @classmethod
@@ -93,7 +93,7 @@ class EnableMFAResponse(BaseModel):
     backup_codes: List[str]
 
 class VerifyMFARequest(BaseModel):
-    code: str
+    code: str = Field(..., max_length=16)
 
 class DisableMFARequest(BaseModel):
-    password: str
+    password: str = Field(..., max_length=128)

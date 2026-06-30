@@ -162,7 +162,7 @@ def user_b_submission_id(db_session):
 def generate_expired_token():
     import jwt
     from datetime import datetime, timedelta
-    from backend.services.auth_service import SECRET_KEY, ALGORITHM
+    from backend.modules.auth.config import SECRET_KEY, ALGORITHM
     expire = datetime.utcnow() - timedelta(hours=1)
     to_encode = {"sub": "1", "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

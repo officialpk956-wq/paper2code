@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
 from backend.models import Paper, User, LearnerProgress, AssessmentAttempt, DojoSubmission, Problem
-from backend.services.auth_service import get_password_hash
+from backend.modules.auth.security.hashing import hash_password as get_password_hash
 import uuid
 import random
 

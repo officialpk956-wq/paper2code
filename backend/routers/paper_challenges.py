@@ -104,7 +104,9 @@ def get_challenge_part(
         "xp_reward": part.xp_reward,
     }
 
-@router.post("/{paper_id}/challenges/{challenge_id}/parts/{part_id}/run")
+@router.post("/{paper_id}/challenges/{challenge_id}/parts/{part_id}/executions")
+# deprecated alias
+@router.post("/{paper_id}/challenges/{challenge_id}/parts/{part_id}/run", deprecated=True)
 def run_challenge_part(
     paper_id: int, challenge_id: int, part_id: int,
     request: RunCodeRequest,

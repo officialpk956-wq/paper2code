@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from backend.database import get_db
 from backend.dependencies import get_current_user, get_optional_user
+from core.llm_client import BudgetExceededError
 from backend.models import (
     LearnerProgress, Paper, PaperModule, AssessmentAttempt, TutorAnalytics,
     InterviewQuestion, Roadmap, TutorFeedback, TutorSessionRecord,
@@ -225,6 +226,8 @@ def update_learner_progress(
             db.commit()
             
         return {"status": "success", "progress_id": progress.id}
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Progress update error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -397,6 +400,8 @@ def get_analytics_dashboard(
             "learning_path_items": learning_path_items,
             "reviews_and_recommendations": recs
         }
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Dashboard error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -409,6 +414,8 @@ def get_analytics_recommendations(
     try:
         recs = recommendation_engine.compute(*_fetch_recommendation_data(db, x_learner_id))
         return recs
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Recommendations error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -421,6 +428,8 @@ def get_adaptive_recommendations(
     try:
         recs = adaptive_engine.get_personalized_recommendations(*_fetch_adaptive_data(db, x_learner_id), _fetch_all_papers_data(db))
         return {"recommendations": recs}
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Adaptive recommendations error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -433,6 +442,8 @@ def get_adaptive_review_plan(
     try:
         plan = adaptive_engine.get_daily_review_plan(*_fetch_adaptive_data(db, x_learner_id), _fetch_all_papers_data(db))
         return plan
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Adaptive review plan error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -445,6 +456,8 @@ def get_adaptive_concept_graph(
     try:
         graph_nodes = adaptive_engine.get_concept_graph(*_fetch_adaptive_data(db, x_learner_id))
         return {"nodes": graph_nodes}
+    except BudgetExceededError as e:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as e:
         logger.exception(f"Concept graph error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -496,6 +509,8 @@ def get_recommendations(
             "recommendations": recs,
             "adaptive": adaptive,
         }
+    except BudgetExceededError as exc:
+        raise HTTPException(status_code=429, detail="Daily LLM token budget exceeded. Try again tomorrow.")
     except Exception as exc:
         logger.exception("Recommendations error for user %s: %s", current_user.id, exc)
         raise HTTPException(status_code=500, detail=str(exc))

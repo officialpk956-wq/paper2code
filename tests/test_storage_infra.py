@@ -101,7 +101,7 @@ class TestPresignedUploadURL:
                 "/api/papers/upload-url?filename=test.pdf",
                 headers=_auth(token),
             )
-        assert r.status_code == 503
+        assert r.status_code == 503, r.json()
 
     def test_02_non_pdf_rejected(self, client, db_session):
         user = _seed_user(db_session, email="pu02@si.com")
@@ -147,7 +147,7 @@ class TestConfirmUpload:
     def test_05_confirm_upload_creates_task(self, client, db_session):
         user = _seed_user(db_session, email="cu05@si.com")
         token = _login(client, user.email)
-        with patch("backend.routers.papers.generate_code_from_pdf_task") as mock_task:
+        with patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task:
             mock_task.delay = MagicMock()
             r = client.post(
                 "/api/papers/confirm-upload",
@@ -199,7 +199,7 @@ class TestConfirmUpload:
         initial_bytes = user.storage_bytes_used
         token = _login(client, user.email)
         file_size = 2 * 1024 * 1024  # 2 MB
-        with patch("backend.routers.papers.generate_code_from_pdf_task") as mock_task:
+        with patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task:
             mock_task.delay = MagicMock()
             client.post(
                 "/api/papers/confirm-upload",
@@ -299,7 +299,7 @@ class TestStorageQuota:
         mock_boto.generate_presigned_url.return_value = "https://r2.example.com/put"
         with patch("backend.services.storage_service.R2_AVAILABLE", True), \
              patch("backend.services.storage_service._r2_client", return_value=mock_boto), \
-             patch("backend.routers.papers._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024):
+             patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024):
             r = client.get(
                 "/api/papers/upload-url?filename=paper.pdf",
                 headers=_auth(token),
@@ -310,7 +310,7 @@ class TestStorageQuota:
         user = _seed_user(db_session, email="sq16@si.com",
                           storage_bytes_used=490 * 1024 * 1024)
         token = _login(client, user.email)
-        with patch("backend.routers.papers._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024):
+        with patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024):
             r = client.post(
                 "/api/papers/confirm-upload",
                 json={
@@ -331,7 +331,7 @@ class TestStorageQuota:
         mock_boto.generate_presigned_url.return_value = "https://r2.example.com/put"
         with patch("backend.services.storage_service.R2_AVAILABLE", True), \
              patch("backend.services.storage_service._r2_client", return_value=mock_boto), \
-             patch("backend.routers.papers._STORAGE_QUOTA_BYTES", 0):
+             patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 0):
             r = client.get(
                 "/api/papers/upload-url?filename=paper.pdf",
                 headers=_auth(token),
@@ -362,7 +362,7 @@ class TestPrometheusMetrics:
     def test_20_metrics_503_when_prometheus_unavailable(self, client, db_session):
         with patch("backend.middleware.metrics._PROMETHEUS_AVAILABLE", False):
             r = client.get("/metrics")
-        assert r.status_code == 503
+        assert r.status_code == 503, r.json()
 
 
 # ---------------------------------------------------------------------------

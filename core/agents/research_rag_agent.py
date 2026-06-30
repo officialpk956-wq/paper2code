@@ -18,7 +18,12 @@ def ask_about_paper(
     target_paper: dict,
     all_papers:   list[dict],
     question:     str,
+    check_budget_callback=None,
+    user_id: Optional[int] = None,
 ) -> dict:
+    from core.llm_client import check_user_token_budget
+    check_user_token_budget(check_budget_callback, user_id)
+    
     """Returns {"answer": str, "referenced_papers": list[int]}"""
     ag   = target_paper.get("architecture_graph") or {}
     nodes = ag.get("nodes", []) if isinstance(ag, dict) else []

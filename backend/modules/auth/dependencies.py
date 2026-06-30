@@ -6,20 +6,18 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import User
 from backend.repositories.user_repository import UserRepository
-from backend.services.auth_service import SECRET_KEY, ALGORITHM
+from backend.modules.auth.config import SECRET_KEY, ALGORITHM
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     try:
+        from backend.modules.security.jwt_rotation import decode_rotated_jwt
         # Validate expiration, issuer, audience, and enforce required fields
-        payload = jwt.decode(
+        payload = decode_rotated_jwt(
             token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM],
             audience="paper2code-app",
-            issuer="paper2code-auth",
-            options={"require": ["exp", "iss", "aud", "sub", "iat"]}
+            issuer="paper2code-auth"
         )
         email: str = payload.get("sub")
         user_id: int = payload.get("user_id")

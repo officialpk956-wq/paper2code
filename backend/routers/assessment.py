@@ -1,0 +1,338 @@
+import logging
+import datetime
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, Depends, Header
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from collections import defaultdict
+
+from backend.database import get_db
+from backend.dependencies import get_current_user, get_optional_user
+from backend.models import (
+    LearnerProgress, Paper, PaperModule, AssessmentAttempt, TutorAnalytics,
+    InterviewQuestion, Roadmap, TutorFeedback, TutorSessionRecord,
+)
+from backend.services.tutor_session_store import tutor_session_store
+from backend.services.progress_service import award_xp
+
+from core.analytics.adaptive_engine import adaptive_engine
+from core.analytics.recommendation_engine import recommendation_engine
+from core.assessment.engine import assessment_engine
+from core.agents.tutor_agent import tutor_manager
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api", tags=["Assessment"])
+
+
+def _fetch_adaptive_data(db: Session, learner_id: str):
+    attempts = db.query(AssessmentAttempt).filter(AssessmentAttempt.learner_id == learner_id).all()
+    progress_records = db.query(LearnerProgress).filter(LearnerProgress.learner_id == learner_id).all()
+    tutor_records = db.query(TutorAnalytics).filter(TutorAnalytics.learner_id == learner_id).all()
+    all_modules = db.query(PaperModule).all()
+    
+    attempts_data = [{"question_text": getattr(a, "question_text", None), "assessment_type": getattr(a, "assessment_type", None), "architecture": getattr(a, "architecture", None), "is_correct": getattr(a, "is_correct", False)} for a in attempts]
+    progress_data = [{"module_id": p.module_id, "status": p.status} for p in progress_records]
+    tutor_data = [{"module": t.module, "architecture": t.architecture, "question_count": getattr(t, "question_count", 0)} for t in tutor_records]
+    modules_data = [{"id": m.id, "explanation": m.explanation, "module_type": m.module_type, "layer_name": m.layer_name} for m in all_modules]
+
+    return attempts_data, progress_data, tutor_data, modules_data
+
+def _fetch_all_papers_data(db: Session):
+    all_papers = db.query(Paper).all()
+    papers_data = []
+    for p in all_papers:
+        mods = [{"id": m.id, "explanation": m.explanation, "module_type": m.module_type, "layer_name": m.layer_name} for m in p.modules]
+        papers_data.append({"id": p.id, "title": p.title, "architecture_graph": p.architecture_graph, "modules": mods})
+    return papers_data
+
+def _fetch_recommendation_data(db: Session, learner_id: str):
+    attempts = db.query(AssessmentAttempt).filter(AssessmentAttempt.learner_id == learner_id).all()
+    tutor_rows = db.query(TutorAnalytics).filter(TutorAnalytics.learner_id == learner_id).all()
+    
+    attempts_data = [{"architecture": a.architecture, "assessment_type": a.assessment_type, "is_correct": a.is_correct} for a in attempts]
+    tutor_data = [{"architecture": t.architecture, "module": t.module, "question_count": t.question_count} for t in tutor_rows]
+    return attempts_data, tutor_data
+
+def _get_tutor_callbacks(db: Session):
+    def lookup_paper_section(paper_id: int, section: str = "abstract"):
+        paper = db.query(Paper).filter_by(id=paper_id).first()
+        if not paper: return "Paper not found."
+        content = getattr(paper, section, None) or paper.abstract or ""
+        return content[:2000] if content else "No content available."
+
+    def get_user_weak_topics(user_id: int):
+        attempts = db.query(AssessmentAttempt).filter_by(learner_id=str(user_id)).all()
+        arch_results = {}
+        for a in attempts:
+            if a.architecture:
+                arch_results.setdefault(a.architecture, []).append(a.is_correct)
+        weak = [arch for arch, results in arch_results.items() if results and sum(results) / len(results) < 0.5]
+        return f"Weak topics: {', '.join(weak)}" if weak else "No weak topics found."
+
+    def find_related_problem(concept: str):
+        concept = concept.lower()
+        from backend.models import Problem
+        prob = db.query(Problem).filter(Problem.is_retired == False, Problem.description.ilike(f"%{concept}%")).first()
+        if prob: return f"Problem: {prob.title} (ID: {prob.id}, Difficulty: {prob.difficulty})"
+        return "No related problem found."
+
+    def search_papers_by_concept(concept: str):
+        papers = db.query(Paper).filter(Paper.visibility != "private", Paper.title.ilike(f"%{concept}%")).limit(3).all()
+        if papers: return "; ".join(f"{p.title} (ID: {p.id})" for p in papers)
+        return "No papers found."
+
+    return {
+        "lookup_paper_section": lookup_paper_section,
+        "get_user_weak_topics": get_user_weak_topics,
+        "find_related_problem": find_related_problem,
+        "search_papers_by_concept": search_papers_by_concept
+    }
+
+
+class ProgressUpdate(BaseModel):
+    status: str
+    time_spent_seconds: int = 0
+
+class ValidateRequest(BaseModel):
+    challenge: Dict[str, Any]
+    user_answer: str
+
+class ProgressUpdateRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+    status: str
+
+class TutorAskRequest(BaseModel):
+    session_id: Optional[str] = None  # server-generated; null = auto-create
+    context_type: str
+    context_data: Dict[str, Any]
+    query: str
+
+class TutorQuizRequest(BaseModel):
+    module_data: Dict[str, Any]
+
+
+
+
+
+
+
+
+
+# deprecated alias, remove after frontend migration
+
+
+
+# deprecated alias, remove after frontend migration
+
+
+
+# deprecated alias, remove after frontend migration
+
+
+# deprecated alias, remove after frontend migration
+
+
+
+@router.get("/assessment/challenge")
+def get_assessment_challenge(
+    type: str = "tensor",
+    arch: str = "ResNet",
+    difficulty: str = "beginner",
+    db: Session = Depends(get_db),
+    x_learner_id: str = Header(alias="X-Learner-ID", default="")
+):
+    try:
+        db_metrics = []
+        if type == "comparison":
+            papers = db.query(Paper).all()
+            for p in papers:
+                flops_analysis = p.flops_analysis or {}
+                arch_graph = p.architecture_graph or {}
+                classification = arch_graph.get("classification", "Unknown")
+                db_metrics.append({
+                    "title": p.title,
+                    "architecture_type": classification,
+                    "parameter_count": flops_analysis.get("total_params_estimate", 0),
+                    "flops": flops_analysis.get("total_flops_score", 0),
+                    "module_count": len(p.modules) if p.modules else 0
+                })
+                
+        challenge = assessment_engine.generate(
+            challenge_type=type,
+            architecture=arch,
+            difficulty=difficulty,
+            db_metrics=db_metrics
+        )
+        return challenge
+    except Exception as e:
+        logger.exception(f"Assessment challenge generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/assessments/validations")
+# deprecated alias
+@router.post("/assessment/validate", deprecated=True)
+def validate_assessment_challenge(
+    request: ValidateRequest,
+    db: Session = Depends(get_db),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
+    current_user=Depends(get_optional_user)
+):
+    try:
+        challenge = request.challenge
+        user_ans = request.user_answer
+        val_res = assessment_engine.validate(challenge, user_ans)
+        
+        question_text = challenge.get("question", "")
+        existing = (
+            db.query(AssessmentAttempt)
+            .filter(
+                AssessmentAttempt.learner_id == x_learner_id,
+                AssessmentAttempt.question_text == question_text
+            )
+            .first()
+        )
+        
+        if existing:
+            existing.attempt_count += 1
+            existing.user_answer = user_ans
+            existing.is_correct = val_res["is_correct"]
+            existing.score = val_res["score"]
+            existing.created_at = datetime.datetime.utcnow()
+            db.commit()
+            db.refresh(existing)
+        else:
+            attempt = AssessmentAttempt(
+                learner_id=x_learner_id,
+                assessment_type=challenge.get("assessment_type", "unknown"),
+                architecture=challenge.get("architecture"),
+                difficulty=challenge.get("difficulty"),
+                question_text=question_text,
+                user_answer=user_ans,
+                correct_answer=val_res["correct_answer"],
+                explanation=val_res["explanation"],
+                score=val_res["score"],
+                attempt_count=1,
+                is_correct=val_res["is_correct"]
+            )
+            db.add(attempt)
+            db.commit()
+            
+        if current_user and val_res["is_correct"]:
+            award_xp(
+                db, 
+                current_user.id, 
+                "assessment.completed",
+                question_text
+            )
+            
+        return val_res
+    except Exception as e:
+        logger.exception(f"Assessment validation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+# ---------------------------------------------------------------------------
+# GET /api/recommendations  — personalised next actions (Sprint F)
+# ---------------------------------------------------------------------------
+
+
+
+# ---------------------------------------------------------------------------
+# GET /api/learning-paths  — curated learning sequences (Sprint F)
+# ---------------------------------------------------------------------------
+
+_LEARNING_PATHS = [
+    {
+        "id": "ai-engineer",
+        "title": "AI Engineer",
+        "description": "From ML fundamentals to production-ready transformer systems.",
+        "icon": "🤖",
+        "steps": [
+            {"id": "resnet",      "type": "architecture", "title": "ResNet",       "domain": "cnns"},
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "bert",        "type": "architecture", "title": "BERT",         "domain": "transformers"},
+            {"id": "gpt",         "type": "architecture", "title": "GPT",          "domain": "transformers"},
+            {"id": "vit",         "type": "architecture", "title": "Vision Transformer", "domain": "transformers"},
+            {"id": "stable-diffusion", "type": "architecture", "title": "Stable Diffusion", "domain": "diffusion"},
+        ],
+    },
+    {
+        "id": "llm-specialist",
+        "title": "LLM Specialist",
+        "description": "Deep dive into large language models and alignment.",
+        "icon": "🧠",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "bert",        "type": "architecture", "title": "BERT",         "domain": "transformers"},
+            {"id": "gpt",         "type": "architecture", "title": "GPT",          "domain": "transformers"},
+            {"id": "llama",       "type": "architecture", "title": "LLaMA",        "domain": "transformers"},
+            {"id": "clip",        "type": "architecture", "title": "CLIP",         "domain": "transformers"},
+        ],
+    },
+    {
+        "id": "vision-engineer",
+        "title": "Vision Engineer",
+        "description": "Computer vision from classic CNNs to diffusion models.",
+        "icon": "👁️",
+        "steps": [
+            {"id": "alexnet",     "type": "architecture", "title": "AlexNet",      "domain": "cnns"},
+            {"id": "resnet",      "type": "architecture", "title": "ResNet",       "domain": "cnns"},
+            {"id": "vit",         "type": "architecture", "title": "Vision Transformer", "domain": "transformers"},
+            {"id": "clip",        "type": "architecture", "title": "CLIP",         "domain": "transformers"},
+            {"id": "ddpm",        "type": "architecture", "title": "DDPM",         "domain": "diffusion"},
+            {"id": "stable-diffusion", "type": "architecture", "title": "Stable Diffusion", "domain": "diffusion"},
+        ],
+    },
+    {
+        "id": "research-track",
+        "title": "Research Track",
+        "description": "Broad survey of modern architectures for aspiring ML researchers.",
+        "icon": "🔬",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Transformer",  "domain": "transformers"},
+            {"id": "gan",         "type": "architecture", "title": "GAN",          "domain": "generative"},
+            {"id": "vae",         "type": "architecture", "title": "VAE",          "domain": "generative"},
+            {"id": "gcn",         "type": "architecture", "title": "GCN",          "domain": "graph"},
+            {"id": "ddpm",        "type": "architecture", "title": "DDPM",         "domain": "diffusion"},
+            {"id": "ppo",         "type": "architecture", "title": "PPO",          "domain": "rl"},
+        ],
+    },
+    {
+        "id": "interview-prep",
+        "title": "Interview Prep",
+        "description": "Targeted practice problems for ML engineering interviews.",
+        "icon": "💼",
+        "steps": [
+            {"id": "transformer", "type": "architecture", "title": "Implement Attention", "domain": "transformers"},
+            {"id": "resnet",      "type": "architecture", "title": "Implement ResNet Block", "domain": "cnns"},
+            {"id": "vae",         "type": "architecture", "title": "Implement VAE Loss",  "domain": "generative"},
+            {"id": "ppo",         "type": "architecture", "title": "Policy Gradient",     "domain": "rl"},
+        ],
+    },
+]
+
+
+
+
+# ---------------------------------------------------------------------------
+# POST /api/tutor/feedback  — thumbs up/down on a tutor message (Sprint F)
+# ---------------------------------------------------------------------------
+
+class TutorFeedbackRequest(BaseModel):
+    session_id:    str
+    message_index: int
+    rating:        int   # 1 = thumbs up, -1 = thumbs down
+
+
+
+
+# ---------------------------------------------------------------------------
+# GET /api/tutor/sessions  — conversation history (Sprint F)
+# ---------------------------------------------------------------------------
+
+

@@ -300,7 +300,7 @@ def test_jwt_validation_claims(client: TestClient, db_session: Session):
         db_session.commit()
 
     import jwt
-    from backend.services.auth_service import SECRET_KEY, ALGORITHM
+    from backend.modules.auth.config import SECRET_KEY, ALGORITHM
     import time
     
     # 1. Missing claims

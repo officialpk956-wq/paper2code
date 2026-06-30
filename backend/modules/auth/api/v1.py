@@ -36,7 +36,7 @@ from backend.modules.auth.services import (
     MFAService,
     OAuthService,
 )
-from backend.services.auth_service import SECRET_KEY, ALGORITHM
+from backend.modules.auth.config import SECRET_KEY, ALGORITHM
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -339,8 +339,8 @@ async def reset_password(request: Request, body: ResetPasswordRequest, db: Sessi
         user = db.query(User).filter_by(id=user_id).first()
         if not user:
             raise HTTPException(404)
-        from backend.services.auth_service import get_password_hash
-        user.hashed_password = get_password_hash(body.new_password)
+        from backend.modules.auth.security.hashing import hash_password
+        user.hashed_password = hash_password(body.new_password)
         user.token_version = (user.token_version or 0) + 1
         db.commit()
         return {"status": "ok", "detail": "Password updated. Please log in again.", "message": "Password reset successfully"}

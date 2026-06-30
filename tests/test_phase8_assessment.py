@@ -132,7 +132,7 @@ def test_recommendation_engine_empty():
     db_mock = MagicMock(spec=Session)
     db_mock.query().filter().all.return_value = []  # No attempts or tutor analytics
     
-    recs = recommendation_engine.compute(db_mock, "test-user-id")
+    recs = recommendation_engine.compute([], [])
     
     assert recs["total_attempts"] == 0
     assert recs["overall_accuracy"] == 0.0
@@ -143,59 +143,22 @@ def test_recommendation_engine_empty():
 
 def test_recommendation_engine_calculation():
     """Verify difficulty score formula and min-max normalization."""
-    # Mock SQLite objects
-    db_mock = MagicMock(spec=Session)
-
     # 1. Mock assessment attempts
     # We want to create different failure rates for ResNet vs DenseNet
-    attempt1 = AssessmentAttempt(
-        learner_id="test-user",
-        assessment_type="tensor",
-        architecture="ResNet",
-        is_correct=False,
-    )
-    attempt2 = AssessmentAttempt(
-        learner_id="test-user",
-        assessment_type="tensor",
-        architecture="ResNet",
-        is_correct=False,
-    )
-    attempt3 = AssessmentAttempt(
-        learner_id="test-user",
-        assessment_type="tensor",
-        architecture="DenseNet",
-        is_correct=True,
-    )
+    attempts = [
+        {"architecture": "ResNet", "assessment_type": "tensor", "is_correct": False},
+        {"architecture": "ResNet", "assessment_type": "tensor", "is_correct": False},
+        {"architecture": "DenseNet", "assessment_type": "tensor", "is_correct": True}
+    ]
 
     # 2. Mock tutor analytics questions count
     # DenseNet has high questions count, ResNet has low questions count
-    tutor1 = TutorAnalytics(
-        learner_id="test-user",
-        architecture="DenseNet",
-        module="denseblock_1",
-        question_count=10,
-    )
-    tutor2 = TutorAnalytics(
-        learner_id="test-user",
-        architecture="ResNet",
-        module="basicblock_1",
-        question_count=2,
-    )
+    tutor_rows = [
+        {"architecture": "DenseNet", "module": "denseblock_1", "question_count": 10},
+        {"architecture": "ResNet", "module": "basicblock_1", "question_count": 2}
+    ]
 
-    # Configure mock returns
-    def query_routing(model):
-        mock_query = MagicMock()
-        if model == AssessmentAttempt:
-            mock_query.filter().all.return_value = [attempt1, attempt2, attempt3]
-        elif model == TutorAnalytics:
-            mock_query.filter().all.return_value = [tutor1, tutor2]
-        else:
-            mock_query.filter().all.return_value = []
-        return mock_query
-
-    db_mock.query.side_effect = query_routing
-
-    recs = recommendation_engine.compute(db_mock, "test-user")
+    recs = recommendation_engine.compute(attempts, tutor_rows)
 
     assert recs["total_attempts"] == 3
     assert recs["overall_accuracy"] == pytest.approx(0.333, abs=0.01)

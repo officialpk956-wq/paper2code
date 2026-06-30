@@ -7,8 +7,34 @@ and Learning Path Adaptation.
 """
 
 from typing import Dict, Any, List, Optional
-from sqlalchemy.orm import Session
-from backend.models import Paper, PaperModule, LearnerProgress, AssessmentAttempt, TutorAnalytics
+from typing import TypedDict
+
+class AttemptData(TypedDict, total=False):
+    question_text: Optional[str]
+    assessment_type: Optional[str]
+    architecture: Optional[str]
+    is_correct: bool
+
+class LearnerProgressData(TypedDict, total=False):
+    module_id: int
+    status: str
+
+class TutorAnalyticsData(TypedDict, total=False):
+    module: Optional[str]
+    architecture: Optional[str]
+    question_count: int
+
+class PaperModuleData(TypedDict, total=False):
+    id: int
+    explanation: Optional[str]
+    module_type: Optional[str]
+    layer_name: Optional[str]
+
+class PaperData(TypedDict, total=False):
+    id: int
+    title: str
+    architecture_graph: Optional[Dict[str, Any]]
+    modules: List[PaperModuleData]
 from collections import defaultdict
 
 
@@ -43,43 +69,39 @@ class AdaptiveEngine:
     Fully deterministic — no LLMs used for calculation.
     """
 
-    def compute_knowledge_profile(self, db: Session, learner_id: str) -> Dict[str, float]:
+    def compute_knowledge_profile(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData]) -> Dict[str, float]:
         """
         Compute LearnerKnowledgeProfile (0.0 to 1.0 mastery score) for 10 core concepts.
         """
         # Load attempts, completions, and tutor queries
-        attempts = db.query(AssessmentAttempt).filter(AssessmentAttempt.learner_id == learner_id).all()
-        progress_records = db.query(LearnerProgress).filter(LearnerProgress.learner_id == learner_id).all()
-        tutor_records = db.query(TutorAnalytics).filter(TutorAnalytics.learner_id == learner_id).all()
 
         # Group assessments by concept
         concept_assessments = defaultdict(list)
         for a in attempts:
-            concept = _match_concept(a.question_text) or _match_concept(a.assessment_type)
-            if not concept and a.architecture:
-                concept = _match_concept(a.architecture)
+            concept = _match_concept(a.get("question_text")) or _match_concept(a.get("assessment_type"))
+            if not concept and a.get("architecture"):
+                concept = _match_concept(a.get("architecture"))
             if concept:
-                concept_assessments[concept].append(a.is_correct)
+                concept_assessments[concept].append(a.get("is_correct"))
 
         # Group completed modules by concept
-        completed_mod_ids = {p.module_id for p in progress_records if p.status == "completed"}
-        all_modules = db.query(PaperModule).all()
+        completed_mod_ids = {p.get("module_id") for p in progress_records if p.get("status") == "completed"}
         
         concept_total_modules = defaultdict(int)
         concept_completed_modules = defaultdict(int)
         for m in all_modules:
-            concept = _match_concept(m.explanation) or _match_concept(m.module_type) or _match_concept(m.layer_name)
+            concept = _match_concept(m.get("explanation")) or _match_concept(m.get("module_type")) or _match_concept(m.get("layer_name"))
             if concept:
                 concept_total_modules[concept] += 1
-                if m.id in completed_mod_ids:
+                if m.get("id") in completed_mod_ids:
                     concept_completed_modules[concept] += 1
 
         # Group tutor queries by concept
         concept_tutor = defaultdict(int)
         for t in tutor_records:
-            concept = _match_concept(t.module) or _match_concept(t.architecture)
+            concept = _match_concept(t.get("module")) or _match_concept(t.get("architecture"))
             if concept:
-                concept_tutor[concept] += t.question_count
+                concept_tutor[concept] += t.get("question_count")
 
         profile = {}
         for concept in CONCEPT_KEYWORDS.keys():
@@ -108,15 +130,11 @@ class AdaptiveEngine:
 
         return profile
 
-    def detect_weaknesses(self, db: Session, learner_id: str) -> Dict[str, Any]:
+    def detect_weaknesses(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData]) -> Dict[str, Any]:
         """
         Detect concepts where the learner struggles.
         Returns: { "weak_topics": [ { "topic": str, "weakness_score": float } ], "confidence": float }
         """
-        attempts = db.query(AssessmentAttempt).filter(AssessmentAttempt.learner_id == learner_id).all()
-        tutor_records = db.query(TutorAnalytics).filter(TutorAnalytics.learner_id == learner_id).all()
-        progress_records = db.query(LearnerProgress).filter(LearnerProgress.learner_id == learner_id).all()
-
         # Group failures & stats by concept
         failures = defaultdict(int)
         total_tries = defaultdict(int)
@@ -124,24 +142,23 @@ class AdaptiveEngine:
         incompletes = defaultdict(int)
 
         for a in attempts:
-            concept = _match_concept(a.question_text) or _match_concept(a.assessment_type)
-            if not concept and a.architecture:
-                concept = _match_concept(a.architecture)
+            concept = _match_concept(a.get("question_text")) or _match_concept(a.get("assessment_type"))
+            if not concept and a.get("architecture"):
+                concept = _match_concept(a.get("architecture"))
             if concept:
                 total_tries[concept] += 1
-                if not a.is_correct:
+                if not a.get("is_correct"):
                     failures[concept] += 1
 
         for t in tutor_records:
-            concept = _match_concept(t.module) or _match_concept(t.architecture)
-            if concept and t.question_count > 1:
-                tutor_reps[concept] += (t.question_count - 1)
+            concept = _match_concept(t.get("module")) or _match_concept(t.get("architecture"))
+            if concept and t.get("question_count") > 1:
+                tutor_reps[concept] += (t.get("question_count") - 1)
 
-        completed_mod_ids = {p.module_id for p in progress_records if p.status == "completed"}
-        all_modules = db.query(PaperModule).all()
+        completed_mod_ids = {p.get("module_id") for p in progress_records if p.get("status") == "completed"}
         for m in all_modules:
-            concept = _match_concept(m.explanation) or _match_concept(m.module_type) or _match_concept(m.layer_name)
-            if concept and m.id not in completed_mod_ids:
+            concept = _match_concept(m.get("explanation")) or _match_concept(m.get("module_type")) or _match_concept(m.get("layer_name"))
+            if concept and m.get("id") not in completed_mod_ids:
                 incompletes[concept] += 1
 
         weak_topics = []
@@ -181,12 +198,12 @@ class AdaptiveEngine:
             "confidence": round(confidence, 2)
         }
 
-    def get_personalized_recommendations(self, db: Session, learner_id: str) -> Dict[str, Any]:
+    def get_personalized_recommendations(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData], all_papers: List[PaperData]) -> Dict[str, Any]:
         """
         Dynamically compile next steps, suggested papers, modules, and tests based on weakness analysis.
         """
-        weak_analysis = self.detect_weaknesses(db, learner_id)
-        profile = self.compute_knowledge_profile(db, learner_id)
+        weak_analysis = self.detect_weaknesses(attempts, progress_records, tutor_records, all_modules)
+        profile = self.compute_knowledge_profile(attempts, progress_records, tutor_records, all_modules)
         
         weak_topics_list = [w["topic"] for w in weak_analysis["weak_topics"] if w["weakness_score"] > 0.2]
         
@@ -199,23 +216,21 @@ class AdaptiveEngine:
         suggested_assessments = []
         suggested_papers = []
 
-        all_papers = db.query(Paper).all()
-        progress_records = db.query(LearnerProgress).filter(LearnerProgress.learner_id == learner_id).all()
-        completed_mod_ids = {p.module_id for p in progress_records if p.status == "completed"}
+        completed_mod_ids = {p.get("module_id") for p in progress_records if p.get("status") == "completed"}
 
         # Compile matching items based on target weak topics
         for topic in weak_topics_list:
             # 1. Suggested review modules (not completed yet)
             for paper in all_papers:
-                for m in paper.modules:
-                    if m.id not in completed_mod_ids:
-                        concept = _match_concept(m.explanation) or _match_concept(m.module_type)
+                for m in paper.get("modules", []):
+                    if m.get("id") not in completed_mod_ids:
+                        concept = _match_concept(m.get("explanation")) or _match_concept(m.get("module_type"))
                         if concept == topic:
                             review_modules.append({
-                                "module_id": m.id,
-                                "paper_id": paper.id,
-                                "paper_title": paper.title,
-                                "layer_name": m.layer_name,
+                                "module_id": m.get("id"),
+                                "paper_id": paper.get("id"),
+                                "paper_title": paper.get("title"),
+                                "layer_name": m.get("layer_name"),
                                 "topic": topic
                             })
                             if len(review_modules) >= 3:
@@ -225,12 +240,12 @@ class AdaptiveEngine:
 
             # 2. Suggested papers
             for paper in all_papers:
-                arch_graph = paper.architecture_graph or {}
+                arch_graph = paper.get("architecture_graph") or {}
                 classification = arch_graph.get("classification", "")
-                if _match_concept(classification) == topic or _match_concept(paper.title) == topic:
+                if _match_concept(classification) == topic or _match_concept(paper.get("title")) == topic:
                     suggested_papers.append({
-                        "paper_id": paper.id,
-                        "title": paper.title,
+                        "paper_id": paper.get("id"),
+                        "title": paper.get("title"),
                         "classification": classification,
                         "topic": topic
                     })
@@ -267,13 +282,13 @@ class AdaptiveEngine:
         if not review_modules and all_papers:
             # Suggest first incomplete module
             for paper in all_papers:
-                for m in paper.modules:
-                    if m.id not in completed_mod_ids:
+                for m in paper.get("modules", []):
+                    if m.get("id") not in completed_mod_ids:
                         review_modules.append({
-                            "module_id": m.id,
-                            "paper_id": paper.id,
-                            "paper_title": paper.title,
-                            "layer_name": m.layer_name,
+                            "module_id": m.get("id"),
+                            "paper_id": paper.get("id"),
+                            "paper_title": paper.get("title"),
+                            "layer_name": m.get("layer_name"),
                             "topic": "General"
                         })
                         break
@@ -296,11 +311,11 @@ class AdaptiveEngine:
             "weak_topics": weak_analysis["weak_topics"][:3]
         }
 
-    def get_daily_review_plan(self, db: Session, learner_id: str) -> Dict[str, Any]:
+    def get_daily_review_plan(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData], all_papers: List[PaperData]) -> Dict[str, Any]:
         """
         Compile today's review plan featuring exactly 3 specific, targeted tasks.
         """
-        recs = self.get_personalized_recommendations(db, learner_id)
+        recs = self.get_personalized_recommendations(attempts, progress_records, tutor_records, all_modules, all_papers)
         
         review_items = []
 
@@ -363,12 +378,12 @@ class AdaptiveEngine:
             "today_review": review_items[:3]
         }
 
-    def get_concept_graph(self, db: Session, learner_id: str) -> List[Dict[str, Any]]:
+    def get_concept_graph(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData]) -> List[Dict[str, Any]]:
         """
         Build dynamic Concept Graph nodes with states: Mastered / Learning / Needs Review.
         """
-        profile = self.compute_knowledge_profile(db, learner_id)
-        weaknesses = self.detect_weaknesses(db, learner_id)
+        profile = self.compute_knowledge_profile(attempts, progress_records, tutor_records, all_modules)
+        weaknesses = self.detect_weaknesses(attempts, progress_records, tutor_records, all_modules)
         weak_topics = {w["topic"]: w["weakness_score"] for w in weaknesses["weak_topics"]}
 
         target_concepts = ["CNN", "Residual", "Dense", "Attention", "Encoder Decoder", "FLOPs", "Tensor Shapes"]
@@ -407,11 +422,11 @@ class AdaptiveEngine:
 
         return nodes
 
-    def get_adaptive_learning_path(self, db: Session, learner_id: str) -> List[Dict[str, Any]]:
+    def get_adaptive_learning_path(self, attempts: List[AttemptData], progress_records: List[LearnerProgressData], tutor_records: List[TutorAnalyticsData], all_modules: List[PaperModuleData]) -> List[Dict[str, Any]]:
         """
         Compile customized learning path, dynamically injecting remediation checks if needed.
         """
-        profile = self.compute_knowledge_profile(db, learner_id)
+        profile = self.compute_knowledge_profile(attempts, progress_records, tutor_records, all_modules)
 
         # Baseline path structure
         path = [

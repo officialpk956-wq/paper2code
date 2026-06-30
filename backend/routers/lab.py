@@ -232,7 +232,9 @@ def get_reproduction_card_view(paper_id: int, db: Session = Depends(get_db)):
         "reproduction_card": card,
     }
 
-@router.post("/lab/mutate")
+@router.post("/lab/mutations")
+# deprecated alias
+@router.post("/lab/mutate", deprecated=True)
 def lab_mutate(request: LabMutateRequest):
     try:
         before_graph = _build_base_graph(request.architecture, request.config)
@@ -259,7 +261,9 @@ def lab_mutate(request: LabMutateRequest):
         logger.exception(f"Lab mutate error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/lab/predict")
+@router.post("/lab/predictions")
+# deprecated alias
+@router.post("/lab/predict", deprecated=True)
 def lab_predict(request: LabPredictRequest):
     try:
         before_graph = _build_base_graph(request.architecture)
@@ -286,7 +290,9 @@ def lab_predict(request: LabPredictRequest):
         logger.exception(f"Lab predict error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/lab/experiment")
+@router.post("/lab/experiments")
+# deprecated alias
+@router.post("/lab/experiment", deprecated=True)
 def lab_experiment(request: LabExperimentRequest):
     try:
         before_graph = _build_base_graph(request.architecture)

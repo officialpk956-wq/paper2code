@@ -3,7 +3,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.models import User, Problem, DojoSubmission
 
-from backend.services.auth_service import get_password_hash
+from backend.modules.auth.security.hashing import hash_password as get_password_hash
 import uuid
 
 @pytest.fixture

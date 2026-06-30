@@ -16,8 +16,18 @@ Reads from SQLite tables:
   - learner_progress     (for completion status)
 """
 from __future__ import annotations
-from typing import Dict, Any, List, Optional
-from sqlalchemy.orm import Session
+from typing import Dict, Any, List, Optional, TypedDict
+
+class AttemptData(TypedDict, total=False):
+    architecture: Optional[str]
+    assessment_type: Optional[str]
+    is_correct: bool
+
+class TutorAnalyticsData(TypedDict, total=False):
+    architecture: Optional[str]
+    module: Optional[str]
+    question_count: int
+
 from collections import defaultdict
 
 
@@ -58,11 +68,11 @@ class RecommendationEngine:
 
     def compute(
         self,
-        db: Session,
-        learner_id: str,
+        attempts: List[AttemptData],
+        tutor_rows: List[TutorAnalyticsData],
     ) -> Dict[str, Any]:
         """
-        Compute recommendations for a learner.
+        Compute recommendations for a learner based on provided data dicts.
 
         Returns:
           {
@@ -71,23 +81,17 @@ class RecommendationEngine:
             "suggested_assessments": list[dict]
           }
         """
-        from backend.models import AssessmentAttempt, TutorAnalytics, LearnerProgress
-
-        # ── 1. Load all attempts for this learner ──────────────────────────
-        attempts = (
-            db.query(AssessmentAttempt)
-            .filter(AssessmentAttempt.learner_id == learner_id)
-            .all()
-        )
 
         # ── 2. Compute failure rate per (architecture, assessment_type) ────
         bucket_attempts: Dict[str, int] = defaultdict(int)
         bucket_failures: Dict[str, int] = defaultdict(int)
 
         for a in attempts:
-            key = f"{a.architecture or 'General'}::{a.assessment_type or 'general'}"
+            arch = a.get("architecture") or "General"
+            atype = a.get("assessment_type") or "general"
+            key = f"{arch}::{atype}"
             bucket_attempts[key] += 1
-            if not a.is_correct:
+            if not a.get("is_correct"):
                 bucket_failures[key] += 1
 
         failure_rates: Dict[str, float] = {}
@@ -95,16 +99,12 @@ class RecommendationEngine:
             failure_rates[key] = bucket_failures[key] / total if total > 0 else 0.0
 
         # ── 3. Load tutor question frequency per (architecture, module) ────
-        tutor_rows = (
-            db.query(TutorAnalytics)
-            .filter(TutorAnalytics.learner_id == learner_id)
-            .all()
-        )
-
         question_freq: Dict[str, int] = defaultdict(int)
         for t in tutor_rows:
-            key = f"{t.architecture or 'General'}::{t.module or 'general'}"
-            question_freq[key] += t.question_count
+            arch = t.get("architecture") or "General"
+            mod = t.get("module") or "general"
+            key = f"{arch}::{mod}"
+            question_freq[key] += t.get("question_count", 0)
 
         # ── 4. Compute difficulty scores ───────────────────────────────────
         # Combine keys from both sources
@@ -164,7 +164,7 @@ class RecommendationEngine:
 
         # Suggested assessments: challenge types with no attempts
         all_types = {"architecture", "tensor", "flops", "comparison"}
-        attempted_types = {a.assessment_type for a in attempts if a.assessment_type}
+        attempted_types = {a.get("assessment_type") for a in attempts if a.get("assessment_type")}
         untried_types = all_types - attempted_types
 
         suggested_assessments = []
@@ -178,8 +178,9 @@ class RecommendationEngine:
         # Also suggest higher difficulty for consistently correct areas
         correct_by_type: Dict[str, List[bool]] = defaultdict(list)
         for a in attempts:
-            if a.assessment_type:
-                correct_by_type[a.assessment_type].append(a.is_correct)
+            atype = a.get("assessment_type")
+            if atype:
+                correct_by_type[atype].append(a.get("is_correct", False))
 
         for atype, results in correct_by_type.items():
             if len(results) >= 3 and sum(results) / len(results) >= 0.8:
@@ -198,7 +199,7 @@ class RecommendationEngine:
             "suggested_assessments": suggested_assessments[:5],
             "total_attempts": len(attempts),
             "overall_accuracy": (
-                round(sum(1 for a in attempts if a.is_correct) / len(attempts), 3)
+                round(sum(1 for a in attempts if a.get("is_correct")) / len(attempts), 3)
                 if attempts else 0.0
             ),
         }

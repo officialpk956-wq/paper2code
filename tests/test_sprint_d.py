@@ -383,8 +383,10 @@ class TestStreakAtRisk:
     def test_01_at_risk_user_identified(self, db_session: Session):
         from backend.tasks.growth_tasks import _do_streak_at_risk
 
-        yesterday = datetime.datetime.utcnow() - datetime.timedelta(hours=30)
-        u = _seed_user(db_session, "ci_streak_risk@example.com", streak=5, last_active=yesterday)
+        # Use exactly 12:00 noon yesterday to avoid time-of-day boundary issues
+        today_date = datetime.datetime.utcnow().date()
+        yesterday_noon = datetime.datetime.combine(today_date - datetime.timedelta(days=1), datetime.time(12, 0))
+        u = _seed_user(db_session, "ci_streak_risk@example.com", streak=5, last_active=yesterday_noon)
 
         with patch("backend.tasks.growth_tasks.send_streak_at_risk_email_sync") as mock_send:
             mock_send.return_value = True
@@ -397,8 +399,9 @@ class TestStreakAtRisk:
     def test_02_zero_streak_user_not_notified(self, db_session: Session):
         from backend.tasks.growth_tasks import _do_streak_at_risk
 
-        yesterday = datetime.datetime.utcnow() - datetime.timedelta(hours=30)
-        u = _seed_user(db_session, "ci_streak_zero@example.com", streak=0, last_active=yesterday)
+        today_date = datetime.datetime.utcnow().date()
+        yesterday_noon = datetime.datetime.combine(today_date - datetime.timedelta(days=1), datetime.time(12, 0))
+        u = _seed_user(db_session, "ci_streak_zero@example.com", streak=0, last_active=yesterday_noon)
 
         with patch("backend.tasks.growth_tasks.send_streak_at_risk_email_sync") as mock_send:
             mock_send.return_value = True
