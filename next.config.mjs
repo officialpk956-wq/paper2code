@@ -59,7 +59,7 @@ const nextConfig = {
               "img-src 'self' data: blob: https://assets.lottiefiles.com https://assets9.lottiefiles.com",
               "font-src 'self' https://cdn.jsdelivr.net",
               // API calls to backend + Observable + PostHog
-              "connect-src 'self' https://observablehq.com https://us.i.posthog.com",
+              "connect-src 'self' https://paper2code-1-81y5.onrender.com https://observablehq.com https://us.i.posthog.com",
               // YouTube and Observable iframe embeds
               "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://observablehq.com",
               // This page must not be framed (XFO already set above)
