@@ -26,11 +26,10 @@ def health_check(db: Session = Depends(get_db)):
     
     # Check Redis
     try:
-        import os
-        import redis
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        r = redis.Redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1)
-        r.ping()
+        from backend.redis_config import session_redis
+        if session_redis is None:
+            raise Exception("Redis connection is None")
+        session_redis.ping()
         checks["redis"] = "healthy"
     except Exception as e:
         checks["redis"] = f"unhealthy: {str(e)}"
@@ -51,12 +50,11 @@ def health_db():
 
 @router.get("/api/health/redis")
 def health_redis():
-    import os
-    import redis
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    from backend.redis_config import session_redis
     try:
-        r = redis.Redis.from_url(redis_url, decode_responses=True)
-        r.ping()
+        if session_redis is None:
+            raise Exception("Redis connection is None")
+        session_redis.ping()
         return {"status": "ok", "redis": "connected"}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
