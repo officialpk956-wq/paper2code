@@ -48,19 +48,17 @@ logger = logging.getLogger(__name__)
 from backend.modules.security.startup_validation import validate_production_security_config
 validate_production_security_config()
 
-# Only use create_all for local dev/test. Production uses: alembic upgrade head
-import os as _os
-if _os.getenv("ENVIRONMENT", "development") != "production":
-    Base.metadata.create_all(bind=engine)
-    # Seed achievement catalogue (idempotent)
-    try:
-        from backend.database import SessionLocal as _SL
-        from backend.services.achievement_service import seed_achievements as _seed
-        _db = _SL()
-        _seed(_db)
-        _db.close()
-    except Exception as _e:
-        logger.warning("Achievement seeding skipped: %s", _e)
+# create_all is idempotent — safe to run on every startup (no Alembic configured)
+Base.metadata.create_all(bind=engine)
+# Seed achievement catalogue (idempotent)
+try:
+    from backend.database import SessionLocal as _SL
+    from backend.services.achievement_service import seed_achievements as _seed
+    _db = _SL()
+    _seed(_db)
+    _db.close()
+except Exception as _e:
+    logger.warning("Achievement seeding skipped: %s", _e)
 
 app = FastAPI(title="Paper2Code API")
 app.state.limiter = limiter
