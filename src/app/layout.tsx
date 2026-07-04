@@ -4,6 +4,7 @@ import './globals.css';
 import { TopNavbar } from '@/components/TopNavbar';
 import { AuthModalProvider } from '@/components/AuthModalContext';
 import { AuthModal } from '@/components/AuthModal';
+import { AnimatedBackground } from '@/components/AnimatedBackground';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`dark ${inter.variable}`}>
       <body>
+        <AnimatedBackground />
         <AuthModalProvider>
           <TopNavbar />
           <div className="page-fade-in">{children}</div>

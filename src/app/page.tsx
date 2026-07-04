@@ -43,21 +43,21 @@ export default function HomePage() {
   const topDomains = CURRICULUM.slice(0, 3);
 
   return (
-    <div className="bg-black text-white">
+    <div className="bg-transparent text-white">
       {/* HERO */}
       <section className="relative flex min-h-screen items-center justify-center overflow-hidden">
         <div
           className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ width: 700, height: 700, background: 'rgba(249,115,22,0.05)', filter: 'blur(140px)', borderRadius: '9999px' }}
+          style={{ width: 700, height: 700, background: 'rgba(52,211,153,0.05)', filter: 'blur(140px)', borderRadius: '9999px' }}
           aria-hidden
         />
         <div className="relative mx-auto flex max-w-5xl flex-col items-center gap-6 px-6 text-center">
-          <span className="rounded-full border border-[#F97316]/30 bg-[#F97316]/5 px-4 py-1.5 text-[13px] text-[#F97316]">
+          <span className="rounded-full border border-[#34D399]/30 bg-[#34D399]/5 px-4 py-1.5 text-[13px] text-[#34D399]">
             New: AI-powered architecture blueprints →
           </span>
           <h1 className="text-[64px] font-bold leading-[1.05] tracking-tight text-white">
             From Research Papers<br />
-            to <span className="text-[#F97316]">Running Code</span>
+            to <span className="text-[#34D399]">Running Code</span>
           </h1>
           <p className="mt-2 max-w-[520px] text-[16px] leading-[1.8] text-[#A3A3A3]">
             Upload any ML paper and get coding challenges, architecture diagrams, and guided
@@ -65,18 +65,18 @@ export default function HomePage() {
           </p>
           <div className="mt-4 flex flex-wrap justify-center gap-4">
             <Link href="/papers"
-              className="rounded-full bg-[#F97316] px-8 py-3.5 text-[15px] font-bold text-black transition-colors hover:bg-[#fb8a3a]">
+              className="rounded-full bg-[#34D399] px-8 py-3.5 text-[15px] font-bold text-black transition-colors hover:bg-[#4ADEA8]">
               Start Building for Free →
             </Link>
             <Link href="/dojo"
-              className="rounded-full border border-[#262626] px-8 py-3.5 text-[15px] text-white transition-colors hover:bg-[#111]">
+              className="rounded-full border border-[#223429] px-8 py-3.5 text-[15px] text-white transition-colors hover:bg-[#121D16]">
               Browse Problems
             </Link>
           </div>
-          <div className="mt-16 flex w-full flex-wrap justify-center gap-8 border-y border-[#1A1A1A] py-8 md:gap-16">
+          <div className="mt-16 flex w-full flex-wrap justify-center gap-8 border-y border-[#1B2C21] py-8 md:gap-16">
             {STATS.map(s => (
               <Link key={s.label} href={s.href} className="text-center group block">
-                <div className="text-2xl font-bold text-[#F97316] group-hover:brightness-125 transition-all">{s.value}</div>
+                <div className="text-2xl font-bold text-[#34D399] group-hover:brightness-125 transition-all">{s.value}</div>
                 <div className="mt-1 text-[11px] uppercase tracking-wider text-[#525252] group-hover:text-[#A3A3A3] transition-colors">{s.label}</div>
               </Link>
             ))}
@@ -96,7 +96,7 @@ export default function HomePage() {
         <div className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
           {PAPER_CARDS.map(c => (
             <Link key={c.title} href="/papers"
-              className="rounded-xl border border-[#262626] bg-[#111] p-5 transition-colors hover:border-[#A78BFA]/30 block">
+              className="rounded-xl border border-[#223429] bg-[#121D16] p-5 transition-colors hover:border-[#A78BFA]/30 block">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#A78BFA]/12">
                 <c.icon size={18} className="text-[#A78BFA]" />
               </div>
@@ -108,9 +108,9 @@ export default function HomePage() {
       </section>
 
       {/* DOJO */}
-      <section className="bg-[#080808] py-24">
+      <section className="bg-[#0C160F] py-24">
         <div className="mx-auto max-w-7xl px-6">
-          <span className="inline-block rounded-full border border-[#F97316]/20 bg-[#F97316]/10 px-3 py-1 text-xs font-semibold text-[#F97316]">
+          <span className="inline-block rounded-full border border-[#34D399]/20 bg-[#34D399]/10 px-3 py-1 text-xs font-semibold text-[#34D399]">
             Practice Dojo
           </span>
           <h2 className="mt-3 text-[34px] font-bold text-white">Code ML from Scratch.</h2>
@@ -120,7 +120,7 @@ export default function HomePage() {
           <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
             {PROBLEMS.map(p => (
               <Link key={p.num} href={p.href}
-                className="rounded-xl border border-[#262626] bg-[#111] p-5 block transition-colors hover:border-[#F97316]/30">
+                className="rounded-xl border border-[#223429] bg-[#121D16] p-5 block transition-colors hover:border-[#34D399]/30">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-[#525252]">{p.num}</span>
                   <span className={'rounded-full border px-2 py-0.5 text-[10px] font-semibold ' + DIFF_COLOR[p.difficulty]}>
@@ -130,10 +130,10 @@ export default function HomePage() {
                 <div className="mt-2 text-[15px] font-semibold text-white">{p.title}</div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {p.topics.map(t => (
-                    <span key={t} className="rounded-md bg-[#1A1A1A] px-2 py-0.5 text-[10px] text-[#A3A3A3]">{t}</span>
+                    <span key={t} className="rounded-md bg-[#1B2C21] px-2 py-0.5 text-[10px] text-[#A3A3A3]">{t}</span>
                   ))}
                 </div>
-                <div className="mt-4 text-xs font-semibold text-[#F97316]">Solve →</div>
+                <div className="mt-4 text-xs font-semibold text-[#34D399]">Solve →</div>
               </Link>
             ))}
           </div>
@@ -152,7 +152,7 @@ export default function HomePage() {
         <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
           {topDomains.map(d => (
             <Link key={d.slug} href={`/learn/${d.slug}`}
-              className="rounded-xl border border-[#262626] bg-[#111] p-5 block transition-colors hover:border-[#60A5FA]/30">
+              className="rounded-xl border border-[#223429] bg-[#121D16] p-5 block transition-colors hover:border-[#60A5FA]/30">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#60A5FA]/12">
                   <Zap size={18} className="text-[#60A5FA]" />
@@ -162,7 +162,7 @@ export default function HomePage() {
                   <div className="text-xs text-[#525252]">{d.topics.length} topics</div>
                 </div>
               </div>
-              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1A1A]">
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1B2C21]">
                 <div className="h-full rounded-full bg-[#60A5FA] transition-all" style={{ width: `0%` }} />
               </div>
               <div className="mt-2 text-[11px] text-[#525252]">0% complete</div>
@@ -172,11 +172,11 @@ export default function HomePage() {
       </section>
 
       {/* FOOTER */}
-      <footer className="mt-0 border-t border-[#1A1A1A] bg-[#050505] px-12 py-16">
+      <footer className="mt-0 border-t border-[#1B2C21] bg-[#081009] px-12 py-16">
         <div className="mx-auto flex max-w-7xl flex-col justify-between gap-10 md:flex-row">
           <div className="max-w-sm">
             <div className="flex items-center gap-2">
-              <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#F97316' }} />
+              <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#34D399' }} />
               <span className="text-[15px] font-bold text-white">paper2code</span>
             </div>
             <p className="mt-2 text-sm text-[#A3A3A3]">Bridge research and practice.</p>
@@ -192,7 +192,7 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-        <div className="mx-auto mt-12 flex max-w-7xl items-center justify-between border-t border-[#1A1A1A] pt-6">
+        <div className="mx-auto mt-12 flex max-w-7xl items-center justify-between border-t border-[#1B2C21] pt-6">
           <div className="text-xs text-[#525252]">© 2026 paper2code</div>
           <div className="text-xs text-[#525252]">Privacy · Terms</div>
         </div>

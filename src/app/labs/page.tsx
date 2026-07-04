@@ -89,9 +89,9 @@ const LABS: Lab[] = [
 
 export default function LabsPage() {
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white">
+    <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
-      <div className="border-b border-[#1E1E1E] bg-[#0D0D0D] px-8 py-6">
+      <div className="border-b border-[#1B2A20] bg-[#0E1811] px-8 py-6">
         <h1 className="text-[26px] font-bold text-white">AI Labs</h1>
         <p className="mt-1 text-[13px] text-[#525252]">
           Visual guides to the architectures behind modern AI — interactive parameter labs are on the roadmap.
@@ -102,9 +102,9 @@ export default function LabsPage() {
       <div className="mx-auto max-w-6xl px-8 py-8 grid grid-cols-1 md:grid-cols-2 gap-5">
         {LABS.map(lab => (
           <Link key={lab.id} href={`/architectures/${lab.archSlug}`}
-            className="group rounded-2xl border border-[#262626] bg-[#111] overflow-hidden transition-colors hover:border-[#404040] block">
+            className="group rounded-2xl border border-[#223429] bg-[#121D16] overflow-hidden transition-colors hover:border-[#2E4436] block">
             {/* Preview */}
-            <div className="h-44 bg-[#0D0D0D] flex items-center justify-center p-4">
+            <div className="h-44 bg-[#0E1811] flex items-center justify-center p-4">
               {lab.svgContent}
             </div>
             <div className="p-5">

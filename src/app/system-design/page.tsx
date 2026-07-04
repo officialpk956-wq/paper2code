@@ -6,9 +6,9 @@ import { SD_SYSTEMS } from '@/data/content/systemDesign';
 
 export default function SystemDesignPage() {
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white">
+    <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
-      <div className="border-b border-[#262626] bg-[#0D0D0D] px-8 py-10 text-center">
+      <div className="border-b border-[#223429] bg-[#0E1811] px-8 py-10 text-center">
         <h1 className="text-[32px] font-bold text-white mb-3">AI System Design</h1>
         <p className="text-[15px] text-[#A3A3A3] max-w-2xl mx-auto">
           Master the architecture of production AI systems. Learn how to design scalable, 
@@ -27,12 +27,12 @@ export default function SystemDesignPage() {
               <Link 
                 key={sys.slug} 
                 href={`/system-design/${sys.slug}`}
-                className="group bg-[#111] border border-[#262626] rounded-2xl p-6 hover:border-[#F97316]/50 transition-all flex flex-col h-full"
+                className="group bg-[#121D16] border border-[#223429] rounded-2xl p-6 hover:border-[#34D399]/50 transition-all flex flex-col h-full"
               >
-                <div className="text-[11px] font-bold text-[#F97316] uppercase tracking-wider mb-2">
+                <div className="text-[11px] font-bold text-[#34D399] uppercase tracking-wider mb-2">
                   System {sys.number}
                 </div>
-                <h2 className="text-[20px] font-bold text-white mb-3 group-hover:text-[#F97316] transition-colors leading-tight">
+                <h2 className="text-[20px] font-bold text-white mb-3 group-hover:text-[#34D399] transition-colors leading-tight">
                   {sys.name}
                 </h2>
                 
@@ -41,11 +41,11 @@ export default function SystemDesignPage() {
                     <span className="w-1.5 h-1.5 rounded-full bg-[#4ADE80] mr-2"></span>
                     4 levels · Beginner → Research
                   </div>
-                  <div className="flex items-center justify-between pt-4 border-t border-[#262626]">
+                  <div className="flex items-center justify-between pt-4 border-t border-[#223429]">
                     <span className="text-[12px] font-medium text-[#525252]">
                       {projectCount} Hands-on Projects
                     </span>
-                    <ArrowRight size={16} className="text-[#525252] group-hover:text-[#F97316] transition-colors" />
+                    <ArrowRight size={16} className="text-[#525252] group-hover:text-[#34D399] transition-colors" />
                   </div>
                 </div>
               </Link>

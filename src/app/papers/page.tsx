@@ -35,9 +35,9 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
   const hasWorkspace = !!workspaceId;
 
   return (
-    <div className="border border-[#262626] rounded-xl bg-[#111] mb-3 overflow-hidden">
+    <div className="border border-[#223429] rounded-xl bg-[#121D16] mb-3 overflow-hidden">
       <div 
-        className="p-4 flex gap-4 cursor-pointer hover:bg-[#141414] transition-colors"
+        className="p-4 flex gap-4 cursor-pointer hover:bg-[#16241B] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="w-8 text-[#A3A3A3] font-mono text-[12px] font-medium pt-0.5">#{paper.rank}</div>
@@ -70,7 +70,7 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
       </div>
       
       {expanded && (
-        <div className="border-t border-[#262626] bg-[#0A0A0A] p-4 text-[12px] space-y-3">
+        <div className="border-t border-[#223429] bg-transparent p-4 text-[12px] space-y-3">
           {paper.conceptsIntroduced && (
             <div>
               <span className="text-[#A78BFA] font-medium">Concepts:</span> <span className="text-[#A3A3A3]">{paper.conceptsIntroduced}</span>
@@ -103,7 +103,7 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
                  if (a && !seen.has(a.slug)) {
                    seen.add(a.slug);
                    chips.push(
-                     <Link key={a.slug} href={`/architectures/${a.slug}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#1A1A1A] border border-[#333] rounded-md text-[11px] text-[#F97316] font-medium hover:bg-[#262626]">
+                     <Link key={a.slug} href={`/architectures/${a.slug}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#1B2C21] border border-[#2E4436] rounded-md text-[11px] text-[#34D399] font-medium hover:bg-[#223429]">
                        Architecture: {a.name} →
                      </Link>
                    );
@@ -114,13 +114,13 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
             const dojoSlug = dojoSlugFor(paper.conceptsIntroduced ?? '');
             if (dojoSlug) {
               chips.push(
-                <Link key="dojo" href={`/dojo/${dojoSlug}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#1A1A1A] border border-[#333] rounded-md text-[11px] text-[#60A5FA] font-medium hover:bg-[#262626]">
+                <Link key="dojo" href={`/dojo/${dojoSlug}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#1B2C21] border border-[#2E4436] rounded-md text-[11px] text-[#60A5FA] font-medium hover:bg-[#223429]">
                   Solve related problem →
                 </Link>
               );
             }
             return chips.length > 0 ? (
-              <div className="flex gap-2 pt-3 border-t border-[#1A1A1A] mt-2">
+              <div className="flex gap-2 pt-3 border-t border-[#1B2C21] mt-2">
                 {chips}
               </div>
             ) : null;
@@ -201,12 +201,12 @@ function PapersContent() {
   const groupedPapers = Array.from(sectionMap.entries());
 
   return (
-    <div className="flex flex-col overflow-hidden bg-[#0A0A0A] text-white" style={{ height: 'calc(100vh - 56px)' }}>
+    <div className="flex flex-col overflow-hidden bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
       {/* HEADER */}
-      <div className="h-[68px] bg-[#0D0D0D] border-b border-[#1E1E1E] flex items-center px-8 gap-6 flex-shrink-0">
+      <div className="h-[68px] bg-[#0E1811] border-b border-[#1B2A20] flex items-center px-8 gap-6 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="text-[20px] font-bold text-white">Research Hub</div>
-          <div className="flex bg-[#141414] border border-[#262626] rounded-lg p-1">
+          <div className="flex bg-[#16241B] border border-[#223429] rounded-lg p-1">
             <button
               onClick={() => setActiveTab('Library')}
               className={`px-4 py-1.5 text-[12px] font-medium rounded-md transition-colors ${activeTab === 'Library' ? 'bg-[#A78BFA] text-black' : 'text-[#A3A3A3] hover:text-white'}`}
@@ -223,7 +223,7 @@ function PapersContent() {
         </div>
         <div className="flex-1" />
         <input type="text" placeholder="Search papers..."
-          className="w-[240px] bg-[#141414] border border-[#262626] rounded-lg px-3 py-2 text-[13px] text-white placeholder:text-[#525252] focus:outline-none focus:border-[#A78BFA]/40" />
+          className="w-[240px] bg-[#16241B] border border-[#223429] rounded-lg px-3 py-2 text-[13px] text-white placeholder:text-[#525252] focus:outline-none focus:border-[#A78BFA]/40" />
       </div>
 
       {error && activeTab === 'Workspace' && (
@@ -238,7 +238,7 @@ function PapersContent() {
           <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto w-full">
             {groupedPapers.map(([sectionName, sectionPapers]) => (
               <div key={sectionName} className="mb-10">
-                <div className="flex items-baseline justify-between border-b border-[#262626] pb-2 mb-4">
+                <div className="flex items-baseline justify-between border-b border-[#223429] pb-2 mb-4">
                   <h2 className="text-[18px] font-bold text-[#A78BFA]">{sectionName}</h2>
                   <span className="text-[12px] font-medium text-[#525252]">{sectionPapers.length} papers</span>
                 </div>
@@ -257,7 +257,7 @@ function PapersContent() {
               <input type="file" accept=".pdf" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
               
               <div onClick={handleUploadClick}
-                className="border-2 border-dashed border-[#A78BFA]/35 rounded-2xl bg-[#0D0D0D] min-h-[220px] flex flex-col items-center justify-center gap-4 p-8 cursor-pointer hover:border-[#A78BFA]/60 hover:bg-[#A78BFA]/3 transition-all">
+                className="border-2 border-dashed border-[#A78BFA]/35 rounded-2xl bg-[#0E1811] min-h-[220px] flex flex-col items-center justify-center gap-4 p-8 cursor-pointer hover:border-[#A78BFA]/60 hover:bg-[#A78BFA]/3 transition-all">
                 <div className="w-14 h-14 bg-[#A78BFA]/12 rounded-full flex items-center justify-center">
                   <Upload className="text-[#A78BFA]" size={24} />
                 </div>
@@ -270,9 +270,9 @@ function PapersContent() {
               </div>
 
               {uploading && (
-                <div className="bg-[#111] border border-[#262626] rounded-xl p-4 mt-4">
+                <div className="bg-[#121D16] border border-[#223429] rounded-xl p-4 mt-4">
                   <div className="text-[13px] font-semibold text-white">Uploading...</div>
-                  <div className="h-1.5 bg-[#1A1A1A] rounded-full mt-3 overflow-hidden">
+                  <div className="h-1.5 bg-[#1B2C21] rounded-full mt-3 overflow-hidden">
                     <div className="h-full bg-[#A78BFA] rounded-full w-[65%] animate-pulse" />
                   </div>
                   <div className="text-[11px] text-[#A78BFA] mt-2">Processing document...</div>
@@ -289,19 +289,19 @@ function PapersContent() {
               {loading ? (
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                   {[1, 2, 3].map(i => (
-                    <div key={i} className="bg-[#111] border border-[#262626] rounded-xl p-4 h-[140px] animate-pulse">
-                      <div className="h-1 bg-[#262626] rounded-full mb-3 w-1/4" />
-                      <div className="h-4 bg-[#262626] rounded mb-2" />
-                      <div className="h-4 bg-[#262626] rounded mb-4 w-3/4" />
-                      <div className="h-3 bg-[#262626] rounded w-1/2" />
+                    <div key={i} className="bg-[#121D16] border border-[#223429] rounded-xl p-4 h-[140px] animate-pulse">
+                      <div className="h-1 bg-[#223429] rounded-full mb-3 w-1/4" />
+                      <div className="h-4 bg-[#223429] rounded mb-2" />
+                      <div className="h-4 bg-[#223429] rounded mb-4 w-3/4" />
+                      <div className="h-3 bg-[#223429] rounded w-1/2" />
                     </div>
                   ))}
                 </div>
               ) : papers.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-[300px] border border-dashed border-[#262626] rounded-xl bg-[#111]">
+                <div className="flex flex-col items-center justify-center h-[300px] border border-dashed border-[#223429] rounded-xl bg-[#121D16]">
                   <div className="text-[#525252] text-sm mb-2">No papers yet</div>
                   {!isUserLoggedIn && (
-                    <button className="text-[#F97316] hover:underline text-sm font-semibold" onClick={() => (window as any).showAuthModal?.()}>
+                    <button className="text-[#34D399] hover:underline text-sm font-semibold" onClick={() => (window as any).showAuthModal?.()}>
                       Sign up to upload your first paper
                     </button>
                   )}
@@ -310,13 +310,13 @@ function PapersContent() {
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                   {papers.map(p => (
                     <Link key={p.id} href={`/papers/${p.id}`}
-                      className="bg-[#111] border border-[#262626] rounded-xl p-4 cursor-pointer hover:border-[#A78BFA]/35 transition-colors flex flex-col h-full">
+                      className="bg-[#121D16] border border-[#223429] rounded-xl p-4 cursor-pointer hover:border-[#A78BFA]/35 transition-colors flex flex-col h-full">
                       <div className="h-1 rounded-full mb-3" style={{ backgroundColor: p.color || '#A78BFA' }} />
                       <div className="text-[12px] font-semibold text-white leading-snug line-clamp-2">{p.title}</div>
                       <div className="text-[10px] text-[#525252] mt-1">{p.authors || 'Unknown Author'}</div>
                       <div className="flex gap-2 mt-3 flex-wrap">
                         {(p.topics || []).map(t => (
-                          <span key={t} className="bg-[#1A1A1A] text-[#A3A3A3] text-[10px] px-2 py-0.5 rounded-md">{t}</span>
+                          <span key={t} className="bg-[#1B2C21] text-[#A3A3A3] text-[10px] px-2 py-0.5 rounded-md">{t}</span>
                         ))}
                       </div>
                       <div className="mt-auto pt-4 flex justify-between items-center">
@@ -341,7 +341,7 @@ function PapersContent() {
 
 export default function PapersPage() {
   return (
-    <Suspense fallback={<div className="bg-black min-h-screen text-white p-8">Loading...</div>}>
+    <Suspense fallback={<div className="bg-transparent min-h-screen text-white p-8">Loading...</div>}>
       <PapersContent />
     </Suspense>
   );

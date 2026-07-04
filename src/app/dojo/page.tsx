@@ -116,28 +116,28 @@ export default function DojoPage() {
   }), [problems, topic, search, status, difficulty]);
 
   return (
-    <div className="flex overflow-hidden bg-black text-white" style={{ height: 'calc(100vh - 56px)' }}>
+    <div className="flex overflow-hidden bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
       {/* LEFT SIDEBAR */}
-      <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1E1E1E] bg-[#0D0D0D] p-4">
+      <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1B2A20] bg-[#0E1811] p-4">
         {/* POTD */}
-        <Link href="/dojo/ml-attention" className="block rounded-xl border border-[#F97316]/25 bg-[#1C0F00] p-4 hover:border-[#F97316]/50 transition-colors">
-          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#F97316]">Problem of the Day</div>
+        <Link href="/dojo/ml-attention" className="block rounded-xl border border-[#34D399]/25 bg-[#0F2418] p-4 hover:border-[#34D399]/50 transition-colors">
+          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#34D399]">Problem of the Day</div>
           <div className="mt-1 text-[13px] font-semibold text-white">Scaled Dot-Product Attention</div>
           <div className="mt-3 flex items-center justify-between">
             <span className="rounded-md bg-[#F87171]/12 px-2 py-0.5 text-[11px] font-semibold text-[#F87171]">Hard</span>
-            <span className="font-mono text-xs text-[#F97316]">{countdown}</span>
+            <span className="font-mono text-xs text-[#34D399]">{countdown}</span>
           </div>
         </Link>
 
         {/* PROGRESS — real counts derived from submission history */}
-        <div className="rounded-xl border border-[#262626] bg-[#111] p-4">
+        <div className="rounded-xl border border-[#223429] bg-[#121D16] p-4">
           <div className="mb-3 text-[12px] font-semibold text-white">Your Progress</div>
           <div className="grid grid-cols-3 gap-2">
             {(['Easy', 'Medium', 'Hard'] as const).map(level => {
               const color = level === 'Easy' ? 'text-[#4ADE80]' : level === 'Medium' ? 'text-[#FACC15]' : 'text-[#F87171]';
               const n = problems.filter(p => p.difficulty === level && p.solved).length;
               return (
-                <div key={level} className="rounded-lg border border-[#1E1E1E] bg-[#0A0A0A] p-2 text-center">
+                <div key={level} className="rounded-lg border border-[#1B2A20] bg-transparent p-2 text-center">
                   <div className={'text-xl font-bold ' + color}>{n}</div>
                   <div className="mt-0.5 text-[10px] text-[#525252]">{level}</div>
                 </div>
@@ -151,8 +151,8 @@ export default function DojoPage() {
             <button key={t} type="button" onClick={() => setTab(t)}
               className={'flex-1 rounded-lg px-4 py-2 text-xs ' +
                 (tab === t
-                  ? 'bg-[#F97316] font-semibold text-black'
-                  : 'border border-[#262626] bg-[#141414] text-[#A3A3A3] hover:text-white')}>
+                  ? 'bg-[#34D399] font-semibold text-black'
+                  : 'border border-[#223429] bg-[#16241B] text-[#A3A3A3] hover:text-white')}>
               {t === 'problems' ? 'Problems' : 'Leaderboard'}
             </button>
           ))}
@@ -169,29 +169,29 @@ export default function DojoPage() {
         {tab === 'problems' ? (
           <>
             {/* Topic chips */}
-            <div className="flex flex-wrap gap-2 border-b border-[#1E1E1E] px-5 py-3">
+            <div className="flex flex-wrap gap-2 border-b border-[#1B2A20] px-5 py-3">
               {TOPIC_CHIPS.map(t => (
                 <button key={t} type="button" onClick={() => setTopic(t)}
                   className={'rounded-full px-3 py-1 text-[11px] transition-colors ' +
                     (topic === t
-                      ? 'bg-[#F97316] font-semibold text-black'
-                      : 'border border-[#262626] bg-[#141414] text-[#A3A3A3] hover:text-white')}>
+                      ? 'bg-[#34D399] font-semibold text-black'
+                      : 'border border-[#223429] bg-[#16241B] text-[#A3A3A3] hover:text-white')}>
                   {t}
                 </button>
               ))}
             </div>
 
             {/* Filter bar */}
-            <div className="flex items-center gap-3 border-b border-[#1E1E1E] px-5 py-3">
+            <div className="flex items-center gap-3 border-b border-[#1B2A20] px-5 py-3">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search problems..."
-                className="w-[220px] rounded-lg border border-[#262626] bg-[#141414] px-3 py-2 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#F97316]" />
+                className="w-[220px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#34D399]" />
               <select value={status} onChange={e => setStatus(e.target.value)}
-                className="w-[120px] rounded-lg border border-[#262626] bg-[#141414] px-3 py-2 text-[13px] text-white outline-none">
+                className="w-[120px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white outline-none">
                 <option value="All">All Status</option>
                 <option>Solved</option><option>Unsolved</option>
               </select>
               <select value={difficulty} onChange={e => setDifficulty(e.target.value)}
-                className="w-[120px] rounded-lg border border-[#262626] bg-[#141414] px-3 py-2 text-[13px] text-white outline-none">
+                className="w-[120px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white outline-none">
                 <option value="All">All</option>
                 <option>Easy</option><option>Medium</option><option>Hard</option>
               </select>
@@ -200,7 +200,7 @@ export default function DojoPage() {
 
             {/* Table */}
             <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1E1E1E] bg-[#0D0D0D] px-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
+              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1B2A20] bg-[#0E1811] px-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
                 <div className="w-7 flex-shrink-0"></div>
                 <div className="min-w-0 flex-1"># Title</div>
                 <div className="w-[68px] flex-shrink-0 text-right">Difficulty</div>
@@ -208,10 +208,10 @@ export default function DojoPage() {
               </div>
               {filtered.map(p => {
                 const Row = (
-                  <div className="flex items-center border-b border-[#1E1E1E]/60 px-4 py-2.5 hover:bg-[#111] cursor-pointer min-h-[52px]">
+                  <div className="flex items-center border-b border-[#1B2A20]/60 px-4 py-2.5 hover:bg-[#121D16] cursor-pointer min-h-[52px]">
                     <div className="w-7 flex-shrink-0">
                       <span className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: p.solved ? '#4ADE80' : '#262626' }} />
+                        style={{ background: p.solved ? '#4ADE80' : '#223429' }} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -220,7 +220,7 @@ export default function DojoPage() {
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {p.topics.slice(0, 2).map(t => (
-                          <span key={t} className="rounded bg-[#1A1A1A] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
+                          <span key={t} className="rounded bg-[#1B2C21] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
                         ))}
                       </div>
                     </div>
@@ -234,20 +234,20 @@ export default function DojoPage() {
           </>
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-[#1E1E1E] px-5 py-4">
+            <div className="flex items-center justify-between border-b border-[#1B2A20] px-5 py-4">
               <h2 className="text-[18px] font-bold text-white">🏆 Leaderboard</h2>
-              <div className="flex gap-1 rounded-lg border border-[#262626] bg-[#141414] p-1">
+              <div className="flex gap-1 rounded-lg border border-[#223429] bg-[#16241B] p-1">
                 {(['Weekly', 'All-time'] as const).map(b => (
                   <button key={b} type="button" onClick={() => setBoard(b)}
                     className={'rounded-md px-3 py-1 text-xs ' +
-                      (board === b ? 'bg-[#F97316] font-semibold text-black' : 'text-[#A3A3A3] hover:text-white')}>
+                      (board === b ? 'bg-[#34D399] font-semibold text-black' : 'text-[#A3A3A3] hover:text-white')}>
                     {b}
                   </button>
                 ))}
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1E1E1E] bg-[#0D0D0D] px-5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
+              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1B2A20] bg-[#0E1811] px-5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
                 <div className="w-16">Rank</div><div className="flex-1">User</div>
                 <div className="w-24">Solved</div><div className="w-24">XP</div><div className="w-24">Streak</div>
               </div>
@@ -255,11 +255,11 @@ export default function DojoPage() {
               {loading && leaderboard.length === 0 ? (
                 <div className="p-4 space-y-4">
                   {[1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="flex h-[40px] items-center border border-[#1E1E1E] bg-[#111] animate-pulse rounded px-5">
-                      <div className="w-16 h-4 bg-[#262626] rounded"></div>
+                    <div key={i} className="flex h-[40px] items-center border border-[#1B2A20] bg-[#121D16] animate-pulse rounded px-5">
+                      <div className="w-16 h-4 bg-[#223429] rounded"></div>
                       <div className="flex flex-1 items-center gap-3">
-                        <div className="w-8 h-8 bg-[#262626] rounded-full"></div>
-                        <div className="w-32 h-4 bg-[#262626] rounded"></div>
+                        <div className="w-8 h-8 bg-[#223429] rounded-full"></div>
+                        <div className="w-32 h-4 bg-[#223429] rounded"></div>
                       </div>
                     </div>
                   ))}
@@ -273,15 +273,15 @@ export default function DojoPage() {
                   const isYou = userProfile?.username && row.username === userProfile.username;
                   return (
                     <div key={row.rank}
-                      className={'flex h-[56px] items-center border-b border-[#1E1E1E]/60 px-5 ' +
+                      className={'flex h-[56px] items-center border-b border-[#1B2A20]/60 px-5 ' +
                         (RANK_BORDER[row.rank] ? 'border-l-4 ' + RANK_BORDER[row.rank] + ' ' : '') +
-                        (isYou ? 'bg-[#F97316]/10' : 'hover:bg-[#111]')}>
+                        (isYou ? 'bg-[#34D399]/10' : 'hover:bg-[#121D16]')}>
                       <div className="w-16 text-[13px] font-semibold text-white">#{row.rank}</div>
                       <div className="flex flex-1 items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1A1A1A] text-xs font-bold text-white">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1B2C21] text-xs font-bold text-white">
                           {row.username ? row.username.charAt(0).toUpperCase() : '?'}
                         </div>
-                        <span className={'text-[13px] ' + (isYou ? 'font-semibold text-[#F97316]' : 'text-white')}>
+                        <span className={'text-[13px] ' + (isYou ? 'font-semibold text-[#34D399]' : 'text-white')}>
                           {isYou ? 'You' : row.username}
                         </span>
                       </div>

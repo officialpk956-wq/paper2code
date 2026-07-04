@@ -30,10 +30,10 @@ export default function PricingPage() {
   const yearlyPrice  = Math.round(monthlyPrice * 12 * 0.75);
 
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white">
+    <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
       <div className="text-center px-6 py-20">
-        <span className="inline-block rounded-full border border-[#F97316]/20 bg-[#F97316]/8 px-3 py-1 text-xs font-semibold text-[#F97316]">
+        <span className="inline-block rounded-full border border-[#34D399]/20 bg-[#34D399]/8 px-3 py-1 text-xs font-semibold text-[#34D399]">
           Pricing
         </span>
         <h1 className="mt-4 text-[40px] font-bold text-white">Simple, Transparent Pricing</h1>
@@ -43,7 +43,7 @@ export default function PricingPage() {
         <div className="mt-6 flex items-center justify-center gap-3">
           <span className={'text-[13px] ' + (!yearly ? 'text-white' : 'text-[#525252]')}>Monthly</span>
           <button type="button" onClick={() => setYearly(!yearly)}
-            className={'relative h-6 w-11 rounded-full transition-colors ' + (yearly ? 'bg-[#F97316]' : 'bg-[#262626]')}>
+            className={'relative h-6 w-11 rounded-full transition-colors ' + (yearly ? 'bg-[#34D399]' : 'bg-[#223429]')}>
             <div className={'absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ' +
               (yearly ? 'translate-x-5' : 'translate-x-1')} />
           </button>
@@ -56,7 +56,7 @@ export default function PricingPage() {
       {/* CARDS */}
       <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-24 md:flex-row">
         {/* FREE */}
-        <div className="flex flex-1 flex-col rounded-2xl border border-[#262626] bg-[#111] p-7">
+        <div className="flex flex-1 flex-col rounded-2xl border border-[#223429] bg-[#121D16] p-7">
           <div className="text-[13px] font-semibold uppercase tracking-wider text-[#525252]">Free</div>
           <div className="mt-3 flex items-end gap-1">
             <span className="text-[42px] font-bold text-white">$0</span>
@@ -65,7 +65,7 @@ export default function PricingPage() {
           <div className="mt-1 text-[12px] text-[#525252]">No credit card required</div>
 
           <Link href="/papers"
-            className="mt-6 block w-full rounded-xl border border-[#262626] py-3 text-[13px] font-semibold text-white hover:bg-[#141414] transition-colors text-center">
+            className="mt-6 block w-full rounded-xl border border-[#223429] py-3 text-[13px] font-semibold text-white hover:bg-[#16241B] transition-colors text-center">
             Get Started Free
           </Link>
 
@@ -80,12 +80,12 @@ export default function PricingPage() {
         </div>
 
         {/* PRO */}
-        <div className="flex flex-1 flex-col rounded-2xl border border-[#F97316]/40 bg-gradient-to-b from-[#1A0A00] to-[#111] p-7 relative overflow-hidden">
+        <div className="flex flex-1 flex-col rounded-2xl border border-[#34D399]/40 bg-gradient-to-b from-[#10231A] to-[#121D16] p-7 relative overflow-hidden">
           <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full"
-            style={{ background: 'rgba(249,115,22,0.08)', filter: 'blur(32px)' }} />
+            style={{ background: 'rgba(52,211,153,0.08)', filter: 'blur(32px)' }} />
           <div className="flex items-center gap-2">
-            <div className="text-[13px] font-semibold uppercase tracking-wider text-[#F97316]">Pro</div>
-            <span className="rounded-full bg-[#F97316]/15 px-2 py-0.5 text-[10px] font-semibold text-[#F97316]">Most Popular</span>
+            <div className="text-[13px] font-semibold uppercase tracking-wider text-[#34D399]">Pro</div>
+            <span className="rounded-full bg-[#34D399]/15 px-2 py-0.5 text-[10px] font-semibold text-[#34D399]">Most Popular</span>
           </div>
           <div className="mt-3 flex items-end gap-1">
             <span className="text-[42px] font-bold text-white">
@@ -101,14 +101,14 @@ export default function PricingPage() {
           {!yearly && <div className="text-[12px] text-[#525252]">Billed monthly</div>}
 
           <Link href="/papers"
-            className="mt-6 block w-full rounded-xl bg-[#F97316] py-3 text-[13px] font-bold text-black hover:bg-[#fb8a3a] transition-colors text-center">
+            className="mt-6 block w-full rounded-xl bg-[#34D399] py-3 text-[13px] font-bold text-black hover:bg-[#4ADEA8] transition-colors text-center">
             Upgrade to Pro →
           </Link>
 
           <ul className="mt-6 flex flex-col gap-3">
             {PRO_FEATURES.map(f => (
               <li key={f} className="flex items-start gap-2.5 text-[13px] text-white">
-                <Check size={14} className="mt-0.5 flex-shrink-0 text-[#F97316]" />
+                <Check size={14} className="mt-0.5 flex-shrink-0 text-[#34D399]" />
                 {f}
               </li>
             ))}
@@ -125,7 +125,7 @@ export default function PricingPage() {
           { q: 'Is there a student discount?', a: 'Yes — email us with a .edu address for 50% off Pro.' },
           { q: 'Can I try Pro before paying?', a: 'The free tier gives you a solid taste. We\'ll add a trial soon.' },
         ].map(({ q, a }) => (
-          <div key={q} className="rounded-xl border border-[#262626] bg-[#111] p-4">
+          <div key={q} className="rounded-xl border border-[#223429] bg-[#121D16] p-4">
             <div className="text-[13px] font-semibold text-white">{q}</div>
             <div className="mt-1.5 text-[12px] leading-relaxed text-[#A3A3A3]">{a}</div>
           </div>

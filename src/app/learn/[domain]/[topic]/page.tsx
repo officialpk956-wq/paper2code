@@ -26,7 +26,7 @@ const LEARN_SECTIONS = [
 
 function SectionPlaceholder() {
   return (
-    <div className="bg-[#111] border border-[#262626] border-dashed rounded-xl p-8 text-center my-6">
+    <div className="bg-[#121D16] border border-[#223429] border-dashed rounded-xl p-8 text-center my-6">
       <p className="text-[13px] text-[#A3A3A3] italic">
         Content in production — structure follows the Paper2Code chapter template
       </p>
@@ -57,7 +57,7 @@ export default function TopicPage() {
 
   if (!domain || !topic) {
     return (
-      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center">
+      <div className="min-h-screen bg-transparent text-white flex flex-col items-center justify-center">
         <h1 className="text-2xl font-bold mb-4">Topic not found</h1>
         <Link href={`/learn/${domainSlug || ''}`} className="text-[#60A5FA] hover:underline flex items-center gap-2">
           <ArrowLeft size={16} /> Back
@@ -75,7 +75,7 @@ export default function TopicPage() {
         <Link 
           key={text} 
           href={`/learn/${matched.domainSlug}/${matched.slug}`} 
-          className="bg-[#141414] border border-[#262626] rounded-md px-3 py-1.5 text-[12px] text-white hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors flex items-center gap-1.5 cursor-pointer mr-2 mb-2 inline-flex"
+          className="bg-[#16241B] border border-[#223429] rounded-md px-3 py-1.5 text-[12px] text-white hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors flex items-center gap-1.5 cursor-pointer mr-2 mb-2 inline-flex"
         >
           {isPrereq ? <Key size={12} className="text-[#525252]" /> : <ArrowRight size={12} className="text-[#525252]" />}
           {trimmed}
@@ -83,7 +83,7 @@ export default function TopicPage() {
       );
     }
     return (
-      <div key={text} className="bg-[#141414] border border-[#262626] rounded-md px-3 py-1.5 text-[12px] text-[#A3A3A3] flex items-center gap-1.5 cursor-default mr-2 mb-2 inline-flex">
+      <div key={text} className="bg-[#16241B] border border-[#223429] rounded-md px-3 py-1.5 text-[12px] text-[#A3A3A3] flex items-center gap-1.5 cursor-default mr-2 mb-2 inline-flex">
         {isPrereq ? <Key size={12} className="text-[#525252]" /> : <ArrowRight size={12} className="text-[#525252]" />}
         {trimmed}
       </div>
@@ -95,9 +95,9 @@ export default function TopicPage() {
   const prereqEdgesFrom = PREREQ_EDGES.filter(e => e.from.toLowerCase() === topic.title.trim().toLowerCase());
 
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white">
+    <div className="min-h-screen bg-transparent text-white">
       {/* Top Nav */}
-      <div className="border-b border-[#262626] px-8 py-4 bg-[#0D0D0D] flex items-center gap-2 sticky top-0 z-10 text-[13px] font-medium">
+      <div className="border-b border-[#223429] px-8 py-4 bg-[#0E1811] flex items-center gap-2 sticky top-0 z-10 text-[13px] font-medium">
         <Link href="/learn" className="text-[#A3A3A3] hover:text-white transition-colors">
           Learn
         </Link>
@@ -124,14 +124,14 @@ export default function TopicPage() {
               {topic.level}
             </span>
             {topic.studyTime && (
-              <span className="flex items-center gap-1.5 text-[12px] text-[#A3A3A3] bg-[#111] border border-[#262626] px-3 py-1 rounded-md">
+              <span className="flex items-center gap-1.5 text-[12px] text-[#A3A3A3] bg-[#121D16] border border-[#223429] px-3 py-1 rounded-md">
                 <Clock size={14} /> {topic.studyTime}
               </span>
             )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5">
+            <div className="bg-[#0E1811] border border-[#223429] rounded-xl p-5">
               <div className="text-[12px] font-semibold text-[#A3A3A3] uppercase tracking-wider mb-4 flex items-center gap-2">
                 <Key size={14} className="text-[#60A5FA]" /> Prerequisites
               </div>
@@ -144,7 +144,7 @@ export default function TopicPage() {
               )}
             </div>
 
-            <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5">
+            <div className="bg-[#0E1811] border border-[#223429] rounded-xl p-5">
               <div className="text-[12px] font-semibold text-[#A3A3A3] uppercase tracking-wider mb-4 flex items-center gap-2">
                 <ArrowRight size={14} className="text-[#4ADE80]" /> What This Unlocks
               </div>
@@ -169,29 +169,29 @@ export default function TopicPage() {
             if (!dojoSlug && !arch && !prevTopic && !nextTopic) return null;
 
             return (
-              <div className="mt-8 pt-8 border-t border-[#262626] flex flex-wrap gap-3 items-center">
+              <div className="mt-8 pt-8 border-t border-[#223429] flex flex-wrap gap-3 items-center">
                 <span className="text-[12px] font-bold text-[#525252] uppercase tracking-wider mr-2">Continue</span>
                 
                 {prevTopic && (
-                  <Link href={`/learn/${domain.slug}/${prevTopic.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#111] border border-[#262626] rounded-md text-[12px] font-medium text-[#A3A3A3] hover:text-white hover:border-[#525252] transition-colors">
+                  <Link href={`/learn/${domain.slug}/${prevTopic.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#121D16] border border-[#223429] rounded-md text-[12px] font-medium text-[#A3A3A3] hover:text-white hover:border-[#525252] transition-colors">
                     ← {prevTopic.title}
                   </Link>
                 )}
                 
                 {nextTopic && (
-                  <Link href={`/learn/${domain.slug}/${nextTopic.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#111] border border-[#262626] rounded-md text-[12px] font-medium text-[#A3A3A3] hover:text-white hover:border-[#525252] transition-colors">
+                  <Link href={`/learn/${domain.slug}/${nextTopic.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#121D16] border border-[#223429] rounded-md text-[12px] font-medium text-[#A3A3A3] hover:text-white hover:border-[#525252] transition-colors">
                     {nextTopic.title} →
                   </Link>
                 )}
 
                 {dojoSlug && (
-                  <Link href={`/dojo/${dojoSlug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#111] border border-[#F97316]/30 rounded-md text-[12px] font-medium text-[#F97316] hover:bg-[#F97316]/10 transition-colors ml-auto">
+                  <Link href={`/dojo/${dojoSlug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#121D16] border border-[#34D399]/30 rounded-md text-[12px] font-medium text-[#34D399] hover:bg-[#34D399]/10 transition-colors ml-auto">
                     Practice: {dojoSlug} →
                   </Link>
                 )}
 
                 {arch && (
-                  <Link href={`/architectures/${arch.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#111] border border-[#A78BFA]/30 rounded-md text-[12px] font-medium text-[#A78BFA] hover:bg-[#A78BFA]/10 transition-colors">
+                  <Link href={`/architectures/${arch.slug}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#121D16] border border-[#A78BFA]/30 rounded-md text-[12px] font-medium text-[#A78BFA] hover:bg-[#A78BFA]/10 transition-colors">
                     Architecture: {arch.name} →
                   </Link>
                 )}
@@ -202,7 +202,7 @@ export default function TopicPage() {
 
         {/* PREREQUISITE CHAIN */}
         {(prereqEdgesTo.length > 0 || prereqEdgesFrom.length > 0) && (
-          <div className="bg-[#111] border border-[#262626] rounded-xl p-6 mb-16">
+          <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 mb-16">
             <h3 className="text-[14px] font-bold text-white mb-4">Prerequisite Chain</h3>
             <div className="flex flex-col gap-4">
               {prereqEdgesTo.length > 0 && (
@@ -229,7 +229,7 @@ export default function TopicPage() {
         <div className="space-y-16">
           {LEARN_SECTIONS.map((section, idx) => (
             <section key={section} id={`section-${idx + 1}`} className="scroll-mt-16">
-              <h2 className="text-[22px] font-bold text-white mb-6 border-b border-[#262626] pb-2">
+              <h2 className="text-[22px] font-bold text-white mb-6 border-b border-[#223429] pb-2">
                 {idx + 1}. {section}
               </h2>
               <SectionPlaceholder />

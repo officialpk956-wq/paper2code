@@ -5,7 +5,7 @@ import { CURRICULUM } from '@/data/content/curriculum';
 
 export default function LearnPage() {
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white p-8">
+    <div className="min-h-screen bg-transparent text-white p-8">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-[26px] font-bold text-white mb-2">Curriculum</h1>
         <p className="text-[13px] text-[#A3A3A3] mb-8">
@@ -24,7 +24,7 @@ export default function LearnPage() {
               <Link 
                 href={`/learn/${domain.slug}`}
                 key={domain.slug}
-                className="bg-[#111] border border-[#262626] rounded-xl p-5 hover:border-[#60A5FA]/40 transition-colors flex flex-col"
+                className="bg-[#121D16] border border-[#223429] rounded-xl p-5 hover:border-[#60A5FA]/40 transition-colors flex flex-col"
               >
                 <div className="text-[11px] font-semibold text-[#60A5FA] mb-2 uppercase tracking-wider">
                   Domain {domain.number}
@@ -45,7 +45,7 @@ export default function LearnPage() {
                         <div className="h-full bg-[#A78BFA] rounded-r-sm" style={{ width: `${(expertCount / topicCount) * 100}%` }} title={`Expert: ${expertCount}`} />
                       </>
                     ) : (
-                      <div className="h-full w-full bg-[#262626] rounded-sm" />
+                      <div className="h-full w-full bg-[#223429] rounded-sm" />
                     )}
                   </div>
                   <div className="flex justify-between text-[10px] text-[#525252] mt-1">

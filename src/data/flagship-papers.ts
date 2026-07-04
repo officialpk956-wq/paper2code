@@ -45,7 +45,7 @@ export const FLAGSHIP_META: Record<string, FlagshipMeta> = {
   lora: {
     title: 'LoRA: Low-Rank Adaptation of Large Language Models',
     authors: 'Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, Chen',
-    year: 2021, color: '#FB923C',
+    year: 2021, color: '#A3E635',
     archName: 'LoRA',
     abstract: 'As we pre-train larger models, full fine-tuning becomes less feasible. We propose LoRA, which freezes the pre-trained model weights and injects trainable rank decomposition matrices into each layer of the Transformer architecture, greatly reducing the number of trainable parameters for downstream tasks.',
     contributions: ['ΔW = BA: rank decomposition reduces trainable params by 10,000×', 'No inference latency — adapters merged at deploy time', 'Matches full fine-tuning quality on GPT-3 tasks', 'Can target any linear layer: Q, K, V, output projection'],
@@ -71,7 +71,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'ffn', label: 'Feed-Forward', x: 450, y: 270, color: '#60A5FA' },
       { id: 'enc', label: 'Encoder', x: 150, y: 400, color: '#34D399' },
       { id: 'dec', label: 'Decoder', x: 450, y: 400, color: '#34D399' },
-      { id: 'pos', label: 'Pos. Encoding', x: 300, y: 400, color: '#FB923C' },
+      { id: 'pos', label: 'Pos. Encoding', x: 300, y: 400, color: '#A3E635' },
     ],
     edges: [
       { source: 'attn', target: 'mha' }, { source: 'attn', target: 'ffn' },
@@ -84,7 +84,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'conv', label: 'Convolution', x: 300, y: 140, color: '#60A5FA' },
       { id: 'bn', label: 'BatchNorm', x: 150, y: 270, color: '#A78BFA' },
       { id: 'relu', label: 'ReLU', x: 450, y: 270, color: '#A78BFA' },
-      { id: 'skip', label: 'Skip Connection', x: 300, y: 300, color: '#F97316' },
+      { id: 'skip', label: 'Skip Connection', x: 300, y: 300, color: '#34D399' },
       { id: 'block', label: 'Residual Block', x: 300, y: 420, color: '#34D399' },
     ],
     edges: [
@@ -95,7 +95,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
   },
   bert: {
     nodes: [
-      { id: 'wp', label: 'WordPiece', x: 150, y: 150, color: '#FB923C' },
+      { id: 'wp', label: 'WordPiece', x: 150, y: 150, color: '#A3E635' },
       { id: 'mlm', label: 'Masked LM', x: 450, y: 150, color: '#A78BFA' },
       { id: 'nsp', label: 'NSP', x: 450, y: 300, color: '#A78BFA' },
       { id: 'enc', label: 'Encoder ×12', x: 300, y: 250, color: '#60A5FA' },
@@ -113,7 +113,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'patch', label: 'Patches 16×16', x: 150, y: 150, color: '#34D399' },
       { id: 'proj', label: 'Linear Proj.', x: 400, y: 150, color: '#60A5FA' },
       { id: 'cls', label: '[CLS] Token', x: 150, y: 300, color: '#A78BFA' },
-      { id: 'pos', label: 'Pos. Embed', x: 400, y: 300, color: '#FB923C' },
+      { id: 'pos', label: 'Pos. Embed', x: 400, y: 300, color: '#A3E635' },
       { id: 'enc', label: 'Encoder', x: 275, y: 420, color: '#F472B6' },
     ],
     edges: [
@@ -124,8 +124,8 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
   lora: {
     nodes: [
       { id: 'w', label: 'Frozen W', x: 300, y: 140, color: '#525252' },
-      { id: 'a', label: 'A (down)', x: 150, y: 280, color: '#FB923C' },
-      { id: 'b', label: 'B (up)', x: 450, y: 280, color: '#FB923C' },
+      { id: 'a', label: 'A (down)', x: 150, y: 280, color: '#A3E635' },
+      { id: 'b', label: 'B (up)', x: 450, y: 280, color: '#A3E635' },
       { id: 'delta', label: 'ΔW = BA', x: 300, y: 300, color: '#A78BFA' },
       { id: 'merge', label: 'W + BA', x: 300, y: 420, color: '#34D399' },
     ],
@@ -140,7 +140,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'sram', label: 'SRAM (fast)', x: 450, y: 150, color: '#34D399' },
       { id: 'tile', label: 'Tiling', x: 300, y: 270, color: '#A78BFA' },
       { id: 'softmax', label: 'Online Softmax', x: 150, y: 400, color: '#60A5FA' },
-      { id: 'recomp', label: 'Recompute', x: 450, y: 400, color: '#FB923C' },
+      { id: 'recomp', label: 'Recompute', x: 450, y: 400, color: '#A3E635' },
     ],
     edges: [
       { source: 'hbm', target: 'tile' }, { source: 'sram', target: 'tile' },

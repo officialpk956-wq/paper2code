@@ -31,7 +31,7 @@ const ARCH_SECTIONS = [
 
 function SectionPlaceholder() {
   return (
-    <div className="bg-[#111] border border-[#262626] border-dashed rounded-xl p-8 text-center my-6">
+    <div className="bg-[#121D16] border border-[#223429] border-dashed rounded-xl p-8 text-center my-6">
       <p className="text-[13px] text-[#A3A3A3] italic">
         Content in production — structure follows the Paper2Code chapter template
       </p>
@@ -59,9 +59,9 @@ export default function ArchitectureSlugPage() {
 
   if (!arch) {
     return (
-      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center">
+      <div className="min-h-screen bg-transparent text-white flex flex-col items-center justify-center">
         <h1 className="text-2xl font-bold mb-4">Architecture not found</h1>
-        <Link href="/architectures" className="text-[#FB923C] hover:underline flex items-center gap-2">
+        <Link href="/architectures" className="text-[#A3E635] hover:underline flex items-center gap-2">
           <ArrowLeft size={16} /> Back to Library
         </Link>
       </div>
@@ -77,14 +77,14 @@ export default function ArchitectureSlugPage() {
         <Link 
           key={trimmed}
           href={`/architectures/${match.slug}`}
-          className="px-2.5 py-1 bg-[#141414] border border-[#262626] rounded-md text-[12px] text-white hover:border-[#FB923C]/50 hover:bg-[#FB923C]/10 transition-colors inline-block mr-2 mb-2"
+          className="px-2.5 py-1 bg-[#16241B] border border-[#223429] rounded-md text-[12px] text-white hover:border-[#A3E635]/50 hover:bg-[#A3E635]/10 transition-colors inline-block mr-2 mb-2"
         >
           {trimmed}
         </Link>
       );
     }
     return (
-      <span key={trimmed} className="px-2.5 py-1 bg-[#141414] border border-[#262626] rounded-md text-[12px] text-[#A3A3A3] inline-block mr-2 mb-2 cursor-default">
+      <span key={trimmed} className="px-2.5 py-1 bg-[#16241B] border border-[#223429] rounded-md text-[12px] text-[#A3A3A3] inline-block mr-2 mb-2 cursor-default">
         {trimmed}
       </span>
     );
@@ -99,17 +99,17 @@ export default function ArchitectureSlugPage() {
   const learnTopic = findTopic(arch.name);
 
   return (
-    <div className="flex h-[calc(100vh-56px)] bg-[#0A0A0A] text-white overflow-hidden">
+    <div className="flex h-[calc(100vh-56px)] bg-transparent text-white overflow-hidden">
       {/* LEFT SIDEBAR (Nav) */}
-      <div className="w-[260px] border-r border-[#262626] bg-[#0D0D0D] flex-shrink-0 flex flex-col h-full">
-        <div className="p-4 border-b border-[#262626]">
+      <div className="w-[260px] border-r border-[#223429] bg-[#0E1811] flex-shrink-0 flex flex-col h-full">
+        <div className="p-4 border-b border-[#223429]">
           <Link href="/architectures" className="text-[12px] text-[#A3A3A3] hover:text-white flex items-center gap-1.5 transition-colors">
             <ArrowLeft size={14} /> Back to Library
           </Link>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-1">
           {ARCH_SECTIONS.map((section, idx) => (
-            <a key={section} href={`#section-${idx + 1}`} className="block text-[12px] text-[#A3A3A3] hover:text-white hover:bg-[#111] px-3 py-2 rounded-md transition-colors truncate">
+            <a key={section} href={`#section-${idx + 1}`} className="block text-[12px] text-[#A3A3A3] hover:text-white hover:bg-[#121D16] px-3 py-2 rounded-md transition-colors truncate">
               {idx + 1}. {section}
             </a>
           ))}
@@ -122,7 +122,7 @@ export default function ArchitectureSlugPage() {
           {/* HEADER (SECTION 0) */}
           <div className="mb-12">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#FB923C]">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#A3E635]">
                 {arch.category}
               </span>
               <span className="text-[#525252]">|</span>
@@ -141,11 +141,11 @@ export default function ArchitectureSlugPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-            <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-6">
+            <div className="bg-[#0E1811] border border-[#223429] rounded-xl p-6">
               <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-3">Key Innovation</div>
               <div className="text-[14px] text-[#D4D4D4] leading-relaxed">{arch.keyInnovation}</div>
             </div>
-            <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-6">
+            <div className="bg-[#0E1811] border border-[#223429] rounded-xl p-6">
               <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-3">Industry Usage</div>
               <div className="text-[14px] text-[#D4D4D4] leading-relaxed">{arch.industryUsage}</div>
             </div>
@@ -153,7 +153,7 @@ export default function ArchitectureSlugPage() {
 
           {/* LINEAGE */}
           {(parents.length > 0 || derived.length > 0) && (
-            <div className="bg-[#111] border border-[#262626] rounded-xl p-6 mb-16">
+            <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 mb-16">
               <h3 className="text-[14px] font-bold text-white mb-4">Architecture Lineage</h3>
               <div className="flex flex-col gap-4">
                 {parents.length > 0 && (
@@ -178,7 +178,7 @@ export default function ArchitectureSlugPage() {
               const isRelatedPapers = section === "Related Papers";
               return (
                 <section key={section} id={`section-${idx + 1}`} className="scroll-mt-16">
-                  <h2 className="text-[22px] font-bold text-white mb-6 border-b border-[#262626] pb-2">
+                  <h2 className="text-[22px] font-bold text-white mb-6 border-b border-[#223429] pb-2">
                     {idx + 1}. {section}
                   </h2>
                   
@@ -189,7 +189,7 @@ export default function ArchitectureSlugPage() {
                           const workspaceId = LIBRARY_TO_WORKSPACE_ID[p.slug];
                           const href = workspaceId ? `/papers/${workspaceId}` : `/papers?tab=library`;
                           return (
-                            <Link key={p.slug} href={href} className="bg-[#111] border border-[#262626] p-4 rounded-xl flex items-center justify-between hover:border-[#A78BFA]/50 transition-colors">
+                            <Link key={p.slug} href={href} className="bg-[#121D16] border border-[#223429] p-4 rounded-xl flex items-center justify-between hover:border-[#A78BFA]/50 transition-colors">
                               <div className="flex items-center gap-4">
                                 <span className="text-[#525252] font-mono text-[12px] font-medium w-8">#{p.rank}</span>
                                 <span className="text-[14px] font-bold text-white">{p.title}</span>
@@ -211,7 +211,7 @@ export default function ArchitectureSlugPage() {
       </div>
 
       {/* RIGHT SIDEBAR */}
-      <div className="w-[280px] border-l border-[#262626] bg-[#0D0D0D] flex-shrink-0 flex flex-col h-full overflow-y-auto p-6 gap-8">
+      <div className="w-[280px] border-l border-[#223429] bg-[#0E1811] flex-shrink-0 flex flex-col h-full overflow-y-auto p-6 gap-8">
         
         {/* 1. Learn */}
         {learnTopic && (
@@ -226,10 +226,10 @@ export default function ArchitectureSlugPage() {
 
         {/* 2. Practice */}
         {practiceSlug && (
-          <div className="bg-gradient-to-br from-[#FB923C]/10 to-transparent border border-[#FB923C]/20 rounded-xl p-5">
+          <div className="bg-gradient-to-br from-[#A3E635]/10 to-transparent border border-[#A3E635]/20 rounded-xl p-5">
             <div className="text-[13px] font-bold text-white mb-2">Build from Scratch</div>
             <p className="text-[12px] text-[#A3A3A3] mb-4">Implement this architecture's core components.</p>
-            <Link href={`/dojo/${practiceSlug}`} className="bg-[#FB923C] text-black text-[12px] font-bold px-4 py-2 rounded-lg hover:brightness-110 transition-all flex items-center justify-center gap-1.5">
+            <Link href={`/dojo/${practiceSlug}`} className="bg-[#A3E635] text-black text-[12px] font-bold px-4 py-2 rounded-lg hover:brightness-110 transition-all flex items-center justify-center gap-1.5">
               Practice in Dojo <ArrowRight size={14} />
             </Link>
           </div>
@@ -238,7 +238,7 @@ export default function ArchitectureSlugPage() {
         {/* 3. Related Papers */}
         {relatedPapers.length > 0 && (
           <div>
-            <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4 border-b border-[#262626] pb-2">
+            <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4 border-b border-[#223429] pb-2">
               Related Papers
             </div>
             <div className="space-y-3">
@@ -259,7 +259,7 @@ export default function ArchitectureSlugPage() {
         {/* 4. Same Category */}
         {categorySiblings.length > 0 && (
           <div>
-            <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4 border-b border-[#262626] pb-2">
+            <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4 border-b border-[#223429] pb-2">
               Related: {arch.category}
             </div>
             <div className="space-y-3">
