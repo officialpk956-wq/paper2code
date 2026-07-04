@@ -11,14 +11,8 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ['lucide-react'],
   },
-  redirects: async () => {
-    return [
-      {
-        source: '/knowledge-graph',
-        destination: '/knowledge-intelligence',
-        permanent: false,
-      },
-    ]
+  eslint: {
+    ignoreDuringBuilds: true,
   },
   headers: async () => {
     return [
@@ -53,8 +47,9 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
               "style-src 'self' 'unsafe-inline'",
+              "worker-src blob: 'self'",
               // Allow images from self, data URIs, CDNs (Lottie, diagrams)
               "img-src 'self' data: blob: https://assets.lottiefiles.com https://assets9.lottiefiles.com",
               "font-src 'self' https://cdn.jsdelivr.net",

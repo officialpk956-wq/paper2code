@@ -1,66 +1,63 @@
-import { getAllContent, getAllSlugs } from '@/lib/content/loader';
-import { getTopicCount } from '@/data/topics';
+'use client';
 
-import { LearnHero } from '@/components/learn/LearnHero';
-import { ContinueLearningCard } from '@/components/learn/ContinueLearningCard';
-import { LearningPaths } from '@/components/learn/LearningPaths';
-import { DomainGrid } from '@/components/learn/DomainGrid';
-import { TrendingTopics } from '@/components/learn/TrendingTopics';
-import { Recommendations } from '@/components/learn/Recommendations';
-import { RecentlyAdded } from '@/components/learn/RecentlyAdded';
-import { KnowledgeGraphPreview } from '@/components/learn/KnowledgeGraphPreview';
-import { DOMAINS } from '@/data/learn/domains';
-import { LEARNING_PATHS } from '@/data/learn/paths';
-import { TRENDING_TOPICS } from '@/data/learn/topics';
-import {
-  CONTINUE_LEARNING,
-  RECOMMENDATIONS,
-  RECENTLY_ADDED,
-} from '@/data/learn/recommendations';
+import Link from 'next/link';
+import { CURRICULUM } from '@/data/content/curriculum';
 
 export default function LearnPage() {
-  const paperCount = getAllContent('paper').length;
-  const archCount = getAllSlugs('architecture').length;
-  const problemCount = getAllSlugs('problem').length;
-  const topicCount = getTopicCount();
-  const realStats = { paperCount, archCount, problemCount, topicCount };
-
   return (
-    <div
-      className="h-full flex overflow-hidden"
-      style={{ background: 'var(--bg-body)' }}
-    >
-      <div
-        className="flex-1 overflow-y-auto min-w-0"
-        style={{
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'rgba(124,58,237,0.2) transparent',
-        }}
-      >
-        {/* Section 1: Hero */}
-        <LearnHero stats={realStats} />
+    <div className="min-h-screen bg-[#0A0A0A] text-white p-8">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-[26px] font-bold text-white mb-2">Curriculum</h1>
+        <p className="text-[13px] text-[#A3A3A3] mb-8">
+          A structured path from basics to advanced research.
+        </p>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {CURRICULUM.map(domain => {
+            const topicCount = domain.topics.length;
+            const beginnerCount = domain.topics.filter(t => t.level === 'Beginner').length;
+            const intermediateCount = domain.topics.filter(t => t.level === 'Intermediate').length;
+            const advancedCount = domain.topics.filter(t => t.level === 'Advanced').length;
+            const expertCount = domain.topics.filter(t => t.level === 'Expert').length;
 
-        <div className="px-6 pb-12">
-          {/* Section 2: Continue Learning */}
-          <ContinueLearningCard data={CONTINUE_LEARNING} />
-
-          {/* Section 3: Learning Paths */}
-          <LearningPaths paths={LEARNING_PATHS} />
-
-          {/* Section 4: Domains */}
-          <DomainGrid domains={DOMAINS} />
-
-          {/* Section 5: Trending Topics */}
-          <TrendingTopics topics={TRENDING_TOPICS} />
-
-          {/* Section 6: Recommended For You */}
-          <Recommendations items={RECOMMENDATIONS} />
-
-          {/* Section 7: Recently Added */}
-          <RecentlyAdded items={RECENTLY_ADDED} />
-
-          {/* Section 8: Knowledge Graph Preview */}
-          <KnowledgeGraphPreview />
+            return (
+              <Link 
+                href={`/learn/${domain.slug}`}
+                key={domain.slug}
+                className="bg-[#111] border border-[#262626] rounded-xl p-5 hover:border-[#60A5FA]/40 transition-colors flex flex-col"
+              >
+                <div className="text-[11px] font-semibold text-[#60A5FA] mb-2 uppercase tracking-wider">
+                  Domain {domain.number}
+                </div>
+                <h2 className="text-[18px] font-bold text-white mb-4 leading-tight">{domain.name}</h2>
+                <div className="mt-auto">
+                  <div className="flex justify-between items-end mb-2">
+                    <span className="text-[12px] font-medium text-[#A3A3A3]">{topicCount} Topics</span>
+                  </div>
+                  
+                  {/* 4-segment level bar */}
+                  <div className="flex gap-1 h-1.5 w-full">
+                    {topicCount > 0 ? (
+                      <>
+                        <div className="h-full bg-[#4ADE80] rounded-l-sm" style={{ width: `${(beginnerCount / topicCount) * 100}%` }} title={`Beginner: ${beginnerCount}`} />
+                        <div className="h-full bg-[#FACC15]" style={{ width: `${(intermediateCount / topicCount) * 100}%` }} title={`Intermediate: ${intermediateCount}`} />
+                        <div className="h-full bg-[#F87171]" style={{ width: `${(advancedCount / topicCount) * 100}%` }} title={`Advanced: ${advancedCount}`} />
+                        <div className="h-full bg-[#A78BFA] rounded-r-sm" style={{ width: `${(expertCount / topicCount) * 100}%` }} title={`Expert: ${expertCount}`} />
+                      </>
+                    ) : (
+                      <div className="h-full w-full bg-[#262626] rounded-sm" />
+                    )}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-[#525252] mt-1">
+                    <span>Beg</span>
+                    <span>Int</span>
+                    <span>Adv</span>
+                    <span>Exp</span>
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </div>
     </div>

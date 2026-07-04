@@ -1,50 +1,33 @@
-import type { Config } from 'tailwindcss'
-import defaultTheme from 'tailwindcss/defaultTheme'
-import animate from 'tailwindcss-animate'
+import type { Config } from 'tailwindcss';
 
 const config: Config = {
-  content: [
-    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
-  ],
+  content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
   theme: {
     extend: {
-      fontFamily: {
-        sans: ['var(--font-sans)', ...defaultTheme.fontFamily.sans],
-        heading: ['var(--font-heading)', ...defaultTheme.fontFamily.sans],
-        mono: ['JetBrains Mono', 'monospace'],
-      },
       colors: {
-        background: 'var(--bg-body)',
-        surface: 'var(--bg-surface)',
-        panel: 'var(--bg-panel)',
-        border: 'var(--color-border)',
-        primary: 'var(--color-text-primary)',
-        secondary: 'var(--color-text-secondary)',
-        tertiary: 'var(--color-text-tertiary)',
+        brand:     '#F97316',
+        bg:        '#0A0A0A',
+        surface:   '#111111',
+        'surface-2': '#141414',
+        border:    '#1A1A1A',
+        muted:     '#A3A3A3',
+        subtle:    '#525252',
+        text:      '#FAFAFA',
+        papers:    '#A78BFA',
+        dojo:      '#F97316',
+        learn:     '#60A5FA',
+        labs:      '#34D399',
+        easy:      '#4ADE80',
+        medium:    '#FACC15',
+        hard:      '#F87171',
       },
-      animation: {
-        shimmer: 'shimmer 2s infinite',
-        aurora: 'aurora 8s ease infinite',
-      },
-      keyframes: {
-        shimmer: {
-          '-100%': { backgroundPosition: '200% 0' },
-          '100%': { backgroundPosition: '-200% 0' },
-        },
-        aurora: {
-          '0%': { backgroundPosition: '0% 50%' },
-          '50%': { backgroundPosition: '100% 50%' },
-          '100%': { backgroundPosition: '0% 50%' },
-        },
-      },
-      spacing: {
-        'nav': 'var(--text-h3)',
+      fontFamily: {
+        sans: ['var(--font-sans)', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
     },
   },
-  plugins: [animate],
-  darkMode: 'class',
-}
-export default config
+  plugins: [],
+};
+
+export default config;
