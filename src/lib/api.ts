@@ -13,7 +13,13 @@ async function handle<T>(res: Response): Promise<T> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? 'Request failed');
+    // FastAPI validation errors (422) return `detail` as an array of
+    // {loc, msg} objects, not a string — stringify it into something readable
+    // instead of letting it render as "[object Object]" wherever it's shown.
+    const detail = Array.isArray(err.detail)
+      ? err.detail.map((e: any) => e?.msg ?? JSON.stringify(e)).join('; ')
+      : err.detail;
+    throw new Error(detail ?? 'Request failed');
   }
   return res.json() as Promise<T>;
 }

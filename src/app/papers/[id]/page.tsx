@@ -98,6 +98,7 @@ export default function PaperWorkspacePage() {
   ]);
   const [input, setInput] = useState('');
   const [tutorLoading, setTutorLoading] = useState(false);
+  const [tutorSessionId, setTutorSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSummary();
@@ -205,10 +206,21 @@ export default function PaperWorkspacePage() {
       return;
     }
     try {
-      const res = await apiPost<{ answer: string }>('/api/tutor/ask', { question: userMsg, paper_id: id });
+      // Matches backend's TutorAskRequest exactly: query/context_type/context_data
+      // are required with no defaults — sending {question, paper_id} (the old
+      // shape) 422'd on every single message.
+      const res = await apiPost<{ answer: string; session_id: string }>('/api/tutor/ask', {
+        query: userMsg,
+        session_id: tutorSessionId,
+        context_type: 'paper',
+        context_data: { title: meta?.title ?? '', paper_id: id },
+      });
+      setTutorSessionId(res.session_id);
       setChat(prev => [...prev, { role: 'assistant', text: res.answer }]);
     } catch (err: any) {
-      setChat(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error answering that question.' }]);
+      // apiGet/apiPost surface the backend's HTTPException detail as err.message
+      // (e.g. the real "Daily tutor query limit reached" text) — show it when present.
+      setChat(prev => [...prev, { role: 'assistant', text: err?.message || 'Sorry, I encountered an error answering that question.' }]);
     } finally {
       setTutorLoading(false);
     }

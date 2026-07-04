@@ -24,6 +24,18 @@ export function AuthModal() {
 
   if (!isOpen) return null;
 
+  // Backend's /api/auth/login is OAuth2-password-form, not JSON, and only
+  // returns {access_token, refresh_token, token_type} — no user profile.
+  const doLogin = async (loginEmail: string, loginPassword: string) => {
+    const formData = new URLSearchParams();
+    formData.append('grant_type', 'password');
+    formData.append('username', loginEmail); // backend expects 'username' field to contain the email for OAuth2
+    formData.append('password', loginPassword);
+    return apiPostForm<{ access_token: string; refresh_token?: string }>(
+      '/api/auth/login', formData, 'application/x-www-form-urlencoded',
+    );
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
@@ -31,26 +43,27 @@ export function AuthModal() {
 
     try {
       if (tab === 'signup') {
+        // Backend's RegisterRequest requires {email, name, password} exactly —
+        // sending {username, ...} (the old shape) 422'd on every signup.
+        // /api/auth/register only creates the account and returns the user
+        // profile — it does NOT return tokens, so a real login call right
+        // after is required (email verification isn't required to log in).
         const uname = username || email.split('@')[0];
-        const res = await apiPost<{ access_token: string; refresh_token?: string; user: any }>('/api/auth/register', {
-          username: uname,
+        const registeredUser = await apiPost<Record<string, any>>('/api/auth/register', {
+          name: uname,
           email,
-          password
+          password,
         });
-        setTokens({ access_token: res.access_token, refresh_token: res.refresh_token });
+        const loginRes = await doLogin(email, password);
+        setTokens({ access_token: loginRes.access_token, refresh_token: loginRes.refresh_token });
         if (typeof window !== 'undefined') {
-          localStorage.setItem('user_profile', JSON.stringify(res.user));
+          localStorage.setItem('user_profile', JSON.stringify(registeredUser));
         }
         close();
         window.location.reload();
       } else {
-        const formData = new URLSearchParams();
-        formData.append('grant_type', 'password');
-        formData.append('username', email); // backend expects 'username' field to contain the email for OAuth2
-        formData.append('password', password);
-        
-        const res = await apiPostForm<{ access_token: string }>('/api/auth/login', formData, 'application/x-www-form-urlencoded');
-        setTokens({ access_token: res.access_token });
+        const res = await doLogin(email, password);
+        setTokens({ access_token: res.access_token, refresh_token: res.refresh_token });
         // Login only returns a token — persist a minimal profile so the navbar
         // can show the signed-in state after the reload.
         if (typeof window !== 'undefined') {
@@ -96,7 +109,11 @@ export function AuthModal() {
             onChange={e => setEmail(e.target.value)} autoComplete="email" />
           <input className={inp} placeholder="Password" type="password" value={password}
             onChange={e => setPassword(e.target.value)}
+            minLength={tab === 'signup' ? 10 : undefined}
             autoComplete={tab === 'signup' ? 'new-password' : 'current-password'} />
+          {tab === 'signup' && (
+            <div className="text-[11px] text-[#525252] -mt-1.5">At least 10 characters</div>
+          )}
           {tab === 'signin' && (
             <div className="flex justify-end">
               <button type="button" className="text-xs text-[#A3A3A3] transition-colors hover:text-[#34D399]">
