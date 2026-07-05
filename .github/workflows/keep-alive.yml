@@ -1,0 +1,28 @@
+name: Keep backend warm
+
+# Render's free tier spins a web service down after ~15 minutes of inactivity;
+# the next visitor then waits ~40s+ for a cold start. This pings the health
+# endpoint on a schedule so the service stays awake during active hours.
+#
+# NOTE: GitHub-hosted cron is best-effort and can be delayed under load, so an
+# occasional cold start is still possible. For bulletproof uptime use a paid
+# Render tier, or a dedicated monitor like UptimeRobot (free, 5-min checks).
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes
+  workflow_dispatch: {}       # allow manual runs from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          echo "Pinging backend at $(date -u)"
+          # Generous timeout to absorb a cold start; retry a couple of times.
+          # Best-effort: never fail the job (no noisy failure emails).
+          curl -fsS --max-time 90 --retry 3 --retry-delay 15 --retry-all-errors \
+            https://paper2code-1-81y5.onrender.com/api/health \
+            && echo "Backend is awake." \
+            || echo "Ping did not succeed this run (server may still be waking)."
