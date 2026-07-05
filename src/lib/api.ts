@@ -17,7 +17,7 @@ async function handle<T>(res: Response): Promise<T> {
     // {loc, msg} objects, not a string — stringify it into something readable
     // instead of letting it render as "[object Object]" wherever it's shown.
     const detail = Array.isArray(err.detail)
-      ? err.detail.map((e: any) => e?.msg ?? JSON.stringify(e)).join('; ')
+      ? err.detail.map((e: { msg?: string }) => e?.msg ?? JSON.stringify(e)).join('; ')
       : err.detail;
     throw new Error(detail ?? 'Request failed');
   }

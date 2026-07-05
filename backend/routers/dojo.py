@@ -362,6 +362,41 @@ async def submit_dojo_code(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/dojo/runs — synchronous, UNGRADED execution ("Run" button)
+# Executes the code as-is in the Piston sandbox and returns the result
+# directly. No DojoSubmission row, no XP, no streak — unlike code-submissions
+# this is a scratchpad run, and being synchronous it works without a Celery
+# worker deployed.
+# ---------------------------------------------------------------------------
+
+class DojoRunRequest(BaseModel):
+    problem_id: str = Field(..., max_length=256)
+    code: str = Field(..., max_length=65536)
+    stdin: Optional[str] = Field(default=None, max_length=65536)
+
+@router.post("/dojo/runs")
+@limiter.limit("60/hour", key_func=_dojo_user_key)
+async def run_dojo_code(
+    req: DojoRunRequest,
+    request: Request,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.services.dojo_execution_service import execute_python, RUN_TIMEOUT_MS
+
+    prob = db.query(Problem).filter_by(id=req.problem_id).first()
+    if not prob:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    if len(req.code.encode('utf-8')) > 10000:
+        raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10KB")
+
+    timeout_ms = prob.time_limit_ms or RUN_TIMEOUT_MS
+    result = await execute_python(req.code, req.stdin or "", run_timeout_ms=timeout_ms)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # POST /api/submissions/{id}/share  — mark best submission as public (P1)
 # ---------------------------------------------------------------------------
 

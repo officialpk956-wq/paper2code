@@ -17,7 +17,7 @@ export default function SystemDesignSlugPage() {
     return (
       <div className="min-h-screen bg-transparent text-white flex flex-col items-center justify-center">
         <h1 className="text-2xl font-bold mb-4">System not found</h1>
-        <Link href="/system-design" className="text-[#34D399] hover:underline flex items-center gap-2">
+        <Link href="/system-design" className="text-[#A78BFA] hover:underline flex items-center gap-2">
           <ArrowLeft size={16} /> Back to System Design
         </Link>
       </div>
@@ -30,18 +30,18 @@ export default function SystemDesignSlugPage() {
   return (
     <div className="min-h-screen bg-transparent text-white flex flex-col">
       {/* HEADER */}
-      <div className="border-b border-[#223429] bg-[#0E1811]">
+      <div className="border-b border-[#262626] bg-[#0A0A0A]">
         <div className="max-w-5xl mx-auto px-8 py-8">
           <Link href="/system-design" className="text-[#A3A3A3] hover:text-white text-[13px] flex items-center gap-1.5 mb-6 transition-colors inline-flex">
             <ArrowLeft size={16} /> Back to Systems
           </Link>
-          <div className="text-[12px] font-bold text-[#34D399] uppercase tracking-wider mb-3">
+          <div className="text-[12px] font-bold text-[#A78BFA] uppercase tracking-wider mb-3">
             System {sys.number}
           </div>
           <h1 className="text-[40px] font-bold text-white mb-8 leading-tight">{sys.name}</h1>
           
           {/* TABS */}
-          <div className="flex items-center gap-2 border-b border-[#223429] w-full">
+          <div className="flex items-center gap-2 border-b border-[#262626] w-full">
             {tabs.map(tab => {
               const hasModule = sys.modules.some(m => m.level === tab);
               const isActive = activeTab === tab;
@@ -52,7 +52,7 @@ export default function SystemDesignSlugPage() {
                   onClick={() => setActiveTab(tab)}
                   className={`px-6 py-3 text-[14px] font-medium transition-colors border-b-2 ${
                     isActive 
-                      ? 'border-[#34D399] text-[#34D399]' 
+                      ? 'border-[#A78BFA] text-[#A78BFA]' 
                       : hasModule 
                         ? 'border-transparent text-[#A3A3A3] hover:text-white' 
                         : 'border-transparent text-[#525252] cursor-not-allowed opacity-50'
@@ -72,8 +72,8 @@ export default function SystemDesignSlugPage() {
           <div className="grid grid-cols-1 gap-8">
             {/* Learning Objectives */}
             {currentModule.learningObjectives.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
                   <CheckSquare size={20} className="text-[#4ADE80]" /> Learning Objectives
                 </h2>
                 <ul className="space-y-4">
@@ -89,8 +89,8 @@ export default function SystemDesignSlugPage() {
 
             {/* Prerequisites */}
             {currentModule.prerequisites.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
                   <Key size={20} className="text-[#FACC15]" /> Prerequisites
                 </h2>
                 <div className="flex flex-wrap gap-2">
@@ -98,7 +98,7 @@ export default function SystemDesignSlugPage() {
                     const topic = findTopic(req);
                     if (topic) {
                       return (
-                        <Link key={i} href={`/learn/${topic.domainSlug}/${topic.topicSlug}`} className="px-3 py-1.5 bg-[#1B2C21] border border-[#2E4436] rounded-md text-[13px] font-medium text-[#60A5FA] hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors">
+                        <Link key={i} href={`/learn/${topic.domainSlug}/${topic.topicSlug}`} className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2E4436] rounded-md text-[13px] font-medium text-[#60A5FA] hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors">
                           {req}
                         </Link>
                       );
@@ -106,13 +106,13 @@ export default function SystemDesignSlugPage() {
                     const arch = findArch(req);
                     if (arch) {
                       return (
-                        <Link key={i} href={`/architectures/${arch.slug}`} className="px-3 py-1.5 bg-[#1B2C21] border border-[#2E4436] rounded-md text-[13px] font-medium text-[#34D399] hover:border-[#34D399]/50 hover:bg-[#34D399]/10 transition-colors">
+                        <Link key={i} href={`/architectures/${arch.slug}`} className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2E4436] rounded-md text-[13px] font-medium text-[#A78BFA] hover:border-[#A78BFA]/50 hover:bg-[#A78BFA]/10 transition-colors">
                           {req}
                         </Link>
                       );
                     }
                     return (
-                      <span key={i} className="px-3 py-1.5 bg-[#1B2C21] border border-[#2E4436] rounded-md text-[13px] text-[#A3A3A3]">
+                      <span key={i} className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2E4436] rounded-md text-[13px] text-[#A3A3A3]">
                         {req}
                       </span>
                     );
@@ -123,13 +123,13 @@ export default function SystemDesignSlugPage() {
 
             {/* Diagram Specs */}
             {currentModule.diagramsNeeded.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
                   <ImageIcon size={20} className="text-[#A78BFA]" /> Architecture Diagrams
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {currentModule.diagramsNeeded.map((diag, i) => (
-                    <div key={i} className="bg-[#1B2C21] border border-[#2E4436] p-4 rounded-lg flex flex-col h-full">
+                    <div key={i} className="bg-[#1A1A1A] border border-[#2E4436] p-4 rounded-lg flex flex-col h-full">
                       <div className="text-[10px] font-bold text-[#525252] uppercase tracking-wider mb-2">Diagram Spec</div>
                       <div className="text-[14px] text-[#D4D4D4] leading-relaxed">{diag}</div>
                     </div>
@@ -140,8 +140,8 @@ export default function SystemDesignSlugPage() {
 
             {/* Case Studies */}
             {currentModule.caseStudies.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
                   <BookOpen size={20} className="text-[#60A5FA]" /> Case Studies
                 </h2>
                 <ul className="space-y-4">
@@ -157,14 +157,14 @@ export default function SystemDesignSlugPage() {
 
             {/* Hands-On Projects */}
             {currentModule.handsOnProjects.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
-                  <PenTool size={20} className="text-[#34D399]" /> Hands-On Projects
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
+                  <PenTool size={20} className="text-[#A78BFA]" /> Hands-On Projects
                 </h2>
                 <div className="space-y-4">
                   {currentModule.handsOnProjects.map((proj, i) => (
-                    <div key={i} className="flex gap-4 items-start bg-[#1B2C21] border border-[#2E4436] p-4 rounded-lg">
-                      <div className="text-[#34D399] font-mono font-bold text-[14px] mt-0.5">{(i + 1).toString().padStart(2, '0')}</div>
+                    <div key={i} className="flex gap-4 items-start bg-[#1A1A1A] border border-[#2E4436] p-4 rounded-lg">
+                      <div className="text-[#A78BFA] font-mono font-bold text-[14px] mt-0.5">{(i + 1).toString().padStart(2, '0')}</div>
                       <div className="text-[15px] text-[#D4D4D4] leading-relaxed">{proj}</div>
                     </div>
                   ))}
@@ -174,8 +174,8 @@ export default function SystemDesignSlugPage() {
 
             {/* Interview Questions */}
             {currentModule.interviewQuestions.length > 0 && (
-              <div className="bg-[#121D16] border border-[#223429] rounded-xl p-6 md:p-8">
-                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#223429]">
+              <div className="bg-[#111111] border border-[#262626] rounded-xl p-6 md:p-8">
+                <h2 className="text-[18px] font-bold text-white mb-6 flex items-center gap-2 pb-4 border-b border-[#262626]">
                   <MessageCircle size={20} className="text-[#F87171]" /> Interview Questions
                 </h2>
                 <ul className="space-y-4">
@@ -197,22 +197,22 @@ export default function SystemDesignSlugPage() {
       </div>
 
       {/* FOOTER CTAs */}
-      <div className="border-t border-[#223429] bg-[#0E1811] py-12 mt-auto">
+      <div className="border-t border-[#262626] bg-[#0A0A0A] py-12 mt-auto">
         <div className="max-w-5xl mx-auto px-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Link href="/architectures" className="bg-[#121D16] border border-[#223429] p-6 rounded-xl hover:border-[#34D399]/50 transition-colors group flex items-center justify-between">
+          <Link href="/architectures" className="bg-[#111111] border border-[#262626] p-6 rounded-xl hover:border-[#A78BFA]/50 transition-colors group flex items-center justify-between">
             <div>
-              <div className="text-[16px] font-bold text-white group-hover:text-[#34D399] transition-colors mb-1">Browse Architectures</div>
+              <div className="text-[16px] font-bold text-white group-hover:text-[#A78BFA] transition-colors mb-1">Browse Architectures</div>
               <div className="text-[13px] text-[#A3A3A3]">Explore ML models behind the systems.</div>
             </div>
-            <ArrowRight size={20} className="text-[#525252] group-hover:text-[#34D399] transition-colors" />
+            <ArrowRight size={20} className="text-[#525252] group-hover:text-[#A78BFA] transition-colors" />
           </Link>
 
-          <Link href="/dojo" className="bg-[#121D16] border border-[#223429] p-6 rounded-xl hover:border-[#34D399]/50 transition-colors group flex items-center justify-between">
+          <Link href="/dojo" className="bg-[#111111] border border-[#262626] p-6 rounded-xl hover:border-[#A78BFA]/50 transition-colors group flex items-center justify-between">
             <div>
-              <div className="text-[16px] font-bold text-white group-hover:text-[#34D399] transition-colors mb-1">Practice in Dojo</div>
+              <div className="text-[16px] font-bold text-white group-hover:text-[#A78BFA] transition-colors mb-1">Practice in Dojo</div>
               <div className="text-[13px] text-[#A3A3A3]">Implement core components from scratch.</div>
             </div>
-            <ArrowRight size={20} className="text-[#525252] group-hover:text-[#34D399] transition-colors" />
+            <ArrowRight size={20} className="text-[#525252] group-hover:text-[#A78BFA] transition-colors" />
           </Link>
         </div>
       </div>

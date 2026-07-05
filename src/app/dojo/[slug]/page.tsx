@@ -10,7 +10,7 @@ import {
   Lock, CheckCircle, XCircle, Loader2,
 } from 'lucide-react';
 import { PROBLEMS, getProblemBySlug, getProblemIndex } from '@/data/problems';
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPost, isLoggedIn } from '@/lib/api';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -86,12 +86,21 @@ export default function ProblemPage() {
     setStdout('');
     setExpected('');
 
-    // Fetch prior submissions
-    apiGet<{status:string; created_at:string}[]>(`/api/dojo/submissions?problem_slug=${slug}`)
-      .then(data => {
-        if (Array.isArray(data)) setSubmissions(data);
-      })
-      .catch(err => console.error('Failed to load submissions:', err));
+    // Fetch prior submissions — endpoint returns {submissions: [{problem_id,
+    // passed, created_at, ...}]} for the whole user; filter to this problem.
+    if (isLoggedIn()) {
+      apiGet<{ submissions: { problem_id: string; passed: boolean; created_at: string | null }[] }>('/api/dojo/submissions?limit=100')
+        .then(data => {
+          const rows = (data?.submissions ?? [])
+            .filter(s => s.problem_id === slug)
+            .map(s => ({
+              status: s.passed ? 'accepted' : 'wrong_answer',
+              created_at: s.created_at ? new Date(s.created_at).toLocaleString() : '',
+            }));
+          setSubmissions(rows);
+        })
+        .catch(err => console.error('Failed to load submissions:', err));
+    }
   }, [slug, problem]);
 
   /* auto-save code */
@@ -101,54 +110,93 @@ export default function ProblemPage() {
     return () => clearTimeout(t);
   }, [code, slug]);
 
-  /* ── Run ─────────────────────────────────────────────── */
+  /* ── Run — synchronous, ungraded scratch run ─────────── */
   async function handleRun() {
+    if (!isLoggedIn()) {
+      setConsoleTab('result');
+      setRunState('error');
+      setStdout('Sign in to run code — solutions and XP are tracked per account.');
+      return;
+    }
     setRunState('running');
     setConsoleTab('result');
     try {
-      const data = await apiPost<any>('/api/dojo/run', {
-        problem_slug: slug, code, language: 'python', test_input: testInput
-      });
-      if (data.passed || data.status === 'passed') {
+      // POST /api/dojo/runs executes code verbatim in the Piston sandbox and
+      // returns the result directly (no polling, no XP, no submission row).
+      // The editable Testcase harness is appended to the user's code.
+      const composed = testInput.trim() ? code + '\n\n' + testInput : code;
+      const data = await apiPost<{ passed: boolean; stdout: string; stderr: string; time_ms: number | null }>(
+        '/api/dojo/runs',
+        { problem_id: slug, code: composed },
+      );
+      const output = [data.stdout, data.stderr].filter(Boolean).join('\n');
+      if (data.passed) {
         setRunState('passed');
-        setStdout(data.stdout ?? data.output ?? 'All tests passed!');
-        setExpected('');
+        setStdout(output || 'Ran successfully (no output).');
       } else {
         setRunState('failed');
-        setStdout(data.stdout ?? data.error ?? data.output ?? 'Wrong answer');
-        setExpected(data.expected ?? '');
+        setStdout(output || 'Execution failed.');
       }
-    } catch (err: any) {
+      setExpected('');
+    } catch (err: unknown) {
       setRunState('error');
-      setStdout(err.message || 'Could not reach the server. Is the backend running?');
+      setStdout((err as Error).message || 'Could not reach the server.');
     }
   }
 
-  /* ── Submit ──────────────────────────────────────────── */
+  /* ── Submit — graded, async: queue then poll the task ─── */
   async function handleSubmit() {
+    if (!isLoggedIn()) {
+      setConsoleTab('result');
+      setRunState('error');
+      setStdout('Sign in to submit — solutions and XP are tracked per account.');
+      return;
+    }
     setRunState('running');
     setConsoleTab('result');
     try {
-      const data = await apiPost<any>('/api/dojo/submit', {
-        problem_slug: slug, code, language: 'python'
+      // The worker appends this problem's judge harness server-side; passing
+      // means every assert held. Result arrives via GET /api/tasks/{id}.
+      const sub = await apiPost<{ task_id: string }>('/api/dojo/code-submissions', {
+        problem_id: slug,
+        code,
       });
-      if (data.passed || data.status === 'accepted') {
-        setRunState('passed');
-        setStdout(
-          data.tests_passed !== undefined
-            ? `${data.tests_passed} / ${data.tests_total} test cases passed`
-            : (data.stdout ?? 'Accepted!'),
+      let settled = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const t = await apiGet<{ status: string; result?: { passed?: boolean; stdout?: string; stderr?: string }; error?: string }>(
+          `/api/tasks/${sub.task_id}`,
         );
-        setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
-      } else {
-        setRunState('failed');
-        setStdout(data.error ?? data.stdout ?? 'Some test cases failed');
-        setExpected(data.expected ?? '');
-        setSubmissions(prev => [{ status: 'wrong_answer', created_at: new Date().toLocaleString() }, ...prev]);
+        if (t.status === 'complete') {
+          const r = t.result ?? {};
+          const output = [r.stdout, r.stderr].filter(Boolean).join('\n');
+          if (r.passed) {
+            setRunState('passed');
+            setStdout(output || 'Accepted!');
+            setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
+          } else {
+            setRunState('failed');
+            setStdout(output || 'Some test cases failed');
+            setSubmissions(prev => [{ status: 'wrong_answer', created_at: new Date().toLocaleString() }, ...prev]);
+          }
+          settled = true;
+          break;
+        }
+        if (t.status === 'failed') {
+          setRunState('error');
+          setStdout(t.error || 'Execution failed on the server.');
+          settled = true;
+          break;
+        }
       }
-    } catch (err: any) {
+      if (!settled) {
+        setRunState('error');
+        setStdout('Still queued after 45 seconds — the execution worker may be offline. Your submission is saved; check the Submissions tab later.');
+      }
+      setExpected('');
+    } catch (err: unknown) {
       setRunState('error');
-      setStdout(err.message || 'Could not reach the server. Is the backend running?');
+      setStdout((err as Error).message || 'Could not reach the server.');
     }
   }
 
@@ -159,8 +207,8 @@ export default function ProblemPage() {
         className="flex h-screen items-center justify-center flex-col gap-4"
         style={{ background: 'transparent' }}
       >
-        <p style={{ color: '#525252' }}>Problem "{slug}" not found.</p>
-        <Link href="/dojo" style={{ color: '#34D399', fontSize: 13 }}>
+        <p style={{ color: '#525252' }}>Problem &quot;{slug}&quot; not found.</p>
+        <Link href="/dojo" style={{ color: '#A78BFA', fontSize: 13 }}>
           ← Back to Dojo
         </Link>
       </div>
@@ -179,7 +227,7 @@ export default function ProblemPage() {
         style={{
           height: 52,
           background: 'transparent',
-          borderBottom: '1px solid #1B2A20',
+          borderBottom: '1px solid #1A1A1A',
         }}
       >
         <Link
@@ -193,7 +241,7 @@ export default function ProblemPage() {
           Problems
         </Link>
 
-        <div style={{ width: 1, height: 16, background: '#223429' }} />
+        <div style={{ width: 1, height: 16, background: '#262626' }} />
 
         <span style={{ fontSize: 13, fontWeight: 600, color: '#FAFAFA' }}>
           #{String(problemIndex + 1).padStart(3, '0')} · {problem.title}
@@ -229,7 +277,7 @@ export default function ProblemPage() {
         {/* timer */}
         <div
           className="flex items-center gap-2 px-3 py-1.5 rounded-md"
-          style={{ background: '#16241B', border: '1px solid #223429' }}
+          style={{ background: '#111111', border: '1px solid #262626' }}
         >
           <Clock size={12} style={{ color: '#525252' }} />
           <Timer />
@@ -242,12 +290,12 @@ export default function ProblemPage() {
         {/* LEFT PANEL */}
         <div
           className="flex flex-col overflow-hidden"
-          style={{ width: '45%', borderRight: '1px solid #1B2A20' }}
+          style={{ width: '45%', borderRight: '1px solid #1A1A1A' }}
         >
           {/* tab bar */}
           <div
             className="flex items-end gap-1 px-4 flex-shrink-0"
-            style={{ height: 44, borderBottom: '1px solid #1B2A20' }}
+            style={{ height: 44, borderBottom: '1px solid #1A1A1A' }}
           >
             {(['description', 'submissions', 'notes'] as LeftTab[]).map(t => (
               <button
@@ -257,8 +305,8 @@ export default function ProblemPage() {
                 style={{
                   padding: '0 12px 10px',
                   fontSize: 13,
-                  color: leftTab === t ? '#34D399' : '#525252',
-                  borderBottom: leftTab === t ? '2px solid #34D399' : '2px solid transparent',
+                  color: leftTab === t ? '#A78BFA' : '#525252',
+                  borderBottom: leftTab === t ? '2px solid #A78BFA' : '2px solid transparent',
                   background: 'none',
                   cursor: 'pointer',
                 }}
@@ -288,7 +336,7 @@ export default function ProblemPage() {
           </div>
 
           {/* tab content */}
-          <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#223429 transparent' }}>
+          <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#262626 transparent' }}>
 
             {/* DESCRIPTION */}
             {leftTab === 'description' && (
@@ -300,14 +348,14 @@ export default function ProblemPage() {
                     <span
                       key={t}
                       style={{
-                        background: '#1B2C21', color: '#60A5FA',
+                        background: '#1A1A1A', color: '#60A5FA',
                         fontSize: 11, padding: '4px 8px', borderRadius: 6,
                       }}
                     >{t}</span>
                   ))}
                 </div>
 
-                <hr style={{ borderColor: '#1B2A20', margin: '16px 0' }} />
+                <hr style={{ borderColor: '#1A1A1A', margin: '16px 0' }} />
 
                 <p style={{ fontSize: 13, color: '#A3A3A3', lineHeight: 1.85, whiteSpace: 'pre-line' }}>
                   {problem.description}
@@ -320,7 +368,7 @@ export default function ProblemPage() {
                     </p>
                     <div
                       className="space-y-1"
-                      style={{ background: '#0E1811', borderRadius: 12, padding: 16, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}
+                      style={{ background: '#0A0A0A', borderRadius: 12, padding: 16, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}
                     >
                       <div>
                         <span style={{ color: '#4ADE80' }}>Input: </span>
@@ -339,11 +387,11 @@ export default function ProblemPage() {
 
                 <div
                   style={{
-                    marginTop: 20, background: '#0E1811',
-                    border: '1px solid #223429', borderRadius: 12, padding: 16,
+                    marginTop: 20, background: '#0A0A0A',
+                    border: '1px solid #262626', borderRadius: 12, padding: 16,
                   }}
                 >
-                  <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', color: '#34D399', textTransform: 'uppercase', marginBottom: 12 }}>
+                  <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', color: '#A78BFA', textTransform: 'uppercase', marginBottom: 12 }}>
                     Constraints
                   </p>
                   <ul className="space-y-2">
@@ -359,7 +407,7 @@ export default function ProblemPage() {
                 {problem.hints.length > 0 && (
                   <div
                     style={{
-                      marginTop: 16, border: '1px solid #223429',
+                      marginTop: 16, border: '1px solid #262626',
                       borderRadius: 12, padding: 16,
                     }}
                   >
@@ -374,31 +422,31 @@ export default function ProblemPage() {
 
                 {/* RELATED */}
                 {(SLUG_META[slug]?.archSlug || SLUG_META[slug]?.paperSlug || SLUG_META[slug]?.learnPath) && (
-                  <div style={{ marginTop: 20, border: '1px solid #223429', borderRadius: 12, padding: 16 }}>
+                  <div style={{ marginTop: 20, border: '1px solid #262626', borderRadius: 12, padding: 16 }}>
                     <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#A78BFA', textTransform: 'uppercase', marginBottom: 12 }}>
                       Related
                     </p>
                     <div className="space-y-2">
                       {SLUG_META[slug]?.learnPath && (
                         <Link href={SLUG_META[slug].learnPath!}
-                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#121D16]"
-                          style={{ border: '1px solid #1B2A20' }}>
+                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#111111]"
+                          style={{ border: '1px solid #1A1A1A' }}>
                           <span style={{ fontSize: 12, color: '#60A5FA' }}>📚 {SLUG_META[slug].learnName} Path</span>
                           <span style={{ fontSize: 11, color: '#525252' }}>Learn →</span>
                         </Link>
                       )}
                       {SLUG_META[slug]?.archSlug && (
                         <Link href={`/architectures/${SLUG_META[slug].archSlug}`}
-                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#121D16]"
-                          style={{ border: '1px solid #1B2A20' }}>
+                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#111111]"
+                          style={{ border: '1px solid #1A1A1A' }}>
                           <span style={{ fontSize: 12, color: '#A3E635' }}>⚡ {SLUG_META[slug].archName} Architecture</span>
                           <span style={{ fontSize: 11, color: '#525252' }}>Explore →</span>
                         </Link>
                       )}
                       {SLUG_META[slug]?.paperSlug && (
                         <Link href={`/papers/${SLUG_META[slug].paperSlug}`}
-                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#121D16]"
-                          style={{ border: '1px solid #1B2A20' }}>
+                          className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-[#111111]"
+                          style={{ border: '1px solid #1A1A1A' }}>
                           <span style={{ fontSize: 12, color: '#A78BFA' }}>📄 {SLUG_META[slug].paperTitle}</span>
                           <span style={{ fontSize: 11, color: '#525252' }}>Read →</span>
                         </Link>
@@ -417,7 +465,7 @@ export default function ProblemPage() {
                 </p>
                 {submissions.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <CheckCircle size={32} style={{ color: '#223429', marginBottom: 12 }} />
+                    <CheckCircle size={32} style={{ color: '#262626', marginBottom: 12 }} />
                     <p style={{ fontSize: 13, color: '#525252' }}>No submissions yet</p>
                     <p style={{ fontSize: 11, color: '#525252', marginTop: 4 }}>
                       Hit Submit to record your solution
@@ -429,7 +477,7 @@ export default function ProblemPage() {
                       <div
                         key={i}
                         className="flex items-center justify-between px-4 py-3 rounded-lg"
-                        style={{ background: '#121D16', border: '1px solid #223429' }}
+                        style={{ background: '#111111', border: '1px solid #262626' }}
                       >
                         <span
                           style={{
@@ -475,12 +523,12 @@ export default function ProblemPage() {
           {/* editor toolbar */}
           <div
             className="flex items-center gap-2 px-4 flex-shrink-0"
-            style={{ height: 44, background: '#0E1811', borderBottom: '1px solid #1B2A20' }}
+            style={{ height: 44, background: '#0A0A0A', borderBottom: '1px solid #1A1A1A' }}
           >
             <span
               style={{
-                background: '#0F2418', border: '1px solid rgba(52,211,153,0.4)',
-                color: '#34D399', fontSize: 12, fontWeight: 600,
+                background: '#1A1A1A', border: '1px solid rgba(167,139,250,0.4)',
+                color: '#A78BFA', fontSize: 12, fontWeight: 600,
                 padding: '4px 12px', borderRadius: 6,
               }}
             >
@@ -491,7 +539,7 @@ export default function ProblemPage() {
               onClick={() => { setCode(problem.starter_code); localStorage.removeItem(`code_${slug}`); }}
               className="flex items-center gap-1.5 transition-colors"
               style={{
-                background: '#16241B', border: '1px solid #223429', borderRadius: 6,
+                background: '#111111', border: '1px solid #262626', borderRadius: 6,
                 padding: '6px 10px', fontSize: 11, color: '#A3A3A3', cursor: 'pointer',
               }}
               onMouseEnter={e => (e.currentTarget.style.color = '#FAFAFA')}
@@ -503,7 +551,7 @@ export default function ProblemPage() {
               onClick={() => navigator.clipboard.writeText(code)}
               className="flex items-center gap-1.5 transition-colors"
               style={{
-                background: '#16241B', border: '1px solid #223429', borderRadius: 6,
+                background: '#111111', border: '1px solid #262626', borderRadius: 6,
                 padding: '6px 10px', fontSize: 11, color: '#A3A3A3', cursor: 'pointer',
               }}
               onMouseEnter={e => (e.currentTarget.style.color = '#FAFAFA')}
@@ -542,19 +590,19 @@ export default function ProblemPage() {
           {/* action bar */}
           <div
             className="flex items-center justify-end gap-3 px-4 flex-shrink-0"
-            style={{ height: 52, background: '#0E1811', borderTop: '1px solid #1B2A20' }}
+            style={{ height: 52, background: '#0A0A0A', borderTop: '1px solid #1A1A1A' }}
           >
             <button
               onClick={handleRun}
               disabled={runState === 'running'}
               className="flex items-center gap-2 transition-colors"
               style={{
-                background: '#16241B', border: '1px solid #223429', borderRadius: 8,
+                background: '#111111', border: '1px solid #262626', borderRadius: 8,
                 padding: '8px 20px', fontSize: 13, color: '#FAFAFA', cursor: 'pointer',
                 opacity: runState === 'running' ? 0.5 : 1,
               }}
-              onMouseEnter={e => { if (runState !== 'running') e.currentTarget.style.background = '#1B2C21'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = '#16241B'; }}
+              onMouseEnter={e => { if (runState !== 'running') e.currentTarget.style.background = '#1A1A1A'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#111111'; }}
             >
               {runState === 'running'
                 ? <Loader2 size={13} className="animate-spin" />
@@ -566,7 +614,7 @@ export default function ProblemPage() {
               disabled={runState === 'running'}
               className="flex items-center gap-2 transition-all"
               style={{
-                background: '#34D399', borderRadius: 8,
+                background: '#A78BFA', borderRadius: 8,
                 padding: '8px 24px', fontSize: 13, fontWeight: 600,
                 color: '#000', cursor: 'pointer', border: 'none',
                 opacity: runState === 'running' ? 0.5 : 1,
@@ -584,19 +632,19 @@ export default function ProblemPage() {
           {/* CONSOLE PANEL */}
           <div
             className="flex flex-col flex-shrink-0"
-            style={{ height: 220, borderTop: '1px solid #1B2A20', background: '#0C160F' }}
+            style={{ height: 220, borderTop: '1px solid #1A1A1A', background: '#0A0A0A' }}
           >
             {/* drag handle */}
             <div
-              style={{ height: 3, background: '#1B2A20', cursor: 'row-resize', flexShrink: 0, transition: 'background 150ms' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(52,211,153,0.4)')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#1B2A20')}
+              style={{ height: 3, background: '#1A1A1A', cursor: 'row-resize', flexShrink: 0, transition: 'background 150ms' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(167,139,250,0.4)')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#1A1A1A')}
             />
 
             {/* console tabs */}
             <div
               className="flex items-end gap-1 px-4 flex-shrink-0"
-              style={{ height: 40, borderBottom: '1px solid #1B2A20' }}
+              style={{ height: 40, borderBottom: '1px solid #1A1A1A' }}
             >
               {([['testcase', 'Testcase'], ['result', 'Test Result']] as [ConsoleTab, string][]).map(([k, label]) => (
                 <button
@@ -604,8 +652,8 @@ export default function ProblemPage() {
                   onClick={() => setConsoleTab(k)}
                   style={{
                     padding: '0 10px 8px', fontSize: 12,
-                    color: consoleTab === k ? '#34D399' : '#525252',
-                    borderBottom: consoleTab === k ? '2px solid #34D399' : '2px solid transparent',
+                    color: consoleTab === k ? '#A78BFA' : '#525252',
+                    borderBottom: consoleTab === k ? '2px solid #A78BFA' : '2px solid transparent',
                     background: 'none', cursor: 'pointer', transition: 'color 150ms',
                   }}
                   onMouseEnter={e => { if (consoleTab !== k) e.currentTarget.style.color = '#A3A3A3'; }}
@@ -617,7 +665,7 @@ export default function ProblemPage() {
             </div>
 
             {/* console content */}
-            <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#223429 transparent' }}>
+            <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#262626 transparent' }}>
 
               {consoleTab === 'testcase' && (
                 <div style={{ padding: 16 }}>
@@ -653,7 +701,7 @@ export default function ProblemPage() {
                             className="animate-bounce"
                             style={{
                               width: 6, height: 6, borderRadius: '50%',
-                              background: '#34D399',
+                              background: '#A78BFA',
                               animationDelay: `${i * 0.15}s`,
                             }}
                           />

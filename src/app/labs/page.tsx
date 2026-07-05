@@ -38,20 +38,20 @@ const CNN_SVG = (
 
 const VIT_SVG = (
   <svg viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-    <text x={100} y={12} textAnchor="middle" fill="#34D399" fontSize={9} fontWeight={700}>Vision Transformer</text>
+    <text x={100} y={12} textAnchor="middle" fill="#A78BFA" fontSize={9} fontWeight={700}>Vision Transformer</text>
     {[0,1,2,3,4,5,6,7,8].map(i => {
       const col = i % 3, row = Math.floor(i / 3);
       return <rect key={i} x={15+col*40} y={18+row*30} width={36} height={26} rx={4}
-        fill={'#34D399'+(i===4?'35':'18')} stroke={'#34D399'+(i===4?'80':'40')} strokeWidth={1}/>;
+        fill={'#A78BFA'+(i===4?'35':'18')} stroke={'#A78BFA'+(i===4?'80':'40')} strokeWidth={1}/>;
     })}
-    <text x={15+1*40+18} y={18+1*30+13} textAnchor="middle" dominantBaseline="middle" fill="#34D399" fontSize={7}>[CLS]</text>
+    <text x={15+1*40+18} y={18+1*30+13} textAnchor="middle" dominantBaseline="middle" fill="#A78BFA" fontSize={7}>[CLS]</text>
     {[0,1,2,5,6,7,8].map(i => {
       const col = i%3, row = Math.floor(i/3);
-      return <text key={i} x={15+col*40+18} y={18+row*30+13} textAnchor="middle" dominantBaseline="middle" fill="#34D39970" fontSize={7}>P{i}</text>;
+      return <text key={i} x={15+col*40+18} y={18+row*30+13} textAnchor="middle" dominantBaseline="middle" fill="#A78BFA70" fontSize={7}>P{i}</text>;
     })}
-    <line x1={100} y1={108} x2={100} y2={118} stroke="#34D399" strokeWidth={1}/>
-    <rect x={60} y={118} width={80} height={12} rx={4} fill="#34D39920" stroke="#34D39950" strokeWidth={1}/>
-    <text x={100} y={124} textAnchor="middle" dominantBaseline="middle" fill="#34D399" fontSize={7}>Transformer Encoder</text>
+    <line x1={100} y1={108} x2={100} y2={118} stroke="#A78BFA" strokeWidth={1}/>
+    <rect x={60} y={118} width={80} height={12} rx={4} fill="#A78BFA20" stroke="#A78BFA50" strokeWidth={1}/>
+    <text x={100} y={124} textAnchor="middle" dominantBaseline="middle" fill="#A78BFA" fontSize={7}>Transformer Encoder</text>
   </svg>
 );
 
@@ -83,7 +83,7 @@ const DIFFUSION_SVG = (
 const LABS: Lab[] = [
   { id: 'transformer', archSlug: 'transformer',     title: 'Transformer',       subtitle: 'Explore multi-head attention, positional encodings, and the full encoder-decoder stack.',  color: '#A78BFA', badge: 'NLP',    svgContent: TRANSFORMER_SVG },
   { id: 'cnn',         archSlug: 'resnet',           title: 'CNN',               subtitle: 'Visualize feature maps, convolution kernels, and how pooling layers downsample.',           color: '#60A5FA', badge: 'Vision', svgContent: CNN_SVG },
-  { id: 'vit',         archSlug: 'vit',              title: 'Vision Transformer', subtitle: 'Watch patches become tokens and see how a CNN-free model processes images.',               color: '#34D399', badge: 'Vision', svgContent: VIT_SVG },
+  { id: 'vit',         archSlug: 'vit',              title: 'Vision Transformer', subtitle: 'Watch patches become tokens and see how a CNN-free model processes images.',               color: '#A78BFA', badge: 'Vision', svgContent: VIT_SVG },
   { id: 'diffusion',   archSlug: 'stable-diffusion', title: 'Diffusion',         subtitle: 'Step through forward noise addition and reverse denoising in a latent diffusion model.',   color: '#F472B6', badge: 'Gen.',   svgContent: DIFFUSION_SVG },
 ];
 
@@ -91,7 +91,7 @@ export default function LabsPage() {
   return (
     <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
-      <div className="border-b border-[#1B2A20] bg-[#0E1811] px-8 py-6">
+      <div className="border-b border-[#1A1A1A] bg-[#0A0A0A] px-8 py-6">
         <h1 className="text-[26px] font-bold text-white">AI Labs</h1>
         <p className="mt-1 text-[13px] text-[#525252]">
           Visual guides to the architectures behind modern AI — interactive parameter labs are on the roadmap.
@@ -102,9 +102,9 @@ export default function LabsPage() {
       <div className="mx-auto max-w-6xl px-8 py-8 grid grid-cols-1 md:grid-cols-2 gap-5">
         {LABS.map(lab => (
           <Link key={lab.id} href={`/architectures/${lab.archSlug}`}
-            className="group rounded-2xl border border-[#223429] bg-[#121D16] overflow-hidden transition-colors hover:border-[#2E4436] block">
+            className="group rounded-2xl border border-[#262626] bg-[#111111] overflow-hidden transition-colors hover:border-[#2E4436] block">
             {/* Preview */}
-            <div className="h-44 bg-[#0E1811] flex items-center justify-center p-4">
+            <div className="h-44 bg-[#0A0A0A] flex items-center justify-center p-4">
               {lab.svgContent}
             </div>
             <div className="p-5">

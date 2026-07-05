@@ -37,7 +37,7 @@ export const FLAGSHIP_META: Record<string, FlagshipMeta> = {
   vit: {
     title: 'An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale',
     authors: 'Dosovitskiy, Beyer, Kolesnikov, Weissenborn, Zhai, et al.',
-    year: 2020, color: '#34D399',
+    year: 2020, color: '#A78BFA',
     archSlug: 'vit', archName: 'ViT',
     abstract: 'While the Transformer architecture has become the de-facto standard for NLP tasks, its applications to computer vision remain limited. We show that reliance on CNNs is not necessary and a pure transformer applied directly to sequences of image patches can perform very well on image classification tasks.',
     contributions: ['Pure Transformer for image classification — no CNN components', 'Image split into 16×16 patches treated as word tokens', '[CLS] token used for classification head', 'Outperforms CNNs at scale with far less compute'],
@@ -69,8 +69,8 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'attn', label: 'Attention', x: 300, y: 140, color: '#A78BFA' },
       { id: 'mha', label: 'Multi-Head', x: 150, y: 270, color: '#60A5FA' },
       { id: 'ffn', label: 'Feed-Forward', x: 450, y: 270, color: '#60A5FA' },
-      { id: 'enc', label: 'Encoder', x: 150, y: 400, color: '#34D399' },
-      { id: 'dec', label: 'Decoder', x: 450, y: 400, color: '#34D399' },
+      { id: 'enc', label: 'Encoder', x: 150, y: 400, color: '#A78BFA' },
+      { id: 'dec', label: 'Decoder', x: 450, y: 400, color: '#A78BFA' },
       { id: 'pos', label: 'Pos. Encoding', x: 300, y: 400, color: '#A3E635' },
     ],
     edges: [
@@ -84,8 +84,8 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'conv', label: 'Convolution', x: 300, y: 140, color: '#60A5FA' },
       { id: 'bn', label: 'BatchNorm', x: 150, y: 270, color: '#A78BFA' },
       { id: 'relu', label: 'ReLU', x: 450, y: 270, color: '#A78BFA' },
-      { id: 'skip', label: 'Skip Connection', x: 300, y: 300, color: '#34D399' },
-      { id: 'block', label: 'Residual Block', x: 300, y: 420, color: '#34D399' },
+      { id: 'skip', label: 'Skip Connection', x: 300, y: 300, color: '#A78BFA' },
+      { id: 'block', label: 'Residual Block', x: 300, y: 420, color: '#A78BFA' },
     ],
     edges: [
       { source: 'conv', target: 'bn' }, { source: 'conv', target: 'relu' },
@@ -99,7 +99,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'mlm', label: 'Masked LM', x: 450, y: 150, color: '#A78BFA' },
       { id: 'nsp', label: 'NSP', x: 450, y: 300, color: '#A78BFA' },
       { id: 'enc', label: 'Encoder ×12', x: 300, y: 250, color: '#60A5FA' },
-      { id: 'cls', label: '[CLS] Token', x: 150, y: 300, color: '#34D399' },
+      { id: 'cls', label: '[CLS] Token', x: 150, y: 300, color: '#A78BFA' },
       { id: 'ft', label: 'Fine-tuning', x: 300, y: 420, color: '#F472B6' },
     ],
     edges: [
@@ -110,7 +110,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
   },
   vit: {
     nodes: [
-      { id: 'patch', label: 'Patches 16×16', x: 150, y: 150, color: '#34D399' },
+      { id: 'patch', label: 'Patches 16×16', x: 150, y: 150, color: '#A78BFA' },
       { id: 'proj', label: 'Linear Proj.', x: 400, y: 150, color: '#60A5FA' },
       { id: 'cls', label: '[CLS] Token', x: 150, y: 300, color: '#A78BFA' },
       { id: 'pos', label: 'Pos. Embed', x: 400, y: 300, color: '#A3E635' },
@@ -127,7 +127,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
       { id: 'a', label: 'A (down)', x: 150, y: 280, color: '#A3E635' },
       { id: 'b', label: 'B (up)', x: 450, y: 280, color: '#A3E635' },
       { id: 'delta', label: 'ΔW = BA', x: 300, y: 300, color: '#A78BFA' },
-      { id: 'merge', label: 'W + BA', x: 300, y: 420, color: '#34D399' },
+      { id: 'merge', label: 'W + BA', x: 300, y: 420, color: '#A78BFA' },
     ],
     edges: [
       { source: 'a', target: 'delta' }, { source: 'b', target: 'delta' },
@@ -137,7 +137,7 @@ export const FLAGSHIP_GRAPH: Record<string, Graph> = {
   'flash-attention': {
     nodes: [
       { id: 'hbm', label: 'HBM (slow)', x: 150, y: 150, color: '#F87171' },
-      { id: 'sram', label: 'SRAM (fast)', x: 450, y: 150, color: '#34D399' },
+      { id: 'sram', label: 'SRAM (fast)', x: 450, y: 150, color: '#A78BFA' },
       { id: 'tile', label: 'Tiling', x: 300, y: 270, color: '#A78BFA' },
       { id: 'softmax', label: 'Online Softmax', x: 150, y: 400, color: '#60A5FA' },
       { id: 'recomp', label: 'Recompute', x: 450, y: 400, color: '#A3E635' },

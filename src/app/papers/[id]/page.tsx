@@ -27,6 +27,15 @@ type PaperMeta = {
 
 type Challenge = { num: string; title: string; difficulty: 'Easy' | 'Medium' | 'Hard'; href: string };
 
+type GraphNode = { id: string; label?: string; x?: number; y?: number; color?: string };
+type GraphEdge = { source: string; target: string };
+type GraphData = { status?: string; nodes?: GraphNode[]; edges?: GraphEdge[] };
+
+type BlueprintComponent = { name: string; description: string };
+type BlueprintData = { status?: string; components?: BlueprintComponent[] };
+
+type ExecutableData = { status?: string; code?: string; language?: string };
+
 const PAPER_CHALLENGES: Record<string, Challenge[]> = {
   'attention-is-all-you-need': [
     { num: '#010', title: 'Scaled Dot-Product Attention', difficulty: 'Hard',   href: '/dojo/ml-attention' },
@@ -83,9 +92,9 @@ export default function PaperWorkspacePage() {
   
   // Data states
   const [meta, setMeta] = useState<PaperMeta | null>(null);
-  const [graphData, setGraphData] = useState<any>(null);
-  const [blueprintData, setBlueprintData] = useState<any>(null);
-  const [executableData, setExecutableData] = useState<any>(null);
+  const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [blueprintData, setBlueprintData] = useState<BlueprintData | null>(null);
+  const [executableData, setExecutableData] = useState<ExecutableData | null>(null);
   
   // UI states
   const [loading, setLoading] = useState(true);
@@ -121,8 +130,8 @@ export default function PaperWorkspacePage() {
     try {
       const data = await apiGet<PaperMeta>(`/api/papers/${id}`);
       setMeta({ ...data, color: data.color || '#A78BFA' });
-    } catch (err: any) {
-      setError(err.message || 'Failed to load summary');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to load summary');
     } finally {
       setLoading(false);
     }
@@ -133,10 +142,10 @@ export default function PaperWorkspacePage() {
     if (FLAGSHIP_GRAPH[id]) { setGraphData(FLAGSHIP_GRAPH[id]); return; }
     setTabLoading(true);
     try {
-      const data = await apiGet<any>(`/api/papers/${id}/knowledge-graph`);
+      const data = await apiGet<GraphData>(`/api/papers/${id}/knowledge-graph`);
       setGraphData(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load graph');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to load graph');
     } finally {
       setTabLoading(false);
     }
@@ -147,10 +156,10 @@ export default function PaperWorkspacePage() {
     if (FLAGSHIP_BLUEPRINT[id]) { setBlueprintData(FLAGSHIP_BLUEPRINT[id]); return; }
     setTabLoading(true);
     try {
-      const data = await apiGet<any>(`/api/papers/${id}/blueprint`);
+      const data = await apiGet<BlueprintData>(`/api/papers/${id}/blueprint`);
       setBlueprintData(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load blueprint');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to load blueprint');
     } finally {
       setTabLoading(false);
     }
@@ -161,10 +170,10 @@ export default function PaperWorkspacePage() {
     if (FLAGSHIP_CODE[id]) { setExecutableData(FLAGSHIP_CODE[id]); return; }
     setTabLoading(true);
     try {
-      const data = await apiGet<any>(`/api/papers/${id}/executable-graph`);
+      const data = await apiGet<ExecutableData>(`/api/papers/${id}/executable-graph`);
       setExecutableData(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load executable code');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to load executable code');
     } finally {
       setTabLoading(false);
     }
@@ -172,7 +181,7 @@ export default function PaperWorkspacePage() {
 
   // Poll for processing status
   useEffect(() => {
-    let interval: any;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (
       (tab === 'graph' && graphData?.status === 'processing') ||
       (tab === 'blueprint' && blueprintData?.status === 'processing') ||
@@ -217,10 +226,8 @@ export default function PaperWorkspacePage() {
       });
       setTutorSessionId(res.session_id);
       setChat(prev => [...prev, { role: 'assistant', text: res.answer }]);
-    } catch (err: any) {
-      // apiGet/apiPost surface the backend's HTTPException detail as err.message
-      // (e.g. the real "Daily tutor query limit reached" text) — show it when present.
-      setChat(prev => [...prev, { role: 'assistant', text: err?.message || 'Sorry, I encountered an error answering that question.' }]);
+    } catch (err: unknown) {
+      setChat(prev => [...prev, { role: 'assistant', text: (err as Error)?.message || 'Sorry, I encountered an error answering that question.' }]);
     } finally {
       setTutorLoading(false);
     }
@@ -230,9 +237,9 @@ export default function PaperWorkspacePage() {
     return (
       <div className="flex flex-col bg-transparent text-white p-8" style={{ height: 'calc(100vh - 56px)' }}>
         <div className="animate-pulse space-y-4">
-          <div className="h-4 bg-[#223429] rounded w-1/4" />
-          <div className="h-8 bg-[#223429] rounded w-1/2" />
-          <div className="h-4 bg-[#223429] rounded w-1/3" />
+          <div className="h-4 bg-[#262626] rounded w-1/4" />
+          <div className="h-8 bg-[#262626] rounded w-1/2" />
+          <div className="h-4 bg-[#262626] rounded w-1/3" />
         </div>
       </div>
     );
@@ -251,7 +258,7 @@ export default function PaperWorkspacePage() {
   return (
     <div className="flex flex-col bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
       {/* HEADER */}
-      <div className="border-b border-[#1B2A20] bg-[#0E1811] px-6 py-4 flex-shrink-0">
+      <div className="border-b border-[#1A1A1A] bg-[#0A0A0A] px-6 py-4 flex-shrink-0">
         {error && (
           <div className="mb-4 bg-red-500/10 border border-red-500/20 px-4 py-2 text-xs text-red-500 rounded">
             Could not load data — retrying… ({error})
@@ -277,7 +284,7 @@ export default function PaperWorkspacePage() {
               return (
                 <div className="mt-3 flex gap-2">
                   <Link href="/papers?tab=library"
-                    className="inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full px-2.5 py-0.5 border border-[#2E4436] bg-[#1B2C21] text-[#A3A3A3] hover:text-white hover:border-[#525252]">
+                    className="inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full px-2.5 py-0.5 border border-[#2E4436] bg-[#1A1A1A] text-[#A3A3A3] hover:text-white hover:border-[#525252]">
                     View in Library →
                   </Link>
                   {archEntry && (
@@ -292,7 +299,7 @@ export default function PaperWorkspacePage() {
             })()}
           </div>
           <div className="flex gap-2">
-            <button className="text-[12px] px-3 py-1.5 rounded-lg border border-[#223429] text-[#A3A3A3] hover:text-white">Export</button>
+            <button className="text-[12px] px-3 py-1.5 rounded-lg border border-[#262626] text-[#A3A3A3] hover:text-white">Export</button>
             <button className="text-[12px] px-3 py-1.5 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110">Share</button>
           </div>
         </div>
@@ -302,7 +309,7 @@ export default function PaperWorkspacePage() {
           {TAB_LIST.map(t => (
             <button key={t.id} type="button" onClick={() => setTab(t.id)}
               className={'px-3 py-1.5 text-[12px] rounded-md transition-colors ' +
-                (tab === t.id ? 'bg-[#1B2C21] text-white font-semibold' : 'text-[#525252] hover:text-white')}>
+                (tab === t.id ? 'bg-[#1A1A1A] text-white font-semibold' : 'text-[#525252] hover:text-white')}>
               {t.label}
             </button>
           ))}
@@ -313,18 +320,18 @@ export default function PaperWorkspacePage() {
       <div className="flex-1 overflow-y-auto p-6 relative">
         {tabLoading && (
           <div className="absolute inset-0 bg-[#0A120D]/50 z-10 flex items-center justify-center">
-            <div className="animate-pulse bg-[#121D16] border border-[#223429] p-4 rounded-xl text-sm">Loading...</div>
+            <div className="animate-pulse bg-[#111111] border border-[#262626] p-4 rounded-xl text-sm">Loading...</div>
           </div>
         )}
 
         {tab === 'summary' && (
           <div className="max-w-2xl space-y-6">
-            <div className="rounded-xl border border-[#223429] bg-[#121D16] p-5">
+            <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
               <div className="text-[13px] font-semibold text-white mb-3">Abstract</div>
               <p className="text-[13px] leading-relaxed text-[#A3A3A3]">{meta.abstract}</p>
             </div>
             {meta.contributions && meta.contributions.length > 0 && (
-              <div className="rounded-xl border border-[#223429] bg-[#121D16] p-5">
+              <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
                 <div className="text-[13px] font-semibold text-white mb-3">Key Contributions</div>
                 <ul className="space-y-2 text-[13px] text-[#A3A3A3]">
                   {meta.contributions.map((c: string) => (
@@ -340,24 +347,24 @@ export default function PaperWorkspacePage() {
 
         {tab === 'graph' && graphData?.status === 'processing' && (
           <div className="flex flex-col items-center justify-center h-full text-[#A3A3A3] text-sm">
-            <div className="animate-spin mb-4 border-2 border-t-[#34D399] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
+            <div className="animate-spin mb-4 border-2 border-t-[#A78BFA] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
             Still processing...
-            <div className="w-64 bg-[#16241B] rounded-full h-2 mt-4 overflow-hidden">
-              <div className="bg-[#34D399] h-full rounded-full animate-pulse w-1/2"></div>
+            <div className="w-64 bg-[#111111] rounded-full h-2 mt-4 overflow-hidden">
+              <div className="bg-[#A78BFA] h-full rounded-full animate-pulse w-1/2"></div>
             </div>
           </div>
         )}
         {tab === 'graph' && graphData?.status !== 'processing' && graphData?.nodes && (
-          <div className="rounded-xl border border-[#223429] bg-[#121D16] p-4" style={{ height: 520 }}>
+          <div className="rounded-xl border border-[#262626] bg-[#111111] p-4" style={{ height: 520 }}>
             <div className="text-[13px] font-semibold text-white mb-4">Concept Graph</div>
             <svg viewBox="0 0 600 480" className="w-full h-[440px]">
-              {graphData.edges.map((edge: any) => {
-                const na = graphData.nodes.find((n: any) => n.id === edge.source);
-                const nb = graphData.nodes.find((n: any) => n.id === edge.target);
+              {graphData.edges?.map((edge: GraphEdge) => {
+                const na = graphData.nodes?.find((n: GraphNode) => n.id === edge.source);
+                const nb = graphData.nodes?.find((n: GraphNode) => n.id === edge.target);
                 if (!na || !nb) return null;
-                return <line key={edge.source + edge.target} x1={na.x || Math.random()*500} y1={na.y || Math.random()*400} x2={nb.x || Math.random()*500} y2={nb.y || Math.random()*400} stroke="#223429" strokeWidth={1.5} />;
+                return <line key={edge.source + edge.target} x1={na.x || Math.random()*500} y1={na.y || Math.random()*400} x2={nb.x || Math.random()*500} y2={nb.y || Math.random()*400} stroke="#262626" strokeWidth={1.5} />;
               })}
-              {graphData.nodes.map((n: any) => {
+              {graphData.nodes?.map((n: GraphNode) => {
                 const nx = n.x || (Math.random() * 400 + 100);
                 const ny = n.y || (Math.random() * 300 + 100);
                 const color = n.color || '#A78BFA';
@@ -376,16 +383,16 @@ export default function PaperWorkspacePage() {
 
         {tab === 'blueprint' && blueprintData?.status === 'processing' && (
           <div className="flex flex-col items-center justify-center h-full text-[#A3A3A3] text-sm">
-            <div className="animate-spin mb-4 border-2 border-t-[#34D399] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
+            <div className="animate-spin mb-4 border-2 border-t-[#A78BFA] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
             Still processing...
           </div>
         )}
         {tab === 'blueprint' && blueprintData?.status !== 'processing' && blueprintData?.components && (
-          <div className="rounded-xl border border-[#223429] bg-[#121D16] p-6">
+          <div className="rounded-xl border border-[#262626] bg-[#111111] p-6">
             <div className="text-[13px] font-semibold text-white mb-4">Architecture Blueprint</div>
             <div className="text-sm text-[#A3A3A3]">
-              {blueprintData.components.map((c: any) => (
-                <div key={c.name} className="mb-2 p-2 bg-[#1B2C21] rounded">
+              {blueprintData.components?.map((c: BlueprintComponent) => (
+                <div key={c.name} className="mb-2 p-2 bg-[#1A1A1A] rounded">
                   <span className="font-semibold">{c.name}</span>: {c.description}
                 </div>
               ))}
@@ -395,15 +402,15 @@ export default function PaperWorkspacePage() {
 
         {tab === 'executable' && executableData?.status === 'processing' && (
           <div className="flex flex-col items-center justify-center h-full text-[#A3A3A3] text-sm">
-            <div className="animate-spin mb-4 border-2 border-t-[#34D399] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
+            <div className="animate-spin mb-4 border-2 border-t-[#A78BFA] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
             Still processing...
           </div>
         )}
         {tab === 'executable' && executableData?.status !== 'processing' && executableData?.code && (
-          <div className="rounded-xl border border-[#223429] bg-[#0E1811] overflow-hidden">
-            <div className="flex items-center justify-between border-b border-[#1B2A20] px-4 py-2.5">
+          <div className="rounded-xl border border-[#262626] bg-[#0A0A0A] overflow-hidden">
+            <div className="flex items-center justify-between border-b border-[#1A1A1A] px-4 py-2.5">
               <div className="text-[13px] font-semibold text-white">implementation.{executableData.language === 'python' ? 'py' : 'txt'}</div>
-              <button className="text-[12px] px-3 py-1 rounded-lg bg-[#34D399] text-black font-semibold hover:brightness-110">Run</button>
+              <button className="text-[12px] px-3 py-1 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110">Run</button>
             </div>
             <pre className="p-4 text-[12px] text-[#A3A3A3] overflow-x-auto leading-relaxed font-mono whitespace-pre-wrap">
               {executableData.code}
@@ -417,14 +424,14 @@ export default function PaperWorkspacePage() {
               Coding challenges derived from <span className="text-white">{meta.title}</span>
             </div>
             {challenges.map(p => (
-              <div key={p.num} className="flex items-center justify-between rounded-xl border border-[#223429] bg-[#121D16] px-4 py-3">
+              <div key={p.num} className="flex items-center justify-between rounded-xl border border-[#262626] bg-[#111111] px-4 py-3">
                 <div>
                   <span className="text-[11px] text-[#525252] mr-2">{p.num}</span>
                   <span className="text-[14px] font-semibold text-white">{p.title}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={DIFF_COLOR[p.difficulty] + ' text-[12px]'}>{p.difficulty}</span>
-                  <Link href={p.href} className="text-[12px] px-3 py-1 rounded-lg bg-[#34D399] text-black font-semibold hover:brightness-110">
+                  <Link href={p.href} className="text-[12px] px-3 py-1 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110">
                     Solve →
                   </Link>
                 </div>
@@ -435,18 +442,18 @@ export default function PaperWorkspacePage() {
 
         {tab === 'tutor' && (
           <div className="flex flex-col gap-3 max-w-2xl h-[480px]">
-            <div className="flex-1 overflow-y-auto space-y-3 rounded-xl border border-[#223429] bg-[#121D16] p-4">
+            <div className="flex-1 overflow-y-auto space-y-3 rounded-xl border border-[#262626] bg-[#111111] p-4">
               {chat.map((msg, i) => (
                 <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                   <div className={'max-w-[80%] rounded-xl px-4 py-2.5 text-[13px] leading-relaxed ' +
-                    (msg.role === 'user' ? 'bg-[#34D399] text-black font-medium' : 'bg-[#1B2C21] text-[#A3A3A3]')}>
+                    (msg.role === 'user' ? 'bg-[#A78BFA] text-black font-medium' : 'bg-[#1A1A1A] text-[#A3A3A3]')}>
                     {msg.text}
                   </div>
                 </div>
               ))}
               {tutorLoading && (
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] rounded-xl px-4 py-2.5 text-[13px] bg-[#1B2C21] text-[#A3A3A3] flex items-center gap-2">
+                  <div className="max-w-[80%] rounded-xl px-4 py-2.5 text-[13px] bg-[#1A1A1A] text-[#A3A3A3] flex items-center gap-2">
                     <div className="w-1.5 h-1.5 bg-[#525252] rounded-full animate-bounce" />
                     <div className="w-1.5 h-1.5 bg-[#525252] rounded-full animate-bounce" style={{ animationDelay: '0.15s' }} />
                     <div className="w-1.5 h-1.5 bg-[#525252] rounded-full animate-bounce" style={{ animationDelay: '0.3s' }} />
@@ -459,9 +466,9 @@ export default function PaperWorkspacePage() {
                 onKeyDown={e => e.key === 'Enter' && sendMessage()}
                 placeholder="Ask about this paper..."
                 disabled={tutorLoading}
-                className="flex-1 bg-[#16241B] border border-[#223429] rounded-xl px-4 py-2.5 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#34D399]" />
+                className="flex-1 bg-[#111111] border border-[#262626] rounded-xl px-4 py-2.5 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA]" />
               <button onClick={sendMessage} disabled={tutorLoading}
-                className="px-4 py-2.5 rounded-xl bg-[#34D399] text-black text-[13px] font-semibold hover:brightness-110 disabled:opacity-50">Send</button>
+                className="px-4 py-2.5 rounded-xl bg-[#A78BFA] text-black text-[13px] font-semibold hover:brightness-110 disabled:opacity-50">Send</button>
             </div>
           </div>
         )}

@@ -44,7 +44,7 @@ export default function DomainPage() {
   return (
     <div className="min-h-screen bg-transparent text-white">
       {/* Top Nav */}
-      <div className="border-b border-[#223429] px-8 py-6 bg-[#0E1811]">
+      <div className="border-b border-[#262626] px-8 py-6 bg-[#0A0A0A]">
         <Link href="/learn" className="text-[#A3A3A3] hover:text-white text-[13px] flex items-center gap-1.5 mb-6 transition-colors">
           <ChevronLeft size={16} /> Back to Curriculum
         </Link>
@@ -61,14 +61,14 @@ export default function DomainPage() {
               <div className="text-[12px] font-bold tracking-widest uppercase mb-6 flex items-center gap-3"
                 style={{ color: getDifficultyColor(level) }}>
                 {level} 
-                <div className="flex-1 h-px bg-[#223429]"></div>
+                <div className="flex-1 h-px bg-[#262626]"></div>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {topics.map(t => (
                   <Link
                     key={t.slug}
                     href={`/learn/${domain.slug}/${t.slug}`}
-                    className="bg-[#121D16] border border-[#223429] p-6 rounded-xl block hover:border-[#60A5FA]/50 transition-colors group flex flex-col h-full"
+                    className="bg-[#111111] border border-[#262626] p-6 rounded-xl block hover:border-[#60A5FA]/50 transition-colors group flex flex-col h-full"
                   >
                     <div className="flex items-start justify-between mb-4">
                       <div>
@@ -76,7 +76,7 @@ export default function DomainPage() {
                         <div className="text-[14px] text-[#A3A3A3] mt-2 line-clamp-2 leading-relaxed">{t.why}</div>
                       </div>
                     </div>
-                    <div className="mt-auto pt-4 flex items-center justify-between border-t border-[#223429]">
+                    <div className="mt-auto pt-4 flex items-center justify-between border-t border-[#262626]">
                       <div className="flex items-center gap-3">
                         <span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider" 
                           style={{ backgroundColor: `${getDifficultyColor(t.level)}15`, color: getDifficultyColor(t.level) }}>

@@ -11,6 +11,20 @@ type ProblemRow = {
   topics: string[]; acceptance: string; solved: boolean;
 };
 
+// Matches GET /api/leaderboard's real response: {leaders: [{rank, user_id,
+// name, points, xp_level, streak, problems_solved, avatar_url}]}
+type LeaderboardEntry = {
+  rank: number; user_id: number; name: string;
+  points: number; xp_level: number; streak: number; problems_solved: number;
+  avatar_url?: string | null;
+};
+
+// Matches GET /api/dojo/submissions rows: {problem_id, passed, created_at, ...}
+type SubmissionRow = {
+  problem_id: string; passed: boolean;
+  [key: string]: unknown;
+};
+
 // Derived from the single source of truth in src/data/problems.ts —
 // every listed row is a real, solvable problem by construction.
 const INITIAL_PROBLEMS: ProblemRow[] = PROBLEMS.map((p, i) => ({
@@ -59,11 +73,11 @@ export default function DojoPage() {
   const countdown = useCountdown();
 
   const [problems, setProblems] = useState<ProblemRow[]>(INITIAL_PROBLEMS);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
-  const [userProfile, setUserProfile] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -77,18 +91,21 @@ export default function DojoPage() {
       setError('');
       setLoading(true);
       try {
+        // NOTE: leaderboard returns an OBJECT {leaders: [...]}, not an array,
+        // and `category=all` would ILIKE-filter for the literal string "all".
         const [lbData, subData] = await Promise.all([
-          apiGet<any[]>('/api/leaderboard?limit=10&category=all').catch(() => []),
-          isLoggedIn() ? apiGet<any[]>('/api/dojo/submissions?distinct=true').catch(() => []) : Promise.resolve([])
+          apiGet<{ leaders: LeaderboardEntry[] }>('/api/leaderboard?limit=10').catch(() => null),
+          isLoggedIn()
+            ? apiGet<{ submissions: SubmissionRow[] }>('/api/dojo/submissions?limit=100').catch(() => null)
+            : Promise.resolve(null),
         ]);
 
-        setLeaderboard(lbData || []);
+        setLeaderboard(lbData?.leaders ?? []);
 
-        if (subData && subData.length > 0) {
+        const rows = subData?.submissions ?? [];
+        if (rows.length > 0) {
           const solvedSlugs = new Set(
-            subData
-              .filter((s: any) => s.status === 'accepted')
-              .map((s: any) => s.problem_slug)
+            rows.filter(s => s.passed).map(s => s.problem_id)
           );
 
           setProblems(INITIAL_PROBLEMS.map(p => ({
@@ -96,8 +113,8 @@ export default function DojoPage() {
             solved: solvedSlugs.has(p.slug),
           })));
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load data');
+      } catch (err: unknown) {
+        setError((err as Error).message || 'Failed to load data');
       } finally {
         setLoading(false);
       }
@@ -118,26 +135,26 @@ export default function DojoPage() {
   return (
     <div className="flex overflow-hidden bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
       {/* LEFT SIDEBAR */}
-      <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1B2A20] bg-[#0E1811] p-4">
+      <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1A1A1A] bg-[#0A0A0A] p-4">
         {/* POTD */}
-        <Link href="/dojo/ml-attention" className="block rounded-xl border border-[#34D399]/25 bg-[#0F2418] p-4 hover:border-[#34D399]/50 transition-colors">
-          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#34D399]">Problem of the Day</div>
+        <Link href="/dojo/ml-attention" className="block rounded-xl border border-[#A78BFA]/25 bg-[#0F2418] p-4 hover:border-[#A78BFA]/50 transition-colors">
+          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#A78BFA]">Problem of the Day</div>
           <div className="mt-1 text-[13px] font-semibold text-white">Scaled Dot-Product Attention</div>
           <div className="mt-3 flex items-center justify-between">
             <span className="rounded-md bg-[#F87171]/12 px-2 py-0.5 text-[11px] font-semibold text-[#F87171]">Hard</span>
-            <span className="font-mono text-xs text-[#34D399]">{countdown}</span>
+            <span className="font-mono text-xs text-[#A78BFA]">{countdown}</span>
           </div>
         </Link>
 
         {/* PROGRESS — real counts derived from submission history */}
-        <div className="rounded-xl border border-[#223429] bg-[#121D16] p-4">
+        <div className="rounded-xl border border-[#262626] bg-[#111111] p-4">
           <div className="mb-3 text-[12px] font-semibold text-white">Your Progress</div>
           <div className="grid grid-cols-3 gap-2">
             {(['Easy', 'Medium', 'Hard'] as const).map(level => {
               const color = level === 'Easy' ? 'text-[#4ADE80]' : level === 'Medium' ? 'text-[#FACC15]' : 'text-[#F87171]';
               const n = problems.filter(p => p.difficulty === level && p.solved).length;
               return (
-                <div key={level} className="rounded-lg border border-[#1B2A20] bg-transparent p-2 text-center">
+                <div key={level} className="rounded-lg border border-[#1A1A1A] bg-transparent p-2 text-center">
                   <div className={'text-xl font-bold ' + color}>{n}</div>
                   <div className="mt-0.5 text-[10px] text-[#525252]">{level}</div>
                 </div>
@@ -151,8 +168,8 @@ export default function DojoPage() {
             <button key={t} type="button" onClick={() => setTab(t)}
               className={'flex-1 rounded-lg px-4 py-2 text-xs ' +
                 (tab === t
-                  ? 'bg-[#34D399] font-semibold text-black'
-                  : 'border border-[#223429] bg-[#16241B] text-[#A3A3A3] hover:text-white')}>
+                  ? 'bg-[#A78BFA] font-semibold text-black'
+                  : 'border border-[#262626] bg-[#111111] text-[#A3A3A3] hover:text-white')}>
               {t === 'problems' ? 'Problems' : 'Leaderboard'}
             </button>
           ))}
@@ -169,29 +186,29 @@ export default function DojoPage() {
         {tab === 'problems' ? (
           <>
             {/* Topic chips */}
-            <div className="flex flex-wrap gap-2 border-b border-[#1B2A20] px-5 py-3">
+            <div className="flex flex-wrap gap-2 border-b border-[#1A1A1A] px-5 py-3">
               {TOPIC_CHIPS.map(t => (
                 <button key={t} type="button" onClick={() => setTopic(t)}
                   className={'rounded-full px-3 py-1 text-[11px] transition-colors ' +
                     (topic === t
-                      ? 'bg-[#34D399] font-semibold text-black'
-                      : 'border border-[#223429] bg-[#16241B] text-[#A3A3A3] hover:text-white')}>
+                      ? 'bg-[#A78BFA] font-semibold text-black'
+                      : 'border border-[#262626] bg-[#111111] text-[#A3A3A3] hover:text-white')}>
                   {t}
                 </button>
               ))}
             </div>
 
             {/* Filter bar */}
-            <div className="flex items-center gap-3 border-b border-[#1B2A20] px-5 py-3">
+            <div className="flex items-center gap-3 border-b border-[#1A1A1A] px-5 py-3">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search problems..."
-                className="w-[220px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#34D399]" />
+                className="w-[220px] rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA]" />
               <select value={status} onChange={e => setStatus(e.target.value)}
-                className="w-[120px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white outline-none">
+                className="w-[120px] rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-[13px] text-white outline-none">
                 <option value="All">All Status</option>
                 <option>Solved</option><option>Unsolved</option>
               </select>
               <select value={difficulty} onChange={e => setDifficulty(e.target.value)}
-                className="w-[120px] rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-[13px] text-white outline-none">
+                className="w-[120px] rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-[13px] text-white outline-none">
                 <option value="All">All</option>
                 <option>Easy</option><option>Medium</option><option>Hard</option>
               </select>
@@ -200,7 +217,7 @@ export default function DojoPage() {
 
             {/* Table */}
             <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1B2A20] bg-[#0E1811] px-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
+              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1A1A1A] bg-[#0A0A0A] px-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
                 <div className="w-7 flex-shrink-0"></div>
                 <div className="min-w-0 flex-1"># Title</div>
                 <div className="w-[68px] flex-shrink-0 text-right">Difficulty</div>
@@ -208,10 +225,10 @@ export default function DojoPage() {
               </div>
               {filtered.map(p => {
                 const Row = (
-                  <div className="flex items-center border-b border-[#1B2A20]/60 px-4 py-2.5 hover:bg-[#121D16] cursor-pointer min-h-[52px]">
+                  <div className="flex items-center border-b border-[#1A1A1A]/60 px-4 py-2.5 hover:bg-[#111111] cursor-pointer min-h-[52px]">
                     <div className="w-7 flex-shrink-0">
                       <span className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: p.solved ? '#4ADE80' : '#223429' }} />
+                        style={{ background: p.solved ? '#4ADE80' : '#262626' }} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -220,7 +237,7 @@ export default function DojoPage() {
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {p.topics.slice(0, 2).map(t => (
-                          <span key={t} className="rounded bg-[#1B2C21] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
+                          <span key={t} className="rounded bg-[#1A1A1A] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
                         ))}
                       </div>
                     </div>
@@ -234,20 +251,20 @@ export default function DojoPage() {
           </>
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-[#1B2A20] px-5 py-4">
+            <div className="flex items-center justify-between border-b border-[#1A1A1A] px-5 py-4">
               <h2 className="text-[18px] font-bold text-white">🏆 Leaderboard</h2>
-              <div className="flex gap-1 rounded-lg border border-[#223429] bg-[#16241B] p-1">
+              <div className="flex gap-1 rounded-lg border border-[#262626] bg-[#111111] p-1">
                 {(['Weekly', 'All-time'] as const).map(b => (
                   <button key={b} type="button" onClick={() => setBoard(b)}
                     className={'rounded-md px-3 py-1 text-xs ' +
-                      (board === b ? 'bg-[#34D399] font-semibold text-black' : 'text-[#A3A3A3] hover:text-white')}>
+                      (board === b ? 'bg-[#A78BFA] font-semibold text-black' : 'text-[#A3A3A3] hover:text-white')}>
                     {b}
                   </button>
                 ))}
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1B2A20] bg-[#0E1811] px-5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
+              <div className="sticky top-0 z-10 flex h-10 items-center border-b border-[#1A1A1A] bg-[#0A0A0A] px-5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#525252]">
                 <div className="w-16">Rank</div><div className="flex-1">User</div>
                 <div className="w-24">Solved</div><div className="w-24">XP</div><div className="w-24">Streak</div>
               </div>
@@ -255,11 +272,11 @@ export default function DojoPage() {
               {loading && leaderboard.length === 0 ? (
                 <div className="p-4 space-y-4">
                   {[1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="flex h-[40px] items-center border border-[#1B2A20] bg-[#121D16] animate-pulse rounded px-5">
-                      <div className="w-16 h-4 bg-[#223429] rounded"></div>
+                    <div key={i} className="flex h-[40px] items-center border border-[#1A1A1A] bg-[#111111] animate-pulse rounded px-5">
+                      <div className="w-16 h-4 bg-[#262626] rounded"></div>
                       <div className="flex flex-1 items-center gap-3">
-                        <div className="w-8 h-8 bg-[#223429] rounded-full"></div>
-                        <div className="w-32 h-4 bg-[#223429] rounded"></div>
+                        <div className="w-8 h-8 bg-[#262626] rounded-full"></div>
+                        <div className="w-32 h-4 bg-[#262626] rounded"></div>
                       </div>
                     </div>
                   ))}
@@ -270,24 +287,24 @@ export default function DojoPage() {
                 </div>
               ) : (
                 leaderboard.map(row => {
-                  const isYou = userProfile?.username && row.username === userProfile.username;
+                  const isYou = typeof userProfile?.name === 'string' && row.name === userProfile.name;
                   return (
                     <div key={row.rank}
-                      className={'flex h-[56px] items-center border-b border-[#1B2A20]/60 px-5 ' +
+                      className={'flex h-[56px] items-center border-b border-[#1A1A1A]/60 px-5 ' +
                         (RANK_BORDER[row.rank] ? 'border-l-4 ' + RANK_BORDER[row.rank] + ' ' : '') +
-                        (isYou ? 'bg-[#34D399]/10' : 'hover:bg-[#121D16]')}>
+                        (isYou ? 'bg-[#A78BFA]/10' : 'hover:bg-[#111111]')}>
                       <div className="w-16 text-[13px] font-semibold text-white">#{row.rank}</div>
                       <div className="flex flex-1 items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1B2C21] text-xs font-bold text-white">
-                          {row.username ? row.username.charAt(0).toUpperCase() : '?'}
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1A1A1A] text-xs font-bold text-white">
+                          {row.name ? row.name.charAt(0).toUpperCase() : '?'}
                         </div>
-                        <span className={'text-[13px] ' + (isYou ? 'font-semibold text-[#34D399]' : 'text-white')}>
-                          {isYou ? 'You' : row.username}
+                        <span className={'text-[13px] ' + (isYou ? 'font-semibold text-[#A78BFA]' : 'text-white')}>
+                          {isYou ? 'You' : row.name}
                         </span>
                       </div>
-                      <div className="w-24 text-[13px] text-white">{row.solved_count}</div>
-                      <div className="w-24 text-[13px] text-[#A78BFA]">{row.xp?.toLocaleString()}</div>
-                      <div className="w-24 text-[13px] text-[#F59E0B]">🔥 {row.current_streak}</div>
+                      <div className="w-24 text-[13px] text-white">{row.problems_solved}</div>
+                      <div className="w-24 text-[13px] text-[#A78BFA]">{row.points?.toLocaleString()}</div>
+                      <div className="w-24 text-[13px] text-[#F59E0B]">🔥 {row.streak}</div>
                     </div>
                   );
                 })

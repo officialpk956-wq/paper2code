@@ -12,6 +12,7 @@ const NAV_LINKS = [
   { label: 'Learn',         href: '/learn' },
   { label: 'Architectures', href: '/architectures' },
   { label: 'System Design', href: '/system-design' },
+  { label: 'Extract Code',  href: '/extract-code' },
   { label: 'Labs',          href: '/labs' },
   { label: 'Pricing',       href: '/pricing' },
 ] as const;
@@ -26,12 +27,12 @@ export function TopNavbar() {
   return (
     <header
       className="sticky top-0 z-50 h-14 border-b backdrop-blur"
-      style={{ background: 'rgba(10,18,13,0.95)', borderColor: '#1B2A20' }}
+      style={{ background: 'rgba(10,10,10,0.95)', borderColor: '#1A1A1A' }}
     >
       <div className="mx-auto flex h-full items-center justify-between px-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
-          <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#34D399' }} />
+          <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#A78BFA' }} />
           <span className="text-[15px] font-bold text-white">paper2code</span>
         </Link>
 
@@ -46,7 +47,7 @@ export function TopNavbar() {
                 className={
                   'flex h-full items-center px-4 text-[13px] transition-colors ' +
                   (active
-                    ? 'text-[#34D399] border-b-2 border-[#34D399] bg-[#34D399]/8'
+                    ? 'text-[#A78BFA] border-b-2 border-[#A78BFA] bg-[#A78BFA]/8'
                     : 'text-[#A3A3A3] hover:text-white')
                 }
               >
@@ -62,22 +63,22 @@ export function TopNavbar() {
             {user ? (
               <>
                 <div title={user.name}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#34D399] text-xs font-bold text-black">
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#A78BFA] text-xs font-bold text-black">
                   {user.name.charAt(0).toUpperCase()}
                 </div>
                 <button type="button" onClick={signOut}
-                  className="rounded-lg border border-[#223429] bg-[#16241B] px-3 py-1.5 text-xs text-[#A3A3A3] transition-colors hover:text-white hover:bg-[#1B2C21]">
+                  className="rounded-lg border border-[#262626] bg-[#111111] px-3 py-1.5 text-xs text-[#A3A3A3] transition-colors hover:text-white hover:bg-[#1A1A1A]">
                   Sign Out
                 </button>
               </>
             ) : (
               <>
                 <button type="button" onClick={() => openAuth('signin')}
-                  className="rounded-lg border border-[#223429] bg-[#16241B] px-3 py-1.5 text-xs text-[#FAFAFA] transition-colors hover:bg-[#1B2C21]">
+                  className="rounded-lg border border-[#262626] bg-[#111111] px-3 py-1.5 text-xs text-[#FAFAFA] transition-colors hover:bg-[#1A1A1A]">
                   Sign In
                 </button>
                 <button type="button" onClick={() => openAuth('signup')}
-                  className="rounded-full bg-[#34D399] px-4 py-1.5 text-xs font-semibold text-black transition-colors hover:bg-[#4ADEA8]">
+                  className="rounded-full bg-[#A78BFA] px-4 py-1.5 text-xs font-semibold text-black transition-colors hover:bg-[#C4B5FD]">
                   Get Started
                 </button>
               </>
@@ -96,11 +97,11 @@ export function TopNavbar() {
       {open && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col bg-[#121D16] p-4"
-            style={{ borderRight: '1px solid #1B2A20' }}>
+          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col bg-[#111111] p-4"
+            style={{ borderRight: '1px solid #1A1A1A' }}>
             <div className="mb-6 flex items-center justify-between">
               <Link href="/" onClick={() => setOpen(false)} className="flex items-center gap-2">
-                <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#34D399' }} />
+                <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#A78BFA' }} />
                 <span className="text-[15px] font-bold text-white">paper2code</span>
               </Link>
               <button type="button" aria-label="Close menu" onClick={() => setOpen(false)}
@@ -114,7 +115,7 @@ export function TopNavbar() {
                 return (
                   <Link key={link.href} href={link.href} onClick={() => setOpen(false)}
                     className={'rounded-md px-3 py-2.5 text-sm transition-colors ' +
-                      (active ? 'bg-[#34D399]/10 text-[#34D399]' : 'text-[#A3A3A3] hover:bg-white/5 hover:text-white')}>
+                      (active ? 'bg-[#A78BFA]/10 text-[#A78BFA]' : 'text-[#A3A3A3] hover:bg-white/5 hover:text-white')}>
                     {link.label}
                   </Link>
                 );
@@ -124,24 +125,24 @@ export function TopNavbar() {
               {user ? (
                 <>
                   <div className="flex items-center gap-2 px-1 py-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#34D399] text-xs font-bold text-black">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#A78BFA] text-xs font-bold text-black">
                       {user.name.charAt(0).toUpperCase()}
                     </div>
                     <span className="text-sm text-white truncate">{user.name}</span>
                   </div>
                   <button type="button" onClick={() => { setOpen(false); signOut(); }}
-                    className="rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-xs text-[#FAFAFA]">
+                    className="rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-xs text-[#FAFAFA]">
                     Sign Out
                   </button>
                 </>
               ) : (
                 <>
                   <button type="button" onClick={() => { setOpen(false); openAuth('signin'); }}
-                    className="rounded-lg border border-[#223429] bg-[#16241B] px-3 py-2 text-xs text-[#FAFAFA]">
+                    className="rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-xs text-[#FAFAFA]">
                     Sign In
                   </button>
                   <button type="button" onClick={() => { setOpen(false); openAuth('signup'); }}
-                    className="rounded-full bg-[#34D399] px-4 py-2 text-xs font-semibold text-black">
+                    className="rounded-full bg-[#A78BFA] px-4 py-2 text-xs font-semibold text-black">
                     Get Started
                   </button>
                 </>

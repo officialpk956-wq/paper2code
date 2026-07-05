@@ -58,14 +58,22 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
     try:
         TaskRepository(db).set_running(task_id)
 
-        # Resolve per-problem timeout
+        # Resolve per-problem timeout + judge harness
         task = TaskRepository(db).get(task_id)
         run_timeout_ms = RUN_TIMEOUT_MS
+        exec_code = code
         if task and task.input_ref:
             from backend.models import Problem
             prob = db.query(Problem).filter_by(id=task.input_ref).first()
             if prob and prob.time_limit_ms:
                 run_timeout_ms = prob.time_limit_ms
+            # Graded submissions run the user's code with the problem's assert
+            # harness appended — passed == harness asserts all hold (exit 0).
+            if prob and isinstance(prob.test_cases, list):
+                for tc in prob.test_cases:
+                    if isinstance(tc, dict) and tc.get("type") == "harness" and tc.get("code"):
+                        exec_code = code + "\n\n# ── judge harness ──\n" + tc["code"]
+                        break
 
         # Run execute_python in a dedicated thread (avoids running event loop conflicts)
         import threading
@@ -77,7 +85,7 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 res.append(loop.run_until_complete(
-                    execute_python(code, stdin, run_timeout_ms=run_timeout_ms)
+                    execute_python(exec_code, stdin, run_timeout_ms=run_timeout_ms)
                 ))
             except Exception as ex:
                 err.append(ex)

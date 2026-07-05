@@ -60,6 +60,16 @@ try:
 except Exception as _e:
     logger.warning("Achievement seeding skipped: %s", _e)
 
+# Seed dojo problems so frontend slugs (ml-sigmoid, ...) resolve (idempotent)
+try:
+    from backend.database import SessionLocal as _SL2
+    from backend.services.problem_seed_service import seed_dojo_problems as _seed_problems
+    _db2 = _SL2()
+    _seed_problems(_db2)
+    _db2.close()
+except Exception as _e:
+    logger.warning("Dojo problem seeding skipped: %s", _e)
+
 app = FastAPI(title="Paper2Code API")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
