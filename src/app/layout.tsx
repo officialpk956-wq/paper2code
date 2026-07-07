@@ -5,6 +5,8 @@ import { TopNavbar } from '@/components/TopNavbar';
 import { AuthModalProvider } from '@/components/AuthModalContext';
 import { AuthModal } from '@/components/AuthModal';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
+import 'katex/dist/katex.min.css';
+import PageTransition from '@/components/PageTransition';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
@@ -20,7 +22,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AnimatedBackground />
         <AuthModalProvider>
           <TopNavbar />
-          <div className="page-fade-in">{children}</div>
+          <PageTransition>
+            <div className="page-fade-in">{children}</div>
+          </PageTransition>
           <AuthModal />
         </AuthModalProvider>
       </body>

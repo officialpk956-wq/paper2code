@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://paper2code-1-81y5.onrender.com';
+const BASE = 'http://127.0.0.1:8000'; // Hardcoded to IPv4 to prevent Failed to fetch
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;

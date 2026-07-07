@@ -9,12 +9,14 @@ Existing token-based flow (frontend handles redirect, sends token):
 This router adds the server-side code-exchange flow:
   GET  /api/auth/oauth/{provider}/authorize-url  → {url, state}
   POST /api/auth/oauth/{provider}/exchange        → {access_token, ...}
+  POST /api/auth/firebase/verify                  → {access_token, ...}
 
 Also exposes:
   GET  /api/auth/oauth/providers                  → list of providers user has linked
 """
 
 import os
+import json
 import secrets
 import logging
 import httpx
@@ -216,6 +218,77 @@ def list_linked_providers(
             {"provider": a.provider, "email": a.provider_email, "linked_at": a.created_at}
             for a in accounts
         ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# Firebase ID-token verification  (POST /api/auth/firebase/verify)
+# ---------------------------------------------------------------------------
+
+class FirebaseVerifyRequest(BaseModel):
+    id_token: str
+
+
+def _get_firebase_app():
+    """Lazily initialise Firebase Admin SDK (once per process)."""
+    import firebase_admin
+    from firebase_admin import credentials as fb_creds
+    if not firebase_admin._apps:
+        sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+        if sa_json:
+            cred = fb_creds.Certificate(json.loads(sa_json))
+        else:
+            cred = fb_creds.ApplicationDefault()
+        firebase_admin.initialize_app(cred)
+    return firebase_admin.get_app()
+
+
+@router.post("/firebase/verify")
+async def firebase_verify(body: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    """
+    Verify a Firebase ID token (from Firebase Google Sign-In popup) and
+    return the platform JWT.  Creates the user account on first sign-in.
+    """
+    from backend.modules.auth.middleware.rate_limit import get_client_ip
+    client_ip = get_client_ip(request)
+    allowed = check_sliding_window_rate_limit(f"firebase:verify:{client_ip}", limit=10, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in a minute.")
+
+    try:
+        import firebase_admin
+        from firebase_admin import auth as fb_auth
+        app = _get_firebase_app()
+        decoded = fb_auth.verify_id_token(body.id_token, app=app, check_revoked=False)
+    except Exception as exc:
+        log.error("Firebase token verification failed: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid or expired Firebase token")
+
+    email = decoded.get("email", "")
+    if not email:
+        raise HTTPException(status_code=400, detail="Firebase account has no email address")
+    if not decoded.get("email_verified", False):
+        raise HTTPException(status_code=400, detail="Google account email is not verified")
+
+    userinfo = {
+        "email": email,
+        "name":  decoded.get("name") or email.split("@")[0],
+        "picture": decoded.get("picture"),
+        "sub":   decoded.get("uid") or decoded.get("sub"),
+    }
+    user = _upsert_user(db, "google", userinfo)
+
+    from backend.modules.auth.services import SessionService
+    session_svc = SessionService(db)
+    jwt_access  = session_svc.create_access_token(user)
+    jwt_refresh = session_svc.create_refresh_token(user)
+    session_svc.register_session(user, jwt_refresh, None, None)
+
+    return {
+        "access_token":  jwt_access,
+        "refresh_token": jwt_refresh,
+        "token_type":    "bearer",
+        "user": {"id": user.id, "email": user.email, "name": user.name},
     }
 
 

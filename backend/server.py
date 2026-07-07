@@ -1,5 +1,7 @@
 import logging
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration

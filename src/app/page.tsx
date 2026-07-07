@@ -6,6 +6,8 @@ import { CURRICULUM } from '@/data/content/curriculum';
 import { SD_SYSTEMS } from '@/data/content/systemDesign';
 import { PROBLEMS as DOJO_PROBLEMS } from '@/data/problems';
 import { LEGAL } from '@/lib/legal';
+import { FadeIn } from '@/components/FadeIn';
+import AnimatedCard from '@/components/AnimatedCard';
 
 const STATS = [
   { value: `${ARCHITECTURES.length}`, label: 'Architectures', href: '/architectures' },
@@ -75,11 +77,13 @@ export default function HomePage() {
             </Link>
           </div>
           <div className="mt-16 flex w-full flex-wrap justify-center gap-8 border-y border-[#1A1A1A] py-8 md:gap-16">
-            {STATS.map(s => (
-              <Link key={s.label} href={s.href} className="text-center group block">
-                <div className="text-2xl font-bold text-[#A78BFA] group-hover:brightness-125 transition-all">{s.value}</div>
-                <div className="mt-1 text-[11px] uppercase tracking-wider text-[#525252] group-hover:text-[#A3A3A3] transition-colors">{s.label}</div>
-              </Link>
+            {STATS.map((s, idx) => (
+              <FadeIn key={s.label} delay={idx * 0.05}>
+                <Link href={s.href} className="text-center group block">
+                  <div className="text-2xl font-bold text-[#A78BFA] group-hover:brightness-125 transition-all">{s.value}</div>
+                  <div className="mt-1 text-[11px] uppercase tracking-wider text-[#525252] group-hover:text-[#A3A3A3] transition-colors">{s.label}</div>
+                </Link>
+              </FadeIn>
             ))}
           </div>
         </div>
@@ -95,15 +99,19 @@ export default function HomePage() {
           Turn dense PDFs into interactive knowledge — with graphs, diagrams, and code that runs.
         </p>
         <div className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
-          {PAPER_CARDS.map(c => (
-            <Link key={c.title} href="/papers"
-              className="rounded-xl border border-[#262626] bg-[#111111] p-5 transition-colors hover:border-[#A78BFA]/30 block">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#A78BFA]/12">
-                <c.icon size={18} className="text-[#A78BFA]" />
-              </div>
-              <div className="mt-4 text-sm font-semibold text-white">{c.title}</div>
-              <div className="mt-1 text-xs leading-relaxed text-[#A3A3A3]">{c.desc}</div>
-            </Link>
+          {PAPER_CARDS.map((c, idx) => (
+            <FadeIn key={c.title} delay={idx * 0.1}>
+              <AnimatedCard>
+                <Link href="/papers"
+                  className="rounded-xl border border-[#262626] bg-[#111111] p-5 transition-colors hover:border-[#A78BFA]/30 block h-full">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#A78BFA]/12">
+                    <c.icon size={18} className="text-[#A78BFA]" />
+                  </div>
+                  <div className="mt-4 text-sm font-semibold text-white">{c.title}</div>
+                  <div className="mt-1 text-xs leading-relaxed text-[#A3A3A3]">{c.desc}</div>
+                </Link>
+              </AnimatedCard>
+            </FadeIn>
           ))}
         </div>
       </section>
@@ -119,23 +127,27 @@ export default function HomePage() {
             Bite-sized problems that build intuition — from sigmoid to full transformers.
           </p>
           <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {PROBLEMS.map(p => (
-              <Link key={p.num} href={p.href}
-                className="rounded-xl border border-[#262626] bg-[#111111] p-5 block transition-colors hover:border-[#A78BFA]/30">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-[#525252]">{p.num}</span>
-                  <span className={'rounded-full border px-2 py-0.5 text-[10px] font-semibold ' + DIFF_COLOR[p.difficulty]}>
-                    {p.difficulty}
-                  </span>
-                </div>
-                <div className="mt-2 text-[15px] font-semibold text-white">{p.title}</div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {p.topics.map(t => (
-                    <span key={t} className="rounded-md bg-[#1A1A1A] px-2 py-0.5 text-[10px] text-[#A3A3A3]">{t}</span>
-                  ))}
-                </div>
-                <div className="mt-4 text-xs font-semibold text-[#A78BFA]">Solve →</div>
-              </Link>
+            {PROBLEMS.map((p, idx) => (
+              <FadeIn key={p.num} delay={idx * 0.1}>
+                <AnimatedCard>
+                  <Link href={p.href}
+                    className="rounded-xl border border-[#262626] bg-[#111111] p-5 block transition-colors hover:border-[#A78BFA]/30 h-full">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#525252]">{p.num}</span>
+                      <span className={'rounded-full border px-2 py-0.5 text-[10px] font-semibold ' + DIFF_COLOR[p.difficulty]}>
+                        {p.difficulty}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-[15px] font-semibold text-white">{p.title}</div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {p.topics.map(t => (
+                        <span key={t} className="rounded-md bg-[#1A1A1A] px-2 py-0.5 text-[10px] text-[#A3A3A3]">{t}</span>
+                      ))}
+                    </div>
+                    <div className="mt-4 text-xs font-semibold text-[#A78BFA]">Solve →</div>
+                  </Link>
+                </AnimatedCard>
+              </FadeIn>
             ))}
           </div>
         </div>
@@ -151,23 +163,27 @@ export default function HomePage() {
           Structured tracks that take you from the math to the model.
         </p>
         <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-          {topDomains.map(d => (
-            <Link key={d.slug} href={`/learn/${d.slug}`}
-              className="rounded-xl border border-[#262626] bg-[#111111] p-5 block transition-colors hover:border-[#60A5FA]/30">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#60A5FA]/12">
-                  <Zap size={18} className="text-[#60A5FA]" />
-                </div>
-                <div>
-                  <div className="text-[15px] font-semibold text-white">{d.name}</div>
-                  <div className="text-xs text-[#525252]">{d.topics.length} topics</div>
-                </div>
-              </div>
-              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1A1A]">
-                <div className="h-full rounded-full bg-[#60A5FA] transition-all" style={{ width: `0%` }} />
-              </div>
-              <div className="mt-2 text-[11px] text-[#525252]">0% complete</div>
-            </Link>
+          {topDomains.map((d, idx) => (
+            <FadeIn key={d.slug} delay={idx * 0.1}>
+              <AnimatedCard>
+                <Link href={`/learn/${d.slug}`}
+                  className="rounded-xl border border-[#262626] bg-[#111111] p-5 block transition-colors hover:border-[#60A5FA]/30 h-full">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#60A5FA]/12">
+                      <Zap size={18} className="text-[#60A5FA]" />
+                    </div>
+                    <div>
+                      <div className="text-[15px] font-semibold text-white">{d.name}</div>
+                      <div className="text-xs text-[#525252]">{d.topics.length} topics</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1A1A]">
+                    <div className="h-full rounded-full bg-[#60A5FA] transition-all" style={{ width: `0%` }} />
+                  </div>
+                  <div className="mt-2 text-[11px] text-[#525252]">0% complete</div>
+                </Link>
+              </AnimatedCard>
+            </FadeIn>
           ))}
         </div>
       </section>

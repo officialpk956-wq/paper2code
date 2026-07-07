@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { FadeIn } from '@/components/FadeIn';
 
 const FREE_FEATURES = [
   '5 paper uploads / month',
@@ -32,88 +34,104 @@ export default function PricingPage() {
   return (
     <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
-      <div className="text-center px-6 py-20">
-        <span className="inline-block rounded-full border border-[#A78BFA]/20 bg-[#A78BFA]/8 px-3 py-1 text-xs font-semibold text-[#A78BFA]">
-          Pricing
-        </span>
-        <h1 className="mt-4 text-[40px] font-bold text-white">Simple, Transparent Pricing</h1>
-        <p className="mt-2 text-[15px] text-[#A3A3A3]">Start free. Upgrade when you&apos;re ready to go deep.</p>
-
-        {/* Toggle */}
-        <div className="mt-6 flex items-center justify-center gap-3">
-          <span className={'text-[13px] ' + (!yearly ? 'text-white' : 'text-[#525252]')}>Monthly</span>
-          <button type="button" onClick={() => setYearly(!yearly)}
-            className={'relative h-6 w-11 rounded-full transition-colors ' + (yearly ? 'bg-[#A78BFA]' : 'bg-[#262626]')}>
-            <div className={'absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ' +
-              (yearly ? 'translate-x-5' : 'translate-x-1')} />
-          </button>
-          <span className={'text-[13px] ' + (yearly ? 'text-white' : 'text-[#525252]')}>
-            Yearly <span className="rounded-full bg-[#4ADE80]/15 px-1.5 py-0.5 text-[10px] text-[#4ADE80]">25% off</span>
+      <FadeIn>
+        <div className="text-center px-6 py-20">
+          <span className="inline-block rounded-full border border-[#A78BFA]/20 bg-[#A78BFA]/8 px-3 py-1 text-xs font-semibold text-[#A78BFA]">
+            Pricing
           </span>
+          <h1 className="mt-4 text-[40px] font-bold text-white">Simple, Transparent Pricing</h1>
+          <p className="mt-2 text-[15px] text-[#A3A3A3]">Start free. Upgrade when you&apos;re ready to go deep.</p>
+
+          {/* Toggle */}
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <span className={'text-[13px] ' + (!yearly ? 'text-white' : 'text-[#525252]')}>Monthly</span>
+            <button type="button" onClick={() => setYearly(!yearly)}
+              className={'relative h-6 w-11 rounded-full transition-colors ' + (yearly ? 'bg-[#A78BFA]' : 'bg-[#262626]')}>
+              <div className={'absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ' +
+                (yearly ? 'translate-x-5' : 'translate-x-1')} />
+            </button>
+            <span className={'text-[13px] ' + (yearly ? 'text-white' : 'text-[#525252]')}>
+              Yearly <span className="rounded-full bg-[#4ADE80]/15 px-1.5 py-0.5 text-[10px] text-[#4ADE80]">25% off</span>
+            </span>
+          </div>
         </div>
-      </div>
+      </FadeIn>
 
       {/* CARDS */}
       <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-24 md:flex-row">
         {/* FREE */}
-        <div className="flex flex-1 flex-col rounded-2xl border border-[#262626] bg-[#111111] p-7">
-          <div className="text-[13px] font-semibold uppercase tracking-wider text-[#525252]">Free</div>
-          <div className="mt-3 flex items-end gap-1">
-            <span className="text-[42px] font-bold text-white">$0</span>
-            <span className="mb-2 text-[13px] text-[#525252]">/ month</span>
-          </div>
-          <div className="mt-1 text-[12px] text-[#525252]">No credit card required</div>
+        <FadeIn delay={0}>
+          <motion.div
+            className="flex flex-col rounded-2xl border border-[#262626] bg-[#111111] p-7 h-full"
+            whileHover={{ scale: 1.02, y: -4 }}
+            whileTap={{ scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          >
+            <div className="text-[13px] font-semibold uppercase tracking-wider text-[#525252]">Free</div>
+            <div className="mt-3 flex items-end gap-1">
+              <span className="text-[42px] font-bold text-white">$0</span>
+              <span className="mb-2 text-[13px] text-[#525252]">/ month</span>
+            </div>
+            <div className="mt-1 text-[12px] text-[#525252]">No credit card required</div>
 
-          <Link href="/papers"
-            className="mt-6 block w-full rounded-xl border border-[#262626] py-3 text-[13px] font-semibold text-white hover:bg-[#111111] transition-colors text-center">
-            Get Started Free
-          </Link>
+            <Link href="/papers"
+              className="mt-6 block w-full rounded-xl border border-[#262626] py-3 text-[13px] font-semibold text-white hover:bg-[#111111] transition-colors text-center">
+              Get Started Free
+            </Link>
 
-          <ul className="mt-6 flex flex-col gap-3">
-            {FREE_FEATURES.map(f => (
-              <li key={f} className="flex items-start gap-2.5 text-[13px] text-[#A3A3A3]">
-                <Check size={14} className="mt-0.5 flex-shrink-0 text-[#4ADE80]" />
-                {f}
-              </li>
-            ))}
-          </ul>
-        </div>
+            <ul className="mt-6 flex flex-col gap-3">
+              {FREE_FEATURES.map(f => (
+                <li key={f} className="flex items-start gap-2.5 text-[13px] text-[#A3A3A3]">
+                  <Check size={14} className="mt-0.5 flex-shrink-0 text-[#4ADE80]" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        </FadeIn>
 
         {/* PRO */}
-        <div className="flex flex-1 flex-col rounded-2xl border border-[#A78BFA]/40 bg-gradient-to-b from-[#0A0A0A] to-[#111111] p-7 relative overflow-hidden">
-          <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full"
-            style={{ background: 'rgba(167,139,250,0.08)', filter: 'blur(32px)' }} />
-          <div className="flex items-center gap-2">
-            <div className="text-[13px] font-semibold uppercase tracking-wider text-[#A78BFA]">Pro</div>
-            <span className="rounded-full bg-[#A78BFA]/15 px-2 py-0.5 text-[10px] font-semibold text-[#A78BFA]">Most Popular</span>
-          </div>
-          <div className="mt-3 flex items-end gap-1">
-            <span className="text-[42px] font-bold text-white">
-              ${yearly ? Math.round(yearlyPrice / 12) : monthlyPrice}
-            </span>
-            <span className="mb-2 text-[13px] text-[#525252]">/ month</span>
-          </div>
-          {yearly && (
-            <div className="text-[12px] text-[#525252]">
-              Billed ${yearlyPrice}/year · save ${monthlyPrice * 12 - yearlyPrice}
+        <FadeIn delay={0.1}>
+          <motion.div
+            className="flex flex-col rounded-2xl border border-[#A78BFA]/40 bg-gradient-to-b from-[#0A0A0A] to-[#111111] p-7 relative overflow-hidden h-full"
+            whileHover={{ scale: 1.02, y: -4 }}
+            whileTap={{ scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          >
+            <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full"
+              style={{ background: 'rgba(167,139,250,0.08)', filter: 'blur(32px)' }} />
+            <div className="flex items-center gap-2">
+              <div className="text-[13px] font-semibold uppercase tracking-wider text-[#A78BFA]">Pro</div>
+              <span className="rounded-full bg-[#A78BFA]/15 px-2 py-0.5 text-[10px] font-semibold text-[#A78BFA]">Most Popular</span>
             </div>
-          )}
-          {!yearly && <div className="text-[12px] text-[#525252]">Billed monthly</div>}
+            <div className="mt-3 flex items-end gap-1">
+              <span className="text-[42px] font-bold text-white">
+                ${yearly ? Math.round(yearlyPrice / 12) : monthlyPrice}
+              </span>
+              <span className="mb-2 text-[13px] text-[#525252]">/ month</span>
+            </div>
+            {yearly && (
+              <div className="text-[12px] text-[#525252]">
+                Billed ${yearlyPrice}/year · save ${monthlyPrice * 12 - yearlyPrice}
+              </div>
+            )}
+            {!yearly && <div className="text-[12px] text-[#525252]">Billed monthly</div>}
 
-          <Link href="/papers"
-            className="mt-6 block w-full rounded-xl bg-[#A78BFA] py-3 text-[13px] font-bold text-black hover:bg-[#C4B5FD] transition-colors text-center">
-            Upgrade to Pro →
-          </Link>
+            <Link href="/papers"
+              className="mt-6 block w-full rounded-xl bg-[#A78BFA] py-3 text-[13px] font-bold text-black hover:bg-[#C4B5FD] transition-colors text-center">
+              Upgrade to Pro →
+            </Link>
 
-          <ul className="mt-6 flex flex-col gap-3">
-            {PRO_FEATURES.map(f => (
-              <li key={f} className="flex items-start gap-2.5 text-[13px] text-white">
-                <Check size={14} className="mt-0.5 flex-shrink-0 text-[#A78BFA]" />
-                {f}
-              </li>
-            ))}
-          </ul>
-        </div>
+            <ul className="mt-6 flex flex-col gap-3">
+              {PRO_FEATURES.map(f => (
+                <li key={f} className="flex items-start gap-2.5 text-[13px] text-white">
+                  <Check size={14} className="mt-0.5 flex-shrink-0 text-[#A78BFA]" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        </FadeIn>
       </div>
 
       {/* FAQ */}
