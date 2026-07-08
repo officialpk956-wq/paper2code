@@ -24,6 +24,7 @@ type AuthModalContextValue = {
   close: () => void;
   setTab: (tab: Tab) => void;
   user: User | null;
+  hydrated: boolean;
   signIn: (user: User) => void;
   signOut: () => void;
 };
@@ -34,14 +35,20 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab]       = useState<Tab>('signin');
   const [user, setUser]     = useState<User | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate the signed-in state from localStorage on mount. Without this the
-  // navbar always renders logged-out after the post-login page reload.
-  useEffect(() => {
-    if (!isLoggedIn()) return; // stale profile without a token ≠ signed in
+  const hydrate = useCallback(() => {
+    if (!isLoggedIn()) {
+      setUser(null);
+      setHydrated(true);
+      return;
+    }
     try {
       const raw = localStorage.getItem('user_profile');
-      if (!raw) return;
+      if (!raw) {
+        setHydrated(true);
+        return;
+      }
       const p = JSON.parse(raw);
       if (p && typeof p === 'object' && (p.name || p.email)) {
         setUser({
@@ -51,21 +58,49 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch {
-      // corrupted profile JSON — treat as signed out
+      setUser(null);
     }
+    setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
+
+  useEffect(() => {
+    const handleStorage = () => {
+      if (!isLoggedIn()) {
+        setUser(null);
+      } else {
+        setUser(prev => {
+           if (!prev) hydrate();
+           return prev;
+        });
+      }
+    };
+    
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('auth-changed', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('auth-changed', handleStorage);
+    };
+  }, [hydrate]);
 
   const open    = useCallback((next?: Tab) => { if (next) setTab(next); setIsOpen(true); }, []);
   const close   = useCallback(() => setIsOpen(false), []);
-  const signIn  = useCallback((u: User) => { setUser(u); setIsOpen(false); }, []);
+  const signIn  = useCallback((u: User) => { 
+    localStorage.setItem('user_profile', JSON.stringify(u)); 
+    setUser(u); 
+    setIsOpen(false); 
+  }, []);
   const signOut = useCallback(() => {
-    clearTokens(); // actually sign out: remove tokens + profile from localStorage
-    setUser(null);
+    clearTokens();
   }, []);
 
   const value = useMemo(
-    () => ({ isOpen, tab, open, close, setTab, user, signIn, signOut }),
-    [isOpen, tab, open, close, user, signIn, signOut],
+    () => ({ isOpen, tab, open, close, setTab, user, hydrated, signIn, signOut }),
+    [isOpen, tab, open, close, user, hydrated, signIn, signOut],
   );
 
   return <AuthModalContext.Provider value={value}>{children}</AuthModalContext.Provider>;
