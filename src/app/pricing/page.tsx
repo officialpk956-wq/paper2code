@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { FadeIn } from '@/components/FadeIn';
+import { PROBLEMS } from '@/data/problems';
 
 const FREE_FEATURES = [
   '5 paper uploads / month',
   'Knowledge graph extraction',
-  '20 dojo problems',
+  `${Math.min(5, PROBLEMS.length)} starter dojo problems`,
   'Basic learning paths',
   'Community leaderboard',
 ];
@@ -18,8 +19,8 @@ const PRO_FEATURES = [
   'Unlimited paper uploads',
   'Architecture blueprints',
   'Executable code generation',
-  'All 128 dojo problems',
-  'AI Tutor (50 sessions/month)',
+  `All ${PROBLEMS.length} dojo problems`,
+  'AI Tutor access',
   'Full learning paths',
   'Priority support',
   'Early access to new labs',
