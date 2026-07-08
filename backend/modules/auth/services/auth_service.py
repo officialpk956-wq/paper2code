@@ -13,6 +13,7 @@ from backend.modules.auth.services.session_service import SessionService
 from backend.modules.auth.services.audit_service import AuditService
 from backend.modules.auth.services.email_service import EmailService
 from backend.modules.security.brute_force import check_login_brute_force, record_failed_attempt, reset_failed_attempts
+from backend.modules.auth.allowlist import is_email_allowed
 
 class AuthService:
     def __init__(self, db: Session):
@@ -30,6 +31,13 @@ class AuthService:
         ip_address: Optional[str],
         user_agent: Optional[str]
     ) -> User:
+        # 0. Private-preview allowlist (no-op unless ALLOWLIST_EMAILS is set)
+        if not is_email_allowed(email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sign-ups are limited to invited accounts during the private preview.",
+            )
+
         # 1. Validate password strength
         is_strong, err_msg = validate_password_strength(password)
         if not is_strong:
@@ -71,6 +79,13 @@ class AuthService:
     ) -> User:
         # Enforce account lockout checks
         check_login_brute_force(email)
+
+        # Private-preview allowlist (no-op unless ALLOWLIST_EMAILS is set)
+        if not is_email_allowed(email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This site is in private preview and your account is not on the access list.",
+            )
 
         user = self.repo.get_by_email(email)
         
