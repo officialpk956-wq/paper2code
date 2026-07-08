@@ -1,4 +1,6 @@
-const BASE = 'http://127.0.0.1:8000'; // Hardcoded to IPv4 to prevent Failed to fetch
+const BASE =
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
+  'http://127.0.0.1:8000';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
@@ -8,7 +10,6 @@ function authHeaders(): Record<string, string> {
 async function handle<T>(res: Response): Promise<T> {
   if (res.status === 401) {
     clearTokens();
-    window.location.href = '/';
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
@@ -38,6 +39,7 @@ export function clearTokens() {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('user_profile');
+    window.dispatchEvent(new Event('auth-changed'));
   }
 }
 
