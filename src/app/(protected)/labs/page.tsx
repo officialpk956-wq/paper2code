@@ -96,7 +96,7 @@ export default function LabsPage() {
       <div className="border-b border-[#1A1A1A] bg-[#0A0A0A] px-8 py-6">
         <h1 className="text-[26px] font-bold text-white">AI Labs</h1>
         <p className="mt-1 text-[13px] text-[#525252]">
-          Visual guides to the architectures behind modern AI — interactive parameter labs are on the roadmap.
+          Visual guides to the architectures behind modern AI. Interactive parameter labs are on the roadmap.
         </p>
       </div>
 

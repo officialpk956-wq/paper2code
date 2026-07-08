@@ -140,7 +140,7 @@ export default function PricingPage() {
         {[
           { q: 'Can I cancel anytime?', a: 'Yes. Cancel any time and keep access until the end of your billing period.' },
           { q: 'What counts as a paper upload?', a: 'Any PDF you upload to the Research Hub counts. Re-uploads of the same file do not.' },
-          { q: 'Is there a student discount?', a: 'Yes — email us with a .edu address for 50% off Pro.' },
+          { q: 'Is there a student discount?', a: 'Yes. Email us with a .edu address for 50% off Pro.' },
           { q: 'Can I try Pro before paying?', a: 'The free tier gives you a solid taste. We\'ll add a trial soon.' },
         ].map(({ q, a }) => (
           <div key={q} className="rounded-xl border border-[#262626] bg-[#111111] p-4">

@@ -55,9 +55,11 @@ export default function HomePage() {
           aria-hidden
         />
         <div className="relative mx-auto flex max-w-5xl flex-col items-center gap-6 px-6 text-center">
-          <span className="rounded-full border border-[#A78BFA]/30 bg-[#A78BFA]/5 px-4 py-1.5 text-[13px] text-[#A78BFA]">
-            New: AI-powered architecture blueprints →
-          </span>
+          <Link href="/papers" className="group mb-3 z-10 transition-transform hover:scale-105">
+            <span className="rounded-full border border-[#A78BFA]/30 bg-[#A78BFA]/5 px-4 py-1.5 text-[13px] text-[#A78BFA] hover:bg-[#A78BFA]/10 transition-colors">
+              New: AI-powered architecture blueprints →
+            </span>
+          </Link>
           <h1 className="text-[64px] font-bold leading-[1.05] tracking-tight text-white">
             From Research Papers<br />
             to <span className="text-[#A78BFA]">Running Code</span>
@@ -72,7 +74,8 @@ export default function HomePage() {
               Start Building for Free →
             </Link>
             <Link href="/dojo"
-              className="rounded-full border border-[#262626] px-8 py-3.5 text-[15px] text-white transition-colors hover:bg-[#111111]">
+              className="inline-flex items-center gap-2 rounded-full border border-[#333333] bg-[#0A0A0A] px-8 py-3.5 text-[15px] text-[#E5E5E5] shadow-lg transition-all hover:border-[#A78BFA]/40 hover:bg-[#111111] hover:text-white hover:shadow-[#A78BFA]/10 active:scale-95">
+              <Code2 size={16} className="text-[#A78BFA] flex-shrink-0" />
               Browse Problems
             </Link>
           </div>
@@ -96,7 +99,7 @@ export default function HomePage() {
         </span>
         <h2 className="mt-3 text-[34px] font-bold text-white">Upload. Extract. Understand.</h2>
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#A3A3A3]">
-          Turn dense PDFs into interactive knowledge — with graphs, diagrams, and code that runs.
+          Turn dense PDFs into interactive knowledge, featuring graphs, diagrams, and code that runs.
         </p>
         <div className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
           {PAPER_CARDS.map((c, idx) => (
@@ -124,7 +127,7 @@ export default function HomePage() {
           </span>
           <h2 className="mt-3 text-[34px] font-bold text-white">Code ML from Scratch.</h2>
           <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#A3A3A3]">
-            Bite-sized problems that build intuition — from sigmoid to full transformers.
+            Bite-sized problems that build intuition, covering everything from sigmoid to full transformers.
           </p>
           <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
             {PROBLEMS.map((p, idx) => (
