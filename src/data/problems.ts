@@ -353,6 +353,308 @@ This is the core operation inside every transformer model.`,
       'Step 4: output = weights @ V',
     ],
   },
+  {
+    slug: 'stats-mean-var-std',
+    index: 11,
+    title: 'Mean, Variance, and Std Dev',
+    difficulty: 'Easy',
+    topics: ['Statistics', 'NumPy'],
+    description: `Implement functions to compute the mean, variance, and standard deviation from scratch.
+
+Given an array of numbers $X$:
+1. Mean ($\mu$) = $\frac{1}{N} \sum x_i$
+2. Variance ($\sigma^2$) = $\frac{1}{N} \sum (x_i - \mu)^2$
+3. Standard Deviation ($\sigma$) = $\sqrt{\sigma^2}$
+
+Use population variance (divide by $N$, not $N-1$).`,
+    constraints: [
+      'Input x is a 1D numpy array',
+      'Return a tuple of (mean, variance, std)',
+      'Do not use np.mean, np.var, or np.std'
+    ],
+    examples: [
+      { input: 'stats_basics(np.array([2, 4, 4, 4, 5, 5, 7, 9]))', output: '(5.0, 4.0, 2.0)' }
+    ],
+    starter_code: `import numpy as np\n\ndef stats_basics(x):\n    # TODO: compute mean, var, std without np.mean/var/std\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(stats_basics(np.array([2, 4, 4, 4, 5, 5, 7, 9])), 4)))`,
+    acceptance: '85.2%',
+    hints: [
+      'Use np.sum(x) / len(x) for the mean',
+      'For variance, sum the squared differences from the mean and divide by N'
+    ]
+  },
+  {
+    slug: 'stats-covariance-correlation',
+    index: 12,
+    title: 'Covariance & Correlation',
+    difficulty: 'Medium',
+    topics: ['Statistics', 'NumPy'],
+    description: `Compute the covariance and Pearson correlation coefficient between two arrays $X$ and $Y$.
+
+Covariance measures the joint variability:
+$Cov(X, Y) = \frac{1}{N} \sum (x_i - \mu_X)(y_i - \mu_Y)$
+
+Correlation normalizes covariance to the range $[-1, 1]$:
+$\rho = \frac{Cov(X, Y)}{\sigma_X \sigma_Y}$
+
+Use population parameters ($1/N$).`,
+    constraints: [
+      'Inputs x and y are 1D arrays of the same length',
+      'Return a tuple of (covariance, correlation)',
+      'Do not use np.cov or np.corrcoef'
+    ],
+    examples: [
+      { input: 'cov_corr(np.array([1, 2, 3]), np.array([3, 1, 2]))', output: '(-0.1667, -0.25)' }
+    ],
+    starter_code: `import numpy as np\n\ndef cov_corr(x, y):\n    # TODO: compute covariance and Pearson correlation\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(cov_corr(np.array([1, 2, 3]), np.array([3, 1, 2])), 4)))`,
+    acceptance: '78.5%',
+    hints: [
+      'First compute the means of x and y',
+      'Then compute the deviations (x - mean_x) and (y - mean_y)',
+      'Covariance is the mean of the product of deviations'
+    ]
+  },
+  {
+    slug: 'stats-z-score',
+    index: 13,
+    title: 'Z-Score Standardization',
+    difficulty: 'Easy',
+    topics: ['Statistics', 'Preprocessing', 'NumPy'],
+    description: `Implement Z-score standardization (also known as standard scaling).
+
+Standardization transforms the data to have a mean of 0 and standard deviation of 1:
+$z = \frac{x - \mu}{\sigma}$
+
+This is crucial for ML algorithms sensitive to scale, like PCA, k-NN, and gradient descent.`,
+    constraints: [
+      'Input x is a 1D numpy array',
+      'Return the standardized array',
+      'If std is 0 (all elements equal), return an array of zeros to avoid division by zero'
+    ],
+    examples: [
+      { input: 'z_score(np.array([1, 2, 3]))', output: 'array([-1.2247,  0.,  1.2247])' }
+    ],
+    starter_code: `import numpy as np\n\ndef z_score(x):\n    # TODO: standardize x to mean 0, std 1\n    pass\n`,
+    test_input: `import numpy as np\nprint(np.round(z_score(np.array([1, 2, 3])), 4))`,
+    acceptance: '90.1%',
+    hints: [
+      'Use np.mean(x) and np.std(x)',
+      'Check if std == 0 before dividing'
+    ]
+  },
+  {
+    slug: 'stats-normal-pdf',
+    index: 14,
+    title: 'Normal Distribution PDF',
+    difficulty: 'Easy',
+    topics: ['Statistics', 'NumPy'],
+    description: `Compute the Probability Density Function (PDF) of a Normal (Gaussian) distribution.
+
+The PDF gives the relative likelihood of a continuous random variable taking on a specific value:
+$f(x) = \frac{1}{\sigma \sqrt{2\pi}} e^{-\frac{1}{2}\left(\frac{x - \mu}{\sigma}\right)^2}$`,
+    constraints: [
+      'Input x is a scalar or numpy array',
+      'mu is the mean, sigma is the standard deviation (sigma > 0)',
+      'Return the PDF values for x'
+    ],
+    examples: [
+      { input: 'normal_pdf(0, mu=0, sigma=1)', output: '0.3989', explanation: 'Standard normal at mean' }
+    ],
+    starter_code: `import numpy as np\n\ndef normal_pdf(x, mu=0.0, sigma=1.0):\n    # TODO: compute the Gaussian PDF\n    pass\n`,
+    test_input: `import numpy as np\nprint(np.round(normal_pdf(np.array([-1, 0, 1]), 0, 1), 4))`,
+    acceptance: '88.3%',
+    hints: [
+      'Use np.pi for π and np.exp() for the exponential function'
+    ]
+  },
+  {
+    slug: 'stats-bayes-theorem',
+    index: 15,
+    title: "Bayes' Theorem",
+    difficulty: 'Medium',
+    topics: ['Probability', 'Math'],
+    description: `Implement Bayes' theorem for a discrete event.
+
+Given:
+- $P(A)$ : Prior probability of event A
+- $P(B|A)$ : Probability of B given A (True Positive Rate)
+- $P(B|\neg A)$ : Probability of B given not A (False Positive Rate)
+
+Compute the posterior probability $P(A|B)$:
+$P(A|B) = \frac{P(B|A) P(A)}{P(B)}$
+where $P(B) = P(B|A)P(A) + P(B|\neg A)P(\neg A)$`,
+    constraints: [
+      'Inputs are scalars between 0 and 1',
+      'Return the posterior probability P(A|B)'
+    ],
+    examples: [
+      {
+        input: 'bayes(p_a=0.01, p_b_given_a=0.9, p_b_given_not_a=0.05)',
+        output: '0.1538',
+        explanation: 'Testing positive for a 1% disease with 90% sensitivity and 5% false positive rate yields only a 15% chance you have it.'
+      }
+    ],
+    starter_code: `def bayes(p_a, p_b_given_a, p_b_given_not_a):\n    # TODO: compute P(A|B)\n    pass\n`,
+    test_input: `print(round(bayes(0.01, 0.9, 0.05), 4))`,
+    acceptance: '75.6%',
+    hints: [
+      'First calculate P(not A) = 1 - p_a',
+      'Then calculate the total probability of B: P(B)'
+    ]
+  },
+  {
+    slug: 'stats-bootstrap-ci',
+    index: 16,
+    title: 'Bootstrap Sample Mean CI',
+    difficulty: 'Hard',
+    topics: ['Statistics', 'NumPy'],
+    description: `Estimate the 95% confidence interval of the mean using bootstrap resampling.
+
+Steps:
+1. Draw \`n_bootstraps\` samples from the data *with replacement*, each of the same size as the original data.
+2. Compute the mean of each bootstrap sample.
+3. Find the 2.5th and 97.5th percentiles of these bootstrap means to form the 95% CI.`,
+    constraints: [
+      'Input x is a 1D numpy array',
+      'Use np.random.choice for resampling',
+      'Set random seed to 42 for reproducibility: np.random.seed(42)',
+      'Return (lower_bound, upper_bound)'
+    ],
+    examples: [
+      { input: 'bootstrap_ci(np.array([1, 2, 3, 4, 5]), n_bootstraps=1000)', output: '(1.8, 4.2)' }
+    ],
+    starter_code: `import numpy as np\n\ndef bootstrap_ci(x, n_bootstraps=1000):\n    np.random.seed(42)\n    # TODO: implement bootstrap CI\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(bootstrap_ci(np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])), 4)))`,
+    acceptance: '55.2%',
+    hints: [
+      'Use np.random.choice(x, size=len(x), replace=True) in a loop or vectorized',
+      'Use np.percentile(means, [2.5, 97.5]) to get the bounds'
+    ]
+  },
+  {
+    slug: 'stats-t-test',
+    index: 17,
+    title: 'Two-Sample T-Test Statistic',
+    difficulty: 'Medium',
+    topics: ['Statistics', 'NumPy'],
+    description: `Compute the t-statistic for a two-sample t-test (independent, equal variances assumed).
+
+The t-statistic measures the difference between two group means relative to the spread of the data:
+$t = \frac{\bar{X}_1 - \bar{X}_2}{s_p \sqrt{\frac{1}{n_1} + \frac{1}{n_2}}}$
+
+Where $s_p$ is the pooled standard deviation:
+$s_p = \sqrt{\frac{(n_1-1)s_1^2 + (n_2-1)s_2^2}{n_1+n_2-2}}$
+
+Note: Use sample variance ($N-1$) for $s_1^2$ and $s_2^2$.`,
+    constraints: [
+      'Inputs x1 and x2 are 1D numpy arrays',
+      'Return the t-statistic',
+      'Use sample variance: np.var(x, ddof=1)'
+    ],
+    examples: [
+      { input: 't_statistic(np.array([1, 2, 3]), np.array([4, 5, 6]))', output: '-3.6742' }
+    ],
+    starter_code: `import numpy as np\n\ndef t_statistic(x1, x2):\n    # TODO: compute the two-sample t-statistic\n    pass\n`,
+    test_input: `import numpy as np\nprint(round(t_statistic(np.array([1, 2, 3]), np.array([4, 5, 6])), 4))`,
+    acceptance: '64.9%',
+    hints: [
+      'Remember to use ddof=1 for sample variance: np.var(x, ddof=1)',
+      'Calculate the pooled variance first, then plug it into the t-statistic formula'
+    ]
+  },
+  {
+    slug: 'stats-mle-gaussian',
+    index: 18,
+    title: 'Maximum Likelihood Estimate (MLE)',
+    difficulty: 'Easy',
+    topics: ['Statistics', 'Machine Learning'],
+    description: `Find the Maximum Likelihood Estimate (MLE) for the parameters of a Gaussian distribution given a dataset.
+
+For a normal distribution, the MLE for the mean ($\mu$) and variance ($\sigma^2$) are simply the sample mean and the population variance (biased variance, dividing by $N$).
+
+Given an array of observations $X$, return the MLE for $\mu$ and $\sigma^2$.`,
+    constraints: [
+      'Input X is a 1D numpy array',
+      'Return a tuple (mu_mle, var_mle)',
+      'var_mle must be the population variance (ddof=0)'
+    ],
+    examples: [
+      { input: 'mle_gaussian(np.array([2, 4, 6, 8]))', output: '(5.0, 5.0)' }
+    ],
+    starter_code: `import numpy as np\n\ndef mle_gaussian(x):\n    # TODO: compute MLE for mean and variance\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(mle_gaussian(np.array([2, 4, 6, 8])), 4)))`,
+    acceptance: '92.1%',
+    hints: [
+      'The MLE for mean is just np.mean(x)',
+      'The MLE for variance is just np.var(x)'
+    ]
+  },
+  {
+    slug: 'stats-kl-divergence',
+    index: 19,
+    title: 'Entropy & KL Divergence',
+    difficulty: 'Medium',
+    topics: ['Information Theory', 'NumPy'],
+    description: `Compute the discrete entropy of a distribution $P$ and the Kullback-Leibler (KL) divergence from $Q$ to $P$.
+
+1. Entropy (in bits): $H(P) = -\sum P(i) \log_2 P(i)$
+2. KL Divergence (in bits): $D_{KL}(P || Q) = \sum P(i) \log_2 \frac{P(i)}{Q(i)}$
+
+Handle 0 probabilities by adding a small epsilon ($1e-9$) before taking the log.`,
+    constraints: [
+      'P and Q are 1D numpy arrays representing probability distributions (sum to 1)',
+      'Return a tuple (entropy, kl_divergence)',
+      'Use log base 2 (np.log2)',
+      'Clip probabilities to [1e-9, 1.0] before logging'
+    ],
+    examples: [
+      {
+        input: 'entropy_kl(np.array([0.5, 0.5]), np.array([0.1, 0.9]))',
+        output: '(1.0, 0.7369)',
+        explanation: 'Entropy of uniform coin is 1 bit.'
+      }
+    ],
+    starter_code: `import numpy as np\n\ndef entropy_kl(P, Q):\n    # TODO: compute entropy of P and KL divergence D_KL(P || Q)\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(entropy_kl(np.array([0.5, 0.5]), np.array([0.1, 0.9])), 4)))`,
+    acceptance: '61.4%',
+    hints: [
+      'np.clip(P, 1e-9, 1) prevents log(0)',
+      'KL divergence is np.sum(P * np.log2(P / Q_clipped))'
+    ]
+  },
+  {
+    slug: 'stats-log-sum-exp',
+    index: 20,
+    title: 'Log-Sum-Exp Trick',
+    difficulty: 'Medium',
+    topics: ['Numerical Methods', 'NumPy'],
+    description: `Implement the Log-Sum-Exp function in a numerically stable way.
+
+When computing $\log(\sum e^{x_i})$, large values of $x_i$ will cause $e^{x_i}$ to overflow to infinity.
+The log-sum-exp trick avoids this:
+
+$\log(\sum e^{x_i}) = a + \log(\sum e^{x_i - a})$
+
+Where $a = \max(x)$. This ensures the largest exponent is $e^0 = 1$, preventing overflow.`,
+    constraints: [
+      'Input x is a 1D numpy array',
+      'Return a scalar',
+      'Must not overflow for large inputs (e.g., x=[1000, 1000])'
+    ],
+    examples: [
+      { input: 'log_sum_exp(np.array([1, 2, 3]))', output: '3.4076' },
+      { input: 'log_sum_exp(np.array([1000, 1000]))', output: '1000.6931' }
+    ],
+    starter_code: `import numpy as np\n\ndef log_sum_exp(x):\n    # TODO: implement numerically stable log-sum-exp\n    pass\n`,
+    test_input: `import numpy as np\nprint(round(float(log_sum_exp(np.array([1000, 1001, 1002]))), 4))`,
+    acceptance: '73.2%',
+    hints: [
+      'Find the maximum: a = np.max(x)',
+      'Compute the sum of exp(x - a)',
+      'Return a + np.log(sum_exp)'
+    ]
+  }
 ];
 
 export function getProblemBySlug(slug: string): Problem | undefined {
