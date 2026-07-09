@@ -12,6 +12,8 @@ import {
 import { PROBLEMS, getProblemBySlug, getProblemIndex } from '@/data/problems';
 import { apiGet, apiPost, isLoggedIn } from '@/lib/api';
 
+import { motion, AnimatePresence } from 'framer-motion';
+
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
 type SlugMeta = { archSlug?: string; archName?: string; paperSlug?: string; paperTitle?: string; learnPath?: string; learnName?: string };
@@ -141,6 +143,20 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
       setRunState('error');
       setStdout(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  function handleEditorMount(editor: any, monaco: any) {
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      // Small timeout to avoid state issues if editor is typing
+      setTimeout(() => {
+        handleRun(false);
+      }, 0);
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+      setTimeout(() => {
+        handleRun(true);
+      }, 0);
+    });
   }
 
   if (!problem) {
@@ -495,6 +511,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                 wordWrap: 'on',
                 automaticLayout: true,
               }}
+              onMount={handleEditorMount}
             />
           </div>
 
@@ -516,8 +533,15 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
             </div>
 
             <div style={{ flex: 1, overflow: 'auto', padding: 12, scrollbarWidth: 'thin', scrollbarColor: '#262626 transparent' }}>
+              <AnimatePresence mode="wait">
               {consoleTab === 'testcase' && (
-                <div>
+                <motion.div
+                  key="testcase"
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -5 }}
+                  transition={{ duration: 0.15 }}
+                >
                   <p style={{ fontSize: 10, fontWeight: 600, color: '#525252', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>stdin</p>
                   <textarea
                     value={testInput}
@@ -529,11 +553,17 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                       outline: 'none', height: 120, scrollbarWidth: 'thin',
                     }}
                   />
-                </div>
+                </motion.div>
               )}
 
               {consoleTab === 'result' && (
-                <div>
+                <motion.div
+                  key="result"
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -5 }}
+                  transition={{ duration: 0.15 }}
+                >
                   {runState === 'idle' && (
                     <p style={{ fontSize: 13, color: '#525252' }}>Run your code to see results here.</p>
                   )}
@@ -544,7 +574,11 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                     </div>
                   )}
                   {(runState === 'passed' || runState === 'failed' || runState === 'error') && (
-                    <div>
+                    <motion.div
+                      initial={runState === 'passed' ? { scale: 0.98, opacity: 0 } : { opacity: 0 }}
+                      animate={runState === 'passed' ? { scale: 1, opacity: 1 } : { opacity: 1 }}
+                      transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                         {runState === 'passed' && <><CheckCircle size={16} style={{ color: '#4ADE80' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#4ADE80' }}>Accepted</span></>}
                         {runState === 'failed' && <><XCircle size={16} style={{ color: '#F87171' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>Wrong Answer</span></>}
@@ -562,10 +596,11 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                           <pre style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#4ADE80', whiteSpace: 'pre-wrap' }}>{expected}</pre>
                         </div>
                       )}
-                    </div>
+                    </motion.div>
                   )}
-                </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </div>
           </div>
         </div>
