@@ -1349,6 +1349,258 @@ Given the gradient of the loss with respect to the output vectors ($dOut$), comp
       'Backward requires accumulating gradients. Initialize dE = np.zeros_like(embeddings)',
       'Use np.add.at(dE, indices, dOut) to handle repeated indices correctly'
     ]
+  },
+  {
+    slug: 'dl-multi-head-attention',
+    index: 43,
+    title: 'Multi-Head Attention (MHA)',
+    difficulty: 'Hard',
+    topics: ['Deep Learning', 'Transformers', 'Paper Implementation'],
+    description: `Implement Multi-Head Attention from "Attention Is All You Need".
+
+Given inputs $X$ (shape $N \times d_{model}$), project them into Query, Key, and Value matrices.
+Then, split them into $h$ heads, compute scaled dot-product attention for each head, concatenate the results, and project back to $d_{model}$.
+
+Assume:
+- $W_q, W_k, W_v \in \mathbb{R}^{d_{model} \times d_{model}}$
+- $W_o \in \mathbb{R}^{d_{model} \times d_{model}}$
+- $d_{head} = d_{model} / h$
+- No masking
+
+Return the final output matrix.`,
+    constraints: [
+      'Input X has shape (N, d_model)',
+      'W_q, W_k, W_v, W_o have shape (d_model, d_model)',
+      'h is the number of heads (integer)',
+      'Return a 2D array of shape (N, d_model)'
+    ],
+    examples: [
+      { input: 'mha(X, Wq, Wk, Wv, Wo, h=2)', output: 'attended_X' }
+    ],
+    starter_code: `import numpy as np\n\ndef mha(X, W_q, W_k, W_v, W_o, h):\n    # TODO: Implement Multi-Head Attention\n    pass\n`,
+    test_input: `import numpy as np\nnp.random.seed(42)\nX = np.random.randn(3, 4)\nWq, Wk, Wv, Wo = np.random.randn(4,4), np.random.randn(4,4), np.random.randn(4,4), np.random.randn(4,4)\nprint(np.round(mha(X, Wq, Wk, Wv, Wo, 2), 4))`,
+    acceptance: '22.1%',
+    hints: [
+      'Project X to Q, K, V',
+      'Reshape to (N, h, d_head) and transpose to (h, N, d_head)',
+      'Compute attention scores: Q @ K.transpose(0, 2, 1) / sqrt(d_head)',
+      'Apply softmax along the last axis (-1)',
+      'Multiply by V, transpose back, reshape to (N, d_model), and project with W_o'
+    ]
+  },
+  {
+    slug: 'dl-transformer-encoder-block',
+    index: 44,
+    title: 'Transformer Encoder Block',
+    difficulty: 'Hard',
+    topics: ['Deep Learning', 'Transformers', 'Paper Implementation'],
+    description: `Implement a single Transformer Encoder Block.
+
+The block consists of two sub-layers:
+1. Multi-Head Attention (assume you have a function \`mha(X)\` available).
+2. Feed-Forward Network (two linear transformations with a ReLU activation in between).
+
+Each sub-layer is surrounded by a residual connection and followed by Layer Normalization (assume \`layer_norm(X)\` is available).
+
+Forward pass:
+$X_1 = \text{LayerNorm}(X + \text{MHA}(X))$
+$X_2 = \text{LayerNorm}(X_1 + \text{FFN}(X_1))$
+
+Wait, the original paper puts LayerNorm *after* the residual addition (Post-LN). Implement the Post-LN version.`,
+    constraints: [
+      'Input X has shape (N, d_model)',
+      'W1 (d_model, d_ff), b1 (d_ff)',
+      'W2 (d_ff, d_model), b2 (d_model)',
+      'Use the provided mha and layer_norm helper functions',
+      'Return the output matrix of shape (N, d_model)'
+    ],
+    examples: [
+      { input: 'transformer_block(X, W1, b1, W2, b2, mha_fn, ln_fn)', output: 'encoder_output' }
+    ],
+    starter_code: `import numpy as np\n\ndef transformer_block(X, W1, b1, W2, b2, mha_fn, ln_fn):\n    # TODO: Implement Transformer Encoder Block (Post-LN)\n    pass\n`,
+    test_input: `import numpy as np\nnp.random.seed(42)\nX = np.random.randn(2, 4)\nW1, b1 = np.random.randn(4, 8), np.random.randn(8)\nW2, b2 = np.random.randn(8, 4), np.random.randn(4)\n# Mock functions\nmha_fn = lambda x: x * 0.1\nln_fn = lambda x: (x - np.mean(x, axis=-1, keepdims=True)) / (np.std(x, axis=-1, keepdims=True) + 1e-5)\nprint(np.round(transformer_block(X, W1, b1, W2, b2, mha_fn, ln_fn), 4))`,
+    acceptance: '35.4%',
+    hints: [
+      'MHA output: out1 = mha_fn(X)',
+      'Residual + LN 1: X1 = ln_fn(X + out1)',
+      'FFN: ffn_out = np.maximum(0, X1 @ W1 + b1) @ W2 + b2',
+      'Residual + LN 2: out2 = ln_fn(X1 + ffn_out)'
+    ]
+  },
+  {
+    slug: 'dl-resnet-block',
+    index: 45,
+    title: 'ResNet Residual Block',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'Computer Vision', 'Paper Implementation'],
+    description: `Implement a basic ResNet Residual Block.
+
+The block applies:
+1. Conv2D -> BatchNorm -> ReLU
+2. Conv2D -> BatchNorm
+3. Add the skip connection (original input $X$)
+4. ReLU
+
+Assume:
+- The input $X$ and the output of the second BatchNorm have the exact same shape (no projection shortcut needed).
+- Helper functions \`conv2d_fn\` and \`batch_norm_fn\` are provided.`,
+    constraints: [
+      'Input X is a feature map',
+      'W1, W2 are conv weights',
+      'Use conv2d_fn(input, weight) and batch_norm_fn(input)',
+      'Return the output feature map'
+    ],
+    examples: [
+      { input: 'resnet_block(X, W1, W2, conv2d_fn, bn_fn)', output: 'output_feature_map' }
+    ],
+    starter_code: `import numpy as np\n\ndef resnet_block(X, W1, W2, conv2d_fn, bn_fn):\n    # TODO: Implement Residual Block\n    pass\n`,
+    test_input: `import numpy as np\nnp.random.seed(42)\nX = np.random.randn(3, 3)\nW1, W2 = np.random.randn(2, 2), np.random.randn(2, 2)\n# Mock functions to simulate same-shape convolutions\nconv2d_fn = lambda x, w: x * np.sum(w)\nbn_fn = lambda x: x * 0.5\nprint(np.round(resnet_block(X, W1, W2, conv2d_fn, bn_fn), 4))`,
+    acceptance: '58.2%',
+    hints: [
+      'Compute out1 = bn_fn(conv2d_fn(X, W1))',
+      'Apply ReLU: out1 = np.maximum(0, out1)',
+      'Compute out2 = bn_fn(conv2d_fn(out1, W2))',
+      'Add skip connection and apply ReLU: return np.maximum(0, out2 + X)'
+    ]
+  },
+  {
+    slug: 'dl-bert-mlm-loss',
+    index: 46,
+    title: 'BERT MLM Loss',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'NLP', 'Paper Implementation'],
+    description: `Implement the Masked Language Model (MLM) Loss used in BERT.
+
+Given the model's unnormalized logit predictions for a sequence of tokens, and the true token IDs, compute the Cross-Entropy loss.
+Crucially, in BERT, the loss is *only* computed over the masked tokens.
+
+You are given a \`mask_indices\` array indicating which sequence positions were masked (1 for masked, 0 for unmasked).`,
+    constraints: [
+      'logits is a 2D array of shape (seq_len, vocab_size)',
+      'targets is a 1D array of integers of shape (seq_len,)',
+      'mask_indices is a 1D array of 0s and 1s of shape (seq_len,)',
+      'Return the scalar average cross-entropy loss over ONLY the masked tokens',
+      'If no tokens are masked, return 0.0'
+    ],
+    examples: [
+      { input: 'bert_mlm_loss(logits, targets, mask)', output: 'scalar_loss' }
+    ],
+    starter_code: `import numpy as np\n\ndef bert_mlm_loss(logits, targets, mask_indices):\n    # TODO: Compute cross-entropy loss over masked tokens\n    pass\n`,
+    test_input: `import numpy as np\nlogits = np.array([[2.0, 0.5, -1.0], [0.1, 3.0, 0.1], [-0.5, 0.0, 2.5]])\ntargets = np.array([0, 2, 2])\nmask = np.array([1, 0, 1])\nprint(np.round(bert_mlm_loss(logits, targets, mask), 4))`,
+    acceptance: '48.9%',
+    hints: [
+      'Filter logits and targets using mask_indices (e.g., logits[mask_indices == 1])',
+      'Compute softmax on the filtered logits',
+      'Extract the probability of the target classes',
+      'Compute -np.mean(np.log(probs))'
+    ]
+  },
+  {
+    slug: 'dl-vit-patch-embed',
+    index: 47,
+    title: 'ViT Patch Embeddings',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'Transformers', 'Computer Vision'],
+    description: `Implement the patch extraction and embedding step of the Vision Transformer (ViT).
+
+An image $X \in \mathbb{R}^{H \times W \times C}$ is reshaped into a sequence of flattened 2D patches $X_p \in \mathbb{R}^{N \times (P^2 \cdot C)}$, where $(P, P)$ is the patch size, and $N = H W / P^2$ is the number of patches.
+Then, the flattened patches are linearly projected to a hidden dimension $D$ using a weight matrix $W$.`,
+    constraints: [
+      'image is a 3D array of shape (H, W, C)',
+      'patch_size is an integer P',
+      'W is a 2D array of shape (P*P*C, D)',
+      'Return the projected sequence of shape (N, D)',
+      'Assume H and W are divisible by P'
+    ],
+    examples: [
+      { input: 'vit_patch_embed(image, patch_size=2, W)', output: 'sequence_of_vectors' }
+    ],
+    starter_code: `import numpy as np\n\ndef vit_patch_embed(image, patch_size, W):\n    # TODO: Extract patches, flatten them, and project using W\n    pass\n`,
+    test_input: `import numpy as np\nimg = np.arange(16).reshape(4, 4, 1)\nW = np.ones((4, 2))\nprint(vit_patch_embed(img, 2, W))`,
+    acceptance: '53.6%',
+    hints: [
+      'Find the number of patches along height and width: H // P, W // P',
+      'You can use nested loops or reshape/transpose to extract patches',
+      'With reshape: image.reshape(H//P, P, W//P, P, C).transpose(0, 2, 1, 3, 4).reshape(-1, P*P*C)',
+      'Multiply the resulting (N, P*P*C) matrix by W'
+    ]
+  },
+  {
+    slug: 'dl-lora-forward',
+    index: 48,
+    title: 'LoRA Forward Pass',
+    difficulty: 'Easy',
+    topics: ['Deep Learning', 'LLMs', 'Paper Implementation'],
+    description: `Implement the forward pass of Low-Rank Adaptation (LoRA).
+
+Instead of fine-tuning a large pre-trained weight matrix $W_0 \in \mathbb{R}^{d \times k}$, LoRA freezes $W_0$ and injects trainable rank decomposition matrices $A \in \mathbb{R}^{r \times k}$ and $B \in \mathbb{R}^{d \times r}$.
+
+The forward pass becomes:
+$h = X W_0^T + \frac{\alpha}{r} X A^T B^T$
+
+Where $X$ is the input, and $\alpha$ is a scaling scalar. (Note: in standard PyTorch linear layers, $y = x W^T$).`,
+    constraints: [
+      'X has shape (N, k)',
+      'W0 has shape (d, k)',
+      'A has shape (r, k)',
+      'B has shape (d, r)',
+      'alpha and r are scalars',
+      'Return the output matrix of shape (N, d)'
+    ],
+    examples: [
+      { input: 'lora_forward(X, W0, A, B, alpha=16, r=4)', output: 'adapted_output' }
+    ],
+    starter_code: `import numpy as np\n\ndef lora_forward(X, W0, A, B, alpha, r):\n    # TODO: Implement LoRA forward pass\n    pass\n`,
+    test_input: `import numpy as np\nX = np.ones((2, 4))\nW0 = np.ones((3, 4)) * 2\nA = np.ones((2, 4)) * 0.5\nB = np.ones((3, 2)) * 0.5\nprint(lora_forward(X, W0, A, B, 4, 2))`,
+    acceptance: '89.2%',
+    hints: [
+      'Compute base output: out_base = X @ W0.T',
+      'Compute lora output: lora_out = (X @ A.T) @ B.T',
+      'Scale lora output by alpha / r',
+      'Return out_base + scaled_lora_out'
+    ]
+  },
+  {
+    slug: 'dl-flash-attention-conceptual',
+    index: 49,
+    title: 'FlashAttention (Tiled Forward)',
+    difficulty: 'Hard',
+    topics: ['Deep Learning', 'Optimization', 'Paper Implementation'],
+    description: `Implement a simplified, conceptual version of FlashAttention's tiled forward pass.
+
+Standard attention computes $S = Q K^T$ (size $N \times N$), which uses too much memory.
+FlashAttention computes the softmax block-by-block to avoid materializing $S$.
+
+Algorithm (Simplified, Online Softmax):
+For a given query vector $q$ and blocks of keys $K_j$ and values $V_j$:
+Keep track of a running maximum $m$ and a running denominator $l$.
+For each block $j$:
+1. $s_j = q K_j^T$
+2. $m_{new} = \max(m, \max(s_j))$
+3. $p_j = \exp(s_j - m_{new})$
+4. $l_{new} = l \cdot \exp(m - m_{new}) + \sum p_j$
+5. $O_{new} = \frac{1}{l_{new}} \left( O \cdot l \cdot \exp(m - m_{new}) + p_j V_j \right)$
+6. $m = m_{new}, l = l_{new}, O = O_{new}$
+
+Implement this for a *single query vector* $q$ processing $K$ and $V$ in chunks.`,
+    constraints: [
+      'q has shape (1, d)',
+      'K and V have shape (N, d)',
+      'block_size is an integer (e.g., process K and V in chunks of this size)',
+      'Return the output vector of shape (1, d)'
+    ],
+    examples: [
+      { input: 'flash_attn_single_query(q, K, V, block_size=2)', output: 'attended_vector' }
+    ],
+    starter_code: `import numpy as np\n\ndef flash_attn_single_query(q, K, V, block_size):\n    N, d = K.shape\n    m = -np.inf\n    l = 0.0\n    O = np.zeros((1, d))\n    \n    # TODO: Process K and V in chunks of block_size\n    \n    return O\n`,
+    test_input: `import numpy as np\nq = np.array([[1.0, 0.0]])\nK = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]])\nV = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0], [4.0, 4.0]])\nprint(np.round(flash_attn_single_query(q, K, V, 2), 4))`,
+    acceptance: '18.7%',
+    hints: [
+      'Iterate j from 0 to N with step block_size',
+      'K_j = K[j : j + block_size], V_j = V[j : j + block_size]',
+      's_j = q @ K_j.T',
+      'Update m, l, and O according to the formulas in the description. Be very careful with the exponential scaling factors!'
+    ]
   }
 ];
 
