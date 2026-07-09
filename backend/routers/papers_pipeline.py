@@ -410,6 +410,10 @@ async def upload_paper(
 
     try:
         pdf_bytes = await _read_limited(file, MAX_SIZE)
+        
+        if not pdf_bytes.startswith(b"%PDF-"):
+            logger.warning("Upload Failed: File missing PDF magic bytes: %s", file.filename)
+            raise HTTPException(status_code=400, detail="Invalid file format. Only legitimate PDF files are allowed.")
 
         from backend.services.storage_service import store_pdf
         paper_name = file.filename.removesuffix(".pdf") if file.filename else "uploaded_paper"

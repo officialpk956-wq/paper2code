@@ -27,9 +27,9 @@ for test_file, description in tests:
         with open(test_file) as f:
             code = f.read()
         exec(code)
-        print(f"\n✅ {test_file} PASSED")
+        print(f"\n[PASS] {test_file} PASSED")
     except Exception as e:
-        print(f"\n❌ {test_file} FAILED: {e}")
+        print(f"\n[FAIL] {test_file} FAILED: {e}")
         failed.append((test_file, str(e)))
 
 print("\n" + "="*70)

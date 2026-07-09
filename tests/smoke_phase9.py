@@ -18,7 +18,7 @@ attempts = [
     AssessmentAttempt(learner_id="demo", question_text="Pooling reduces spatial dimensions...", is_correct=True, assessment_type="tensor"),
 ]
 progress = [
-    LearnerProgress(learner_id="demo", module_id=10, status="completed"),
+    LearnerProgress(learner_id="demo", entity_id="10", entity_type="paper_module", status="completed"),
 ]
 tutor_records = [
     TutorAnalytics(learner_id="demo", architecture="Transformer", module="attention_block", question_count=4),

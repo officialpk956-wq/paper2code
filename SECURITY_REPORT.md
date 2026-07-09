@@ -129,5 +129,17 @@ All new code added in Phase 11B (lab service, API routes, frontend components) w
 | A03:2021 Injection | **Fixed** — command injection and code injection |
 | A04:2021 Insecure Design | **Fixed** — input validation parity across routes |
 | A05:2021 Security Misconfiguration | No config vulnerabilities found |
-| A07:2021 Identification & Auth Failures | N/A — no auth yet |
+| A07:2021 Identification & Auth Failures | **Secured** — Passwords hashed, session revocation on logout, rate-limiting on auth routes |
 | A09:2021 Logging & Monitoring Failures | Timeout/error responses logged; no sensitive data in logs |
+
+---
+
+## 7. Authentication & Rate Limiting Security
+
+With the introduction of the authentication system, several key security measures have been implemented to protect user credentials and sessions:
+
+- **Endpoint Registration Limits:** Account creation is strictly rate-limited to 5 per hour to prevent bot registration spam.
+- **Forgot Password Limits:** Password reset requests are limited to 3 per hour to mitigate brute-force and user enumeration attacks.
+- **Session Revocation:** Logging out triggers a full session revocation, invalidating active refresh tokens on the backend immediately.
+- **Login Rate Limiting:** The login endpoint is limited to 10 attempts per minute to prevent brute-force credential stuffing.
+- **Password Hashing:** Passwords are cryptographically hashed before being stored; plaintext passwords are never logged or saved.

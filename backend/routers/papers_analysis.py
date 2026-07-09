@@ -2,6 +2,7 @@ import logging
 import os
 import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
@@ -250,52 +251,61 @@ def _module_to_dict(m, paper_id: int, total: int) -> dict:
     }
 
 
+def _do_parse_text(text: str):
+    spec = extractor.extract_from_text(text)
+    result = pipeline.run_single(spec)
+    code, code_source = generator._generate_code(spec, result["graph"])
+    return _build_response(spec, result, code, code_source)
+
 @router.post("/papers/text-parse")
 # deprecated alias
 @router.post("/parse_text", deprecated=True)
-def parse_text(request: TextRequest):
+async def parse_text(request: TextRequest):
     try:
-        spec = extractor.extract_from_text(request.text)
-        result = pipeline.run_single(spec)
-        code, code_source = generator._generate_code(spec, result["graph"])
-        return _build_response(spec, result, code, code_source)
+        return await run_in_threadpool(_do_parse_text, request.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def _do_compare_text(text_a: str, text_b: str):
+    result = pipeline.run_comparison_from_text(text_a, text_b)
+    return {
+        "name_a": result["graph_a"].name,
+        "name_b": result["graph_b"].name,
+        "svg_a": result["visual_a"]["graphviz_dot"],
+        "svg_b": result["visual_b"]["graphviz_dot"],
+        "explanation": result["explanation"],
+        "metadata": result["metadata"]
+    }
 
 @router.post("/papers/text-compare")
 # deprecated alias
 @router.post("/compare_text", deprecated=True)
-def compare_text(request: CompareRequest):
+async def compare_text(request: CompareRequest):
     try:
-        result = pipeline.run_comparison_from_text(request.text_a, request.text_b)
-        return {
-            "name_a": result["graph_a"].name,
-            "name_b": result["graph_b"].name,
-            "svg_a": result["visual_a"]["graphviz_dot"],
-            "svg_b": result["visual_b"]["graphviz_dot"],
-            "explanation": result["explanation"],
-            "metadata": result["metadata"]
-        }
+        return await run_in_threadpool(_do_compare_text, request.text_a, request.text_b)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def _do_analyze_graph(name: str, layers: list):
+    from core.rag.normalizer import normalize_config
+    config = normalize_config({
+        "name": name,
+        "layers": layers
+    })
+    result = pipeline.run_single(name, config)
+    return _build_response(
+        spec={"model_family": "Architect"}, 
+        result=result, 
+        code=result.get("code", ""), 
+        code_source="Architect Session"
+    )
 
 @router.post("/papers/graph-analysis")
 # deprecated alias
 @router.post("/analyze_graph", deprecated=True)
-def analyze_graph(request: GraphRequest):
+async def analyze_graph(request: GraphRequest):
     try:
-        from core.rag.normalizer import normalize_config
-        config = normalize_config({
-            "name": request.name,
-            "layers": request.layers
-        })
-        result = pipeline.run_single(request.name, config)
-        return _build_response(
-            spec={"model_family": "Architect"}, 
-            result=result, 
-            code=result.get("code", ""), 
-            code_source="Architect Session"
-        )
+        return await run_in_threadpool(_do_analyze_graph, request.name, request.layers)
     except Exception as e:
         import traceback
         traceback.print_exc()
