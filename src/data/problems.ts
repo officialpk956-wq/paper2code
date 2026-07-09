@@ -654,6 +654,370 @@ Where $a = \max(x)$. This ensures the largest exponent is $e^0 = 1$, preventing 
       'Compute the sum of exp(x - a)',
       'Return a + np.log(sum_exp)'
     ]
+  },
+  {
+    slug: 'ml-train-test-split',
+    index: 21,
+    title: 'Train/Test Split',
+    difficulty: 'Easy',
+    topics: ['Preprocessing', 'NumPy'],
+    description: `Implement a function to split data into training and testing sets.
+
+Given features $X$ and labels $y$, split them randomly so that the test set contains a specific proportion of the data. To ensure reproducibility, set the random seed before shuffling.
+
+Steps:
+1. Set the random seed to \`random_state\`.
+2. Generate a random permutation of indices from $0$ to $N-1$.
+3. Split the indices into train and test parts based on \`test_size\`.
+4. Return \`(X_train, X_test, y_train, y_test)\`.`,
+    constraints: [
+      'Inputs X and y are numpy arrays of the same length (dim 0)',
+      'test_size is a float between 0.0 and 1.0 (e.g., 0.2)',
+      'random_state is an integer for np.random.seed()'
+    ],
+    examples: [
+      { input: 'train_test_split(X, y, test_size=0.2, random_state=42)', output: '(X_train, X_test, y_train, y_test)' }
+    ],
+    starter_code: `import numpy as np\n\ndef train_test_split(X, y, test_size=0.2, random_state=42):\n    # TODO: implement train/test split\n    pass\n`,
+    test_input: `import numpy as np\nX = np.arange(10)\ny = np.arange(10) * 2\n_, X_test, _, y_test = train_test_split(X, y, 0.2, 42)\nprint("X_test:", X_test)\nprint("y_test:", y_test)`,
+    acceptance: '89.4%',
+    hints: [
+      'Use np.random.seed(random_state) first',
+      'np.random.permutation(len(X)) gives shuffled indices',
+      'test_count = int(len(X) * test_size)'
+    ]
+  },
+  {
+    slug: 'ml-linear-regression-normal',
+    index: 22,
+    title: 'Linear Regression (Normal Equation)',
+    difficulty: 'Medium',
+    topics: ['Supervised Learning', 'Linear Algebra', 'NumPy'],
+    description: `Implement exact Linear Regression using the Normal Equation.
+
+The normal equation finds the optimal weights $\theta$ that minimize the Mean Squared Error in a single step:
+$\theta = (X^T X)^{-1} X^T y$
+
+Important: You must prepend a column of 1s to $X$ to account for the bias (intercept) term before computing $\theta$.`,
+    constraints: [
+      'Input X is a 2D numpy array of shape (n_samples, n_features)',
+      'Input y is a 1D numpy array of shape (n_samples,)',
+      'Return the optimal weights (including bias) as a 1D array of shape (n_features + 1,)'
+    ],
+    examples: [
+      { input: 'lin_reg_normal(X, y)', output: 'array([bias, w1, w2, ...])' }
+    ],
+    starter_code: `import numpy as np\n\ndef lin_reg_normal(X, y):\n    # TODO: solve for theta using the normal equation\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1], [2], [3]])\ny = np.array([2, 4, 6])\nprint(np.round(lin_reg_normal(X, y), 4))`,
+    acceptance: '71.5%',
+    hints: [
+      'Add a column of ones to X using np.c_[np.ones(len(X)), X] or np.concatenate',
+      'Use np.linalg.inv() to invert the matrix'
+    ]
+  },
+  {
+    slug: 'ml-linear-regression-gd',
+    index: 23,
+    title: 'Linear Regression (Gradient Descent)',
+    difficulty: 'Medium',
+    topics: ['Supervised Learning', 'Optimization', 'NumPy'],
+    description: `Implement Linear Regression using Gradient Descent.
+
+Unlike the normal equation, gradient descent iteratively updates weights to minimize MSE.
+For $N$ samples, the gradient of the MSE with respect to weights $\theta$ is:
+$\nabla J(\theta) = \frac{2}{N} X^T (X\theta - y)$
+
+Steps for each iteration:
+1. Compute predictions: $\hat{y} = X\theta$
+2. Compute gradient: $g = \frac{2}{N} X^T (\hat{y} - y)$
+3. Update weights: $\theta = \theta - \alpha g$
+
+Prepend a column of 1s to $X$ for the bias. Initialize $\theta$ to zeros.`,
+    constraints: [
+      'Input X is a 2D array, y is a 1D array',
+      'lr is learning rate alpha, epochs is the number of iterations',
+      'Initialize weights to zeros',
+      'Return the final weights array'
+    ],
+    examples: [
+      { input: 'lin_reg_gd(X, y, lr=0.01, epochs=1000)', output: 'array([bias, w1, w2, ...])' }
+    ],
+    starter_code: `import numpy as np\n\ndef lin_reg_gd(X, y, lr=0.01, epochs=1000):\n    # TODO: implement linear regression via gradient descent\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1], [2], [3]])\ny = np.array([2, 4, 6])\nprint(np.round(lin_reg_gd(X, y, 0.01, 1000), 2))`,
+    acceptance: '64.8%',
+    hints: [
+      'Add a column of ones to X first',
+      'Initialize theta = np.zeros(X.shape[1])',
+      'Loop for epochs, updating theta each time'
+    ]
+  },
+  {
+    slug: 'ml-logistic-regression-gd',
+    index: 24,
+    title: 'Logistic Regression (Gradient Descent)',
+    difficulty: 'Medium',
+    topics: ['Supervised Learning', 'Classification', 'NumPy'],
+    description: `Implement Logistic Regression using Gradient Descent.
+
+Logistic regression uses the sigmoid function to predict probabilities:
+$\hat{y} = \sigma(X\theta) = \frac{1}{1 + e^{-X\theta}}$
+
+The gradient of the Binary Cross-Entropy loss with respect to $\theta$ is beautifully similar to linear regression:
+$\nabla J(\theta) = \frac{1}{N} X^T (\hat{y} - y)$
+
+Steps:
+1. Add bias column to $X$, init $\theta$ to zeros.
+2. For each epoch, compute $\hat{y} = \sigma(X\theta)$.
+3. Compute gradient and update $\theta$.`,
+    constraints: [
+      'y contains binary labels (0 or 1)',
+      'Return the final weights array',
+      'Use the standard sigmoid function'
+    ],
+    examples: [
+      { input: 'log_reg_gd(X, y, lr=0.1, epochs=1000)', output: 'array([bias, w1, w2, ...])' }
+    ],
+    starter_code: `import numpy as np\n\ndef sigmoid(z):\n    return 1 / (1 + np.exp(-z))\n\ndef log_reg_gd(X, y, lr=0.1, epochs=1000):\n    # TODO: implement logistic regression via gradient descent\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[0.1], [0.5], [2.0], [3.0]])\ny = np.array([0, 0, 1, 1])\nprint(np.round(log_reg_gd(X, y, 0.5, 1000), 2))`,
+    acceptance: '61.2%',
+    hints: [
+      'The gradient does not have a factor of 2 like MSE does, it is just (1/N) * X.T @ (y_hat - y)'
+    ]
+  },
+  {
+    slug: 'ml-classification-metrics',
+    index: 25,
+    title: 'Classification Metrics',
+    difficulty: 'Easy',
+    topics: ['Evaluation', 'Metrics'],
+    description: `Implement Accuracy, Precision, Recall, and F1 Score for binary classification.
+
+Given true labels $y$ and binary predictions $\hat{y}$:
+- **Accuracy**: (TP + TN) / Total
+- **Precision**: TP / (TP + FP)  (Of all positive predictions, how many were right?)
+- **Recall**: TP / (TP + FN)  (Of all actual positives, how many did we find?)
+- **F1 Score**: $2 \times \frac{Precision \times Recall}{Precision + Recall}$ (Harmonic mean)`,
+    constraints: [
+      'Inputs are 1D arrays of 0s and 1s',
+      'Return a tuple: (accuracy, precision, recall, f1)',
+      'Handle division by zero (return 0.0 for metrics if denominator is 0)'
+    ],
+    examples: [
+      { input: 'metrics(np.array([1,0,1,1]), np.array([1,0,0,1]))', output: '(0.75, 1.0, 0.6667, 0.8)' }
+    ],
+    starter_code: `import numpy as np\n\ndef calc_metrics(y_true, y_pred):\n    # TODO: compute accuracy, precision, recall, f1\n    pass\n`,
+    test_input: `import numpy as np\ny_true = np.array([1, 0, 1, 1, 0, 1])\ny_pred = np.array([1, 0, 0, 1, 1, 1])\nprint(tuple(np.round(calc_metrics(y_true, y_pred), 4)))`,
+    acceptance: '82.7%',
+    hints: [
+      'Count True Positives (TP) where true==1 and pred==1',
+      'Use np.sum((y_true == 1) & (y_pred == 1))'
+    ]
+  },
+  {
+    slug: 'ml-roc-auc',
+    index: 26,
+    title: 'ROC Curve & AUC',
+    difficulty: 'Hard',
+    topics: ['Evaluation', 'NumPy'],
+    description: `Compute the Receiver Operating Characteristic (ROC) curve and Area Under Curve (AUC).
+
+The ROC curve plots True Positive Rate (TPR) vs False Positive Rate (FPR) at various threshold settings.
+1. Sort the true labels in descending order by the predicted probabilities.
+2. Iterate through the sorted labels. Each step changes the threshold.
+3. Compute TPR and FPR at each step.
+4. Calculate AUC using the trapezoidal rule.`,
+    constraints: [
+      'y_true contains 0s and 1s',
+      'y_prob contains probabilities between 0 and 1',
+      'Return the AUC (a single scalar float)'
+    ],
+    examples: [
+      { input: 'roc_auc(np.array([1, 0, 1, 0]), np.array([0.9, 0.1, 0.8, 0.4]))', output: '1.0' }
+    ],
+    starter_code: `import numpy as np\n\ndef roc_auc(y_true, y_prob):\n    # TODO: compute the exact ROC AUC\n    pass\n`,
+    test_input: `import numpy as np\ny_true = np.array([0, 1, 0, 1])\ny_prob = np.array([0.1, 0.4, 0.35, 0.8])\nprint(round(roc_auc(y_true, y_prob), 4))`,
+    acceptance: '41.3%',
+    hints: [
+      'Sort indices: order = np.argsort(y_prob)[::-1]',
+      'Iterate through the sorted y_true. If 1, increase TP. If 0, increase FP.',
+      'AUC is the sum of (FP_diff / Total_Neg) * (TP / Total_Pos)'
+    ]
+  },
+  {
+    slug: 'ml-k-fold-cv',
+    index: 27,
+    title: 'K-Fold Cross-Validation',
+    difficulty: 'Medium',
+    topics: ['Evaluation', 'NumPy'],
+    description: `Generate indices for K-Fold Cross-Validation.
+
+K-Fold splits the dataset into $K$ non-overlapping folds. In each iteration, one fold is used for testing and the remaining $K-1$ folds are used for training.
+
+Return a list of $K$ tuples: \`[(train_indices_1, test_indices_1), ...]\`.`,
+    constraints: [
+      'N is the total number of samples',
+      'k is the number of folds',
+      'Folds should be as equal in size as possible (use integer division and remainder)',
+      'Do not shuffle the indices; split them sequentially'
+    ],
+    examples: [
+      { input: 'k_fold(N=5, k=2)', output: '[( [2,3,4], [0,1] ), ( [0,1], [2,3,4] )]' }
+    ],
+    starter_code: `import numpy as np\n\ndef k_fold(N, k):\n    # TODO: return list of (train_idx, test_idx) tuples\n    pass\n`,
+    test_input: `for tr, te in k_fold(5, 2):\n    print(list(tr), list(te))`,
+    acceptance: '67.9%',
+    hints: [
+      'Base fold size is N // k, with N % k folds having size + 1',
+      'Keep track of the start and end index for each fold'
+    ]
+  },
+  {
+    slug: 'ml-knn-classifier',
+    index: 28,
+    title: 'K-Nearest Neighbours (k-NN)',
+    difficulty: 'Easy',
+    topics: ['Supervised Learning', 'NumPy'],
+    description: `Implement the K-Nearest Neighbours classifier for a single test point.
+
+To predict the class of a new point $x_{test}$:
+1. Compute the Euclidean distance between $x_{test}$ and all training points in $X$.
+2. Find the $k$ nearest training points.
+3. Return the most common label among those $k$ points (majority vote).`,
+    constraints: [
+      'X is a 2D array, y is a 1D array of integer labels',
+      'x_test is a 1D array representing a single test point',
+      'In case of a tie in voting, returning any of the tied classes is acceptable'
+    ],
+    examples: [
+      { input: 'knn(X, y, x_test=[0,0], k=3)', output: 'label_with_majority_vote' }
+    ],
+    starter_code: `import numpy as np\n\ndef knn(X, y, x_test, k=3):\n    # TODO: implement k-NN classification\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1,1], [1.2,1.2], [5,5], [5.1,5.2]])\ny = np.array([0, 0, 1, 1])\nprint(knn(X, y, np.array([2,2]), k=3))`,
+    acceptance: '85.4%',
+    hints: [
+      'Use np.linalg.norm(X - x_test, axis=1) for distances',
+      'Use np.argsort(distances)[:k] to get the k nearest indices',
+      'Use np.bincount() and np.argmax() to find the most common label'
+    ]
+  },
+  {
+    slug: 'ml-k-means',
+    index: 29,
+    title: 'K-Means Clustering',
+    difficulty: 'Hard',
+    topics: ['Unsupervised Learning', 'NumPy'],
+    description: `Implement K-Means Clustering (Lloyd's Algorithm).
+
+Partition the dataset into $K$ distinct clusters:
+1. Initialize $K$ centroids randomly (for simplicity, pick $K$ random points from $X$).
+2. Assign each point to the nearest centroid.
+3. Update each centroid to be the mean of the points assigned to it.
+4. Repeat until centroids do not change (or max_iters is reached).`,
+    constraints: [
+      'X is a 2D numpy array',
+      'Return the final centroids and the array of cluster labels for each point',
+      'Set np.random.seed(random_state) before initializing'
+    ],
+    examples: [
+      { input: 'kmeans(X, k=2)', output: '(centroids, labels)' }
+    ],
+    starter_code: `import numpy as np\n\ndef kmeans(X, k, max_iters=100, random_state=42):\n    np.random.seed(random_state)\n    # TODO: implement K-Means clustering\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1,1], [1.2,1.2], [5,5], [5.2,5.1]])\ncentroids, labels = kmeans(X, k=2)\nprint("labels:", labels)\nprint("centroids:", np.round(centroids, 2))`,
+    acceptance: '53.1%',
+    hints: [
+      'Initial centroids: X[np.random.choice(X.shape[0], k, replace=False)]',
+      'Compute distances between all points and all centroids using broadcasting'
+    ]
+  },
+  {
+    slug: 'ml-pca',
+    index: 30,
+    title: 'Principal Component Analysis (PCA)',
+    difficulty: 'Medium',
+    topics: ['Unsupervised Learning', 'Dimensionality Reduction', 'Linear Algebra'],
+    description: `Implement PCA via eigendecomposition.
+
+PCA projects data into a lower-dimensional subspace while preserving maximum variance.
+1. Center the data by subtracting the mean of each feature.
+2. Compute the covariance matrix of the centered data.
+3. Compute the eigenvalues and eigenvectors of the covariance matrix.
+4. Sort eigenvectors by eigenvalues in descending order.
+5. Project the data onto the top $k$ eigenvectors.`,
+    constraints: [
+      'Return the projected 2D array of shape (N, k)',
+      'Use np.linalg.eigh or np.linalg.eig'
+    ],
+    examples: [
+      { input: 'pca(X, k=2)', output: 'projected_X' }
+    ],
+    starter_code: `import numpy as np\n\ndef pca(X, k):\n    # TODO: implement PCA\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1, 2], [3, 4], [5, 6]])\nprint(np.round(np.abs(pca(X, k=1)), 4))`,
+    acceptance: '62.0%',
+    hints: [
+      'Covariance matrix = np.cov(X_centered, rowvar=False)',
+      'np.linalg.eigh(cov_matrix) returns sorted values/vectors, but in ascending order (reverse them)'
+    ]
+  },
+  {
+    slug: 'ml-decision-tree-gini',
+    index: 31,
+    title: 'Decision Tree Best Split (Gini)',
+    difficulty: 'Hard',
+    topics: ['Trees', 'NumPy'],
+    description: `Find the best feature and threshold to split a dataset based on Gini Impurity.
+
+The Gini Impurity of a node is $1 - \sum p_i^2$, where $p_i$ is the probability of class $i$.
+To evaluate a split, compute the weighted average Gini of the left and right child nodes:
+$Cost = \frac{N_{left}}{N} Gini(left) + \frac{N_{right}}{N} Gini(right)$
+
+Iterate over all features and all unique values of those features to find the split that minimizes this cost.`,
+    constraints: [
+      'X is a 2D array of features, y is a 1D array of binary labels (0/1)',
+      'Return a tuple: (best_feature_index, best_threshold)',
+      'If no split improves impurity, return (None, None)'
+    ],
+    examples: [
+      { input: 'best_split(X, y)', output: '(0, 2.5)' }
+    ],
+    starter_code: `import numpy as np\n\ndef gini(y):\n    if len(y) == 0: return 0.0\n    p = np.mean(y)\n    return 1.0 - (p**2 + (1-p)**2)\n\ndef best_split(X, y):\n    # TODO: iterate all features and thresholds to find the minimum weighted gini\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1, 2], [2, 1], [4, 5], [5, 4]])\ny = np.array([0, 0, 1, 1])\nprint(best_split(X, y))`,
+    acceptance: '32.5%',
+    hints: [
+      'For each feature (column), unique values serve as candidate thresholds',
+      'Split condition: left_mask = X[:, feature] <= threshold',
+      'Calculate weighted gini for the split. Keep track of the minimum.'
+    ]
+  },
+  {
+    slug: 'ml-gaussian-naive-bayes',
+    index: 32,
+    title: 'Gaussian Naive Bayes',
+    difficulty: 'Medium',
+    topics: ['Supervised Learning', 'Probability'],
+    description: `Implement prediction for Gaussian Naive Bayes.
+
+Naive Bayes assumes features are conditionally independent given the class.
+For a continuous feature, we model it with a Gaussian distribution:
+$P(x_i | y=c) = \frac{1}{\sqrt{2\pi\sigma_{c,i}^2}} e^{ - \frac{(x_i - \mu_{c,i})^2}{2\sigma_{c,i}^2} }$
+
+Prediction rule (using log probabilities to prevent underflow):
+$\hat{y} = \arg\max_c \left[ \log P(y=c) + \sum_i \log P(x_i | y=c) \right]$`,
+    constraints: [
+      'We provide you the fitted parameters: priors (dict of class: prob), means (dict of class: array of feature means), vars (dict of class: array of feature vars)',
+      'x_test is a single 1D array',
+      'Return the predicted class label (int)'
+    ],
+    examples: [
+      { input: 'gnb_predict(x_test, priors, means, vars)', output: '1' }
+    ],
+    starter_code: `import numpy as np\n\ndef gnb_predict(x_test, priors, means, vars):\n    # TODO: predict the class for x_test\n    pass\n`,
+    test_input: `import numpy as np\npriors = {0: 0.5, 1: 0.5}\nmeans = {0: np.array([0, 0]), 1: np.array([5, 5])}\nvars = {0: np.array([1, 1]), 1: np.array([1, 1])}\nprint(gnb_predict(np.array([4, 4]), priors, means, vars))`,
+    acceptance: '58.8%',
+    hints: [
+      'Compute the log of the Gaussian PDF for each feature, and sum them up',
+      'Add the log of the prior',
+      'Return the class that yields the maximum value'
+    ]
   }
 ];
 
