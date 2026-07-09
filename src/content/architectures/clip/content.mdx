@@ -1,35 +1,167 @@
-# CLIP
+# CLIP (Contrastive Language-Image Pre-training)
 
 ## 1. Overview
 
+CLIP (Contrastive Language-Image Pre-training) is a foundational multimodal architecture developed by OpenAI in 2021. It fundamentally changed how computer vision models are trained by moving away from fixed-category supervised learning (like predicting one of 1,000 ImageNet classes) toward learning directly from raw text descriptions. 
+
+By predicting which text snippet pairs with which image across a massive dataset of 400 million image-text pairs, CLIP learns a shared embedding space for both vision and language. This enables **zero-shot image classification**: the model can classify an image into any category simply by embedding the category names as text (e.g., "a photo of a dog") and finding the text embedding that is most similar to the image embedding.
+
 ## 2. Historical Context
+
+Before CLIP, the standard paradigm in computer vision was supervised pre-training. Models like ResNet or ViT were trained on datasets like ImageNet, which required expensive, manual human labeling to place images into a fixed set of discrete classes. 
+- **The problem:** These models were brittle. If a model was trained on 1,000 specific classes, it couldn't recognize a new class without retraining. 
+- **The NLP breakthrough:** Meanwhile, in NLP, models like GPT-3 had shown that self-supervised training on massive web scrapes (without manual labels) led to incredible zero-shot generalization.
+
+CLIP brought this "web-scale, open-vocabulary" paradigm to computer vision. Instead of crowd-sourcing labels, OpenAI simply scraped images and their associated `alt` text or captions from the internet.
 
 ## 3. Problem It Solves
 
+1. **Scalability of Data:** Human labeling is expensive and scales poorly. CLIP uses natural language supervision, which is virtually infinite on the internet.
+2. **Zero-Shot Transfer:** Traditional models require a new classification head and fine-tuning for every new task. CLIP can perform new tasks immediately by phrasing them as a text-image matching problem.
+3. **Robustness:** Because CLIP learns from diverse internet images rather than a curated dataset like ImageNet, it is vastly more robust to distribution shifts (e.g., sketches, cartoons, adversarial examples).
+
 ## 4. Architecture Diagram Data
+
+CLIP consists of two independent encoders that map their respective inputs into a shared latent space.
+
+```mermaid
+graph TD
+    subgraph Input
+        I[Image Batch (N)]
+        T[Text Batch (N)]
+    end
+
+    subgraph Encoders
+        IE[Image Encoder<br>ResNet or ViT]
+        TE[Text Encoder<br>Transformer]
+    end
+
+    subgraph Projections
+        IP[Image Projection<br>W_i]
+        TP[Text Projection<br>W_t]
+    end
+    
+    subgraph Shared Space
+        IV[Image Embeddings<br>I_e (N x d_e)]
+        TV[Text Embeddings<br>T_e (N x d_e)]
+    end
+    
+    subgraph Contrastive Loss
+        SM[Cosine Similarity Matrix<br>N x N]
+        L[Maximize Diagonal<br>Minimize Off-Diagonal]
+    end
+
+    I --> IE --> IP --> IV
+    T --> TE --> TP --> TV
+    IV --> SM
+    TV --> SM
+    SM --> L
+```
 
 ## 5. Layer-by-Layer Explanation
 
+### Text Encoder
+- **Architecture:** A standard Transformer decoder (similar to GPT-2). 
+- **Tokenization:** Text is lowercased and tokenized using byte pair encoding (BPE) with a vocabulary of 49,152. Max sequence length is bounded at 76 tokens.
+- **Output:** The activation of the highest layer of the Transformer at the `[EOS]` (End Of Sequence) token is extracted as the feature representation of the text.
+
+### Image Encoder
+OpenAI experimented with two different architectures:
+- **ResNet:** Modified ResNets (ResNet-50, ResNet-101, and scaled up versions like RN50x4, RN50x16, RN50x64). They replaced the global average pooling with an attention pooling mechanism.
+- **Vision Transformer (ViT):** Standard ViTs (ViT-B/32, ViT-B/16, ViT-L/14), which ultimately performed better and trained faster than the ResNets. The feature representation is taken from the `[CLS]` token.
+
+### Projections
+Both the `[EOS]` text feature and the `[CLS]` image feature are passed through a learned linear projection to map them into a shared embedding space of dimension $d_e$.
+
 ## 6. Tensor Flow Walkthrough
+
+Let $N$ be the batch size (e.g., 32,768 in the original paper), and $d_e$ be the shared embedding dimension.
+
+1. **Input Batch:**
+   - Image Input: shape $(N, 3, H, W)$
+   - Text Input: shape $(N, 76)$ (token IDs)
+
+2. **Encode to Features:**
+   - Image features: $(N, d_i)$
+   - Text features: $(N, d_t)$
+
+3. **Project to Shared Space & L2 Normalize:**
+   - Projected Images: $I_e = \text{L2\_Norm}(\text{ImageFeatures} \times W_i) \rightarrow (N, d_e)$
+   - Projected Text: $T_e = \text{L2\_Norm}(\text{TextFeatures} \times W_t) \rightarrow (N, d_e)$
+
+4. **Compute Similarity Matrix:**
+   - We want to know how similar every image is to every text in the batch.
+   - $Logits = I_e \times T_e^T \times \exp(\tau)$
+   - Output shape: $(N, N)$. The diagonal elements represent the correct image-text pairings. Off-diagonals are incorrect pairings. The learnable temperature parameter $\tau$ scales the logits.
 
 ## 7. Mathematical Foundations
 
-## 8. Forward Pass
+CLIP uses an **InfoNCE** (symmetric cross-entropy) contrastive loss. For a batch of $N$ pairs, the model produces an $N \times N$ similarity matrix.
 
-## 9. Training Process
+For a given image $i$, it should have high similarity with its paired text $i$, and low similarity with all other texts $j$ in the batch. The loss for the images is:
+$$L_I = - \frac{1}{N} \sum_{i=1}^{N} \log \frac{\exp(I_i \cdot T_i / \tau)}{\sum_{j=1}^{N} \exp(I_i \cdot T_j / \tau)}$$
+
+Symmetrically, for a given text $i$, it should have high similarity with its paired image $i$:
+$$L_T = - \frac{1}{N} \sum_{i=1}^{N} \log \frac{\exp(T_i \cdot I_i / \tau)}{\sum_{j=1}^{N} \exp(T_j \cdot I_i / \tau)}$$
+
+The final CLIP loss is the average of both:
+$$L_{CLIP} = \frac{L_I + L_T}{2}$$
+
+## 8. Training Process
+
+- **Dataset:** 400 million image-text pairs collected from the internet (WebImageText / WIT).
+- **Batch Size:** Massive batch size of 32,768. A large batch size is critical for contrastive learning because it provides a large number of "negative" examples in the denominator of the softmax, making the task sufficiently hard for the model to learn good representations.
+- **Optimization:** Adam optimizer with decoupled weight decay.
+- **No data augmentation:** Unlike typical contrastive learning (like SimCLR), CLIP uses very minimal data augmentation (just random square crops). The dataset is so large that the model naturally sees enough variation.
+
+## 9. Zero-Shot Inference
+
+To classify an image of a dog into categories `['cat', 'dog', 'car']`:
+1. **Prompt Engineering:** Wrap the categories in a prompt template: `"a photo of a cat"`, `"a photo of a dog"`, `"a photo of a car"`.
+2. **Embed Text:** Pass these 3 strings through the Text Encoder to get an $3 \times d_e$ matrix.
+3. **Embed Image:** Pass the image through the Image Encoder to get a $1 \times d_e$ vector.
+4. **Compute Similarity:** Compute the dot product between the image vector and the 3 text vectors.
+5. **Softmax:** Apply a softmax over the similarities to get probabilities. The highest probability is the predicted class.
 
 ## 10. Complexity Analysis
 
+- **Training:** Highly computationally expensive due to the massive batch sizes and dataset. The largest model (ViT-L/14) took 18 days on 256 V100 GPUs.
+- **Inference:** The vision encoder runs exactly like a standard ViT/ResNet. The text embeddings can be **pre-computed and cached** offline if the categories are known in advance. Thus, at runtime, classifying an image is just a fast vector-matrix multiplication, entirely bounded by the cost of a single ViT forward pass.
+
 ## 11. Advantages
+
+- **Open-Vocabulary:** Can classify images into any category defined by natural language without retraining.
+- **Robustness:** Highly robust to distribution shifts compared to ImageNet-trained models.
+- **Versatility:** The shared embedding space is a powerful building block for downstream tasks like image retrieval, zero-shot detection, and generative modeling (e.g., guiding DALL-E or Stable Diffusion).
 
 ## 12. Limitations
 
+- **Struggles with Fine-Grained Details:** CLIP is notoriously bad at tasks requiring systematic compositionality (e.g., "a red cube on top of a blue sphere" vs "a blue cube on top of a red sphere"), counting objects, or reading complex text in images.
+- **Data Bias:** Trained on unfiltered internet data, it inherits significant social biases.
+- **"Bag of Words" behavior:** The text encoder often behaves like a bag of words, failing to understand complex grammar or negation.
+
 ## 13. Real World Applications
+
+- **Image Retrieval:** Searching for images in a database using natural language queries (e.g., Google Photos search).
+- **Content Moderation:** Zero-shot detection of NSFW or violent content without needing to explicitly train a classifier.
+- **Generative AI Backbones:** CLIP is the "understanding" bridge used in text-to-image models like Stable Diffusion. The text prompt is encoded by CLIP, and the diffusion model is conditioned on that embedding to generate the image.
 
 ## 14. Common Interview Questions
 
+**Q: Why does CLIP require such a large batch size (e.g., 32,768)?**
+Contrastive learning relies on in-batch negatives. With a small batch size, the task of matching an image to its correct text among a small pool is too easy, and the gradients vanish before the model learns nuanced representations. A huge batch size ensures the model has to distinguish between very similar, hard negative examples.
+
+**Q: Explain the difference between CLIP's loss and standard Cross-Entropy loss.**
+Standard CE predicts a fixed class index (e.g., 0 to 999). CLIP's loss is a symmetric cross-entropy over a dynamically constructed similarity matrix. The "classes" change every batch depending on the text inputs.
+
+**Q: How does CLIP perform zero-shot classification without a linear classification head?**
+Instead of a learned weight matrix mapping features to class logits, CLIP uses the text embeddings of the class names (often wrapped in a prompt like "a photo of a {}") as dynamic weights. The dot product between the image embedding and the text embeddings serves as the logits.
+
 ## 15. Related Papers
 
-## 16. Related Problems
+- **ViT (Vision Transformer):** The backbone used for CLIP's image encoder.
+- **ALIGN:** A similar model from Google trained concurrently with CLIP on a much larger but noisier dataset (1 billion pairs).
+- **Stable Diffusion:** Uses a frozen CLIP text encoder to condition image generation.
 
-## 17. Related Learning Track Nodes
+## 16. Related Problems
+- [CLIP Batch Size Memory](/problems/clip-batch-size) — calculate memory requirements for contrastive learning matrices.
