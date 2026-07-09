@@ -1018,6 +1018,337 @@ $\hat{y} = \arg\max_c \left[ \log P(y=c) + \sum_i \log P(x_i | y=c) \right]$`,
       'Add the log of the prior',
       'Return the class that yields the maximum value'
     ]
+  },
+  {
+    slug: 'dl-backprop-single-neuron',
+    index: 33,
+    title: 'Backprop: Single Neuron',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'Calculus'],
+    description: `Implement the backward pass for a single neuron with sigmoid activation and MSE loss.
+
+Forward pass:
+$z = w \cdot x + b$
+$a = \sigma(z)$
+$L = (a - y)^2$
+
+Using the chain rule, compute the gradients $\frac{\partial L}{\partial w}$ and $\frac{\partial L}{\partial b}$:
+$\frac{\partial L}{\partial w} = \frac{\partial L}{\partial a} \frac{\partial a}{\partial z} \frac{\partial z}{\partial w}$
+
+Where:
+- $\frac{\partial L}{\partial a} = 2(a - y)$
+- $\frac{\partial a}{\partial z} = a(1 - a)$ (derivative of sigmoid)
+- $\frac{\partial z}{\partial w} = x$
+- $\frac{\partial z}{\partial b} = 1$`,
+    constraints: [
+      'Inputs w, b, x, y are scalars',
+      'Return a tuple: (grad_w, grad_b)'
+    ],
+    examples: [
+      { input: 'backprop_neuron(w=0.5, b=0.1, x=2.0, y=1.0)', output: '(grad_w, grad_b)' }
+    ],
+    starter_code: `import numpy as np\n\ndef sigmoid(z):\n    return 1 / (1 + np.exp(-z))\n\ndef backprop_neuron(w, b, x, y):\n    # TODO: compute the gradients of MSE loss with respect to w and b\n    pass\n`,
+    test_input: `import numpy as np\nprint(tuple(np.round(backprop_neuron(0.5, 0.1, 2.0, 1.0), 4)))`,
+    acceptance: '64.2%',
+    hints: [
+      'First compute the forward pass to get a',
+      'Compute the derivative of the loss w.r.t a',
+      'Multiply by the derivative of sigmoid w.r.t z',
+      'Multiply by x for grad_w, and by 1 for grad_b'
+    ]
+  },
+  {
+    slug: 'dl-2-layer-mlp',
+    index: 34,
+    title: '2-Layer MLP (Forward + Backward)',
+    difficulty: 'Hard',
+    topics: ['Deep Learning', 'NumPy'],
+    description: `Implement a full forward and backward pass for a 2-layer Multi-Layer Perceptron (MLP) for binary classification.
+
+Architecture:
+- Input $X \in \mathbb{R}^{N \times D_{in}}$
+- Hidden Layer: $Z_1 = X W_1 + b_1$, $A_1 = \text{ReLU}(Z_1)$
+- Output Layer: $Z_2 = A_1 W_2 + b_2$, $\hat{y} = \sigma(Z_2)$
+- Loss: Binary Cross-Entropy
+
+Return the gradients of all parameters: $dW_1, db_1, dW_2, db_2$.
+Assume $dW$ includes the $1/N$ averaging factor (mean over the batch).`,
+    constraints: [
+      'Inputs: X, y, W1, b1, W2, b2',
+      'Use ReLU for the hidden layer and Sigmoid for the output layer',
+      'Return a dictionary: {"dW1": ..., "db1": ..., "dW2": ..., "db2": ...}'
+    ],
+    examples: [
+      { input: 'mlp_pass(X, y, W1, b1, W2, b2)', output: 'dict of gradients' }
+    ],
+    starter_code: `import numpy as np\n\ndef mlp_pass(X, y, W1, b1, W2, b2):\n    N = X.shape[0]\n    # TODO: Forward pass\n    \n    # TODO: Backward pass (compute dW2, db2, dW1, db1)\n    \n    return {"dW1": dW1, "db1": db1, "dW2": dW2, "db2": db2}\n`,
+    test_input: `import numpy as np\nnp.random.seed(42)\nX = np.random.randn(2, 3)\ny = np.array([[1], [0]])\nW1 = np.random.randn(3, 4)\nb1 = np.zeros(4)\nW2 = np.random.randn(4, 1)\nb2 = np.zeros(1)\ngrads = mlp_pass(X, y, W1, b1, W2, b2)\nprint(np.round(grads['dW2'].flatten(), 4))`,
+    acceptance: '28.5%',
+    hints: [
+      'Derivative of BCE with sigmoid simplifies beautifully to: dZ2 = (y_hat - y) / N',
+      'dW2 = A1.T @ dZ2, db2 = np.sum(dZ2, axis=0)',
+      'dA1 = dZ2 @ W2.T',
+      'dZ1 = dA1 * (Z1 > 0)',
+      'dW1 = X.T @ dZ1, db1 = np.sum(dZ1, axis=0)'
+    ]
+  },
+  {
+    slug: 'dl-batch-norm',
+    index: 35,
+    title: 'Batch Normalization (Forward)',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'NumPy'],
+    description: `Implement the forward pass of Batch Normalization.
+
+Batch norm stabilizes training by normalizing the inputs of a layer to have zero mean and unit variance across the batch dimension, then scaling and shifting them.
+
+For a batch $X$:
+1. $\mu_B = \frac{1}{N} \sum X_i$
+2. $\sigma^2_B = \frac{1}{N} \sum (X_i - \mu_B)^2$
+3. $\hat{X_i} = \frac{X_i - \mu_B}{\sqrt{\sigma^2_B + \epsilon}}$
+4. $Y_i = \gamma \hat{X_i} + \beta$`,
+    constraints: [
+      'Input X is a 2D array of shape (batch_size, num_features)',
+      'gamma and beta are 1D arrays of shape (num_features,)',
+      'epsilon is a small scalar to prevent division by zero (default 1e-5)',
+      'Return the normalized and scaled array Y'
+    ],
+    examples: [
+      { input: 'batch_norm(X, gamma, beta)', output: 'normalized_scaled_X' }
+    ],
+    starter_code: `import numpy as np\n\ndef batch_norm(X, gamma, beta, eps=1e-5):\n    # TODO: implement batch normalization forward pass\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1.0, 2.0], [3.0, 4.0]])\ngamma = np.array([1.0, 1.0])\nbeta = np.array([0.0, 0.0])\nprint(np.round(batch_norm(X, gamma, beta), 4))`,
+    acceptance: '76.4%',
+    hints: [
+      'Compute mean and variance along axis 0 (the batch dimension)',
+      'Use keepdims=True to ensure proper broadcasting'
+    ]
+  },
+  {
+    slug: 'dl-layer-norm',
+    index: 36,
+    title: 'Layer Normalization',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'Transformers', 'NumPy'],
+    description: `Implement Layer Normalization.
+
+Unlike Batch Norm, Layer Norm normalizes across the *feature* dimension for each individual sample, making it independent of batch size. It is the standard normalization used in Transformers.
+
+For a single sample vector $x$:
+1. $\mu = \frac{1}{D} \sum x_j$
+2. $\sigma^2 = \frac{1}{D} \sum (x_j - \mu)^2$
+3. $\hat{x} = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}}$
+4. $y = \gamma \hat{x} + \beta$`,
+    constraints: [
+      'Input X is a 2D array of shape (batch_size, num_features)',
+      'Compute mean and variance over the feature dimension (axis -1)',
+      'gamma and beta are 1D arrays of shape (num_features,)',
+      'Return the normalized array'
+    ],
+    examples: [
+      { input: 'layer_norm(X, gamma, beta)', output: 'normalized_scaled_X' }
+    ],
+    starter_code: `import numpy as np\n\ndef layer_norm(X, gamma, beta, eps=1e-5):\n    # TODO: implement layer normalization\n    pass\n`,
+    test_input: `import numpy as np\nX = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])\ngamma = np.ones(3)\nbeta = np.zeros(3)\nprint(np.round(layer_norm(X, gamma, beta), 4))`,
+    acceptance: '71.1%',
+    hints: [
+      'The only difference from BatchNorm is the axis. Compute mean and variance along axis -1 (the feature dimension).',
+      'Use keepdims=True.'
+    ]
+  },
+  {
+    slug: 'dl-dropout',
+    index: 37,
+    title: 'Dropout',
+    difficulty: 'Easy',
+    topics: ['Deep Learning', 'Regularization'],
+    description: `Implement Dropout, a regularization technique.
+
+During training, dropout randomly zeroes out some of the elements of the input tensor with probability $p$.
+To maintain the expected value of the activations, the remaining elements are scaled by $\frac{1}{1-p}$ (Inverted Dropout).
+
+During evaluation (inference), dropout does nothing; the input is returned unchanged.`,
+    constraints: [
+      'Input X is a numpy array',
+      'p is the dropout probability (0.0 to 1.0)',
+      'is_training is a boolean flag',
+      'Set np.random.seed(42) inside the function before generating the mask',
+      'Return the modified array'
+    ],
+    examples: [
+      { input: 'dropout(X, p=0.5, is_training=True)', output: 'array_with_half_zeros_scaled' }
+    ],
+    starter_code: `import numpy as np\n\ndef dropout(X, p, is_training=True):\n    np.random.seed(42)\n    # TODO: implement inverted dropout\n    pass\n`,
+    test_input: `import numpy as np\nX = np.ones(10)\nprint(np.round(dropout(X, p=0.5, is_training=True), 2))`,
+    acceptance: '84.9%',
+    hints: [
+      'If not is_training, just return X',
+      'Generate a mask of booleans: mask = np.random.rand(*X.shape) > p',
+      'Return (X * mask) / (1.0 - p)'
+    ]
+  },
+  {
+    slug: 'dl-conv2d',
+    index: 38,
+    title: 'Conv2D (Naive implementation)',
+    difficulty: 'Hard',
+    topics: ['Deep Learning', 'Computer Vision'],
+    description: `Implement a naive 2D Convolution operation.
+
+Given an input image and a 2D filter (kernel), slide the filter over the image and compute the element-wise multiplication and sum.
+
+Assume:
+- Stride is 1
+- No padding (valid convolution)
+- Single channel input and single channel filter
+
+Output dimension: $(H - F + 1) \times (W - F + 1)$, where $F$ is the filter size.`,
+    constraints: [
+      'Input image is a 2D array of shape (H, W)',
+      'Filter is a 2D array of shape (F, F)',
+      'Use nested loops (no advanced NumPy vectorization required)',
+      'Return the 2D output feature map'
+    ],
+    examples: [
+      { input: 'conv2d(image, kernel)', output: 'feature_map' }
+    ],
+    starter_code: `import numpy as np\n\ndef conv2d(image, kernel):\n    # TODO: perform 2D convolution\n    pass\n`,
+    test_input: `import numpy as np\nimg = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])\nkernel = np.array([[1, 0], [0, -1]])\nprint(conv2d(img, kernel))`,
+    acceptance: '49.8%',
+    hints: [
+      'Initialize an output array of zeros with shape (H-F+1, W-F+1)',
+      'Iterate row i from 0 to H-F, and col j from 0 to W-F',
+      'Extract the image patch: image[i:i+F, j:j+F]',
+      'Compute np.sum(patch * kernel) and assign to output[i, j]'
+    ]
+  },
+  {
+    slug: 'dl-max-pooling',
+    index: 39,
+    title: 'Max Pooling 2D',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'Computer Vision'],
+    description: `Implement a 2D Max Pooling operation.
+
+Max pooling reduces the spatial dimensions of an image by sliding a window over the image and taking the maximum value in that window.
+
+Assume:
+- Window size is (pool_size, pool_size)
+- Stride is equal to pool_size (non-overlapping windows)
+- Single channel input
+
+Output dimension: $(H // pool\_size) \times (W // pool\_size)$.`,
+    constraints: [
+      'Input image is a 2D array of shape (H, W)',
+      'Return the downsampled 2D array',
+      'H and W are guaranteed to be divisible by pool_size'
+    ],
+    examples: [
+      { input: 'max_pool2d(image, pool_size=2)', output: 'downsampled_image' }
+    ],
+    starter_code: `import numpy as np\n\ndef max_pool2d(image, pool_size):\n    # TODO: implement non-overlapping max pooling\n    pass\n`,
+    test_input: `import numpy as np\nimg = np.array([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]])\nprint(max_pool2d(img, 2))`,
+    acceptance: '72.3%',
+    hints: [
+      'Output shape is (H // pool_size, W // pool_size)',
+      'Nested loops: i from 0 to out_H, j from 0 to out_W',
+      'Extract patch: image[i*pool_size : (i+1)*pool_size, j*pool_size : (j+1)*pool_size]',
+      'Take np.max(patch)'
+    ]
+  },
+  {
+    slug: 'dl-sgd-momentum',
+    index: 40,
+    title: 'SGD with Momentum',
+    difficulty: 'Medium',
+    topics: ['Optimization', 'Deep Learning'],
+    description: `Implement a single step of Stochastic Gradient Descent with Momentum.
+
+Momentum helps accelerate SGD in the relevant direction and dampens oscillations by keeping a running velocity.
+
+Update rules:
+1. $v_{new} = \beta v_{old} + (1 - \beta) \nabla L$ (Note: PyTorch usually implements this without the $(1-\beta)$ factor, but we will use the Exponential Moving Average version).
+2. $\theta_{new} = \theta_{old} - \alpha v_{new}$
+
+Where $\alpha$ is learning rate, $\beta$ is momentum coefficient, and $v$ is velocity.`,
+    constraints: [
+      'params, grads, and velocity are numpy arrays of the same shape',
+      'Return a tuple: (new_params, new_velocity)'
+    ],
+    examples: [
+      { input: 'sgd_momentum(w, dw, v, lr=0.1, beta=0.9)', output: '(w_new, v_new)' }
+    ],
+    starter_code: `import numpy as np\n\ndef sgd_momentum(params, grads, velocity, lr=0.1, beta=0.9):\n    # TODO: update velocity and parameters\n    pass\n`,
+    test_input: `import numpy as np\nw = np.array([1.0, 2.0])\ndw = np.array([0.5, -0.2])\nv = np.array([0.1, -0.1])\nw_new, v_new = sgd_momentum(w, dw, v, 0.1, 0.9)\nprint(np.round(w_new, 4))`,
+    acceptance: '66.1%',
+    hints: [
+      'new_velocity = beta * velocity + (1 - beta) * grads',
+      'new_params = params - lr * new_velocity'
+    ]
+  },
+  {
+    slug: 'dl-adam-optimizer',
+    index: 41,
+    title: 'Adam Optimizer (One Step)',
+    difficulty: 'Medium',
+    topics: ['Optimization', 'Deep Learning'],
+    description: `Implement a single step of the Adam optimizer.
+
+Adam maintains both first-order (momentum) and second-order (RMSprop) moments.
+
+Update rules for timestep $t$:
+1. Update biased first moment: $m = \beta_1 m + (1 - \beta_1) g$
+2. Update biased second raw moment: $v = \beta_2 v + (1 - \beta_2) g^2$
+3. Compute bias-corrected first moment: $\hat{m} = \frac{m}{1 - \beta_1^t}$
+4. Compute bias-corrected second raw moment: $\hat{v} = \frac{v}{1 - \beta_2^t}$
+5. Update parameters: $\theta = \theta - \frac{\alpha}{\sqrt{\hat{v}} + \epsilon} \hat{m}$`,
+    constraints: [
+      'params, grads, m, v are arrays of the same shape',
+      't is the current timestep (integer > 0)',
+      'Return a tuple: (new_params, new_m, new_v)'
+    ],
+    examples: [
+      { input: 'adam_step(w, dw, m, v, t, lr, b1, b2, eps)', output: '(w_new, m_new, v_new)' }
+    ],
+    starter_code: `import numpy as np\n\ndef adam_step(params, grads, m, v, t, lr=0.001, b1=0.9, b2=0.999, eps=1e-8):\n    # TODO: perform one step of Adam optimization\n    pass\n`,
+    test_input: `import numpy as np\nw = np.array([1.0, 2.0])\ndw = np.array([0.5, -0.2])\nm = np.zeros(2)\nv = np.zeros(2)\nw_new, _, _ = adam_step(w, dw, m, v, t=1)\nprint(np.round(w_new, 4))`,
+    acceptance: '51.9%',
+    hints: [
+      'Ensure you use b1**t and b2**t for the bias correction',
+      'Do not forget the epsilon in the denominator to prevent division by zero'
+    ]
+  },
+  {
+    slug: 'dl-embedding-lookup',
+    index: 42,
+    title: 'Embedding Lookup + Gradient',
+    difficulty: 'Medium',
+    topics: ['Deep Learning', 'NLP'],
+    description: `Implement an embedding layer forward and backward pass.
+
+In NLP, categorical tokens (like words) are mapped to dense vectors via an embedding matrix.
+Forward pass:
+For an array of token indices, return the corresponding rows of the embedding matrix.
+
+Backward pass:
+Given the gradient of the loss with respect to the output vectors ($dOut$), compute the gradient with respect to the embedding matrix ($dE$).`,
+    constraints: [
+      'indices is a 1D array of integers of length N',
+      'embeddings is a 2D array of shape (vocab_size, hidden_dim)',
+      'dOut is a 2D array of shape (N, hidden_dim)',
+      'Return a tuple: (output, dE)'
+    ],
+    examples: [
+      { input: 'embedding_layer(indices, embeddings, dOut)', output: '(output, dE)' }
+    ],
+    starter_code: `import numpy as np\n\ndef embedding_layer(indices, embeddings, dOut):\n    # TODO: Forward pass (lookup)\n    \n    # TODO: Backward pass (compute gradient w.r.t embeddings)\n    pass\n`,
+    test_input: `import numpy as np\nemb = np.array([[0,0], [1,1], [2,2], [3,3]])\nidx = np.array([1, 3, 1])\ndOut = np.array([[0.1, 0.1], [0.3, 0.3], [0.5, 0.5]])\nout, dE = embedding_layer(idx, emb, dOut)\nprint("out:\\n", out)\nprint("dE:\\n", np.round(dE, 2))`,
+    acceptance: '44.3%',
+    hints: [
+      'Forward is just slicing: output = embeddings[indices]',
+      'Backward requires accumulating gradients. Initialize dE = np.zeros_like(embeddings)',
+      'Use np.add.at(dE, indices, dOut) to handle repeated indices correctly'
+    ]
   }
 ];
 
