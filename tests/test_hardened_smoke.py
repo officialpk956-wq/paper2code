@@ -275,9 +275,10 @@ class TestInfoDisclosure:
         assert r.status_code == 200
 
     def test_metrics_accessible(self, client):
-        """Prometheus /metrics should be available but ideally restricted."""
+        """Prometheus /metrics should be available, or gracefully 503 if the
+        optional prometheus_client dependency isn't installed."""
         r = client.get("/metrics")
-        assert r.status_code == 200  # It works; but is it restricted in prod?
+        assert r.status_code in (200, 503)
 
     def test_404_does_not_leak_stack_trace(self, client):
         r = client.get("/api/this-endpoint-does-not-exist-ever")
