@@ -5,12 +5,10 @@ from core.diagram_resnet import draw_resnet
 from core.diagram_unet import draw_unet
 from core.diagram_vit import draw_vit
 
-
-
-
 SCHEMA_DIR = Path("outputs/code_ready")
 OUT_DIR = Path("outputs/diagrams")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def main():
     for file in SCHEMA_DIR.glob("*.json"):
@@ -28,6 +26,7 @@ def main():
 
         graph.render(OUT_DIR / file.stem, format="png")
         print(f"Saved diagram → {file.stem}.png")
+
 
 if __name__ == "__main__":
     main()

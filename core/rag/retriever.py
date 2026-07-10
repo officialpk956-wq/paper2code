@@ -13,8 +13,6 @@ from scratch using TF-IDF weighting to keep the project lightweight.
 import math
 import re
 from collections import Counter, defaultdict
-from typing import List, Optional, Tuple
-
 
 # ---------------------------------------------------------------------------
 # Architecture-focused query terms (used as the "query" for BM25 scoring)
@@ -22,18 +20,57 @@ from typing import List, Optional, Tuple
 
 _ARCH_QUERY_TERMS = [
     # Layer types
-    "conv", "convolution", "convolutional", "linear", "dense",
-    "attention", "transformer", "embedding", "pooling", "dropout",
-    "batchnorm", "layernorm", "activation", "relu", "gelu", "softmax",
-    "residual", "skip", "upsample", "downsample",
+    "conv",
+    "convolution",
+    "convolutional",
+    "linear",
+    "dense",
+    "attention",
+    "transformer",
+    "embedding",
+    "pooling",
+    "dropout",
+    "batchnorm",
+    "layernorm",
+    "activation",
+    "relu",
+    "gelu",
+    "softmax",
+    "residual",
+    "skip",
+    "upsample",
+    "downsample",
     # Structural terms
-    "encoder", "decoder", "head", "neck", "backbone", "stem",
-    "block", "layer", "module", "stage",
+    "encoder",
+    "decoder",
+    "head",
+    "neck",
+    "backbone",
+    "stem",
+    "block",
+    "layer",
+    "module",
+    "stage",
     # Parameter terms
-    "channels", "filters", "kernel", "stride", "padding", "heads",
-    "hidden", "dimension", "embedding", "patch", "token",
+    "channels",
+    "filters",
+    "kernel",
+    "stride",
+    "padding",
+    "heads",
+    "hidden",
+    "dimension",
+    "embedding",
+    "patch",
+    "token",
     # Quantitative signals
-    "64", "128", "256", "512", "768", "1024", "2048",
+    "64",
+    "128",
+    "256",
+    "512",
+    "768",
+    "1024",
+    "2048",
 ]
 
 
@@ -41,7 +78,8 @@ _ARCH_QUERY_TERMS = [
 # Tokenizer
 # ---------------------------------------------------------------------------
 
-def _tokenize(text: str) -> List[str]:
+
+def _tokenize(text: str) -> list[str]:
     """
     Simple whitespace + punctuation tokenizer.
     Lowercases and strips non-alphanumeric characters.
@@ -54,6 +92,7 @@ def _tokenize(text: str) -> List[str]:
 # BM25 Implementation
 # ---------------------------------------------------------------------------
 
+
 class BM25:
     """
     BM25 (Okapi BM25) scoring for chunk retrieval.
@@ -63,17 +102,15 @@ class BM25:
         b=0.75 (length normalization)
     """
 
-    def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
+    def __init__(self, corpus: list[str], k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
         self.corpus_size = len(corpus)
-        self._tokenized: List[List[str]] = [_tokenize(doc) for doc in corpus]
+        self._tokenized: list[list[str]] = [_tokenize(doc) for doc in corpus]
         self._doc_lengths = [len(doc) for doc in self._tokenized]
-        self._avg_doc_len = (
-            sum(self._doc_lengths) / self.corpus_size if self.corpus_size else 1
-        )
+        self._avg_doc_len = sum(self._doc_lengths) / self.corpus_size if self.corpus_size else 1
         self._idf: dict = self._compute_idf()
-        self._tf: List[Counter] = [Counter(doc) for doc in self._tokenized]
+        self._tf: list[Counter] = [Counter(doc) for doc in self._tokenized]
 
     def _compute_idf(self) -> dict:
         """Compute inverse document frequency for each unique term."""
@@ -84,12 +121,10 @@ class BM25:
 
         idf = {}
         for term, freq in df.items():
-            idf[term] = math.log(
-                (self.corpus_size - freq + 0.5) / (freq + 0.5) + 1
-            )
+            idf[term] = math.log((self.corpus_size - freq + 0.5) / (freq + 0.5) + 1)
         return idf
 
-    def score(self, query_terms: List[str], doc_idx: int) -> float:
+    def score(self, query_terms: list[str], doc_idx: int) -> float:
         """Compute BM25 score for a single document against a query."""
         score = 0.0
         doc_len = self._doc_lengths[doc_idx]
@@ -101,8 +136,10 @@ class BM25:
 
             idf = self._idf.get(term, 0.0)
             tf = tf_counter[term]
-            norm = tf * (self.k1 + 1) / (
-                tf + self.k1 * (1 - self.b + self.b * doc_len / self._avg_doc_len)
+            norm = (
+                tf
+                * (self.k1 + 1)
+                / (tf + self.k1 * (1 - self.b + self.b * doc_len / self._avg_doc_len))
             )
             score += idf * norm
 
@@ -110,9 +147,9 @@ class BM25:
 
     def get_top_k(
         self,
-        query_terms: List[str],
+        query_terms: list[str],
         top_k: int = 5,
-    ) -> List[Tuple[int, float]]:
+    ) -> list[tuple[int, float]]:
         """
         Retrieve top-k document indices with their BM25 scores.
 
@@ -128,11 +165,12 @@ class BM25:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def retrieve_top_chunks(
-    chunks: List[str],
+    chunks: list[str],
     top_k: int = 5,
-    query_terms: Optional[List[str]] = None,
-) -> List[str]:
+    query_terms: list[str] | None = None,
+) -> list[str]:
     """
     Retrieve the most architecturally relevant chunks using BM25.
 
@@ -161,10 +199,10 @@ def retrieve_top_chunks(
 
 
 def retrieve_and_merge(
-    chunks: List[str],
+    chunks: list[str],
     top_k: int = 5,
     max_chars: int = 8_000,
-    query_terms: Optional[List[str]] = None,
+    query_terms: list[str] | None = None,
 ) -> str:
     """
     Retrieve top-k chunks and merge into a single context string.

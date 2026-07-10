@@ -10,6 +10,7 @@ the request carries no valid Bearer token.
 """
 
 import os
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -32,7 +33,9 @@ def _attach_user(request: Request) -> None:
     try:
         import jwt as _jwt
         import sentry_sdk
-        from backend.modules.auth.config import SECRET_KEY, ALGORITHM
+
+        from backend.modules.auth.config import ALGORITHM, SECRET_KEY
+
         payload = _jwt.decode(
             auth[7:],
             SECRET_KEY,

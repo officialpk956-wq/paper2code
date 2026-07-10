@@ -1,6 +1,8 @@
 import torch
-from core.schema_refiner_mobilenet import refine_mobilenet_schema
+
 from core.mobilenet_builder import MobileNetBuilder
+from core.schema_refiner_mobilenet import refine_mobilenet_schema
+
 
 def main():
     print("Testing MobileNetV3...")
@@ -11,6 +13,7 @@ def main():
     out = model(x)
     print(f"Output shape: {out.shape}")
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
+
 
 if __name__ == "__main__":
     main()

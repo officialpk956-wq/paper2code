@@ -15,24 +15,25 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, asdict, field
-from typing import Any, Dict, List, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class EGNode:
     id: str
     name: str
     type: str
-    shape: List[int]
+    shape: list[int]
     params: int
     flops: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -42,21 +43,21 @@ class EGEdge:
     target: str
     edge_type: str  # sequential | residual | concat | cross_attention
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
 class ValidationReport:
     valid: bool
-    errors: List[str]
-    warnings: List[str]
+    errors: list[str]
+    warnings: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict) -> "ValidationReport":
+    def from_dict(cls, d: dict) -> ValidationReport:
         return cls(
             valid=d.get("valid", True),
             errors=d.get("errors", []),
@@ -67,16 +68,16 @@ class ValidationReport:
 @dataclass
 class ExecutableGraph:
     id: str
-    nodes: List[EGNode]
-    edges: List[EGEdge]
-    input_spec: List[int]
-    output_spec: List[int]
+    nodes: list[EGNode]
+    edges: list[EGEdge]
+    input_spec: list[int]
+    output_spec: list[int]
     parameter_count: int
     flops: float
     validation_status: str  # "valid" | "warnings" | "invalid"
     validation_report: ValidationReport
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "nodes": [n.to_dict() for n in self.nodes],
@@ -90,7 +91,7 @@ class ExecutableGraph:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict) -> "ExecutableGraph":
+    def from_dict(cls, d: dict) -> ExecutableGraph:
         return cls(
             id=d["id"],
             nodes=[EGNode(**n) for n in d.get("nodes", [])],
@@ -111,25 +112,25 @@ class ExecutableGraph:
 # ---------------------------------------------------------------------------
 
 # Blueprint component.type → ArchitectureGraph node.type (for TensorTracker)
-_COMP_TO_GRAPH_TYPE: Dict[str, str] = {
-    "conv":            "conv2d",
-    "attention":       "multiheadattention",
-    "embedding":       "patchembedding",
-    "pooling":         "maxpool2d",
-    "mlp":             "feedforward",
-    "normalization":   "layernorm",
-    "activation":      "relu",
+_COMP_TO_GRAPH_TYPE: dict[str, str] = {
+    "conv": "conv2d",
+    "attention": "multiheadattention",
+    "embedding": "patchembedding",
+    "pooling": "maxpool2d",
+    "mlp": "feedforward",
+    "normalization": "layernorm",
+    "activation": "relu",
     "skip_connection": "residual_add",
-    "upsample":        "upsample",
-    "downsample":      "conv2d",
-    "head":            "linear",
+    "upsample": "upsample",
+    "downsample": "conv2d",
+    "head": "linear",
 }
 
 # Blueprint connection.connection_type → ArchitectureGraph edge.edge_type
-_CONN_TO_EDGE: Dict[str, str] = {
-    "sequential":    "flow",
-    "residual":      "residual",
-    "concat":        "skip",
+_CONN_TO_EDGE: dict[str, str] = {
+    "sequential": "flow",
+    "residual": "residual",
+    "concat": "skip",
     "cross_attention": "flow",
 }
 
@@ -138,44 +139,49 @@ _CONN_TO_EDGE: Dict[str, str] = {
 # Shape inference via TensorTracker
 # ---------------------------------------------------------------------------
 
+
 def _run_tracker(
-    components: List[Dict],
-    connections: List[Dict],
-    input_shape: List[int],
-) -> Dict[str, List[int]]:
+    components: list[dict],
+    connections: list[dict],
+    input_shape: list[int],
+) -> dict[str, list[int]]:
     """
     Build a minimal ArchitectureGraph and run TensorTracker to infer shapes.
     Returns a mapping {component_id: output_shape_list}.
     Falls back gracefully if TensorTracker raises.
     """
-    from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge as AGEdge
+    from core.architecture_graph import ArchitectureGraph, GraphNode
+    from core.architecture_graph import GraphEdge as AGEdge
     from core.rag.tensor_tracker import TensorTracker
 
     graph_nodes = []
     for comp in components:
         meta = comp.get("metadata", {}) or {}
         # Prefer the FLOPs-engine-level type stored in metadata; fall back to mapping
-        node_type = (
-            meta.get("flops_type")
-            or _COMP_TO_GRAPH_TYPE.get(comp.get("type", ""), comp.get("type", ""))
+        node_type = meta.get("flops_type") or _COMP_TO_GRAPH_TYPE.get(
+            comp.get("type", ""), comp.get("type", "")
         )
-        graph_nodes.append(GraphNode(
-            id=comp["id"],
-            type=node_type,
-            label=comp.get("name", comp["id"]),
-            params={**meta},
-            input_shape=None,
-            output_shape=None,
-        ))
+        graph_nodes.append(
+            GraphNode(
+                id=comp["id"],
+                type=node_type,
+                label=comp.get("name", comp["id"]),
+                params={**meta},
+                input_shape=None,
+                output_shape=None,
+            )
+        )
 
     graph_edges = []
     for conn in connections:
         edge_type = _CONN_TO_EDGE.get(conn.get("connection_type", "sequential"), "flow")
-        graph_edges.append(AGEdge(
-            source=conn["source"],
-            target=conn["target"],
-            edge_type=edge_type,
-        ))
+        graph_edges.append(
+            AGEdge(
+                source=conn["source"],
+                target=conn["target"],
+                edge_type=edge_type,
+            )
+        )
 
     ag = ArchitectureGraph(
         name="executable-graph",
@@ -185,20 +191,19 @@ def _run_tracker(
     )
 
     tracker = TensorTracker()
-    initial: Optional[tuple] = tuple(input_shape) if input_shape else None
+    initial: tuple | None = tuple(input_shape) if input_shape else None
 
     try:
         tracker.propagate_shapes(ag, initial_shape=initial)
     except Exception:
         pass  # Partial results in node.output_shape are still usable
 
-    result: Dict[str, List[int]] = {}
+    result: dict[str, list[int]] = {}
     for node in ag.nodes:
         if node.output_shape and isinstance(node.output_shape, (list, tuple)):
             try:
                 result[node.id] = [
-                    int(d) if isinstance(d, (int, float)) else 1
-                    for d in node.output_shape
+                    int(d) if isinstance(d, (int, float)) else 1 for d in node.output_shape
                 ]
             except Exception:
                 pass
@@ -210,9 +215,10 @@ def _run_tracker(
 # Validation
 # ---------------------------------------------------------------------------
 
-def _has_cycle(nodes: List[EGNode], edges: List[EGEdge]) -> bool:
+
+def _has_cycle(nodes: list[EGNode], edges: list[EGEdge]) -> bool:
     """Detect a directed cycle using DFS with a recursion-stack set."""
-    adj: Dict[str, List[str]] = {n.id: [] for n in nodes}
+    adj: dict[str, list[str]] = {n.id: [] for n in nodes}
     for e in edges:
         if e.source in adj:
             adj[e.source].append(e.target)
@@ -249,8 +255,8 @@ def validate_graph(graph: ExecutableGraph) -> ValidationReport:
       - Missing input / output nodes
       - Sequential shape mismatches
     """
-    errors: List[str] = []
-    warnings: List[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
 
     node_ids = {n.id for n in graph.nodes}
 
@@ -286,8 +292,8 @@ def validate_graph(graph: ExecutableGraph) -> ValidationReport:
         errors.append("No output node found — all nodes have outgoing edges")
 
     # 5. Shape consistency on sequential edges
-    shape_by_id: Dict[str, List[int]] = {n.id: n.shape for n in graph.nodes}
-    in_shape_by_id: Dict[str, Optional[List[int]]] = {}
+    shape_by_id: dict[str, list[int]] = {n.id: n.shape for n in graph.nodes}
+    in_shape_by_id: dict[str, list[int] | None] = {}
     for n in graph.nodes:
         raw = n.metadata.get("input_shape")
         if isinstance(raw, (list, tuple)) and raw:
@@ -300,8 +306,7 @@ def validate_graph(graph: ExecutableGraph) -> ValidationReport:
         tgt_in = in_shape_by_id.get(e.target)
         if src_out and tgt_in and list(src_out) != list(tgt_in):
             warnings.append(
-                f"Shape mismatch on {e.source!r}→{e.target!r}: "
-                f"out={src_out} in={tgt_in}"
+                f"Shape mismatch on {e.source!r}→{e.target!r}: out={src_out} in={tgt_in}"
             )
 
     valid = len(errors) == 0
@@ -312,62 +317,59 @@ def validate_graph(graph: ExecutableGraph) -> ValidationReport:
 # Main compilation function
 # ---------------------------------------------------------------------------
 
-def compile_blueprint(blueprint_dict: Dict[str, Any]) -> ExecutableGraph:
+
+def compile_blueprint(blueprint_dict: dict[str, Any]) -> ExecutableGraph:
     """
     Convert an ArchitectureBlueprint dict (Phase 14A) to an ExecutableGraph.
 
     Shape inference is done by passing through TensorTracker; values from the
     blueprint's tensor_flow are used as the authoritative FLOPs / params source.
     """
-    components: List[Dict] = blueprint_dict.get("components", [])
-    connections: List[Dict] = blueprint_dict.get("connections", [])
-    tensor_flow: List[Dict] = blueprint_dict.get("tensor_flow", [])
-    input_shape: List[int] = blueprint_dict.get("input_shape", [])
-    output_shape: List[int] = blueprint_dict.get("output_shape", [])
+    components: list[dict] = blueprint_dict.get("components", [])
+    connections: list[dict] = blueprint_dict.get("connections", [])
+    tensor_flow: list[dict] = blueprint_dict.get("tensor_flow", [])
+    input_shape: list[int] = blueprint_dict.get("input_shape", [])
+    output_shape: list[int] = blueprint_dict.get("output_shape", [])
     bp_id: str = blueprint_dict.get("id", "bp-0")
 
     # --- Shape lookup from blueprint tensor_flow (authoritative FLOPs source)
-    flow_by_id: Dict[str, Dict] = {f["component_id"]: f for f in tensor_flow}
+    flow_by_id: dict[str, dict] = {f["component_id"]: f for f in tensor_flow}
 
     # --- Shape inference via TensorTracker (reuse, not duplicate)
     tracker_shapes = _run_tracker(components, connections, input_shape)
 
     # --- Build EGNodes
-    eg_nodes: List[EGNode] = []
+    eg_nodes: list[EGNode] = []
     for comp in components:
         cid = comp["id"]
         flow = flow_by_id.get(cid, {})
 
         # Prefer TensorTracker shapes (shape-validated); fall back to tensor_flow / component
-        out_shape: List[int] = (
-            tracker_shapes.get(cid)
-            or flow.get("output_shape")
-            or comp.get("shape", [])
-            or []
+        out_shape: list[int] = (
+            tracker_shapes.get(cid) or flow.get("output_shape") or comp.get("shape", []) or []
         )
-        in_shape: Optional[List[int]] = (
-            flow.get("input_shape")
-            or None
-        )
+        in_shape: list[int] | None = flow.get("input_shape") or None
 
         params_m: float = float(flow.get("params_M", 0.0))
         flops_m: float = float(flow.get("flops_mflops", 0.0))
 
-        eg_nodes.append(EGNode(
-            id=cid,
-            name=comp.get("name", cid),
-            type=comp.get("type", ""),
-            shape=out_shape,
-            params=int(params_m * 1_000_000),
-            flops=flops_m,
-            metadata={
-                **(comp.get("metadata") or {}),
-                "input_shape": in_shape,
-            },
-        ))
+        eg_nodes.append(
+            EGNode(
+                id=cid,
+                name=comp.get("name", cid),
+                type=comp.get("type", ""),
+                shape=out_shape,
+                params=int(params_m * 1_000_000),
+                flops=flops_m,
+                metadata={
+                    **(comp.get("metadata") or {}),
+                    "input_shape": in_shape,
+                },
+            )
+        )
 
     # --- Build EGEdges
-    eg_edges: List[EGEdge] = [
+    eg_edges: list[EGEdge] = [
         EGEdge(
             source=conn["source"],
             target=conn["target"],
@@ -416,12 +418,13 @@ def compile_blueprint(blueprint_dict: Dict[str, Any]) -> ExecutableGraph:
 # Export functions
 # ---------------------------------------------------------------------------
 
+
 def _safe_id(raw: str) -> str:
     """Sanitize a node id for use in Mermaid and DOT syntax."""
     return re.sub(r"[^a-zA-Z0-9_]", "_", raw)
 
 
-def _shape_label(shape: List[int]) -> str:
+def _shape_label(shape: list[int]) -> str:
     """Human-readable shape string, skipping batch dimension."""
     if not shape:
         return "?"
@@ -439,7 +442,7 @@ def export_graph_mermaid(graph: ExecutableGraph) -> str:
     lines = ["flowchart TD"]
     for n in graph.nodes:
         safe = _safe_id(n.id)
-        label = f'{n.name}\\n[{_shape_label(n.shape)}]'
+        label = f"{n.name}\\n[{_shape_label(n.shape)}]"
         lines.append(f'  {safe}["{label}"]')
     for e in graph.edges:
         src = _safe_id(e.source)
@@ -461,7 +464,7 @@ def export_graph_dot(graph: ExecutableGraph) -> str:
     ]
     for n in graph.nodes:
         safe = _safe_id(n.id)
-        label = f'{n.name}\\n[{_shape_label(n.shape)}]'
+        label = f"{n.name}\\n[{_shape_label(n.shape)}]"
         lines.append(f'  {safe} [label="{label}"];')
     for e in graph.edges:
         src = _safe_id(e.source)

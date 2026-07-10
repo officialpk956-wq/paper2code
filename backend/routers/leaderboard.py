@@ -5,14 +5,15 @@ Cross-user leaderboard ranked by points.
 Supports period filtering: all | weekly | monthly.
 """
 
-import logging
 import datetime
-from fastapi import APIRouter, Depends, Query, HTTPException
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, desc
 
 from backend.database import get_db
-from backend.models import User, DojoSubmission, Problem
+from backend.models import DojoSubmission, Problem, User
 
 log = logging.getLogger(__name__)
 
@@ -59,17 +60,18 @@ def _category_user_ids(db: Session, category: str) -> set[int]:
 
 @router.get("/leaderboard")
 def get_leaderboard(
-    period:   str = Query("all", description="all | weekly | monthly"),
-    category: str = Query("",    description="Filter to users who solved problems in this category"),
-    limit:    int = Query(50,    ge=1, le=200),
+    period: str = Query("all", description="all | weekly | monthly"),
+    category: str = Query("", description="Filter to users who solved problems in this category"),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     if period not in _VALID_PERIODS:
         raise HTTPException(400, f"period must be one of: {', '.join(_VALID_PERIODS)}")
 
-    from backend.redis_config import cache_redis
     import json
-    
+
+    from backend.redis_config import cache_redis
+
     cache_key = f"leaderboard:{period}:{category}:{limit}"
     if cache_redis:
         cached = cache_redis.get(cache_key)
@@ -106,13 +108,7 @@ def get_leaderboard(
             }
         query = query.filter(User.id.in_(cat_user_ids))
 
-    rows = (
-        query
-        .filter(User.points > 0)
-        .order_by(desc(User.points))
-        .limit(limit)
-        .all()
-    )
+    rows = query.filter(User.points > 0).order_by(desc(User.points)).limit(limit).all()
 
     leaders = [
         {
@@ -135,8 +131,8 @@ def get_leaderboard(
         "total_ranked": len(leaders),
         "leaders": leaders,
     }
-    
+
     if cache_redis:
         cache_redis.setex(cache_key, 60, json.dumps(result))
-        
+
     return result

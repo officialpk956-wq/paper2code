@@ -1,5 +1,6 @@
 from core.schema_rules_gan import infer_gan_defaults
 
+
 def refine_gan_schema(raw_schema):
     defaults = infer_gan_defaults(raw_schema)
     schema = {}

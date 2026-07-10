@@ -1,14 +1,17 @@
 import logging
-from datetime import datetime, timezone, timedelta
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem, LeaderboardArchive, XPEvent
+from backend.models import (
+    Paper,
+    Problem,
+    User,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,7 @@ router = APIRouter(prefix="/api/admin", tags=["Admin"])
 # ---------------------------------------------------------------------------
 # Admin dependency — 403 for non-admins
 # ---------------------------------------------------------------------------
+
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
@@ -30,11 +34,9 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # GET /api/admin/costs
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------
@@ -42,21 +44,20 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # PATCH /api/admin/users/{user_id}
 # ---------------------------------------------------------------------------
 
+
 class AdminUserUpdate(BaseModel):
-    is_admin: Optional[bool] = None
-    is_email_verified: Optional[bool] = None
-
-
+    is_admin: bool | None = None
+    is_email_verified: bool | None = None
 
 
 # ---------------------------------------------------------------------------
 # Admin Problem CRUD
 # ---------------------------------------------------------------------------
+
 
 class AdminProblemCreate(BaseModel):
     id: str = Field(..., max_length=256)
@@ -66,37 +67,37 @@ class AdminProblemCreate(BaseModel):
     category: str = Field(..., max_length=100)
     description: str = Field(..., max_length=50000)
     python_template: str = Field(default="", max_length=65536)
-    test_cases: List[Any] = []
-    hints: List[Any] = []
-    explanation: List[Any] = []
-    tags: List[Any] = []
-    related_architectures: List[Any] = []
-    related_papers: List[Any] = []
-    related_math: List[Any] = []
-    learning_points: List[Any] = []
-    estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = Field(default=None, max_length=2048)
-    time_limit_ms: Optional[int] = None   # None → global default (10 000 ms)
+    test_cases: list[Any] = []
+    hints: list[Any] = []
+    explanation: list[Any] = []
+    tags: list[Any] = []
+    related_architectures: list[Any] = []
+    related_papers: list[Any] = []
+    related_math: list[Any] = []
+    learning_points: list[Any] = []
+    estimated_time: int | None = None
+    visualization_url: str | None = Field(default=None, max_length=2048)
+    time_limit_ms: int | None = None  # None → global default (10 000 ms)
 
 
 class AdminProblemUpdate(BaseModel):
-    slug: Optional[str] = Field(default=None, max_length=256)
-    title: Optional[str] = Field(default=None, max_length=500)
-    difficulty: Optional[str] = Field(default=None, max_length=50)
-    category: Optional[str] = Field(default=None, max_length=100)
-    description: Optional[str] = Field(default=None, max_length=50000)
-    python_template: Optional[str] = Field(default=None, max_length=65536)
-    test_cases: Optional[List[Any]] = None
-    hints: Optional[List[Any]] = None
-    explanation: Optional[List[Any]] = None
-    tags: Optional[List[Any]] = None
-    related_architectures: Optional[List[Any]] = None
-    related_papers: Optional[List[Any]] = None
-    related_math: Optional[List[Any]] = None
-    learning_points: Optional[List[Any]] = None
-    estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = Field(default=None, max_length=2048)
-    time_limit_ms: Optional[int] = None
+    slug: str | None = Field(default=None, max_length=256)
+    title: str | None = Field(default=None, max_length=500)
+    difficulty: str | None = Field(default=None, max_length=50)
+    category: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=50000)
+    python_template: str | None = Field(default=None, max_length=65536)
+    test_cases: list[Any] | None = None
+    hints: list[Any] | None = None
+    explanation: list[Any] | None = None
+    tags: list[Any] | None = None
+    related_architectures: list[Any] | None = None
+    related_papers: list[Any] | None = None
+    related_math: list[Any] | None = None
+    learning_points: list[Any] | None = None
+    estimated_time: int | None = None
+    visualization_url: str | None = Field(default=None, max_length=2048)
+    time_limit_ms: int | None = None
 
 
 def _problem_to_dict(p: Problem) -> dict:
@@ -224,16 +225,15 @@ def admin_restore_problem(
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # DELETE /api/admin/users/{user_id}
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Paper moderation: GET /api/admin/papers, DELETE, POST flag
 # ---------------------------------------------------------------------------
+
 
 @router.get("/papers", include_in_schema=False)
 def admin_list_papers(
@@ -277,6 +277,7 @@ def admin_list_papers(
 # GET /api/admin/papers/moderation-queue
 # ---------------------------------------------------------------------------
 
+
 @router.get("/papers/moderation-queue", include_in_schema=False)
 def admin_moderation_queue(
     page: int = 1,
@@ -286,12 +287,7 @@ def admin_moderation_queue(
 ):
     query = db.query(Paper).filter(Paper.is_flagged == True)
     total = query.count()
-    papers = (
-        query.order_by(Paper.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
+    papers = query.order_by(Paper.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
     return {
         "total": total,
         "page": page,
@@ -343,10 +339,13 @@ def admin_delete_paper(
     if paper.uploaded_by and paper.file_size_bytes:
         owner = db.query(User).filter_by(id=paper.uploaded_by).first()
         if owner:
-            owner.storage_bytes_used = max(0, (owner.storage_bytes_used or 0) - paper.file_size_bytes)
+            owner.storage_bytes_used = max(
+                0, (owner.storage_bytes_used or 0) - paper.file_size_bytes
+            )
     # Clean up R2/storage before deleting DB record
     try:
         from backend.services import storage_service
+
         if paper.r2_key:
             storage_service.cleanup(f"r2://{paper.r2_key}")
     except Exception:
@@ -361,7 +360,6 @@ def admin_delete_paper(
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Leaderboard archive: GET /api/admin/leaderboard/archive
 # ---------------------------------------------------------------------------
@@ -373,25 +371,29 @@ def admin_delete_paper(
 
 from backend.models import PaperChallenge, PaperChallengePart
 
+
 class AdminPaperChallengeCreate(BaseModel):
     title: str = Field(..., max_length=500)
-    description: Optional[str] = Field(default=None, max_length=50000)
+    description: str | None = Field(default=None, max_length=50000)
     order_idx: int = 0
+
 
 class AdminPaperChallengePartCreate(BaseModel):
     title: str = Field(..., max_length=500)
     description_md: str = Field(..., max_length=50000)
-    paper_section_md: Optional[str] = Field(default=None, max_length=50000)
-    setup_code: Optional[str] = Field(default=None, max_length=65536)
+    paper_section_md: str | None = Field(default=None, max_length=50000)
+    setup_code: str | None = Field(default=None, max_length=65536)
     starter_code: str = Field(..., max_length=65536)
-    solution_code: Optional[str] = Field(default=None, max_length=65536)
+    solution_code: str | None = Field(default=None, max_length=65536)
     test_code: str = Field(..., max_length=65536)
-    unlock_requires_part_id: Optional[int] = None
+    unlock_requires_part_id: int | None = None
     xp_reward: int = 50
     order_idx: int = 0
 
+
 class AdminPaperChallengePublish(BaseModel):
     is_published: bool
+
 
 @router.post("/papers/{paper_id}/challenges", include_in_schema=False, status_code=201)
 def admin_create_paper_challenge(
@@ -414,6 +416,7 @@ def admin_create_paper_challenge(
     db.commit()
     db.refresh(challenge)
     return {"id": challenge.id, "title": challenge.title}
+
 
 @router.post("/challenges/{challenge_id}/parts", include_in_schema=False, status_code=201)
 def admin_create_paper_challenge_part(
@@ -444,6 +447,7 @@ def admin_create_paper_challenge_part(
     db.refresh(part)
     return {"id": part.id, "title": part.title}
 
+
 @router.patch("/challenges/{challenge_id}", include_in_schema=False)
 def admin_publish_challenge(
     challenge_id: int,
@@ -458,6 +462,7 @@ def admin_publish_challenge(
     challenge.is_published = body.is_published
     db.commit()
     return {"id": challenge.id, "is_published": challenge.is_published}
+
 
 @router.delete("/parts/{part_id}", include_in_schema=False, status_code=200)
 def admin_delete_part(

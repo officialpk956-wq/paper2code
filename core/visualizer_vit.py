@@ -1,6 +1,9 @@
-from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+from core.architecture_graph import ArchitectureGraph, GraphEdge, GraphNode
 
-def build_vit_graph(hidden_size: int = 768, num_heads: int = 12, depth: int = 4) -> ArchitectureGraph:
+
+def build_vit_graph(
+    hidden_size: int = 768, num_heads: int = 12, depth: int = 4
+) -> ArchitectureGraph:
     graph = ArchitectureGraph(name="Vision Transformer")
 
     patch = GraphNode(
@@ -10,10 +13,7 @@ def build_vit_graph(hidden_size: int = 768, num_heads: int = 12, depth: int = 4)
         params={"patch": "16×16", "embed_dim": hidden_size},
         block="Embedding",
         description="Converts image patches into token embeddings",
-        semantic_params={
-            "tokens": "196",
-            "patch_size": "16×16"
-        }
+        semantic_params={"tokens": "196", "patch_size": "16×16"},
     )
     graph.add_node(patch)
 
@@ -30,15 +30,13 @@ def build_vit_graph(hidden_size: int = 768, num_heads: int = 12, depth: int = 4)
             params={"heads": num_heads, "d_model": hidden_size},
             block="Transformer",
             description="Applies self-attention to model global relationships",
-            semantic_params={
-                "tokens": "constant",
-                "flops": "very high",
-                "attention": "quadratic"
-            }
+            semantic_params={"tokens": "constant", "flops": "very high", "attention": "quadratic"},
         )
 
-        attn = GraphNode(f"{block_id}_attn", "MHSA", "Multi-Head Attention", params={"num_heads": num_heads})
-        mlp  = GraphNode(f"{block_id}_mlp", "MLP", "Feed Forward")
+        attn = GraphNode(
+            f"{block_id}_attn", "MHSA", "Multi-Head Attention", params={"num_heads": num_heads}
+        )
+        mlp = GraphNode(f"{block_id}_mlp", "MLP", "Feed Forward")
 
         block.internal_nodes = [attn, mlp]
         block.internal_edges = [
@@ -52,14 +50,16 @@ def build_vit_graph(hidden_size: int = 768, num_heads: int = 12, depth: int = 4)
         prev = block
 
     # -------- Head --------
-    graph.add_node(GraphNode(
-        id="head",
-        type="MLPHead",
-        label="Classification Head",
-        params={"classes": 1000, "in_features": hidden_size},
-        block="Head",
-        description="Maps the final token representation to class predictions"
-    ))
+    graph.add_node(
+        GraphNode(
+            id="head",
+            type="MLPHead",
+            label="Classification Head",
+            params={"classes": 1000, "in_features": hidden_size},
+            block="Head",
+            description="Maps the final token representation to class predictions",
+        )
+    )
 
     graph.add_edge(prev.id, "head", "flow")
 

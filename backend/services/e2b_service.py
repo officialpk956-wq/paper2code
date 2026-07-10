@@ -1,12 +1,12 @@
-import os
 import logging
-from typing import Optional
+import os
 
 log = logging.getLogger(__name__)
 
-E2B_API_KEY       = os.getenv("E2B_API_KEY", "")
-SANDBOX_TEMPLATE  = os.getenv("E2B_SANDBOX_TEMPLATE", "base")
+E2B_API_KEY = os.getenv("E2B_API_KEY", "")
+SANDBOX_TEMPLATE = os.getenv("E2B_SANDBOX_TEMPLATE", "base")
 EXECUTION_TIMEOUT = 20  # seconds
+
 
 def run_code_in_sandbox(
     setup_code: str,
@@ -30,7 +30,9 @@ def run_code_in_sandbox(
 
     try:
         import time
+
         from e2b_code_interpreter import Sandbox
+
         start = time.monotonic()
         with Sandbox(
             template=SANDBOX_TEMPLATE,
@@ -44,9 +46,7 @@ def run_code_in_sandbox(
         stderr = "\n".join(execution.logs.stderr) if execution.logs.stderr else ""
 
         passed = (
-            execution.error is None
-            and "AssertionError" not in stderr
-            and "Error" not in stderr
+            execution.error is None and "AssertionError" not in stderr and "Error" not in stderr
         )
         return {"passed": passed, "stdout": stdout, "stderr": stderr, "time_ms": elapsed_ms}
 

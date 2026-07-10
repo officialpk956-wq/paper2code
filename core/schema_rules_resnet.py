@@ -1,19 +1,10 @@
 # src/schema_rules_resnet.py
 
-RESNET_BLOCK_RULES = {
-    "basic": {
-        "expansion": 1
-    },
-    "bottleneck": {
-        "expansion": 4
-    }
-}
+RESNET_BLOCK_RULES = {"basic": {"expansion": 1}, "bottleneck": {"expansion": 4}}
+
 
 def infer_resnet_stage(
-    prev_channels: int,
-    stage_out_channels: int,
-    block_type: str,
-    stage_index: int
+    prev_channels: int, stage_out_channels: int, block_type: str, stage_index: int
 ):
     expansion = RESNET_BLOCK_RULES[block_type]["expansion"]
 
@@ -25,5 +16,5 @@ def infer_resnet_stage(
         "out_channels": stage_out_channels,
         "expansion": expansion,
         "stride": stride,
-        "downsample": downsample
+        "downsample": downsample,
     }

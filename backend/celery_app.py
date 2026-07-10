@@ -1,4 +1,5 @@
 import os
+
 from celery import Celery
 from celery.schedules import crontab
 
@@ -9,6 +10,7 @@ if _sentry_dsn:
     import sentry_sdk
     from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
     sentry_sdk.init(
         dsn=_sentry_dsn,
         integrations=[CeleryIntegration(), SqlalchemyIntegration()],
@@ -37,15 +39,15 @@ celery_app.conf.worker_prefetch_multiplier = 1  # fair dispatch for long tasks
 celery_app.conf.beat_schedule = {
     "cleanup-zombie-tasks-hourly": {
         "task": "backend.tasks.scheduled_tasks.cleanup_zombie_tasks",
-        "schedule": crontab(minute=0),           # top of every hour
+        "schedule": crontab(minute=0),  # top of every hour
     },
     "daily-db-backup": {
         "task": "backend.tasks.scheduled_tasks.daily_db_backup",
-        "schedule": crontab(hour=3, minute=0),   # 03:00 UTC daily
+        "schedule": crontab(hour=3, minute=0),  # 03:00 UTC daily
     },
     "onboarding-drip-daily": {
         "task": "backend.tasks.growth_tasks.send_onboarding_drips",
-        "schedule": crontab(hour=9, minute=0),   # 09:00 UTC daily
+        "schedule": crontab(hour=9, minute=0),  # 09:00 UTC daily
     },
     "streak-at-risk-daily": {
         "task": "backend.tasks.growth_tasks.send_streak_at_risk",

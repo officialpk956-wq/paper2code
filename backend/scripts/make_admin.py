@@ -2,7 +2,9 @@
 Usage: python -m backend.scripts.make_admin user@example.com
 Makes the given user an admin. Requires DATABASE_URL to be set.
 """
+
 import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()

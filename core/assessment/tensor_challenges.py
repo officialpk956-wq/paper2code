@@ -20,10 +20,12 @@ Every challenge returns:
     "computation": dict   ← the actual TensorTracker/formula result
   }
 """
+
 from __future__ import annotations
+
 import hashlib
 import random
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
 
 def _make_id(label: str) -> str:
@@ -34,21 +36,22 @@ def _make_id(label: str) -> str:
 # Core formula — same math as TensorTracker._compute_output_shape
 # ---------------------------------------------------------------------------
 
-def _conv_output(H: int, W: int, kernel: int, stride: int, padding: int) -> Tuple[int, int]:
+
+def _conv_output(H: int, W: int, kernel: int, stride: int, padding: int) -> tuple[int, int]:
     """Exact formula: floor((H + 2P - K) / S) + 1"""
     out_h = (H + 2 * padding - kernel) // stride + 1
     out_w = (W + 2 * padding - kernel) // stride + 1
     return out_h, out_w
 
 
-def _pool_output(H: int, W: int, kernel: int, stride: int) -> Tuple[int, int]:
+def _pool_output(H: int, W: int, kernel: int, stride: int) -> tuple[int, int]:
     """MaxPool / AvgPool: floor((H - K) / S) + 1"""
     out_h = (H - kernel) // stride + 1
     out_w = (W - kernel) // stride + 1
     return out_h, out_w
 
 
-def _patch_embed_output(H: int, W: int, C: int, patch_size: int, embed_dim: int) -> Tuple[int, int]:
+def _patch_embed_output(H: int, W: int, C: int, patch_size: int, embed_dim: int) -> tuple[int, int]:
     """PatchEmbedding: (H//P) * (W//P) patches, each embed_dim wide"""
     n_patches = (H // patch_size) * (W // patch_size)
     return n_patches, embed_dim
@@ -58,7 +61,7 @@ def _patch_embed_output(H: int, W: int, C: int, patch_size: int, embed_dim: int)
 # Beginner: Conv output shape
 # ---------------------------------------------------------------------------
 
-CONV_BEGINNER: List[Dict[str, Any]] = [
+CONV_BEGINNER: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("conv_basic_3x3_padding1"),
         "question": (
@@ -101,7 +104,7 @@ CONV_BEGINNER: List[Dict[str, Any]] = [
 ]
 
 
-def _build_conv_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
+def _build_conv_challenge(spec: dict[str, Any]) -> dict[str, Any]:
     H_out, W_out = spec["computation"]["result"]
     answer = f"{H_out} × {W_out}"
 
@@ -144,7 +147,7 @@ def _build_conv_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
 # Intermediate: Pooling output shape
 # ---------------------------------------------------------------------------
 
-POOL_INTERMEDIATE: List[Dict[str, Any]] = [
+POOL_INTERMEDIATE: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("maxpool_2x2_stride2"),
         "question": (
@@ -174,8 +177,7 @@ POOL_INTERMEDIATE: List[Dict[str, Any]] = [
     {
         "challenge_id": _make_id("avgpool_global"),
         "question": (
-            "A GlobalAveragePool2D layer receives input (B, 512, 7, 7). "
-            "What is the output shape?"
+            "A GlobalAveragePool2D layer receives input (B, 512, 7, 7). What is the output shape?"
         ),
         "computation": {
             "formula": "GlobalAvgPool: (B, C, H, W) → (B, C)",
@@ -187,7 +189,7 @@ POOL_INTERMEDIATE: List[Dict[str, Any]] = [
 ]
 
 
-def _build_pool_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
+def _build_pool_challenge(spec: dict[str, Any]) -> dict[str, Any]:
     result = spec["computation"]["result"]
     if isinstance(result, tuple) and result[0] == "B":
         answer = f"(B, {result[1]})"
@@ -232,7 +234,7 @@ def _build_pool_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
 # Advanced: Multi-stage shape propagation
 # ---------------------------------------------------------------------------
 
-MULTISTAGE_ADVANCED: List[Dict[str, Any]] = [
+MULTISTAGE_ADVANCED: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("resnet_stem_propagation"),
         "question": (
@@ -278,7 +280,7 @@ MULTISTAGE_ADVANCED: List[Dict[str, Any]] = [
 ]
 
 
-def _propagate_stages(stages) -> Tuple[int, int]:
+def _propagate_stages(stages) -> tuple[int, int]:
     """Propagate H, W through a sequence of conv/pool/patch operations."""
     H, W = None, None
     for name, op, v in stages:
@@ -294,7 +296,7 @@ def _propagate_stages(stages) -> Tuple[int, int]:
     return H, W
 
 
-def _build_multistage_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
+def _build_multistage_challenge(spec: dict[str, Any]) -> dict[str, Any]:
     result = _propagate_stages(spec["stages"])
 
     if spec["challenge_id"] == _make_id("vit_patch_embed_propagation"):
@@ -339,10 +341,11 @@ def _build_multistage_challenge(spec: Dict[str, Any]) -> Dict[str, Any]:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def get_tensor_challenge(
     difficulty: str = "beginner",
     seed: int | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Return a deterministic tensor shape challenge.
 

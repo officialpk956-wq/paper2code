@@ -1,14 +1,16 @@
 import hashlib
-from typing import Optional
+
 from sqlalchemy.orm import Session
+
 from backend.models import User
-from backend.modules.authz.models import OrganizationMember, Organization
+from backend.modules.authz.models import Organization
+
 
 class FlagService:
     def __init__(self, db: Session):
         self.db = db
 
-    def is_feature_enabled(self, feature_name: str, user: User, org_id: Optional[int] = None) -> bool:
+    def is_feature_enabled(self, feature_name: str, user: User, org_id: int | None = None) -> bool:
         """
         Check feature gating. Supports tier checks, beta features, internal check, and rollout percentage.
         """
@@ -23,7 +25,7 @@ class FlagService:
             try:
                 pct = int(pct_part)
                 # Compute hash modulo 100
-                h = hashlib.md5(f"{name_part}:{user.id}".encode("utf-8")).hexdigest()
+                h = hashlib.md5(f"{name_part}:{user.id}".encode()).hexdigest()
                 score = int(h, 16) % 100
                 return score < pct
             except ValueError:
@@ -43,7 +45,7 @@ class FlagService:
                 org = self.db.get(Organization, org_id)
                 if org:
                     user_rank = tier_ranks.get(org.subscription_tier.lower(), 0)
-            
+
             return user_rank >= required_rank
 
         return True

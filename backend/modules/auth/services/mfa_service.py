@@ -1,23 +1,26 @@
-import io
 import base64
+import hashlib
+import io
+import secrets
+
 import pyotp
 import qrcode
-import secrets
-import hashlib
-from typing import Optional, List
 from sqlalchemy.orm import Session
+
 from backend.models import User
 from backend.modules.auth.services.audit_service import AuditService
 
+
 def hash_backup_code(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
 
 class MFAService:
     def __init__(self, db: Session):
         self.db = db
         self.audit_service = AuditService(db)
 
-    def generate_mfa_setup(self, user: User) -> tuple[str, str, List[str]]:
+    def generate_mfa_setup(self, user: User) -> tuple[str, str, list[str]]:
         """
         Generate setup details:
         - TOTP Secret
@@ -25,24 +28,24 @@ class MFAService:
         - Backup codes (plaintext to display to the user, hashes stored in DB)
         """
         secret = pyotp.random_base32()
-        
+
         # Create provisioning URI
         totp = pyotp.TOTP(secret)
         provisioning_uri = totp.provisioning_uri(name=user.email, issuer_name="Paper2Code")
-        
+
         # Generate QR Code Image
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
         qr.add_data(provisioning_uri)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
-        
+
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
         qr_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         qr_data_uri = f"data:image/png;base64,{qr_base64}"
 
         # Generate backup codes
-        plaintext_backups = [secrets.token_hex(5) for _ in range(8)] # 10-char hex codes
+        plaintext_backups = [secrets.token_hex(5) for _ in range(8)]  # 10-char hex codes
         hashed_backups = [hash_backup_code(c) for c in plaintext_backups]
 
         # Temporarily save secret and backup codes, but do not enable MFA yet
@@ -54,11 +57,7 @@ class MFAService:
         return secret, qr_data_uri, plaintext_backups
 
     def verify_and_enable(
-        self,
-        user: User,
-        code: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        self, user: User, code: str, ip_address: str | None, user_agent: str | None
     ) -> bool:
         if not user.totp_secret:
             return False
@@ -67,32 +66,21 @@ class MFAService:
         if totp.verify(code):
             user.mfa_enabled = True
             self.db.commit()
-            
+
             self.audit_service.log(
-                action="mfa_enabled",
-                user_id=user.id,
-                ip_address=ip_address,
-                device=user_agent
+                action="mfa_enabled", user_id=user.id, ip_address=ip_address, device=user_agent
             )
             return True
         return False
 
-    def disable_mfa(
-        self,
-        user: User,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
-    ) -> None:
+    def disable_mfa(self, user: User, ip_address: str | None, user_agent: str | None) -> None:
         user.mfa_enabled = False
         user.totp_secret = None
         user.backup_codes = None
         self.db.commit()
-        
+
         self.audit_service.log(
-            action="mfa_disabled",
-            user_id=user.id,
-            ip_address=ip_address,
-            device=user_agent
+            action="mfa_disabled", user_id=user.id, ip_address=ip_address, device=user_agent
         )
 
     def verify_totp(self, user: User, code: str) -> bool:
@@ -110,7 +98,7 @@ class MFAService:
             return False
 
         hashed_code = hash_backup_code(code)
-        codes: List[str] = list(user.backup_codes)
+        codes: list[str] = list(user.backup_codes)
 
         if hashed_code in codes:
             codes.remove(hashed_code)

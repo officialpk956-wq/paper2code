@@ -1,15 +1,19 @@
 import datetime
 import secrets
-from typing import Optional, Sequence
-import jwt
+from collections.abc import Sequence
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.modules.auth.models import UserSession
 from backend.models import User
+from backend.modules.auth.config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+)
+from backend.modules.auth.models import UserSession
 from backend.modules.auth.repositories.session_repository import SessionRepository, hash_token
 from backend.modules.auth.services.audit_service import AuditService
-from backend.modules.auth.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
+
 
 class SessionService:
     def __init__(self, db: Session):
@@ -19,6 +23,7 @@ class SessionService:
 
     def create_access_token(self, user: User) -> str:
         from backend.modules.security.jwt_rotation import encode_rotated_jwt
+
         now = datetime.datetime.utcnow()
         # expire is handled by encode_rotated_jwt if we pass expires_delta
         expires_delta = datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -30,7 +35,7 @@ class SessionService:
             "aud": "paper2code-app",
             "iat": now,
             "nbf": now,
-            "type": "access"
+            "type": "access",
         }
         return encode_rotated_jwt(payload, expires_delta=expires_delta)
 
@@ -40,11 +45,7 @@ class SessionService:
         return secrets.token_hex(40)
 
     def register_session(
-        self,
-        user: User,
-        refresh_token: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        self, user: User, refresh_token: str, ip_address: str | None, user_agent: str | None
     ) -> UserSession:
         expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
         session = self.repo.create_session(
@@ -52,16 +53,13 @@ class SessionService:
             refresh_token=refresh_token,
             ip_address=ip_address,
             user_agent=user_agent,
-            expires_at=expires_at
+            expires_at=expires_at,
         )
         self.db.commit()
         return session
 
     def rotate_session(
-        self,
-        refresh_token: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        self, refresh_token: str, ip_address: str | None, user_agent: str | None
     ) -> tuple[str, str]:
         """
         Rotates refresh token. Implements replay attack detection and concurrency grace period.
@@ -74,8 +72,7 @@ class SessionService:
             # Token not found - could be a replay attack of a token that has been rotated/revoked!
             # To be safe, we reject and raise 401
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired refresh token"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token"
             )
 
         if session.revoked or session.expires_at < datetime.datetime.utcnow():
@@ -86,18 +83,24 @@ class SessionService:
             # replay attack triggers due to transient network retries or client concurrency.
             if session.revoked and session.rotated_at:
                 grace_limit = session.rotated_at + datetime.timedelta(seconds=10)
-                if datetime.datetime.utcnow() <= grace_limit and session.ip_address == ip_address and session.user_agent == user_agent:
+                if (
+                    datetime.datetime.utcnow() <= grace_limit
+                    and session.ip_address == ip_address
+                    and session.user_agent == user_agent
+                ):
                     user = session.user
                     new_access = self.create_access_token(user)
                     new_refresh = self.create_refresh_token(user)
-                    
-                    expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
+                    expires_at = datetime.datetime.utcnow() + datetime.timedelta(
+                        days=REFRESH_TOKEN_EXPIRE_DAYS
+                    )
                     self.repo.create_session(
                         user_id=user.id,
                         refresh_token=new_refresh,
                         ip_address=ip_address,
                         user_agent=user_agent,
-                        expires_at=expires_at
+                        expires_at=expires_at,
                     )
                     self.db.commit()
                     return new_access, new_refresh
@@ -105,17 +108,17 @@ class SessionService:
             # Replay attack: Revoke all sessions for this user to protect the account
             self.repo.revoke_all_user_sessions(session.user_id)
             self.db.commit()
-            
+
             self.audit_service.log(
                 action="replay_attack_detected",
                 user_id=session.user_id,
                 ip_address=ip_address,
                 device=user_agent,
-                metadata_dict={"revoked_token_hash": token_hash}
+                metadata_dict={"revoked_token_hash": token_hash},
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Replay attack detected. All sessions revoked."
+                detail="Replay attack detected. All sessions revoked.",
             )
 
         # Generate new tokens
@@ -134,13 +137,15 @@ class SessionService:
             refresh_token=new_refresh,
             ip_address=ip_address,
             user_agent=user_agent,
-            expires_at=expires_at
+            expires_at=expires_at,
         )
         self.db.commit()
 
         return new_access, new_refresh
 
-    def revoke_session_by_token(self, refresh_token: str, ip_address: Optional[str], user_agent: Optional[str]) -> None:
+    def revoke_session_by_token(
+        self, refresh_token: str, ip_address: str | None, user_agent: str | None
+    ) -> None:
         token_hash = hash_token(refresh_token)
         session = self.repo.get_session_by_token_hash(token_hash)
         if session:
@@ -151,10 +156,12 @@ class SessionService:
                 user_id=session.user_id,
                 ip_address=ip_address,
                 device=user_agent,
-                metadata_dict={"session_id": session.id}
+                metadata_dict={"session_id": session.id},
             )
 
-    def revoke_session_by_id(self, session_id: str, user_id: int, ip_address: Optional[str], user_agent: Optional[str]) -> bool:
+    def revoke_session_by_id(
+        self, session_id: str, user_id: int, ip_address: str | None, user_agent: str | None
+    ) -> bool:
         session = self.repo.get_session_by_id(session_id)
         if session and session.user_id == user_id:
             res = self.repo.revoke_session(session_id)
@@ -164,27 +171,29 @@ class SessionService:
                 user_id=user_id,
                 ip_address=ip_address,
                 device=user_agent,
-                metadata_dict={"revoked_session_id": session_id}
+                metadata_dict={"revoked_session_id": session_id},
             )
             return res
         return False
 
-    def revoke_all_sessions(self, user_id: int, ip_address: Optional[str], user_agent: Optional[str]) -> None:
+    def revoke_all_sessions(
+        self, user_id: int, ip_address: str | None, user_agent: str | None
+    ) -> None:
         self.repo.revoke_all_user_sessions(user_id)
-        
+
         # Increment token version to invalidate all current access tokens
         user = self.db.get(User, user_id)
         if user:
             user.token_version += 1
-            
+
         self.db.commit()
-        
+
         self.audit_service.log(
             action="logout_all_devices",
             user_id=user_id,
             ip_address=ip_address,
             device=user_agent,
-            metadata_dict={"new_token_version": user.token_version if user else None}
+            metadata_dict={"new_token_version": user.token_version if user else None},
         )
 
     def get_active_sessions(self, user_id: int) -> Sequence[UserSession]:

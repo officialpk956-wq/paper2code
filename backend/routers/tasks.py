@@ -7,6 +7,7 @@ from backend.repositories.task_repository import TaskRepository
 
 router = APIRouter(prefix="/api/tasks", tags=["Tasks"])
 
+
 @router.get("/{task_id}")
 def get_task(
     task_id: str,

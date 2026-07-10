@@ -1,30 +1,23 @@
+import datetime
+import json
 import logging
 import os
-import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, Request
-from fastapi.responses import RedirectResponse
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
-import json
-from sqlalchemy.orm import Session
 from sqlalchemy import func
-import dataclasses
-import base64
+from sqlalchemy.orm import Session
 
 from backend.database import get_db
-from backend.models import Paper
-from backend.services.paper_ingestion_service import ingest_pdf_paper
+from backend.dependencies import get_current_user, get_optional_user
+from backend.models import Paper, Task
+from core.codegen import _node_to_layer
+from core.explainers.graph_explainer import explain_node
+from core.metrics_estimator import estimate_activation_memory, estimate_metrics_from_graph
 from core.orchestrator.pipeline import Paper2CodePipeline
 from core.paper_to_code_generator import PaperToCodeGenerator
 from core.rag.config_extractor import ConfigExtractor
-from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
-from core.explainers.graph_explainer import explain_node
-from core.codegen import _node_to_layer
-from backend.server import limiter
-from backend.dependencies import get_current_user, get_optional_user
-from backend.repositories.task_repository import TaskRepository
-from backend.tasks.paper_tasks import generate_code_from_pdf_task
-from backend.models import Task
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +51,13 @@ def _check_paper_quota(db: Session, user_id: int) -> None:
             ),
         )
 
+
 def _check_storage_quota(db: Session, user_id: int, additional_bytes: int = 0) -> None:
     """Raise 429 if user would exceed their storage quota."""
     if _STORAGE_QUOTA_BYTES <= 0:
         return
     from backend.models import User
+
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         return
@@ -81,38 +76,43 @@ pipeline = Paper2CodePipeline()
 extractor = ConfigExtractor()
 generator = PaperToCodeGenerator()
 
+
 class TextRequest(BaseModel):
     text: str = Field(..., max_length=50000)
-    
+
+
 class CompareRequest(BaseModel):
     text_a: str = Field(..., max_length=50000)
     text_b: str = Field(..., max_length=50000)
 
+
 class GraphRequest(BaseModel):
     name: str = Field(default="Architect Session", max_length=500)
-    layers: list[Dict[str, Any]]
+    layers: list[dict[str, Any]]
 
 
 def _build_response(spec, result, code, code_source):
     graph = result["graph"]
     metrics = estimate_metrics_from_graph(graph)
     mem_data = estimate_activation_memory(graph, batch_size=1, input_spatial=224)
-    total_mem_mb = sum(row['mem_mb'] for row in mem_data) if mem_data else 0
-    
+    total_mem_mb = sum(row["mem_mb"] for row in mem_data) if mem_data else 0
+
     layer_breakdown = []
     for node in graph.nodes:
         node_code = _node_to_layer(node) or f"# Custom block implementation needed for {node.type}"
-        layer_breakdown.append({
-            "id": node.id,
-            "label": node.label,
-            "type": node.type,
-            "params": node.params,
-            "semantic": node.semantic_params,
-            "description": node.description,
-            "explanation": explain_node(node),
-            "code_snippet": node_code
-        })
-        
+        layer_breakdown.append(
+            {
+                "id": node.id,
+                "label": node.label,
+                "type": node.type,
+                "params": node.params,
+                "semantic": node.semantic_params,
+                "description": node.description,
+                "explanation": explain_node(node),
+                "code_snippet": node_code,
+            }
+        )
+
     return {
         "name": graph.name,
         "svg": result["visual"]["graphviz_dot"],
@@ -125,7 +125,7 @@ def _build_response(spec, result, code, code_source):
             "flops_score": metrics["total_flops_score"],
             "params": metrics["total_params_estimate"],
             "depth": metrics["depth"],
-            "memory_mb": round(total_mem_mb, 1)
+            "memory_mb": round(total_mem_mb, 1),
         },
         "tensor_trace": graph.metadata.get("tensor_trace", []),
         "cross_attention_events": graph.metadata.get("cross_attention_events", []),
@@ -148,7 +148,7 @@ def get_paper_info(paper) -> tuple[str, str, str, str]:
     classification = arch_graph.get("classification")
     status = arch_graph.get("status", "Published")
     support = arch_graph.get("support_level", "experimental")
-    
+
     if classification:
         return paper.title, classification, status, support
 
@@ -181,6 +181,7 @@ def safe_dict(val) -> dict:
             return {}
     return {}
 
+
 def safe_list(val) -> list:
     if isinstance(val, list):
         return val
@@ -191,6 +192,7 @@ def safe_list(val) -> list:
         except (ValueError, TypeError):
             return []
     return []
+
 
 def _module_to_dict(m, paper_id: int, total: int) -> dict:
     flops = safe_dict(m.flops_context)
@@ -253,7 +255,6 @@ def _module_to_dict(m, paper_id: int, total: int) -> dict:
 # deprecated alias, remove after frontend migration
 
 
-
 # deprecated alias, remove after frontend migration
 
 
@@ -262,26 +263,27 @@ def _module_to_dict(m, paper_id: int, total: int) -> dict:
 
 @router.get("/papers")
 def list_papers(
-    q:      Optional[str] = Query(None, min_length=2, max_length=200, description="Search title/abstract"),
-    domain: Optional[str] = Query(None, description="Filter by architecture type / domain tag"),
-    skip:   int = Query(0, ge=0),
-    limit:  int = Query(100, ge=1, le=500),
+    q: str | None = Query(None, min_length=2, max_length=200, description="Search title/abstract"),
+    domain: str | None = Query(None, description="Filter by architecture type / domain tag"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user=Depends(get_optional_user),
 ):
-    from backend.redis_config import cache_redis
     import json
-    
+
+    from backend.redis_config import cache_redis
+
     user_id = current_user.id if current_user else None
     cache_key = f"papers:list:{q}:{domain}:{user_id}"
-    
+
     if cache_redis:
         cached = cache_redis.get(cache_key)
         if cached:
             return json.loads(cached)
 
-    from backend.models import Paper
     from sqlalchemy import or_
+
     query = db.query(Paper)
     if current_user:
         # Authenticated: public + unlisted + own private papers
@@ -294,42 +296,44 @@ def list_papers(
     else:
         # Unauthenticated: only public + unlisted
         query = query.filter(Paper.visibility != "private")
-        
+
     if q:
         from backend.services.vector_service import semantic_search
+
         paper_ids = semantic_search(q, limit=20)
         if paper_ids:
             # Reorder SQL results to match Qdrant ranking
             from sqlalchemy.sql.expression import case
-            ordering = case(
-                {_id: index for index, _id in enumerate(paper_ids)},
-                value=Paper.id
-            )
+
+            ordering = case({_id: index for index, _id in enumerate(paper_ids)}, value=Paper.id)
             query = query.filter(Paper.id.in_(paper_ids)).order_by(ordering)
         else:
             # Fallback to ILIKE if vector search returns nothing (or fails)
             pat = f"%{q}%"
-        query = query.filter(or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat)))
+        query = query.filter(
+            or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat))
+        )
     from sqlalchemy.orm import selectinload
+
     papers = query.options(selectinload(Paper.modules)).offset(skip).limit(limit).all()
     if domain:
         domain_lower = domain.lower()
         papers = [p for p in papers if domain_lower in get_paper_info(p)[1].lower()]
     results = []
-    
+
     categories = {}
     largest_model = {"name": None, "params": 0}
     most_complex_model = {"name": None, "flops": 0}
     total_modules = 0
-    
+
     for p in papers:
         title, arch_type, status, support_level = get_paper_info(p)
         flops_analysis = p.flops_analysis or {}
-        
+
         params = flops_analysis.get("total_params_estimate", 0)
         flops = flops_analysis.get("total_flops_score", 0)
         modules_count = len(p.modules)
-        
+
         if status != "Draft":
             total_modules += modules_count
             categories[arch_type] = categories.get(arch_type, 0) + 1
@@ -337,37 +341,39 @@ def list_papers(
                 largest_model = {"name": title, "params": params}
             if flops > most_complex_model["flops"]:
                 most_complex_model = {"name": title, "flops": flops}
-        
-        results.append({
-            "id":              p.id,
-            "title":           title,
-            "authors":         p.authors,
-            "abstract":        p.abstract,
-            "visibility":      p.visibility,
-            "uploaded_by":     p.uploaded_by,
-            "created_at":      p.created_at.isoformat() if p.created_at else None,
-            "architecture_type": arch_type,
-            "module_count":    modules_count,
-            "parameter_count": params,
-            "flops":           flops,
-            "status":          status,
-            "support_level":   support_level,
-        })
-        
+
+        results.append(
+            {
+                "id": p.id,
+                "title": title,
+                "authors": p.authors,
+                "abstract": p.abstract,
+                "visibility": p.visibility,
+                "uploaded_by": p.uploaded_by,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "architecture_type": arch_type,
+                "module_count": modules_count,
+                "parameter_count": params,
+                "flops": flops,
+                "status": status,
+                "support_level": support_level,
+            }
+        )
+
     res = {
         "summary": {
             "total_papers": sum(1 for p in results if p["status"] != "Draft"),
             "total_modules": total_modules,
             "architecture_categories": categories,
             "largest_model": largest_model["name"],
-            "most_complex_model": most_complex_model["name"]
+            "most_complex_model": most_complex_model["name"],
         },
-        "papers": results
+        "papers": results,
     }
-    
+
     if cache_redis:
         cache_redis.setex(cache_key, 30, json.dumps(res))
-        
+
     return res
 
 
@@ -377,14 +383,12 @@ def list_papers(
 # ---------------------------------------------------------------------------
 
 
-
 @router.get("/papers/{paper_id}")
 def get_paper_details(
     paper_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_optional_user),
 ):
-    from backend.models import Paper
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -395,39 +399,41 @@ def get_paper_details(
 
     modules_summary = []
     for m in p.modules:
-        modules_summary.append({
-            "id": m.id,
-            "order_index": m.order_index,
-            "layer_name": m.layer_name,
-            "module_type": m.module_type,
-            "explanation": m.explanation,
-            "tensor_flow": m.tensor_flow,
-            "graph_nodes": m.graph_nodes,
-            "flops_context": m.flops_context
-        })
+        modules_summary.append(
+            {
+                "id": m.id,
+                "order_index": m.order_index,
+                "layer_name": m.layer_name,
+                "module_type": m.module_type,
+                "explanation": m.explanation,
+                "tensor_flow": m.tensor_flow,
+                "graph_nodes": m.graph_nodes,
+                "flops_context": m.flops_context,
+            }
+        )
 
     ingestion_data = (p.architecture_graph or {}).get("ingestion", {})
     return {
         "metadata": {
-            "id":               p.id,
-            "title":            title,
-            "full_title":       p.title,
-            "authors":          p.authors,
-            "abstract":         p.abstract,
-            "visibility":       p.visibility,
-            "uploaded_by":      p.uploaded_by,
-            "created_at":       p.created_at.isoformat() if p.created_at else None,
+            "id": p.id,
+            "title": title,
+            "full_title": p.title,
+            "authors": p.authors,
+            "abstract": p.abstract,
+            "visibility": p.visibility,
+            "uploaded_by": p.uploaded_by,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
             "architecture_type": arch_type,
-            "status":           status,
-            "source_filename":  ingestion_data.get("source_filename"),
-            "figure_count":     ingestion_data.get("figure_count", 0),
-            "equation_count":   ingestion_data.get("equation_count", 0),
+            "status": status,
+            "source_filename": ingestion_data.get("source_filename"),
+            "figure_count": ingestion_data.get("figure_count", 0),
+            "equation_count": ingestion_data.get("equation_count", 0),
         },
         "module_summary": modules_summary,
         "architecture_statistics": {
             "depth": flops_analysis.get("depth", 0),
             "node_count": len(p.architecture_graph.get("nodes", [])) if p.architecture_graph else 0,
-            "edge_count": len(p.architecture_graph.get("edges", [])) if p.architecture_graph else 0
+            "edge_count": len(p.architecture_graph.get("edges", [])) if p.architecture_graph else 0,
         },
         "architecture_graph": p.architecture_graph or {"nodes": [], "edges": []},
         "flops": flops_analysis.get("total_flops_score", 0),
@@ -436,10 +442,10 @@ def get_paper_details(
     }
 
 
-
 MAX_SIZE = 20 * 1024 * 1024  # 20 MB hard cap
 
 _VALID_VISIBILITY = {"public", "unlisted", "private"}
+
 
 async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
     chunks = []
@@ -452,7 +458,7 @@ async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
         if received > max_bytes:
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds {max_bytes // (1024*1024)} MB limit.",
+                detail=f"File exceeds {max_bytes // (1024 * 1024)} MB limit.",
             )
         chunks.append(chunk)
     return b"".join(chunks)
@@ -462,6 +468,7 @@ async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
 # POST /api/papers/confirm-upload  — confirm direct upload, queue processing
 # ---------------------------------------------------------------------------
 
+
 class ConfirmUploadRequest(BaseModel):
     key: str = Field(..., max_length=2048)
     paper_name: str = Field(..., max_length=500)
@@ -470,37 +477,24 @@ class ConfirmUploadRequest(BaseModel):
     file_size_bytes: int = 0
 
 
-
-
 # ---------------------------------------------------------------------------
 # GET /api/papers/{paper_id}/download  — presigned R2 download URL (1h expiry)
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
 # PATCH /api/papers/{id}/visibility  — change visibility (P0, ownership req.)
 # ---------------------------------------------------------------------------
 
+
 class VisibilityUpdate(BaseModel):
     visibility: str
-
-
 
 
 # ---------------------------------------------------------------------------
 # DELETE /api/papers/{id}  — delete own paper, R2 object, free quota (P1)
 # ---------------------------------------------------------------------------
+
 
 @router.delete("/papers/{paper_id}", status_code=200)
 def delete_paper(
@@ -508,7 +502,8 @@ def delete_paper(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from backend.models import Paper, User as _User
+    from backend.models import User as _User
+
     paper = db.query(Paper).filter_by(id=paper_id).first()
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -519,11 +514,14 @@ def delete_paper(
     if paper.file_size_bytes and paper.uploaded_by:
         owner = db.query(_User).filter_by(id=paper.uploaded_by).first()
         if owner:
-            owner.storage_bytes_used = max(0, (owner.storage_bytes_used or 0) - paper.file_size_bytes)
+            owner.storage_bytes_used = max(
+                0, (owner.storage_bytes_used or 0) - paper.file_size_bytes
+            )
 
     # Delete R2 object (best-effort)
     try:
         from backend.services import storage_service
+
         if paper.r2_key:
             storage_service.cleanup(f"r2://{paper.r2_key}")
     except Exception:
@@ -538,10 +536,9 @@ def delete_paper(
 # POST /api/papers/{id}/flag  — user reports a paper for review (P1)
 # ---------------------------------------------------------------------------
 
+
 class PaperFlagRequest(BaseModel):
     reason: str = Field(default="inappropriate", max_length=500)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +548,3 @@ class PaperFlagRequest(BaseModel):
 
 class PaperAskRequest(BaseModel):
     question: str = Field(..., max_length=10000)
-
-
-

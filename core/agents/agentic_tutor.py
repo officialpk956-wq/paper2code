@@ -1,6 +1,6 @@
-import os
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,14 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "paper_id": {"type": "integer", "description": "The paper's database ID"},
-                    "section": {"type": "string", "description": "Section name: abstract, method, experiments, introduction"}
+                    "section": {
+                        "type": "string",
+                        "description": "Section name: abstract, method, experiments, introduction",
+                    },
                 },
-                "required": ["paper_id"]
-            }
-        }
+                "required": ["paper_id"],
+            },
+        },
     },
     {
         "type": "function",
@@ -31,12 +34,10 @@ TOOLS = [
             "description": "Get architectures where this user has low assessment accuracy. Use to personalize explanations.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "user_id": {"type": "integer"}
-                },
-                "required": ["user_id"]
-            }
-        }
+                "properties": {"user_id": {"type": "integer"}},
+                "required": ["user_id"],
+            },
+        },
     },
     {
         "type": "function",
@@ -46,11 +47,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "concept": {"type": "string", "description": "e.g. 'attention mechanism', 'residual connection'"}
+                    "concept": {
+                        "type": "string",
+                        "description": "e.g. 'attention mechanism', 'residual connection'",
+                    }
                 },
-                "required": ["concept"]
-            }
-        }
+                "required": ["concept"],
+            },
+        },
     },
     {
         "type": "function",
@@ -59,13 +63,11 @@ TOOLS = [
             "description": "Search papers in the database that mention a concept in their title or abstract.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "concept": {"type": "string"}
-                },
-                "required": ["concept"]
-            }
-        }
-    }
+                "properties": {"concept": {"type": "string"}},
+                "required": ["concept"],
+            },
+        },
+    },
 ]
 
 _ALLOWED_CONTEXT_KEYS = {"architecture", "title", "domain", "topic"}
@@ -148,7 +150,15 @@ class AgenticTutor:
             finish_reason = choice.finish_reason
 
             # Append the assistant turn (with or without tool_calls)
-            messages.append(choice.message.model_dump(exclude_none=True) if hasattr(choice.message, "model_dump") else {"role": "assistant", "content": choice.message.content or "", "tool_calls": getattr(choice.message, "tool_calls", None)})
+            messages.append(
+                choice.message.model_dump(exclude_none=True)
+                if hasattr(choice.message, "model_dump")
+                else {
+                    "role": "assistant",
+                    "content": choice.message.content or "",
+                    "tool_calls": getattr(choice.message, "tool_calls", None),
+                }
+            )
 
             if finish_reason != "tool_calls":
                 break
@@ -160,16 +170,20 @@ class AgenticTutor:
                     tc.function.name,
                     json.loads(tc.function.arguments),
                 )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": tool_result,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_result,
+                    }
+                )
 
         # Extract the final text answer
         final_text = choice.message.content or ""
         if not final_text:
-            final_text = "I was unable to generate a complete response. Please rephrase your question."
+            final_text = (
+                "I was unable to generate a complete response. Please rephrase your question."
+            )
 
         updated_history = messages[-6:]
         return {"answer": final_text, "reasoning_type": "Agentic"}, updated_history

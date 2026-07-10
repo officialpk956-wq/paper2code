@@ -4,20 +4,20 @@ Semantic vector search for papers using Qdrant + sentence-transformers.
 All methods are safe to call even when Qdrant is not configured:
 they log a warning and return empty results rather than raising.
 """
-import os
+
 import logging
-from typing import Optional
+import os
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL        = os.getenv("QDRANT_URL")          # e.g. https://xxx.qdrant.io
-QDRANT_API_KEY    = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME   = os.getenv("QDRANT_COLLECTION", "papers")
-EMBEDDING_MODEL   = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-VECTOR_DIM        = 384   # bge-small-en output dimension
+QDRANT_URL = os.getenv("QDRANT_URL")  # e.g. https://xxx.qdrant.io
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "papers")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+VECTOR_DIM = 384  # bge-small-en output dimension
 
-_qdrant_client    = None
-_embedder         = None
+_qdrant_client = None
+_embedder = None
 
 
 def _get_qdrant():
@@ -28,6 +28,7 @@ def _get_qdrant():
         return None
     try:
         from qdrant_client import QdrantClient
+
         _qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=10)
         _ensure_collection(_qdrant_client)
         return _qdrant_client
@@ -42,6 +43,7 @@ def _get_embedder():
         return _embedder
     try:
         from sentence_transformers import SentenceTransformer
+
         _embedder = SentenceTransformer(EMBEDDING_MODEL)
         return _embedder
     except Exception as e:
@@ -50,7 +52,8 @@ def _get_embedder():
 
 
 def _ensure_collection(client):
-    from qdrant_client.models import VectorParams, Distance
+    from qdrant_client.models import Distance, VectorParams
+
     existing = [c.name for c in client.get_collections().collections]
     if COLLECTION_NAME not in existing:
         client.create_collection(
@@ -79,19 +82,22 @@ def index_paper(paper_id: int, title: str, abstract: str, authors: str = "") -> 
     client = _get_qdrant()
     if client is None:
         return False
-    text   = f"{title}\n{authors}\n{abstract}"
+    text = f"{title}\n{authors}\n{abstract}"
     vector = embed_text(text)
     if vector is None:
         return False
     try:
         from qdrant_client.models import PointStruct
+
         client.upsert(
             collection_name=COLLECTION_NAME,
-            points=[PointStruct(
-                id=paper_id,
-                vector=vector,
-                payload={"title": title, "abstract": abstract[:500]},
-            )],
+            points=[
+                PointStruct(
+                    id=paper_id,
+                    vector=vector,
+                    payload={"title": title, "abstract": abstract[:500]},
+                )
+            ],
         )
         return True
     except Exception as e:
@@ -130,6 +136,7 @@ def delete_paper(paper_id: int) -> bool:
         return False
     try:
         from qdrant_client.models import PointIdsList
+
         client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=PointIdsList(points=[paper_id]),

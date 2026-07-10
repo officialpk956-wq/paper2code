@@ -19,7 +19,7 @@ def main():
 
         if family != "unet":
             print(f"⚠️ Skipping unsupported model family: {family}")
-            continue   # ✅ now correctly inside loop
+            continue  # ✅ now correctly inside loop
 
         refined = refine_unet_schema(raw_schema)
 

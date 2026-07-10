@@ -1,11 +1,10 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 from backend.dependencies import get_current_user
 from backend.models import User
@@ -24,6 +23,7 @@ _ANNOUNCE_KEY = "announcement:current"
 def _get_redis():
     try:
         import redis as redis_lib
+
         url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         return redis_lib.from_url(url, decode_responses=True)
     except Exception:
@@ -40,10 +40,11 @@ def _admin_required(current_user: User = Depends(get_current_user)) -> User:
 # POST /api/admin/announcements
 # ---------------------------------------------------------------------------
 
+
 class AnnouncementCreate(BaseModel):
     message: str
-    level: str = "info"   # info | warning | error
-    expires_in_seconds: Optional[int] = None
+    level: str = "info"  # info | warning | error
+    expires_in_seconds: int | None = None
 
 
 @router.post("/api/admin/announcements", include_in_schema=False)
@@ -54,7 +55,7 @@ def create_announcement(
     payload = {
         "message": body.message,
         "level": body.level,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "created_by": admin.id,
     }
     r = _get_redis()
@@ -73,6 +74,7 @@ def create_announcement(
 # DELETE /api/admin/announcements
 # ---------------------------------------------------------------------------
 
+
 @router.delete("/api/admin/announcements", include_in_schema=False, status_code=200)
 def delete_announcement(admin: User = Depends(_admin_required)):
     r = _get_redis()
@@ -87,6 +89,7 @@ def delete_announcement(admin: User = Depends(_admin_required)):
 # ---------------------------------------------------------------------------
 # GET /api/announcements  (public — no auth)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/announcements", include_in_schema=False)
 def get_announcement():

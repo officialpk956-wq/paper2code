@@ -1,13 +1,15 @@
-from typing import TypedDict, Optional, Annotated
-import operator
-from langgraph.graph import StateGraph, END
-from core.section_splitter import process_text
+import logging
+from typing import TypedDict
+
+from langgraph.graph import END, StateGraph
+
 from core.architecture_extractor import extract_architecture
 from core.classification import infer_family_from_name
 from core.llm_client import llm_complete
-import logging
+from core.section_splitter import process_text
 
 logger = logging.getLogger(__name__)
+
 
 class IngestionState(TypedDict):
     paper_id: int
@@ -20,7 +22,8 @@ class IngestionState(TypedDict):
     lint_errors: list[str]
     revision_count: int
     final_code: str
-    error: Optional[str]
+    error: str | None
+
 
 def split_sections(state: IngestionState) -> dict:
     """Split raw text into labelled sections."""
@@ -29,6 +32,7 @@ def split_sections(state: IngestionState) -> dict:
         return {"sections": sections}
     except Exception as e:
         return {"error": f"Section split failed: {e}", "sections": {}}
+
 
 def classify_paper(state: IngestionState) -> dict:
     """Determine model family from paper name + section keywords."""
@@ -47,6 +51,7 @@ Reply with ONLY the family name, lowercase, no punctuation."""
         family = llm_complete(prompt).strip().split()[0].lower()
     return {"model_family": family}
 
+
 def extract_schema(state: IngestionState) -> dict:
     """Extract architecture schema using existing architecture_extractor."""
     try:
@@ -56,32 +61,43 @@ def extract_schema(state: IngestionState) -> dict:
     except Exception as e:
         return {"error": f"Schema extraction failed: {e}", "schema": {}}
 
+
 def generate_code(state: IngestionState) -> dict:
     """Generate PyTorch code from schema using existing codegen."""
     try:
         from core.paper_to_code_generator import generate_pytorch_code
+
         code = generate_pytorch_code(state["schema"])
         return {"code": code, "lint_errors": [], "revision_count": 0}
     except Exception as e:
         return {"error": f"Codegen failed: {e}", "code": ""}
 
+
 def lint_code(state: IngestionState) -> dict:
     """Check code for syntax errors using py_compile."""
-    import py_compile, tempfile, os
+    import os
+    import py_compile
+    import tempfile
+
     code = state.get("code", "")
     if not code:
         return {"lint_errors": ["No code generated"]}
     try:
-        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w", encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".py", delete=False, mode="w", encoding="utf-8"
+        ) as f:
             f.write(code)
             fname = f.name
         py_compile.compile(fname, doraise=True)
         os.unlink(fname)
         return {"lint_errors": []}
     except py_compile.PyCompileError as e:
-        try: os.unlink(fname)
-        except: pass
+        try:
+            os.unlink(fname)
+        except:
+            pass
         return {"lint_errors": [str(e)]}
+
 
 def revise_code(state: IngestionState) -> dict:
     """Ask LLM to fix lint errors. Max 3 revisions."""
@@ -102,6 +118,7 @@ Code:
         "revision_count": state.get("revision_count", 0) + 1,
     }
 
+
 from core.agents.code_safety import _check_code_safety
 
 
@@ -110,6 +127,7 @@ def commit_result(state: IngestionState) -> dict:
     code = state.get("code", "")
     _check_code_safety(code)
     return {"final_code": code}
+
 
 def should_revise(state: IngestionState) -> str:
     if state.get("error"):
@@ -122,6 +140,7 @@ def should_revise(state: IngestionState) -> str:
         return "commit"
     return "revise"
 
+
 def build_ingestion_graph() -> StateGraph:
     graph = StateGraph(IngestionState)
     graph.add_node("split_sections", split_sections)
@@ -131,26 +150,37 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_node("lint_code", lint_code)
     graph.add_node("revise_code", revise_code)
     graph.add_node("commit_result", commit_result)
-    
+
     graph.set_entry_point("split_sections")
     graph.add_edge("split_sections", "classify_paper")
     graph.add_edge("classify_paper", "extract_schema")
     graph.add_edge("extract_schema", "generate_code")
     graph.add_edge("generate_code", "lint_code")
-    graph.add_conditional_edges("lint_code", should_revise,
-        {"commit": "commit_result", "revise": "revise_code"})
+    graph.add_conditional_edges(
+        "lint_code", should_revise, {"commit": "commit_result", "revise": "revise_code"}
+    )
     graph.add_edge("revise_code", "lint_code")
     graph.add_edge("commit_result", END)
     return graph.compile()
 
+
 ingestion_graph = build_ingestion_graph()
+
 
 def run_ingestion(paper_id: int, paper_name: str, raw_text: str) -> dict:
     """Entry point called by Celery task."""
     initial_state = IngestionState(
-        paper_id=paper_id, paper_name=paper_name, raw_text=raw_text,
-        sections={}, model_family="", schema={}, code="",
-        lint_errors=[], revision_count=0, final_code="", error=None,
+        paper_id=paper_id,
+        paper_name=paper_name,
+        raw_text=raw_text,
+        sections={},
+        model_family="",
+        schema={},
+        code="",
+        lint_errors=[],
+        revision_count=0,
+        final_code="",
+        error=None,
     )
     result = ingestion_graph.invoke(initial_state)
     return {"final_code": result.get("final_code", ""), "error": result.get("error")}

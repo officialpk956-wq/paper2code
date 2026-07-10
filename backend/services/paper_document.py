@@ -10,8 +10,8 @@ JSON column.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -26,11 +26,11 @@ class Section:
 class Figure:
     id: str
     page: int
-    caption: Optional[str] = None
-    xref: Optional[int] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
-    ext: Optional[str] = None
+    caption: str | None = None
+    xref: int | None = None
+    width: int | None = None
+    height: int | None = None
+    ext: str | None = None
     has_binary: bool = False
 
 
@@ -53,14 +53,14 @@ class PaperDocumentMetadata:
 class PaperDocument:
     id: str
     title: str
-    authors: List[str]
+    authors: list[str]
     abstract: str
-    sections: List[Section]
-    figures: List[Figure]
-    equations: List[Equation]
+    sections: list[Section]
+    figures: list[Figure]
+    equations: list[Equation]
     metadata: PaperDocumentMetadata
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "title": self.title,
@@ -83,10 +83,7 @@ class PaperDocument:
                 }
                 for f in self.figures
             ],
-            "equations": [
-                {"id": e.id, "page": e.page, "text": e.text}
-                for e in self.equations
-            ],
+            "equations": [{"id": e.id, "page": e.page, "text": e.text} for e in self.equations],
             "metadata": {
                 "page_count": self.metadata.page_count,
                 "file_size": self.metadata.file_size,

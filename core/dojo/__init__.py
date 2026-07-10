@@ -16,10 +16,10 @@ Design notes:
 """
 
 from core.dojo.exercises import (
+    EXERCISES,
     get_exercise_list,
     get_public_exercise,
     get_solution,
-    EXERCISES,
 )
 
 __all__ = [

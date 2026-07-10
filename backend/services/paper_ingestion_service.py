@@ -20,18 +20,17 @@ from __future__ import annotations
 import io
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.models import Paper, PaperModule
-from backend.services.knowledge_extraction_service import build_knowledge_graph
-from backend.services.architecture_reconstruction_service import reconstruct_architecture
 from backend.services.architecture_graph_compiler import compile_blueprint
+from backend.services.architecture_reconstruction_service import reconstruct_architecture
+from backend.services.knowledge_extraction_service import build_knowledge_graph
 from core.classification import classify_architecture
 from core.module_generator import generate_modules
 from core.paper_to_code_generator import PaperToCodeGenerator
-
 
 _GENERATOR = PaperToCodeGenerator()
 
@@ -52,7 +51,7 @@ def _resolve_unique_title(db: Session, base_title: str) -> str:
     return candidate
 
 
-def extract_pdf_pages(pdf_bytes: bytes) -> Tuple[List[str], str]:
+def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
     """Extract page-level text from a PDF byte stream."""
     try:
         import pdfplumber
@@ -79,7 +78,7 @@ def extract_pdf_pages(pdf_bytes: bytes) -> Tuple[List[str], str]:
         raise ValueError(f"Failed to extract text from PDF: {exc}") from exc
 
 
-def extract_raw_text(pdf_bytes: bytes) -> Tuple[str, List[str], str]:
+def extract_raw_text(pdf_bytes: bytes) -> tuple[str, list[str], str]:
     pages, method = extract_pdf_pages(pdf_bytes)
     raw_text = "\n\n".join(page for page in pages if page is not None)
     if not raw_text.strip():
@@ -87,7 +86,7 @@ def extract_raw_text(pdf_bytes: bytes) -> Tuple[str, List[str], str]:
     return raw_text, pages, method
 
 
-def extract_figures(pdf_bytes: bytes, page_texts: List[str]) -> List[Dict[str, Any]]:
+def extract_figures(pdf_bytes: bytes, page_texts: list[str]) -> list[dict[str, Any]]:
     """Extract figure metadata from PDF pages using PyMuPDF image xrefs."""
     try:
         import fitz  # PyMuPDF
@@ -95,7 +94,7 @@ def extract_figures(pdf_bytes: bytes, page_texts: List[str]) -> List[Dict[str, A
         return []
 
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    figures: List[Dict[str, Any]] = []
+    figures: list[dict[str, Any]] = []
     seen_xrefs: set[int] = set()
 
     page_count = min(len(document), 30)
@@ -105,7 +104,9 @@ def extract_figures(pdf_bytes: bytes, page_texts: List[str]) -> List[Dict[str, A
         page = document[page_offset]
         page_text = page_texts[page_index - 1] if page_index - 1 < len(page_texts) else ""
         caption_match = None
-        for match in re.finditer(r"(?:Figure|Fig\.)\s*\d+[\s:\-–.]*([^\n]{0,200})", page_text, re.IGNORECASE):
+        for match in re.finditer(
+            r"(?:Figure|Fig\.)\s*\d+[\s:\-–.]*([^\n]{0,200})", page_text, re.IGNORECASE
+        ):
             caption_match = match
             break
 
@@ -120,24 +121,28 @@ def extract_figures(pdf_bytes: bytes, page_texts: List[str]) -> List[Dict[str, A
             except Exception:
                 extracted = {}
 
-            figures.append({
-                "id": f"p{page_index}-img{image_index}",
-                "page": page_index,
-                "xref": xref,
-                "width": extracted.get("width"),
-                "height": extracted.get("height"),
-                "ext": extracted.get("ext"),
-                "caption": caption_match.group(1).strip() if caption_match else None,
-                "has_binary": bool(extracted.get("image")),
-            })
+            figures.append(
+                {
+                    "id": f"p{page_index}-img{image_index}",
+                    "page": page_index,
+                    "xref": xref,
+                    "width": extracted.get("width"),
+                    "height": extracted.get("height"),
+                    "ext": extracted.get("ext"),
+                    "caption": caption_match.group(1).strip() if caption_match else None,
+                    "has_binary": bool(extracted.get("image")),
+                }
+            )
 
     return figures
 
 
-def extract_equations(page_texts: List[str]) -> List[Dict[str, Any]]:
+def extract_equations(page_texts: list[str]) -> list[dict[str, Any]]:
     """Extract equation-like text spans from OCR/text extraction output."""
-    equations: List[Dict[str, Any]] = []
-    equation_re = re.compile(r"(?:\$\$[^$]{4,240}\$\$|\$[^$\n]{4,180}\$|.*[=±∑∫∂∇→≤≥≈][^\n]{0,180})")
+    equations: list[dict[str, Any]] = []
+    equation_re = re.compile(
+        r"(?:\$\$[^$]{4,240}\$\$|\$[^$\n]{4,180}\$|.*[=±∑∫∂∇→≤≥≈][^\n]{0,180})"
+    )
 
     for page_index, page_text in enumerate(page_texts, start=1):
         for raw_line in page_text.splitlines():
@@ -150,11 +155,13 @@ def extract_equations(page_texts: List[str]) -> List[Dict[str, Any]]:
                 any(symbol in line for symbol in ("=", "±", "∑", "∫", "∂", "∇", "→", "≤", "≥", "≈"))
                 and sum(ch.isalpha() for ch in line) < len(line)
             ):
-                equations.append({
-                    "id": f"p{page_index}-eq{len(equations) + 1}",
-                    "page": page_index,
-                    "text": line,
-                })
+                equations.append(
+                    {
+                        "id": f"p{page_index}-eq{len(equations) + 1}",
+                        "page": page_index,
+                        "text": line,
+                    }
+                )
 
     return equations[:80]
 
@@ -170,7 +177,7 @@ _SECTION_HEADING_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-_CANONICAL_NAMES: Dict[str, str] = {
+_CANONICAL_NAMES: dict[str, str] = {
     "abstract": "Abstract",
     "introduction": "Introduction",
     "related work": "Related Work",
@@ -193,12 +200,12 @@ _CANONICAL_NAMES: Dict[str, str] = {
 }
 
 
-def extract_sections(page_texts: List[str]) -> List[Dict[str, Any]]:
+def extract_sections(page_texts: list[str]) -> list[dict[str, Any]]:
     """Extract structured sections from page texts using heading detection."""
     full_text = "\n".join(page_texts)
     matches = list(_SECTION_HEADING_RE.finditer(full_text))
 
-    sections: List[Dict[str, Any]] = []
+    sections: list[dict[str, Any]] = []
     for i, match in enumerate(matches):
         start = match.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
@@ -210,17 +217,19 @@ def extract_sections(page_texts: List[str]) -> List[Dict[str, Any]]:
         canonical = _CANONICAL_NAMES.get(keyword, match.group(1).title())
         level = 2 if canonical == "Appendix" else 1
 
-        sections.append({
-            "id": f"sec-{i + 1}",
-            "title": canonical,
-            "content": content[:4000],
-            "level": level,
-        })
+        sections.append(
+            {
+                "id": f"sec-{i + 1}",
+                "title": canonical,
+                "content": content[:4000],
+                "level": level,
+            }
+        )
 
     return sections
 
 
-def build_ingestion_payload(pdf_bytes: bytes, source_filename: str, title: str) -> Dict[str, Any]:
+def build_ingestion_payload(pdf_bytes: bytes, source_filename: str, title: str) -> dict[str, Any]:
     raw_text, page_texts, text_method = extract_raw_text(pdf_bytes)
     figures = extract_figures(pdf_bytes, page_texts)
     equations = extract_equations(page_texts)
@@ -245,8 +254,8 @@ def ingest_pdf_paper(
     db: Session,
     pdf_bytes: bytes,
     source_filename: str,
-    paper_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    paper_name: str | None = None,
+) -> dict[str, Any]:
     """Run the full ingestion pipeline and persist the resulting paper."""
     base_title = _normalize_title(paper_name or source_filename)
     title = _resolve_unique_title(db, base_title)
@@ -255,9 +264,12 @@ def ingest_pdf_paper(
     result_dict = _GENERATOR.from_pdf(io.BytesIO(pdf_bytes), title)
 
     spec = result_dict.get("spec", {})
-    from backend.schemas.architecture_spec import ArchitectureSpec
-    from pydantic import ValidationError
     import logging
+
+    from pydantic import ValidationError
+
+    from backend.schemas.architecture_spec import ArchitectureSpec
+
     logger = logging.getLogger(__name__)
     try:
         validated_spec = ArchitectureSpec(**spec)
@@ -317,16 +329,18 @@ def ingest_pdf_paper(
     db.refresh(paper)
 
     for module in learning_modules:
-        db.add(PaperModule(
-            paper_id=paper.id,
-            layer_name=module.layer_name,
-            module_type=module.module_type,
-            explanation=module.explanation,
-            tensor_flow=module.tensor_flow,
-            graph_nodes=module.graph_nodes,
-            flops_context=module.flops_context,
-            order_index=module.order_index,
-        ))
+        db.add(
+            PaperModule(
+                paper_id=paper.id,
+                layer_name=module.layer_name,
+                module_type=module.module_type,
+                explanation=module.explanation,
+                tensor_flow=module.tensor_flow,
+                graph_nodes=module.graph_nodes,
+                flops_context=module.flops_context,
+                order_index=module.order_index,
+            )
+        )
 
     db.commit()
 

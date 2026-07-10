@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
-from threading import Lock
 import time
+from threading import Lock
 
 # Simple in-memory counters (replace with Prometheus in production)
 _lock = Lock()
@@ -13,9 +12,11 @@ _counters = {
 }
 _last_reset = time.time()
 
+
 def increment(key: str, amount: int = 1):
     with _lock:
         _counters[key] = _counters.get(key, 0) + amount
+
 
 def get_metrics() -> dict:
     with _lock:

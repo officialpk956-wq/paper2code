@@ -6,10 +6,9 @@ Deterministic, template-based, no invention, no recommendations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict
 
+from core.agents.types import ComparisonResult, TemplateLibrary, VisualMetadata
 from core.architecture_graph import ArchitectureGraph, GraphNode
-from core.agents.types import ComparisonResult, VisualMetadata, TemplateLibrary
 
 
 class ExplanationAgent(ABC):

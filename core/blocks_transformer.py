@@ -1,21 +1,16 @@
-import torch
 import torch.nn as nn
+
 
 class TransformerEncoderBlock(nn.Module):
     def __init__(self, d_model, num_heads, ffn_dim, dropout=0.1):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True
+            embed_dim=d_model, num_heads=num_heads, dropout=dropout, batch_first=True
         )
 
         self.ffn = nn.Sequential(
-            nn.Linear(d_model, ffn_dim),
-            nn.ReLU(),
-            nn.Linear(ffn_dim, d_model)
+            nn.Linear(d_model, ffn_dim), nn.ReLU(), nn.Linear(ffn_dim, d_model)
         )
 
         self.norm1 = nn.LayerNorm(d_model)

@@ -1,19 +1,24 @@
-from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+
 from backend.models import User
-from backend.repositories.user_repository import UserRepository
+from backend.modules.auth.allowlist import is_email_allowed
 from backend.modules.auth.security.hashing import (
-    validate_password_strength,
     hash_password,
+    validate_password_strength,
     verify_password_and_needs_rehash,
 )
-from backend.modules.auth.services.verification_service import VerificationService
-from backend.modules.auth.services.session_service import SessionService
 from backend.modules.auth.services.audit_service import AuditService
 from backend.modules.auth.services.email_service import EmailService
-from backend.modules.security.brute_force import check_login_brute_force, record_failed_attempt, reset_failed_attempts
-from backend.modules.auth.allowlist import is_email_allowed
+from backend.modules.auth.services.session_service import SessionService
+from backend.modules.auth.services.verification_service import VerificationService
+from backend.modules.security.brute_force import (
+    check_login_brute_force,
+    record_failed_attempt,
+    reset_failed_attempts,
+)
+from backend.repositories.user_repository import UserRepository
+
 
 class AuthService:
     def __init__(self, db: Session):
@@ -24,12 +29,7 @@ class AuthService:
         self.audit_service = AuditService(db)
 
     def register(
-        self,
-        email: str,
-        name: str,
-        password: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        self, email: str, name: str, password: str, ip_address: str | None, user_agent: str | None
     ) -> User:
         # 0. Private-preview allowlist (no-op unless ALLOWLIST_EMAILS is set)
         if not is_email_allowed(email):
@@ -41,17 +41,13 @@ class AuthService:
         # 1. Validate password strength
         is_strong, err_msg = validate_password_strength(password)
         if not is_strong:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=err_msg
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
 
         # 2. Check if user already exists
         existing = self.repo.get_by_email(email)
         if existing:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
             )
 
         # 3. Create user
@@ -63,19 +59,12 @@ class AuthService:
         self.verification_service.generate_and_send_verification(user)
 
         self.audit_service.log(
-            action="registration",
-            user_id=user.id,
-            ip_address=ip_address,
-            device=user_agent
+            action="registration", user_id=user.id, ip_address=ip_address, device=user_agent
         )
         return user
 
     def login(
-        self,
-        email: str,
-        password: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        self, email: str, password: str, ip_address: str | None, user_agent: str | None
     ) -> User:
         # Enforce account lockout checks
         check_login_brute_force(email)
@@ -88,13 +77,12 @@ class AuthService:
             )
 
         user = self.repo.get_by_email(email)
-        
+
         if not user or not user.hashed_password:
             # Increment failed attempts and trigger lockout if limit exceeded
             record_failed_attempt(email, self.db)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
             )
 
         # Verify password and check for rehashing requirement
@@ -103,8 +91,7 @@ class AuthService:
             # Increment failed attempts and trigger lockout if limit exceeded
             record_failed_attempt(email, self.db)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
             )
 
         # Success path: reset failed attempts
@@ -119,16 +106,13 @@ class AuthService:
                 action="password_rehashed",
                 user_id=user.id,
                 ip_address=ip_address,
-                device=user_agent
+                device=user_agent,
             )
 
         self.db.commit()
-        
+
         self.audit_service.log(
-            action="login_success",
-            user_id=user.id,
-            ip_address=ip_address,
-            device=user_agent
+            action="login_success", user_id=user.id, ip_address=ip_address, device=user_agent
         )
         return user
 
@@ -137,37 +121,30 @@ class AuthService:
         user: User,
         current_password: str,
         new_password: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        ip_address: str | None,
+        user_agent: str | None,
     ) -> None:
         # Verify current password
         is_verified, _ = verify_password_and_needs_rehash(current_password, user.hashed_password)
         if not is_verified:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Incorrect current password"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect current password"
             )
 
         # Validate strength of new password
         is_strong, err_msg = validate_password_strength(new_password)
         if not is_strong:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=err_msg
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
 
         user.hashed_password = hash_password(new_password)
         user.token_version += 1
-        
+
         # Revoke all sessions
         self.session_service.revoke_all_sessions(user.id, ip_address, user_agent)
         self.db.commit()
 
         self.audit_service.log(
-            action="password_changed",
-            user_id=user.id,
-            ip_address=ip_address,
-            device=user_agent
+            action="password_changed", user_id=user.id, ip_address=ip_address, device=user_agent
         )
 
     def change_email(
@@ -175,23 +152,21 @@ class AuthService:
         user: User,
         new_email: str,
         password: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
+        ip_address: str | None,
+        user_agent: str | None,
     ) -> None:
         # Verify password
         is_verified, _ = verify_password_and_needs_rehash(password, user.hashed_password)
         if not is_verified:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Incorrect password"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password"
             )
 
         # Check if email is already taken
         existing = self.repo.get_by_email(new_email)
         if existing:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email is already taken"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already taken"
             )
 
         user.email = new_email
@@ -206,10 +181,10 @@ class AuthService:
             user_id=user.id,
             ip_address=ip_address,
             device=user_agent,
-            metadata_dict={"new_email": new_email}
+            metadata_dict={"new_email": new_email},
         )
 
-    def update_profile(self, user: User, name: Optional[str], avatar_url: Optional[str]) -> User:
+    def update_profile(self, user: User, name: str | None, avatar_url: str | None) -> User:
         if name:
             user.name = name
         if avatar_url:
@@ -217,19 +192,19 @@ class AuthService:
         self.db.commit()
         return user
 
-    def delete_account(self, user: User, ip_address: Optional[str], user_agent: Optional[str]) -> None:
+    def delete_account(self, user: User, ip_address: str | None, user_agent: str | None) -> None:
         # Log event BEFORE purging user data (to keep a trace, or write to general log)
         self.audit_service.log(
             action="account_deletion",
             user_id=user.id,
             ip_address=ip_address,
             device=user_agent,
-            metadata_dict={"email": user.email}
+            metadata_dict={"email": user.email},
         )
-        
+
         # Revoke all sessions
         self.session_service.revoke_all_sessions(user.id, ip_address, user_agent)
-        
+
         # Purge user row (cascades database deletions)
         email = user.email
         name = user.name

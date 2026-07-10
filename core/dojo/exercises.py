@@ -24,16 +24,15 @@ Exercise schema:
     related_arch      : architecture that prominently uses this (or None)
 """
 
-from typing import Any, Dict, List, Optional
-from core.dojo.validator import run_reference
+from typing import Any
 
+from core.dojo.validator import run_reference
 
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
-EXERCISES: List[Dict[str, Any]] = [
-
+EXERCISES: list[dict[str, Any]] = [
     # ===================== ACTIVATIONS =====================
     {
         "id": "relu",
@@ -242,7 +241,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": None,
         "related_arch": "ViT",
     },
-
     # ===================== LOSSES =====================
     {
         "id": "mse_loss",
@@ -385,7 +383,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": "Label Smoothing",
         "related_arch": "ResNet",
     },
-
     # ===================== OPTIMIZERS (single update step) =====================
     {
         "id": "sgd_step",
@@ -438,7 +435,13 @@ EXERCISES: List[Dict[str, Any]] = [
         ),
         "test_inputs": [
             {"param": [1.0, -2.0], "grad": [0.1, 0.2], "v": [0.0, 0.0], "lr": 0.1, "momentum": 0.9},
-            {"param": [1.0, -2.0], "grad": [0.1, 0.2], "v": [0.5, -0.5], "lr": 0.1, "momentum": 0.9},
+            {
+                "param": [1.0, -2.0],
+                "grad": [0.1, 0.2],
+                "v": [0.5, -0.5],
+                "lr": 0.1,
+                "momentum": 0.9,
+            },
         ],
         "tolerance": 1e-7,
         "hints": [
@@ -484,10 +487,28 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return param - lr * m_hat / (np.sqrt(v_hat) + eps)\n"
         ),
         "test_inputs": [
-            {"param": [0.5, -0.2], "grad": [0.1, 0.3], "m": [0.0, 0.0], "v": [0.0, 0.0],
-             "t": 1, "lr": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-8},
-            {"param": [0.5, -0.2], "grad": [0.1, 0.3], "m": [0.05, 0.1], "v": [0.001, 0.02],
-             "t": 5, "lr": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-8},
+            {
+                "param": [0.5, -0.2],
+                "grad": [0.1, 0.3],
+                "m": [0.0, 0.0],
+                "v": [0.0, 0.0],
+                "t": 1,
+                "lr": 0.001,
+                "beta1": 0.9,
+                "beta2": 0.999,
+                "eps": 1e-8,
+            },
+            {
+                "param": [0.5, -0.2],
+                "grad": [0.1, 0.3],
+                "m": [0.05, 0.1],
+                "v": [0.001, 0.02],
+                "t": 5,
+                "lr": 0.001,
+                "beta1": 0.9,
+                "beta2": 0.999,
+                "eps": 1e-8,
+            },
         ],
         "tolerance": 1e-8,
         "hints": [
@@ -503,7 +524,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": "Learning Rate",
         "related_arch": "Transformer",
     },
-
     # ===================== LAYERS / TOOLS =====================
     {
         "id": "linear_forward",
@@ -524,7 +544,11 @@ EXERCISES: List[Dict[str, Any]] = [
         ),
         "reference_solution": "def linear_forward(x, W, b):\n    return x @ W + b\n",
         "test_inputs": [
-            {"x": [[1.0, 2.0], [3.0, 4.0]], "W": [[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], "b": [0.5, 0.5, 0.5]},
+            {
+                "x": [[1.0, 2.0], [3.0, 4.0]],
+                "W": [[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
+                "b": [0.5, 0.5, 0.5],
+            },
         ],
         "tolerance": 1e-6,
         "hints": [
@@ -563,8 +587,18 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return gamma * (x - mu) / np.sqrt(var + eps) + beta\n"
         ),
         "test_inputs": [
-            {"x": [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], "gamma": [1.0, 1.0, 1.0], "beta": [0.0, 0.0, 0.0], "eps": 1e-5},
-            {"x": [[1.0, 2.0, 3.0]], "gamma": [2.0, 2.0, 2.0], "beta": [1.0, 1.0, 1.0], "eps": 1e-5},
+            {
+                "x": [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]],
+                "gamma": [1.0, 1.0, 1.0],
+                "beta": [0.0, 0.0, 0.0],
+                "eps": 1e-5,
+            },
+            {
+                "x": [[1.0, 2.0, 3.0]],
+                "gamma": [2.0, 2.0, 2.0],
+                "beta": [1.0, 1.0, 1.0],
+                "eps": 1e-5,
+            },
         ],
         "tolerance": 1e-5,
         "hints": [
@@ -609,7 +643,11 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return w @ v\n"
         ),
         "test_inputs": [
-            {"q": [[1.0, 0.0], [0.0, 1.0]], "k": [[1.0, 0.0], [0.0, 1.0]], "v": [[1.0, 2.0], [3.0, 4.0]]},
+            {
+                "q": [[1.0, 0.0], [0.0, 1.0]],
+                "k": [[1.0, 0.0], [0.0, 1.0]],
+                "v": [[1.0, 2.0], [3.0, 4.0]],
+            },
         ],
         "tolerance": 1e-6,
         "hints": [
@@ -625,7 +663,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": "Attention Heads",
         "related_arch": "Transformer",
     },
-
     # ===================== METRICS =====================
     {
         "id": "accuracy",
@@ -659,7 +696,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": None,
         "related_arch": None,
     },
-
     # ===================== MORE LOSSES / OPTIMIZERS / LAYERS =====================
     {
         "id": "huber_loss",
@@ -726,8 +762,14 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return param - lr * grad / (np.sqrt(sq_avg) + eps)\n"
         ),
         "test_inputs": [
-            {"param": [0.5, -0.2], "grad": [0.1, 0.3], "sq_avg": [0.0, 0.0],
-             "lr": 0.01, "alpha": 0.9, "eps": 1e-8},
+            {
+                "param": [0.5, -0.2],
+                "grad": [0.1, 0.3],
+                "sq_avg": [0.0, 0.0],
+                "lr": 0.01,
+                "alpha": 0.9,
+                "eps": 1e-8,
+            },
         ],
         "tolerance": 1e-7,
         "hints": [
@@ -770,7 +812,10 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return out\n"
         ),
         "test_inputs": [
-            {"x": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], "kernel": [[1.0, 0.0], [0.0, 1.0]]},
+            {
+                "x": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
+                "kernel": [[1.0, 0.0], [0.0, 1.0]],
+            },
             {"x": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], "kernel": [[1.0, 1.0]]},
         ],
         "tolerance": 1e-6,
@@ -814,7 +859,15 @@ EXERCISES: List[Dict[str, Any]] = [
             "    return out\n"
         ),
         "test_inputs": [
-            {"x": [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0], [13.0, 14.0, 15.0, 16.0]], "size": 2},
+            {
+                "x": [
+                    [1.0, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0, 12.0],
+                    [13.0, 14.0, 15.0, 16.0],
+                ],
+                "size": 2,
+            },
         ],
         "tolerance": 1e-6,
         "hints": [
@@ -828,7 +881,6 @@ EXERCISES: List[Dict[str, Any]] = [
         "related_hyperparameter": None,
         "related_arch": "ResNet",
     },
-
     # ===================== BACKPROP (gradients) =====================
     {
         "id": "relu_backward",
@@ -947,15 +999,30 @@ EXERCISES: List[Dict[str, Any]] = [
 
 # Merge the "LeetCode for Data Science" problem bank into the catalog.
 from core.dojo.problems import DS_PROBLEMS
+
 EXERCISES = EXERCISES + DS_PROBLEMS
 
-_BY_ID: Dict[str, Dict[str, Any]] = {ex["id"]: ex for ex in EXERCISES}
+_BY_ID: dict[str, dict[str, Any]] = {ex["id"]: ex for ex in EXERCISES}
 
 CATEGORY_ORDER = [
-    "Activation", "Loss", "Optimizer", "Layer", "Backprop", "Metric",
-    "NumPy", "Statistics", "Linear Algebra", "Probability", "ML Metrics",
-    "ML Algorithms", "Data Manipulation", "Time Series", "Distances",
-    "Feature Engineering", "NLP", "Algorithms",
+    "Activation",
+    "Loss",
+    "Optimizer",
+    "Layer",
+    "Backprop",
+    "Metric",
+    "NumPy",
+    "Statistics",
+    "Linear Algebra",
+    "Probability",
+    "ML Metrics",
+    "ML Algorithms",
+    "Data Manipulation",
+    "Time Series",
+    "Distances",
+    "Feature Engineering",
+    "NLP",
+    "Algorithms",
 ]
 
 
@@ -968,11 +1035,11 @@ def difficulty_label(d: int) -> str:
     return "Hard"
 
 
-def _example_count(ex: Dict[str, Any]) -> int:
+def _example_count(ex: dict[str, Any]) -> int:
     return min(2, len(ex.get("test_inputs", [])))
 
 
-def get_all_topics() -> List[str]:
+def get_all_topics() -> list[str]:
     """Sorted unique topic tags across the whole catalog (for the UI filter)."""
     topics = set()
     for ex in EXERCISES:
@@ -981,24 +1048,26 @@ def get_all_topics() -> List[str]:
     return sorted(topics)
 
 
-def get_exercise_list() -> List[Dict[str, Any]]:
+def get_exercise_list() -> list[dict[str, Any]]:
     """Lightweight list for the catalog sidebar (no solutions, no expected outputs)."""
     out = []
     for i, ex in enumerate(EXERCISES):
-        out.append({
-            "id": ex["id"],
-            "number": i + 1,
-            "category": ex["category"],
-            "title": ex["title"],
-            "difficulty": ex["difficulty"],
-            "difficulty_label": difficulty_label(ex["difficulty"]),
-            "topics": ex.get("topics", [ex["category"]]),
-            "concept": ex["concept"],
-        })
+        out.append(
+            {
+                "id": ex["id"],
+                "number": i + 1,
+                "category": ex["category"],
+                "title": ex["title"],
+                "difficulty": ex["difficulty"],
+                "difficulty_label": difficulty_label(ex["difficulty"]),
+                "topics": ex.get("topics", [ex["category"]]),
+                "concept": ex["concept"],
+            }
+        )
     return out
 
 
-def get_public_exercise(exercise_id: str) -> Optional[Dict[str, Any]]:
+def get_public_exercise(exercise_id: str) -> dict[str, Any] | None:
     """
     Full exercise for the workspace — EXCLUDES reference_solution but INCLUDES
     expected_outputs precomputed from the reference solution.
@@ -1034,7 +1103,7 @@ def get_public_exercise(exercise_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def get_solution(exercise_id: str) -> Optional[Dict[str, Any]]:
+def get_solution(exercise_id: str) -> dict[str, Any] | None:
     """Reference solution for the reveal action. None if unknown id."""
     ex = _BY_ID.get(exercise_id)
     if not ex:

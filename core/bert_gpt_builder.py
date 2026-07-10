@@ -1,5 +1,7 @@
 import torch.nn as nn
+
 from core.blocks_bert_gpt import BertEmbeddings, TransformerBlock
+
 
 class BertGPTBuilder(nn.Module):
     def __init__(self, schema):
@@ -11,14 +13,14 @@ class BertGPTBuilder(nn.Module):
         num_heads = schema["num_heads"]
         ffn_dim = schema["ffn_dim"]
         is_causal = schema["is_causal"]
-        
+
         self.embeddings = BertEmbeddings(vocab_size, max_seq_len, d_model)
-        
+
         blocks = []
         for _ in range(depth):
             blocks.append(TransformerBlock(d_model, num_heads, ffn_dim, is_causal))
         self.encoder = nn.Sequential(*blocks)
-        
+
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, vocab_size)
 

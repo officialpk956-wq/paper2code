@@ -23,21 +23,21 @@ Design notes (matching module_generation_design.md):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any
 
 from core.architecture_graph import ArchitectureGraph, GraphNode
-from core.metrics_estimator import (
-    estimate_metrics_from_graph,
-    estimate_activation_memory,
-    FLOPS_SCORES,
-)
 from core.explainers.graph_explainer import explain_node
-
+from core.metrics_estimator import (
+    FLOPS_SCORES,
+    estimate_activation_memory,
+    estimate_metrics_from_graph,
+)
 
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class LearningModule:
@@ -46,25 +46,41 @@ class LearningModule:
 
     All fields map directly to the paper_modules DB table columns.
     """
+
     order_index: int
-    layer_name: str                      # Human-readable module title
-    module_type: str                     # stem | block | stage | head | encoder | bottleneck | decoder
-    explanation: str                     # Educational explanation (from graph_explainer)
-    graph_nodes: List[Dict[str, Any]]    # Source graph node ids + labels
-    tensor_flow: List[Dict[str, Any]]    # Per-node tensor flow / memory data
-    flops_context: Dict[str, Any]        # FLOPs scores + param estimates for nodes in this module
-    confidence: float                    # 0.0–1.0 — how well the module was auto-extracted
+    layer_name: str  # Human-readable module title
+    module_type: str  # stem | block | stage | head | encoder | bottleneck | decoder
+    explanation: str  # Educational explanation (from graph_explainer)
+    graph_nodes: list[dict[str, Any]]  # Source graph node ids + labels
+    tensor_flow: list[dict[str, Any]]  # Per-node tensor flow / memory data
+    flops_context: dict[str, Any]  # FLOPs scores + param estimates for nodes in this module
+    confidence: float  # 0.0–1.0 — how well the module was auto-extracted
 
 
 # ---------------------------------------------------------------------------
 # Trivial node types — collapsed into parent modules, never standalone
 # ---------------------------------------------------------------------------
 
-_TRIVIAL_TYPES = frozenset({
-    "relu", "gelu", "silu", "sigmoid", "tanh",
-    "batchnorm2d", "batchnorm1d", "layernorm", "groupnorm", "instancenorm",
-    "dropout", "identity", "flatten", "permute", "reshape", "softmax",
-})
+_TRIVIAL_TYPES = frozenset(
+    {
+        "relu",
+        "gelu",
+        "silu",
+        "sigmoid",
+        "tanh",
+        "batchnorm2d",
+        "batchnorm1d",
+        "layernorm",
+        "groupnorm",
+        "instancenorm",
+        "dropout",
+        "identity",
+        "flatten",
+        "permute",
+        "reshape",
+        "softmax",
+    }
+)
 
 # Activation types only — for special collapse check
 _ACTIVATION_TYPES = frozenset({"relu", "gelu", "silu", "sigmoid", "tanh"})
@@ -80,7 +96,10 @@ _UPSAMPLE_TYPES = frozenset({"upsample", "convtranspose2d", "upconvolution"})
 # Module type classifiers
 # ---------------------------------------------------------------------------
 
-def _classify_module_type(nodes: List[GraphNode], schema: Dict[str, Any], index: int, total: int) -> str:
+
+def _classify_module_type(
+    nodes: list[GraphNode], schema: dict[str, Any], index: int, total: int
+) -> str:
     """Determine the module_type label for a group of nodes."""
     types = {n.type.lower() for n in nodes}
     labels = " ".join(n.label.lower() for n in nodes)
@@ -121,6 +140,7 @@ def _classify_module_type(nodes: List[GraphNode], schema: Dict[str, Any], index:
 # Confidence scorer
 # ---------------------------------------------------------------------------
 
+
 def _score_confidence(module: dict) -> float:
     """
     Score how confidently we extracted a module.
@@ -153,17 +173,18 @@ def _score_confidence(module: dict) -> float:
 # Step 1 + 2: Extract macro-structures + collapse trivial nodes
 # ---------------------------------------------------------------------------
 
+
 def _group_nodes_into_macro_structures(
     graph: ArchitectureGraph,
-    schema: Dict[str, Any],
-) -> List[List[GraphNode]]:
+    schema: dict[str, Any],
+) -> list[list[GraphNode]]:
     """
     Walk the graph nodes in order. Collapse trivial nodes (norms, activations,
     dropout) into the immediately preceding non-trivial node's group.
     Also groups upsampling layers with subsequent convolutions in decoder blocks.
     """
-    groups: List[List[GraphNode]] = []
-    current_group: List[GraphNode] = []
+    groups: list[list[GraphNode]] = []
+    current_group: list[GraphNode] = []
     nodes = list(graph.nodes)
     i = 0
 
@@ -207,10 +228,11 @@ def _group_nodes_into_macro_structures(
 # Step 3: Detect repeated blocks and stages to create stage-level groups
 # ---------------------------------------------------------------------------
 
+
 def _detect_and_merge_stages(
-    groups: List[List[GraphNode]],
-    schema: Dict[str, Any],
-) -> List[List[GraphNode]]:
+    groups: list[list[GraphNode]],
+    schema: dict[str, Any],
+) -> list[list[GraphNode]]:
     """
     Detect repeated block groups (e.g. 6 transformer layers, 3 ResNet blocks)
     and merge them into a single stage-level LearningModule.
@@ -225,17 +247,22 @@ def _detect_and_merge_stages(
     if not groups:
         return groups
 
-    def fingerprint(group: List[GraphNode]) -> str:
+    def fingerprint(group: list[GraphNode]) -> str:
         # Include node type and key stage parameters (channels/hidden sizes)
         # to ensure stages of different sizes/capacities are not merged incorrectly.
         parts = []
         for n in group:
             t = n.type.lower()
-            ch = n.params.get("channels") or n.params.get("hidden_size") or n.params.get("embed_dim") or ""
+            ch = (
+                n.params.get("channels")
+                or n.params.get("hidden_size")
+                or n.params.get("embed_dim")
+                or ""
+            )
             parts.append(f"{t}:{ch}")
         return ",".join(sorted(parts))
 
-    merged: List[List[GraphNode]] = []
+    merged: list[list[GraphNode]] = []
     i = 0
 
     while i < len(groups):
@@ -253,10 +280,7 @@ def _detect_and_merge_stages(
             # Annotate first node to convey repetition
             if representative:
                 n = representative[0]
-                n.description = (
-                    (n.description or "")
-                    + f" [Repeated ×{repeat_count}]"
-                ).strip()
+                n.description = ((n.description or "") + f" [Repeated ×{repeat_count}]").strip()
             merged.append(representative)
             i = j
         else:
@@ -270,13 +294,14 @@ def _detect_and_merge_stages(
 # Step 4 + 5: Build LearningModule objects
 # ---------------------------------------------------------------------------
 
+
 def _build_module(
     index: int,
     total: int,
-    nodes: List[GraphNode],
-    schema: Dict[str, Any],
-    flops_breakdown: List[Dict[str, Any]],
-    tensor_memory: List[Dict[str, Any]],
+    nodes: list[GraphNode],
+    schema: dict[str, Any],
+    flops_breakdown: list[dict[str, Any]],
+    tensor_memory: list[dict[str, Any]],
     graph: ArchitectureGraph,
 ) -> LearningModule:
     """
@@ -284,7 +309,10 @@ def _build_module(
     """
     # Build node id → metric index (by label match)
     flops_by_label = {row["node"]: row for row in flops_breakdown}
-    real_flops_events = {row.get("node_id", row.get("node_label")): row for row in graph.metadata.get("flops_events", [])}
+    real_flops_events = {
+        row.get("node_id", row.get("node_label")): row
+        for row in graph.metadata.get("flops_events", [])
+    }
     tensor_by_label = {row["node"]: row for row in tensor_memory}
 
     # Graph node context
@@ -306,7 +334,7 @@ def _build_module(
             module_flops_breakdown.append(row)
             total_flops_score += row["score"]
             total_params += row.get("param_estimate", 0)
-            
+
         if node.id in real_flops_events:
             total_mflops += real_flops_events[node.id].get("flops_mflops", 0.0)
         elif node.label in real_flops_events:
@@ -315,24 +343,26 @@ def _build_module(
     for node in nodes:
         # Only include non-trivial nodes in the node ref list for clarity
         if node.type.lower() not in _TRIVIAL_TYPES:
-            graph_node_refs.append({
-                "node_id": node.id,
-                "label": node.label,
-                "type": node.type,
-                "params": node.params,
-                "semantic_params": node.semantic_params,
-                "description": node.description,
-            })
+            graph_node_refs.append(
+                {
+                    "node_id": node.id,
+                    "label": node.label,
+                    "type": node.type,
+                    "params": node.params,
+                    "semantic_params": node.semantic_params,
+                    "description": node.description,
+                }
+            )
             if primary_label is None:
                 primary_label = node.label
-
-
 
         # Tensor flow
         if node.label in tensor_by_label:
             row = dict(tensor_by_label[node.label])
-            if hasattr(node, "input_shape"): row["input_shape"] = node.input_shape
-            if hasattr(node, "output_shape"): row["output_shape"] = node.output_shape
+            if hasattr(node, "input_shape"):
+                row["input_shape"] = node.input_shape
+            if hasattr(node, "output_shape"):
+                row["output_shape"] = node.output_shape
             module_tensor_flow.append(row)
 
         # Explanation — only explain non-trivial nodes
@@ -340,10 +370,11 @@ def _build_module(
             try:
                 # A group is "repeated" if any of its nodes carries the [Repeated] annotation
                 is_repeated = any(
-                    bool(re.search(r"\[Repeated", n.description or ""))
-                    for n in nodes
+                    bool(re.search(r"\[Repeated", n.description or "")) for n in nodes
                 )
-                exp = explain_node(node, context={"index": index, "total": total, "is_repeated": is_repeated})
+                exp = explain_node(
+                    node, context={"index": index, "total": total, "is_repeated": is_repeated}
+                )
                 if exp and len(exp) > 10:
                     explanation_parts.append(exp)
             except Exception:
@@ -353,9 +384,12 @@ def _build_module(
     layer_name = _compose_module_name(index, nodes, schema, total)
 
     # FLOPs summary for this module
-    total_flops_score = sum(r.get("flops_level", 0) if isinstance(r.get("flops_level"), int)
-                            else {"very high": 4, "high": 3, "medium": 2, "low": 1}.get(r.get("flops_level", "low"), 1)
-                            for r in module_flops_breakdown)
+    total_flops_score = sum(
+        r.get("flops_level", 0)
+        if isinstance(r.get("flops_level"), int)
+        else {"very high": 4, "high": 3, "medium": 2, "low": 1}.get(r.get("flops_level", "low"), 1)
+        for r in module_flops_breakdown
+    )
     total_params = sum(r.get("param_estimate", 0) for r in module_flops_breakdown)
 
     flops_context = {
@@ -380,8 +414,10 @@ def _build_module(
                     skip_sources.append(src_node.label)
 
     # Final explanation — join non-empty parts
-    explanation = "\n\n".join(explanation_parts) if explanation_parts else f"Structural module: {layer_name}"
-    
+    explanation = (
+        "\n\n".join(explanation_parts) if explanation_parts else f"Structural module: {layer_name}"
+    )
+
     # Append architecture context to ensure global uniqueness for fallback explanations
     explanation += f"\n\n*(Context: {graph.name} Architecture)*"
 
@@ -411,7 +447,9 @@ def _build_module(
     return LearningModule(**raw)
 
 
-def _compose_module_name(index: int, nodes: List[GraphNode], schema: Dict[str, Any], total: int = 1) -> str:
+def _compose_module_name(
+    index: int, nodes: list[GraphNode], schema: dict[str, Any], total: int = 1
+) -> str:
     """Compose a human-readable module name from node group + schema context."""
     # Primary (non-trivial) node
     primary = next((n for n in nodes if n.type.lower() not in _TRIVIAL_TYPES), None)
@@ -468,11 +506,12 @@ def _compose_module_name(index: int, nodes: List[GraphNode], schema: Dict[str, A
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def generate_modules(
     paper_name: str,
-    schema: Dict[str, Any],
-    pipeline_result: Dict[str, Any],
-) -> Tuple[Dict[str, Any], List[LearningModule]]:
+    schema: dict[str, Any],
+    pipeline_result: dict[str, Any],
+) -> tuple[dict[str, Any], list[LearningModule]]:
     """
     Transform a Paper2Code pipeline result into a list of LearningModules.
 
@@ -502,7 +541,7 @@ def generate_modules(
 
     # --- Step 4+5: Build one LearningModule per group ---
     total = len(groups)
-    modules: List[LearningModule] = []
+    modules: list[LearningModule] = []
     for i, node_group in enumerate(groups):
         module = _build_module(
             index=i,
@@ -532,8 +571,7 @@ def generate_modules(
                 for n in graph.nodes
             ],
             "edges": [
-                {"source": e.source, "target": e.target, "type": e.edge_type}
-                for e in graph.edges
+                {"source": e.source, "target": e.target, "type": e.edge_type} for e in graph.edges
             ],
             "kag_motifs": kag_motifs,
         },

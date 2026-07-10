@@ -1,5 +1,7 @@
 from copy import deepcopy
+
 from core.schema_rules_bert_gpt import infer_bert_gpt_defaults
+
 
 def refine_bert_gpt_schema(raw_schema):
     schema = deepcopy(raw_schema)

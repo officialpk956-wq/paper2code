@@ -1,6 +1,8 @@
 import torch
-from core.schema_refiner_bert_gpt import refine_bert_gpt_schema
+
 from core.bert_gpt_builder import BertGPTBuilder
+from core.schema_refiner_bert_gpt import refine_bert_gpt_schema
+
 
 def main():
     print("Testing BERT (is_causal=False)...")
@@ -19,6 +21,7 @@ def main():
     out_gpt = model_gpt(input_ids)
     print(f"Output shape: {out_gpt.shape}")
     print(f"Params: {sum(p.numel() for p in model_gpt.parameters()):,}")
+
 
 if __name__ == "__main__":
     main()

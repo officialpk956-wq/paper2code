@@ -1,12 +1,15 @@
-import uuid
 import datetime
 import hashlib
-from typing import Optional, List
+import uuid
+
 from sqlalchemy.orm import Session
+
 from backend.modules.authz.models import ApiKey
+
 
 def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
 
 class ApiKeyRepository:
     def __init__(self, db: Session):
@@ -15,11 +18,11 @@ class ApiKeyRepository:
     def create_key(
         self,
         user_id: int,
-        organization_id: Optional[int],
+        organization_id: int | None,
         name: str,
-        scopes: List[str],
+        scopes: list[str],
         key_plaintext: str,
-        expires_at: Optional[datetime.datetime] = None
+        expires_at: datetime.datetime | None = None,
     ) -> ApiKey:
         key_hash = hash_key(key_plaintext)
         api_key = ApiKey(
@@ -30,13 +33,13 @@ class ApiKeyRepository:
             name=name,
             scopes=scopes,
             expires_at=expires_at,
-            revoked=False
+            revoked=False,
         )
         self.db.add(api_key)
         self.db.flush()
         return api_key
 
-    def get_key_by_hash(self, key_hash: str) -> Optional[ApiKey]:
+    def get_key_by_hash(self, key_hash: str) -> ApiKey | None:
         return self.db.query(ApiKey).filter_by(key_hash=key_hash, revoked=False).first()
 
     def revoke_key(self, key_id: str, user_id: int) -> bool:
@@ -47,5 +50,5 @@ class ApiKeyRepository:
             return True
         return False
 
-    def get_keys_for_user(self, user_id: int) -> List[ApiKey]:
+    def get_keys_for_user(self, user_id: int) -> list[ApiKey]:
         return self.db.query(ApiKey).filter_by(user_id=user_id).all()

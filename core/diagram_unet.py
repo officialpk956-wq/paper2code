@@ -1,5 +1,6 @@
 from core.diagram_base import create_graph
 
+
 def draw_unet(schema):
     dot = create_graph("UNet Architecture")
 
@@ -24,7 +25,7 @@ def draw_unet(schema):
         node = f"dec{i}"
         dot.node(node, f"Decoder {i}\nCh: {stage['out_channels']}")
         dot.edge(prev, node)
-        dot.edge(encoders[-(i+1)], node, label="skip")
+        dot.edge(encoders[-(i + 1)], node, label="skip")
         prev = node
 
     dot.node("output", "Output")

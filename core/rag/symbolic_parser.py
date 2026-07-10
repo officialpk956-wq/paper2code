@@ -8,20 +8,20 @@ F9: Symbolic Notation Input
 """
 
 import re
-from typing import Dict, Any
-from core.rag.normalizer import _SYNONYM_MAP, normalize_config
+from typing import Any
 
+from core.rag.normalizer import _SYNONYM_MAP, normalize_config
 
 # Token grammar: LayerType(params)×count
 # Examples: Conv2D(64,3), ReLU, ResBlock×3, Linear(10)
 _TOKEN_RE = re.compile(
-    r"^(?P<type>[A-Za-z][A-Za-z0-9_]*)"          # layer type
-    r"(?:\((?P<params>[^)]*)\))?"                  # optional (params)
-    r"(?:[xX×*](?P<repeat>\d+))?$"                 # optional ×count
+    r"^(?P<type>[A-Za-z][A-Za-z0-9_]*)"  # layer type
+    r"(?:\((?P<params>[^)]*)\))?"  # optional (params)
+    r"(?:[xX×*](?P<repeat>\d+))?$"  # optional ×count
 )
 
 
-def parse_symbolic(spec: str) -> Dict[str, Any]:
+def parse_symbolic(spec: str) -> dict[str, Any]:
     """
     Parse symbolic notation into a ConfigDict.
 
@@ -78,7 +78,7 @@ def parse_symbolic(spec: str) -> Dict[str, Any]:
     return normalize_config(raw_config)
 
 
-def _parse_params(raw: str) -> Dict[str, Any]:
+def _parse_params(raw: str) -> dict[str, Any]:
     """
     Parse parameter string into dict.
 
@@ -93,18 +93,18 @@ def _parse_params(raw: str) -> Dict[str, Any]:
 
     result = {}
     parts = [p.strip() for p in raw.split(",")]
-    
+
     # Context-aware positional keys
-    type_lower = "" # We don't have type here easily, so we check canonical list
+    type_lower = ""  # We don't have type here easily, so we check canonical list
     POSITIONAL_KEYS = ["channels", "kernel_size", "stride", "padding"]
-    
+
     # If the first part looks like a large number (e.g. 512) and it's followed by a small number (e.g. 8),
     # it's likely a Transformer (embed_dim, num_heads).
     if len(parts) >= 2:
         try:
             val1 = int(parts[0])
             val2 = int(parts[1])
-            if val1 >= 32 and val2 <= 64: # Heuristic for (dim, heads)
+            if val1 >= 32 and val2 <= 64:  # Heuristic for (dim, heads)
                 POSITIONAL_KEYS = ["embed_dim", "num_heads"]
         except ValueError:
             pass

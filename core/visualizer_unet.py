@@ -1,4 +1,5 @@
-from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+from core.architecture_graph import ArchitectureGraph, GraphEdge, GraphNode
+
 
 def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGraph:
     graph = ArchitectureGraph(name="U-Net")
@@ -14,19 +15,16 @@ def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGr
             id=block_id,
             type="EncoderBlock",
             label=f"Encoder Block {i}",
-            params={"filters": base_channels * 2**(i-1)},
+            params={"filters": base_channels * 2 ** (i - 1)},
             block="Encoder",
             description="Downsamples spatial resolution to capture contextual information",
-            semantic_params={
-                "feature_map": "downsampling",
-                "flops": "medium"
-            }
+            semantic_params={"feature_map": "downsampling", "flops": "medium"},
         )
 
         # Internal structure
         conv1 = GraphNode(f"{block_id}_conv1", "Conv2D", "Conv 3×3")
         conv2 = GraphNode(f"{block_id}_conv2", "Conv2D", "Conv 3×3")
-        pool  = GraphNode(f"{block_id}_pool",  "MaxPool", "MaxPool")
+        pool = GraphNode(f"{block_id}_pool", "MaxPool", "MaxPool")
 
         block.internal_nodes = [conv1, conv2, pool]
         block.internal_edges = [
@@ -50,19 +48,14 @@ def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGr
         params={"filters": base_channels * 2**stages},
         block="Bottleneck",
         description="Connects encoder and decoder at the lowest resolution",
-        semantic_params={
-            "feature_map": "downsampling",
-            "flops": "medium"
-        }
+        semantic_params={"feature_map": "downsampling", "flops": "medium"},
     )
 
     bottleneck.internal_nodes = [
         GraphNode("bottleneck_conv1", "Conv2D", "Conv 3×3"),
         GraphNode("bottleneck_conv2", "Conv2D", "Conv 3×3"),
     ]
-    bottleneck.internal_edges = [
-        GraphEdge("bottleneck_conv1", "bottleneck_conv2", "flow")
-    ]
+    bottleneck.internal_edges = [GraphEdge("bottleneck_conv1", "bottleneck_conv2", "flow")]
 
     graph.add_node(bottleneck)
     graph.add_edge(prev.id, bottleneck.id, "flow")
@@ -80,14 +73,11 @@ def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGr
             params={"skip": enc.id},
             block="Decoder",
             description="Upsamples features while recovering spatial detail using skip connections",
-            semantic_params={
-                "feature_map": "upsampling",
-                "skip_connection": "yes"
-            }
+            semantic_params={"feature_map": "upsampling", "skip_connection": "yes"},
         )
 
-        up   = GraphNode(f"{block_id}_up", "UpConv", "UpConv")
-        cat  = GraphNode(f"{block_id}_cat", "Concat", "Concat")
+        up = GraphNode(f"{block_id}_up", "UpConv", "UpConv")
+        cat = GraphNode(f"{block_id}_cat", "Concat", "Concat")
         conv = GraphNode(f"{block_id}_conv", "Conv2D", "Conv 3×3")
 
         block.internal_nodes = [up, cat, conv]
@@ -102,13 +92,11 @@ def build_unet_graph(base_channels: int = 64, stages: int = 3) -> ArchitectureGr
         prev = block
 
     # ---------------- Output ----------------
-    graph.add_node(GraphNode(
-        id="out",
-        type="Conv2D",
-        label="Output Layer",
-        params={"channels": 1},
-        block="Head"
-    ))
+    graph.add_node(
+        GraphNode(
+            id="out", type="Conv2D", label="Output Layer", params={"channels": 1}, block="Head"
+        )
+    )
 
     graph.add_edge(prev.id, "out", "flow")
 

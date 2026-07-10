@@ -1,5 +1,3 @@
-import re
-
 def parse_user_agent(user_agent_str: str) -> tuple[str, str]:
     """
     Simple, robust parser to extract (browser, os) from a user agent string.

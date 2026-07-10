@@ -1,20 +1,21 @@
 import logging
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-from sentry_sdk.integrations.celery import CeleryIntegration
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
 from backend.database import engine
 from backend.models import Base
-
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 
 # Initialize Sentry if DSN is provided
 _dsn = os.getenv("SENTRY_DSN", "")
@@ -30,14 +31,33 @@ if _dsn:
 
 limiter = Limiter(key_func=get_remote_address)
 
-from backend.routers import health, auth, papers, papers_pipeline, papers_analysis, dojo, learning, tutor, assessment, lab, tasks, user, admin, admin_users, admin_metrics, search, leaderboard, notifications, achievements
-from backend.routers.oauth import router as oauth_router
-from backend.routers.announcements import router as announcements_router
-from backend.routers.paper_challenges import router as paper_challenges_router
-from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
+from backend.logging_config import JSONFormatter, RequestIDMiddleware
 from backend.middleware.alerting import SlackAlertingMiddleware
+from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from backend.middleware.sentry_context import SentryUserContextMiddleware
-from backend.logging_config import RequestIDMiddleware, JSONFormatter
+from backend.routers import (
+    achievements,
+    admin,
+    admin_metrics,
+    admin_users,
+    assessment,
+    dojo,
+    health,
+    lab,
+    leaderboard,
+    learning,
+    notifications,
+    papers,
+    papers_analysis,
+    papers_pipeline,
+    search,
+    tasks,
+    tutor,
+    user,
+)
+from backend.routers.announcements import router as announcements_router
+from backend.routers.oauth import router as oauth_router
+from backend.routers.paper_challenges import router as paper_challenges_router
 
 # Configure JSON Logging
 handler = logging.StreamHandler()
@@ -48,6 +68,7 @@ logger = logging.getLogger(__name__)
 
 # Run strict configuration validation
 from backend.modules.security.startup_validation import validate_production_security_config
+
 validate_production_security_config()
 
 # create_all is idempotent — safe to run on every startup (no Alembic configured)
@@ -56,6 +77,7 @@ Base.metadata.create_all(bind=engine)
 try:
     from backend.database import SessionLocal as _SL
     from backend.services.achievement_service import seed_achievements as _seed
+
     _db = _SL()
     _seed(_db)
     _db.close()
@@ -66,6 +88,7 @@ except Exception as _e:
 try:
     from backend.database import SessionLocal as _SL2
     from backend.services.problem_seed_service import seed_dojo_problems as _seed_problems
+
     _db2 = _SL2()
     _seed_problems(_db2)
     _db2.close()
@@ -83,15 +106,17 @@ app.add_middleware(SlackAlertingMiddleware)
 app.add_middleware(SentryUserContextMiddleware)
 
 from backend.middleware.trace_id import TraceIDMiddleware
+
 app.add_middleware(TraceIDMiddleware)
 
 # Strict CORS settings
 from backend.modules.security.cors import (
-    get_allowed_origins,
+    get_allow_credentials,
     get_allowed_headers,
     get_allowed_methods,
-    get_allow_credentials,
+    get_allowed_origins,
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
@@ -101,10 +126,12 @@ app.add_middleware(
 )
 
 from backend.middleware.security_headers import SecurityHeadersMiddleware
+
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Routers
 from backend.modules.auth.api.v1 import router as new_auth_router
+
 app.include_router(health.router)
 app.include_router(new_auth_router)
 app.include_router(papers_pipeline.router)
@@ -131,10 +158,14 @@ app.include_router(paper_challenges_router)
 
 # Prometheus metrics endpoint (restricted to internal IPs by Nginx in production)
 from fastapi import Request as _Req
+
+
 @app.get("/metrics", include_in_schema=False)
 def get_metrics(_: _Req):
     return metrics_endpoint()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("backend.server:app", host="0.0.0.0", port=8000, reload=True)

@@ -8,9 +8,10 @@ SQLite (dev/test): falls back to ILIKE / LIKE pattern matching.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func, text
 
 from backend.database import get_db
 from backend.models import Paper, Problem
@@ -38,11 +39,7 @@ def _search_papers(db: Session, q: str, limit: int) -> list:
         return base.filter(vec.op("@@")(tsq)).limit(limit).all()
     # SQLite fallback
     pat = f"%{q}%"
-    return (
-        base.filter(or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat)))
-        .limit(limit)
-        .all()
-    )
+    return base.filter(or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat))).limit(limit).all()
 
 
 def _search_problems(db: Session, q: str, limit: int) -> list:
@@ -89,26 +86,30 @@ def search(
         papers = _search_papers(db, q, limit)
         for p in papers:
             arch = (p.architecture_graph or {}).get("classification", "Unknown")
-            results.append({
-                "type": "paper",
-                "id": p.id,
-                "title": p.title,
-                "snippet": (p.abstract or "")[:200],
-                "tags": [arch] if arch != "Unknown" else [],
-                "url": f"/papers/{p.id}",
-            })
+            results.append(
+                {
+                    "type": "paper",
+                    "id": p.id,
+                    "title": p.title,
+                    "snippet": (p.abstract or "")[:200],
+                    "tags": [arch] if arch != "Unknown" else [],
+                    "url": f"/papers/{p.id}",
+                }
+            )
 
     if "problems" in requested:
         problems = _search_problems(db, q, limit)
         for p in problems:
-            results.append({
-                "type": "problem",
-                "id": p.id,
-                "title": p.title or "",
-                "snippet": (p.description or "")[:200],
-                "tags": [p.difficulty or "", p.category or ""],
-                "url": f"/dojo/{p.id}",
-            })
+            results.append(
+                {
+                    "type": "problem",
+                    "id": p.id,
+                    "title": p.title or "",
+                    "snippet": (p.description or "")[:200],
+                    "tags": [p.difficulty or "", p.category or ""],
+                    "url": f"/dojo/{p.id}",
+                }
+            )
 
     return {
         "query": q,

@@ -1,6 +1,7 @@
-import torch
 import torch.nn as nn
-from core.blocks_gan import DCGANGenerator, DCGANDiscriminator
+
+from core.blocks_gan import DCGANDiscriminator, DCGANGenerator
+
 
 class GANBuilder(nn.Module):
     def __init__(self, schema):
@@ -8,7 +9,7 @@ class GANBuilder(nn.Module):
         latent_dim = schema["latent_dim"]
         base_ch = schema["base_ch"]
         out_ch = schema["img_channels"]
-        
+
         self.generator = DCGANGenerator(latent_dim=latent_dim, base_ch=base_ch, out_ch=out_ch)
         self.discriminator = DCGANDiscriminator(in_ch=out_ch, base_ch=base_ch)
 

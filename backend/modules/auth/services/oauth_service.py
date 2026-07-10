@@ -1,9 +1,10 @@
-from typing import Optional
 from sqlalchemy.orm import Session
+
 from backend.models import User
-from backend.repositories.user_repository import UserRepository
-from backend.modules.auth.oauth.provider import GoogleProvider, GitHubProvider
+from backend.modules.auth.oauth.provider import GitHubProvider, GoogleProvider
 from backend.modules.auth.services.audit_service import AuditService
+from backend.repositories.user_repository import UserRepository
+
 
 class OAuthService:
     def __init__(self, db: Session):
@@ -14,12 +15,8 @@ class OAuthService:
         self.github_provider = GitHubProvider()
 
     async def authenticate_oauth(
-        self,
-        provider_name: str,
-        token: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str]
-    ) -> Optional[User]:
+        self, provider_name: str, token: str, ip_address: str | None, user_agent: str | None
+    ) -> User | None:
         # 1. Resolve provider
         if provider_name == "google":
             info = await self.google_provider.get_user_info(token)
@@ -33,7 +30,7 @@ class OAuthService:
 
         # 2. Prevent duplicate accounts by fetching by email
         user = self.user_repo.get_by_email(info.email)
-        
+
         if user:
             # Account exists. We link it or sync the avatar/name
             # Email is verified via OAuth so we can set is_verified = True
@@ -41,22 +38,18 @@ class OAuthService:
             if info.avatar_url and not user.avatar_url:
                 user.avatar_url = info.avatar_url
             self.db.commit()
-            
+
             self.audit_service.log(
                 action="oauth_login",
                 user_id=user.id,
                 ip_address=ip_address,
                 device=user_agent,
-                metadata_dict={"provider": provider_name}
+                metadata_dict={"provider": provider_name},
             )
             return user
-        
+
         # 3. Register new user
-        user = self.user_repo.create(
-            email=info.email,
-            name=info.name,
-            avatar_url=info.avatar_url
-        )
+        user = self.user_repo.create(email=info.email, name=info.name, avatar_url=info.avatar_url)
         user.is_verified = True
         self.db.commit()
 
@@ -65,6 +58,6 @@ class OAuthService:
             user_id=user.id,
             ip_address=ip_address,
             device=user_agent,
-            metadata_dict={"provider": provider_name}
+            metadata_dict={"provider": provider_name},
         )
         return user

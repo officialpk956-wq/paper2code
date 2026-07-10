@@ -1,16 +1,14 @@
 import json
-import torch
 
-from core.param_counter import count_parameters
 from core.flops_estimator import (
-    estimate_vit_flops,
     estimate_resnet_flops,
     estimate_unet_flops,
+    estimate_vit_flops,
 )
-
-from core.vit_builder import ViTBuilder
 from core.model_builder import ResNetBuilder
+from core.param_counter import count_parameters
 from core.unet_builder import UNetBuilder
+from core.vit_builder import ViTBuilder
 
 
 def verify(schema_path: str):

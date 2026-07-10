@@ -1,6 +1,8 @@
 import torch
-from core.schema_refiner_densenet import refine_densenet_schema
+
 from core.densenet_builder import DenseNetBuilder
+from core.schema_refiner_densenet import refine_densenet_schema
+
 
 def main():
     schema = {"model_family": "densenet", "variant": "121"}
@@ -10,6 +12,7 @@ def main():
     out = model(x)
     print(f"Output shape: {out.shape}")
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
+
 
 if __name__ == "__main__":
     main()

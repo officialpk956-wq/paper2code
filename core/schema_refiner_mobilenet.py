@@ -1,5 +1,7 @@
 from copy import deepcopy
+
 from core.schema_rules_mobilenet import infer_mobilenet_defaults
+
 
 def refine_mobilenet_schema(raw_schema):
     schema = deepcopy(raw_schema)

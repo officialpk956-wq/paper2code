@@ -1,5 +1,6 @@
 from core.schema_rules_mae import infer_mae_defaults
 
+
 def refine_mae_schema(raw_schema):
     defaults = infer_mae_defaults(raw_schema)
     schema = {}

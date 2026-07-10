@@ -14,25 +14,24 @@ Pure functions:
 - compare_graphs: graphs → comparison result
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.agents import (
-    ParsingAgentImpl,
-    DefaultVisualizationAgent,
     DefaultExplanationAgent,
+    DefaultVisualizationAgent,
+    ParsingAgentImpl,
     ParsingSource,
     VisualizationOptions,
 )
-from core.rag.tensor_tracker import TensorTracker, TensorMismatchError
-from core.rag.knowledge_graph import KnowledgeGraph
-from core.rag.diff_engine import GraphDiffEngine
 from core.comparators import (
     summarize_compute,
-    summarize_spatial_behavior,
     summarize_scaling_behavior,
-    compare_graphs,
+    summarize_spatial_behavior,
 )
-from core.rag import ConfigExtractor, preprocess_text
+from core.rag import preprocess_text
+from core.rag.diff_engine import GraphDiffEngine
+from core.rag.knowledge_graph import KnowledgeGraph
+from core.rag.tensor_tracker import TensorMismatchError, TensorTracker
 
 
 class Paper2CodePipeline:
@@ -51,9 +50,9 @@ class Paper2CodePipeline:
 
     def __init__(
         self,
-        parsing_agent: Optional[ParsingAgentImpl] = None,
-        visualization_agent: Optional[DefaultVisualizationAgent] = None,
-        explanation_agent: Optional[DefaultExplanationAgent] = None,
+        parsing_agent: ParsingAgentImpl | None = None,
+        visualization_agent: DefaultVisualizationAgent | None = None,
+        explanation_agent: DefaultExplanationAgent | None = None,
     ):
         """Initialize pipeline with agents (or create defaults)."""
         self.parser = parsing_agent or ParsingAgentImpl()
@@ -64,9 +63,9 @@ class Paper2CodePipeline:
         self.diff_engine = GraphDiffEngine()
 
         # Optional caching for text-based inputs
-        self._text_cache: Dict[str, Dict[str, Any]] = {}
+        self._text_cache: dict[str, dict[str, Any]] = {}
 
-    def _apply_layer_safety_cap(self, config: ParsingSource) -> Dict[str, Any]:
+    def _apply_layer_safety_cap(self, config: ParsingSource) -> dict[str, Any]:
         """
         Apply safety guard: cap layers at MAX_LAYERS.
 
@@ -88,8 +87,8 @@ class Paper2CodePipeline:
     def run_single(
         self,
         config: ParsingSource,
-        vis_options: Optional[VisualizationOptions] = None,
-    ) -> Dict[str, Any]:
+        vis_options: VisualizationOptions | None = None,
+    ) -> dict[str, Any]:
         """
         Run single architecture analysis.
 
@@ -108,7 +107,7 @@ class Paper2CodePipeline:
         was_truncated = capped_config.get("_truncated", False)
 
         graph = self.parser.parse(capped_config)
-        
+
         # 1.5 Tensor Validation (Phase 1 Compiler Step)
         try:
             self.tensor_tracker.propagate_shapes(graph)
@@ -163,8 +162,8 @@ class Paper2CodePipeline:
         self,
         config_a: ParsingSource,
         config_b: ParsingSource,
-        vis_options: Optional[VisualizationOptions] = None,
-    ) -> Dict[str, Any]:
+        vis_options: VisualizationOptions | None = None,
+    ) -> dict[str, Any]:
         """
         Run comparative architecture analysis.
 
@@ -210,8 +209,10 @@ class Paper2CodePipeline:
 
         # Derive comparison contexts (direct from summaries, no new logic)
         dominant_compute = (
-            "A" if compute_a["total_high_flops"] > compute_b["total_high_flops"]
-            else "B" if compute_b["total_high_flops"] > compute_a["total_high_flops"]
+            "A"
+            if compute_a["total_high_flops"] > compute_b["total_high_flops"]
+            else "B"
+            if compute_b["total_high_flops"] > compute_a["total_high_flops"]
             else None
         )
 
@@ -219,14 +220,14 @@ class Paper2CodePipeline:
         spatial_a_val = spatial_levels.get(spatial_a["spatial_preservation"], 2)
         spatial_b_val = spatial_levels.get(spatial_b["spatial_preservation"], 2)
         dominant_spatial = (
-            "A" if spatial_a_val > spatial_b_val
-            else "B" if spatial_b_val > spatial_a_val
-            else None
+            "A" if spatial_a_val > spatial_b_val else "B" if spatial_b_val > spatial_a_val else None
         )
 
         scaling_issue = (
-            "A" if scaling_a["scaling"] == "poor" and scaling_b["scaling"] != "poor"
-            else "B" if scaling_b["scaling"] == "poor" and scaling_a["scaling"] != "poor"
+            "A"
+            if scaling_a["scaling"] == "poor" and scaling_b["scaling"] != "poor"
+            else "B"
+            if scaling_b["scaling"] == "poor" and scaling_a["scaling"] != "poor"
             else None
         )
 
@@ -268,7 +269,9 @@ class Paper2CodePipeline:
         visual_metadata = {
             "highlighted_nodes_a": dict(visual_a.get("node_annotations", {})),
             "highlighted_nodes_b": dict(visual_b.get("node_annotations", {})),
-            "visual_cues": list(set(visual_a.get("visual_cues", []) + visual_b.get("visual_cues", []))),
+            "visual_cues": list(
+                set(visual_a.get("visual_cues", []) + visual_b.get("visual_cues", []))
+            ),
         }
 
         # Build comparison result for explainer
@@ -325,8 +328,8 @@ class Paper2CodePipeline:
     def run_from_text(
         self,
         text: str,
-        vis_options: Optional[VisualizationOptions] = None,
-    ) -> Dict[str, Any]:
+        vis_options: VisualizationOptions | None = None,
+    ) -> dict[str, Any]:
         """
         Run single architecture analysis from raw text.
         """
@@ -348,8 +351,8 @@ class Paper2CodePipeline:
         self,
         text_a: str,
         text_b: str,
-        vis_options: Optional[VisualizationOptions] = None,
-    ) -> Dict[str, Any]:
+        vis_options: VisualizationOptions | None = None,
+    ) -> dict[str, Any]:
         """
         Run comparative architecture analysis from raw text.
         """

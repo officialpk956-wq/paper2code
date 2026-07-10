@@ -10,13 +10,11 @@ Every output is labeled with its implementation type:
   - "Pseudo Implementation":     conceptual scaffold only
 """
 
-from typing import Dict, Any, Optional
-
+from typing import Any
 
 # ── Master code library keyed by module_type ─────────────────────────────────
 
-MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
-
+MODULE_CODE_LIBRARY: dict[str, dict[str, Any]] = {
     "conv2d": {
         "label": "Educational Implementation",
         "component": "nn.Conv2d",
@@ -50,7 +48,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "when followed by BatchNorm2d, which has its own learnable bias (beta)."
         ),
     },
-
     "residualblock": {
         "label": "Reference Implementation",
         "component": "Residual Block (He et al. 2016)",
@@ -106,7 +103,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "applied when spatial dimensions or channel counts change between input and output."
         ),
     },
-
     "bottleneckblock": {
         "label": "Reference Implementation",
         "component": "Bottleneck Block (ResNet-50+)",
@@ -158,7 +154,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "is a design choice from the original paper."
         ),
     },
-
     "denseblock": {
         "label": "Reference Implementation",
         "component": "Dense Block (Huang et al. 2017)",
@@ -205,7 +200,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "Transition layers (not shown) reduce feature map count between dense blocks."
         ),
     },
-
     "multiheadattention": {
         "label": "Reference Implementation",
         "component": "Multi-Head Self-Attention (Vaswani et al. 2017)",
@@ -259,7 +253,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "The fused QKV projection is an optimization over 3 separate linear layers."
         ),
     },
-
     "patchembedding": {
         "label": "Reference Implementation",
         "component": "Patch Embedding (Dosovitskiy et al. 2020)",
@@ -309,7 +302,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "for classification. 1D positional embeddings are learned, not fixed sinusoidal."
         ),
     },
-
     "transformerblock": {
         "label": "Reference Implementation",
         "component": "Transformer Encoder Layer",
@@ -361,7 +353,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "The FFN dimension is typically 4× the embedding dimension (mlp_ratio=4)."
         ),
     },
-
     "upsample": {
         "label": "Educational Implementation",
         "component": "Bilinear Upsample + Conv (U-Net Decoder)",
@@ -405,7 +396,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "it passes fine-grained spatial detail from the encoder directly to the decoder."
         ),
     },
-
     "linear": {
         "label": "Educational Implementation",
         "component": "nn.Linear (Fully Connected Layer)",
@@ -439,7 +429,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "is used before the linear layer for CNN heads to handle variable input sizes."
         ),
     },
-
     "batchnorm2d": {
         "label": "Educational Implementation",
         "component": "nn.BatchNorm2d",
@@ -473,7 +462,6 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
             "At inference, running statistics (not batch statistics) are used."
         ),
     },
-
     "layernorm": {
         "label": "Educational Implementation",
         "component": "nn.LayerNorm",
@@ -512,8 +500,8 @@ MODULE_CODE_LIBRARY: Dict[str, Dict[str, Any]] = {
 
 def get_module_implementation(
     module_type: str,
-    params: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Return a structured implementation view for a given module type.
 
@@ -552,18 +540,18 @@ def get_module_implementation(
     # Fill template parameters
     template = entry["pytorch_template"]
     fills = {
-        "in_channels":  p.get("in_channels", p.get("channels", 64)),
+        "in_channels": p.get("in_channels", p.get("channels", 64)),
         "out_channels": p.get("out_channels", p.get("channels", 64)),
-        "kernel_size":  p.get("kernel_size", 3),
-        "stride":       p.get("stride", 1),
-        "padding":      p.get("padding", 1),
-        "d_model":      p.get("hidden_size", p.get("embed_dim", 768)),
-        "num_heads":    p.get("num_heads", p.get("heads", 12)),
-        "patch_size":   p.get("patch_size", 16),
-        "embed_dim":    p.get("embed_dim", p.get("hidden_size", 768)),
-        "in_features":  p.get("in_features", 2048),
-        "num_classes":  p.get("num_classes", 1000),
-        "channels":     p.get("channels", 64),
+        "kernel_size": p.get("kernel_size", 3),
+        "stride": p.get("stride", 1),
+        "padding": p.get("padding", 1),
+        "d_model": p.get("hidden_size", p.get("embed_dim", 768)),
+        "num_heads": p.get("num_heads", p.get("heads", 12)),
+        "patch_size": p.get("patch_size", 16),
+        "embed_dim": p.get("embed_dim", p.get("hidden_size", 768)),
+        "in_features": p.get("in_features", 2048),
+        "num_classes": p.get("num_classes", 1000),
+        "channels": p.get("channels", 64),
     }
     try:
         pytorch_code = template.format(**fills)
@@ -584,7 +572,7 @@ def get_architecture_implementation(
     paper_title: str,
     classification: str,
     modules: list,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build full architecture implementation view for a paper.
 
@@ -602,12 +590,14 @@ def get_architecture_implementation(
             m.get("module_type", ""),
             m.get("graph_nodes", [{}])[0].get("params", {}) if m.get("graph_nodes") else {},
         )
-        module_implementations.append({
-            "module_id": m.get("id"),
-            "layer_name": m.get("layer_name"),
-            "module_type": m.get("module_type"),
-            "implementation": impl,
-        })
+        module_implementations.append(
+            {
+                "module_id": m.get("id"),
+                "layer_name": m.get("layer_name"),
+                "module_type": m.get("module_type"),
+                "implementation": impl,
+            }
+        )
 
     return {
         "paper_title": paper_title,

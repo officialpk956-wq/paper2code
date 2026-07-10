@@ -15,13 +15,14 @@ This module never executes learner-supplied code. It only execs trusted
 reference-solution strings defined in the problem catalog.
 """
 
-from typing import Any, Dict, List
-import numpy as np
+from typing import Any
 
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
+
 
 def _to_jsonable(x: Any) -> Any:
     """Convert numpy/Python values into plain JSON-serialisable structures."""
@@ -47,13 +48,13 @@ def _is_numeric_list(value: list) -> bool:
     return isinstance(flat, (int, float)) and not isinstance(flat, bool)
 
 
-def _coerce_inputs(raw_inputs: Dict[str, Any]) -> Dict[str, Any]:
+def _coerce_inputs(raw_inputs: dict[str, Any]) -> dict[str, Any]:
     """
     Convert a test case's inputs into kwargs for the reference function.
     Numeric lists become numpy arrays; lists of strings/mixed stay as Python
     lists; scalars pass through. Mirrors the Pyodide harness exactly.
     """
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     for key, value in raw_inputs.items():
         if isinstance(value, list) and _is_numeric_list(value):
             kwargs[key] = np.array(value, dtype=float)
@@ -62,15 +63,17 @@ def _coerce_inputs(raw_inputs: Dict[str, Any]) -> Dict[str, Any]:
     return kwargs
 
 
-def run_reference(reference_solution: str, fn_name: str, test_inputs: List[Dict[str, Any]]) -> List[Any]:
+def run_reference(
+    reference_solution: str, fn_name: str, test_inputs: list[dict[str, Any]]
+) -> list[Any]:
     """Execute a reference solution; return its JSON-serialisable output per test case."""
-    namespace: Dict[str, Any] = {"np": np, "numpy": np}
+    namespace: dict[str, Any] = {"np": np, "numpy": np}
     exec(reference_solution, namespace)  # noqa: S102 — trusted, our own code only
     if fn_name not in namespace:
         raise ValueError(f"Reference solution does not define '{fn_name}'")
     fn = namespace[fn_name]
 
-    outputs: List[Any] = []
+    outputs: list[Any] = []
     for case in test_inputs:
         kwargs = _coerce_inputs(case)
         outputs.append(_to_jsonable(fn(**kwargs)))
@@ -80,6 +83,7 @@ def run_reference(reference_solution: str, fn_name: str, test_inputs: List[Dict[
 # ---------------------------------------------------------------------------
 # Deep matching (shared semantics with the client-side Pyodide harness)
 # ---------------------------------------------------------------------------
+
 
 def _is_number(x: Any) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool)

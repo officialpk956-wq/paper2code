@@ -1,5 +1,7 @@
 import json
+
 import torch
+
 from core.transformer_builder import TransformerBuilder
 
 schema = json.load(open("outputs/code_ready/attention_all_you_need_2017.json"))

@@ -16,20 +16,20 @@ Modules:
 
 from core.rag.config_extractor import (
     ConfigExtractor,
-    preprocess_text,
     extract_table_layers,
+    preprocess_text,
 )
-from core.rag.normalizer import normalize_config
-from core.rag.symbolic_parser import parse_symbolic
-from core.rag.section_splitter import (
-    get_architecture_text,
-    split_into_sections,
-    chunk_for_retrieval,
-    score_chunks_by_density,
-)
-from core.rag.retriever import retrieve_top_chunks, retrieve_and_merge
 from core.rag.knowledge_graph import KnowledgeGraph
+from core.rag.normalizer import normalize_config
+from core.rag.retriever import retrieve_and_merge, retrieve_top_chunks
+from core.rag.section_splitter import (
+    chunk_for_retrieval,
+    get_architecture_text,
+    score_chunks_by_density,
+    split_into_sections,
+)
 from core.rag.semantic_explainer import SemanticExplainer
+from core.rag.symbolic_parser import parse_symbolic
 
 __all__ = [
     # Core extraction

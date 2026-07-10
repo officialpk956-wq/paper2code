@@ -6,15 +6,14 @@ Deterministic, no graph construction, no reasoning, no semantic inference.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Set
 
-from core.architecture_graph import ArchitectureGraph
 from core.agents.types import (
-    VisualizationMode,
     ComparisonContext,
+    VisualizationMode,
     VisualizationOptions,
     VisualRepresentation,
 )
+from core.architecture_graph import ArchitectureGraph
 
 
 class VisualizationAgent(ABC):
@@ -50,8 +49,8 @@ class VisualizationAgent(ABC):
         self,
         graph: ArchitectureGraph,
         mode: VisualizationMode = "single",
-        comparison_ctx: Optional[ComparisonContext] = None,
-        options: Optional[VisualizationOptions] = None,
+        comparison_ctx: ComparisonContext | None = None,
+        options: VisualizationOptions | None = None,
     ) -> VisualRepresentation:
         """
         Render graph with semantic-aware visual cues.
@@ -115,7 +114,7 @@ class VisualizationAgent(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_visual_cues(self) -> Set[str]:
+    def get_visual_cues(self) -> set[str]:
         """
         Get list of supported visual cues.
 

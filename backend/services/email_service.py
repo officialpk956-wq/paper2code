@@ -1,13 +1,13 @@
-import os
 import logging
-from typing import Optional
+import os
+
 import resend
 
 logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-FROM_EMAIL     = os.getenv("FROM_EMAIL", "Paper2Code <noreply@paper2code.com>")
-FRONTEND_URL   = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "Paper2Code <noreply@paper2code.com>")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -18,7 +18,9 @@ def send_email_sync(to_email: str, subject: str, html_body: str) -> bool:
         logger.info("MOCK EMAIL to %s: %s", to_email, subject)
         return True
     try:
-        resend.Emails.send({"from": FROM_EMAIL, "to": to_email, "subject": subject, "html": html_body})
+        resend.Emails.send(
+            {"from": FROM_EMAIL, "to": to_email, "subject": subject, "html": html_body}
+        )
         return True
     except Exception as e:
         logger.exception("Failed to send email to %s: %s", to_email, e)
@@ -44,6 +46,7 @@ def _base_template(content: str) -> str:
 
 
 # --- TEMPLATES ---
+
 
 def send_verification_email_sync(to_email: str, token: str) -> bool:
     link = f"{FRONTEND_URL}/verify-email?token={token}"
@@ -137,18 +140,23 @@ def send_password_reset_email_sync(to_email: str, token: str) -> bool:
 def send_drip_email_sync(to_email: str, name: str, day: int):
     return send_email_sync(to_email, f"Day {day} at Paper2Code", f"<p>Hi {name}</p>")
 
+
 def send_streak_at_risk_email_sync(to_email: str, name: str, streak: int):
-    return send_email_sync(to_email, "Keep your streak alive!", f"<p>Hi {name}, you have a {streak} day streak at risk.</p>")
+    return send_email_sync(
+        to_email,
+        "Keep your streak alive!",
+        f"<p>Hi {name}, you have a {streak} day streak at risk.</p>",
+    )
+
 
 def send_weekly_digest_email_sync(to_email: str, name: str, stats: dict):
-    return send_email_sync(to_email, "Your Weekly Digest", f"<p>Hi {name}, here are your stats: {stats}</p>")
-
-
+    return send_email_sync(
+        to_email, "Your Weekly Digest", f"<p>Hi {name}, here are your stats: {stats}</p>"
+    )
 
 
 _DRIP_TEMPLATES = {
-    1: {'subject': 'Day 1', 'cta_text': 'Start', 'body': '...'},
-    3: {'subject': 'Day 3', 'cta_text': 'Continue', 'body': '...'},
-    7: {'subject': 'Day 7', 'cta_text': 'Finish', 'body': '...'},
+    1: {"subject": "Day 1", "cta_text": "Start", "body": "..."},
+    3: {"subject": "Day 3", "cta_text": "Continue", "body": "..."},
+    7: {"subject": "Day 7", "cta_text": "Finish", "body": "..."},
 }
-

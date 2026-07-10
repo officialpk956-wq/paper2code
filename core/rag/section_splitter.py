@@ -14,9 +14,7 @@ Pipeline:
 """
 
 import re
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
-
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Section boundary detection patterns
@@ -78,10 +76,8 @@ _ARCH_KEYWORDS = [
 ]
 
 # Compile all patterns once
-_arch_heading_re = [re.compile(p, re.IGNORECASE | re.MULTILINE)
-                    for p in _ARCH_HEADING_PATTERNS]
-_stop_heading_re = [re.compile(p, re.IGNORECASE | re.MULTILINE)
-                    for p in _STOP_HEADING_PATTERNS]
+_arch_heading_re = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in _ARCH_HEADING_PATTERNS]
+_stop_heading_re = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in _STOP_HEADING_PATTERNS]
 _arch_keyword_re = [re.compile(p, re.IGNORECASE) for p in _ARCH_KEYWORDS]
 
 # Generic section heading: "3. Method" or "3 Method" or "Method" on its own line
@@ -94,9 +90,11 @@ _SECTION_BOUNDARY_RE = re.compile(
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TextSection:
     """A segment of paper text with its heading and relevance score."""
+
     heading: str
     content: str
     start_char: int
@@ -110,7 +108,8 @@ class TextSection:
 # Public API
 # ---------------------------------------------------------------------------
 
-def split_into_sections(text: str) -> List[TextSection]:
+
+def split_into_sections(text: str) -> list[TextSection]:
     """
     Split raw PDF text into sections using heading detection.
 
@@ -121,7 +120,7 @@ def split_into_sections(text: str) -> List[TextSection]:
         List of TextSection objects in order of appearance.
     """
     # Find all candidate section boundaries
-    boundaries: List[Tuple[int, str]] = []
+    boundaries: list[tuple[int, str]] = []
 
     for match in _SECTION_BOUNDARY_RE.finditer(text):
         heading = match.group(1).strip()
@@ -130,15 +129,17 @@ def split_into_sections(text: str) -> List[TextSection]:
 
     if not boundaries:
         # No boundaries found — treat entire text as one section
-        return [TextSection(
-            heading="Full Text",
-            content=text,
-            start_char=0,
-            end_char=len(text),
-        )]
+        return [
+            TextSection(
+                heading="Full Text",
+                content=text,
+                start_char=0,
+                end_char=len(text),
+            )
+        ]
 
     # Build sections from boundaries
-    sections: List[TextSection] = []
+    sections: list[TextSection] = []
     for i, (start, heading) in enumerate(boundaries):
         end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(text)
         content = text[start:end].strip()
@@ -200,7 +201,7 @@ def get_architecture_text(text: str, max_chars: int = 12_000) -> str:
     return merged[:max_chars]
 
 
-def chunk_for_retrieval(text: str, chunk_size: int = 1_000, overlap: int = 150) -> List[str]:
+def chunk_for_retrieval(text: str, chunk_size: int = 1_000, overlap: int = 150) -> list[str]:
     """
     Split text into overlapping chunks for BM25 / semantic retrieval.
 
@@ -233,7 +234,7 @@ def chunk_for_retrieval(text: str, chunk_size: int = 1_000, overlap: int = 150) 
     return [c for c in chunks if c]
 
 
-def score_chunks_by_density(chunks: List[str], top_k: int = 5) -> List[str]:
+def score_chunks_by_density(chunks: list[str], top_k: int = 5) -> list[str]:
     """
     Score and rank chunks by architectural keyword density.
 
@@ -247,7 +248,7 @@ def score_chunks_by_density(chunks: List[str], top_k: int = 5) -> List[str]:
     Returns:
         Top-k chunks ordered by descending keyword density.
     """
-    scored: List[Tuple[float, str]] = []
+    scored: list[tuple[float, str]] = []
 
     for chunk in chunks:
         score = _score_section(chunk)
@@ -260,6 +261,7 @@ def score_chunks_by_density(chunks: List[str], top_k: int = 5) -> List[str]:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 def _is_arch_heading(heading: str) -> bool:
     """Return True if this heading signals an architecture/method section."""

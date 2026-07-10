@@ -3,7 +3,6 @@
 MODEL_SCHEMA = {
     "model_name": None,
     "task": None,  # classification, segmentation, seq2seq, detection, etc.
-
     "components": [
         # Example component
         # {
@@ -11,15 +10,8 @@ MODEL_SCHEMA = {
         #   "details": {}
         # }
     ],
-
     "loss": None,
     "optimizer": None,
-
-    "training_details": {
-        "batch_size": None,
-        "epochs": None,
-        "learning_rate": None
-    },
-
-    "notes": None
+    "training_details": {"batch_size": None, "epochs": None, "learning_rate": None},
+    "notes": None,
 }

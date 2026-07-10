@@ -17,12 +17,13 @@ Usage:
         ...
 """
 
-import os
 import logging
-from typing import Generator
+import os
+from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
 
 class Base(DeclarativeBase):
     __allow_unmapped__ = True
@@ -44,9 +45,7 @@ DATABASE_URL: str = os.getenv(
 )
 
 # Postgres-specific connection pool settings are ignored for SQLite.
-_connect_args: dict = (
-    {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-)
+_connect_args: dict = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -58,14 +57,18 @@ engine = create_engine(
     # Echo SQL to stdout when SQLALCHEMY_ECHO is set (dev debugging only)
     echo=os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true",
     # Pool settings (harmless for SQLite, meaningful for Postgres)
-    pool_pre_ping=True,          # verify connections before checkout
-    pool_recycle=1800,           # recycle connections every 30 min
+    pool_pre_ping=True,  # verify connections before checkout
+    pool_recycle=1800,  # recycle connections every 30 min
     connect_args=_connect_args,
-    **({
-        "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
-        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "30")),
-        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "10")),
-    } if _is_postgres else {}),
+    **(
+        {
+            "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "30")),
+            "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "10")),
+        }
+        if _is_postgres
+        else {}
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -83,6 +86,7 @@ SessionLocal = sessionmaker(
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
+
 
 def get_db() -> Generator[Session, None, None]:
     """
@@ -108,6 +112,7 @@ def get_db() -> Generator[Session, None, None]:
 # ---------------------------------------------------------------------------
 # Health-check helper
 # ---------------------------------------------------------------------------
+
 
 def ping_db() -> dict:
     """

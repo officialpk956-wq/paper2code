@@ -9,30 +9,31 @@ Security guarantees:
   - Per-user daily query limit enforced via Redis INCR + TTL
 """
 
-import os
-import uuid
-import json
-import time
-import logging
 import datetime
+import json
+import logging
+import os
+import time
+import uuid
 
 log = logging.getLogger(__name__)
 
-REDIS_URL         = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TUTOR_DAILY_LIMIT = int(os.getenv("TUTOR_DAILY_LIMIT", "30"))
-SESSION_TTL       = 1800  # 30 minutes of inactivity
+SESSION_TTL = 1800  # 30 minutes of inactivity
 
 
 class TutorSessionStore:
     def __init__(self):
         self._redis = None
         self._mem_sessions: dict = {}  # session_id -> data dict
-        self._mem_rates: dict = {}     # "user_id:date" -> count
+        self._mem_rates: dict = {}  # "user_id:date" -> count
         self._try_connect()
 
     def _try_connect(self) -> None:
         try:
             from backend.redis_config import session_redis
+
             if session_redis:
                 session_redis.ping()
                 self._redis = session_redis
@@ -41,9 +42,7 @@ class TutorSessionStore:
                 self._redis = None
                 log.warning("TutorSessionStore: session_redis is None; falling back to in-memory")
         except Exception as exc:
-            log.warning(
-                "TutorSessionStore: Redis unavailable (%s); falling back to in-memory", exc
-            )
+            log.warning("TutorSessionStore: Redis unavailable (%s); falling back to in-memory", exc)
             self._redis = None
 
     # ------------------------------------------------------------------
@@ -60,9 +59,7 @@ class TutorSessionStore:
             "last_active": time.time(),
         }
         if self._redis:
-            self._redis.setex(
-                f"tutor:session:{session_id}", SESSION_TTL, json.dumps(data)
-            )
+            self._redis.setex(f"tutor:session:{session_id}", SESSION_TTL, json.dumps(data))
         else:
             self._mem_sessions[session_id] = data
         return session_id
@@ -130,9 +127,7 @@ class TutorSessionStore:
 
     def _save(self, session_id: str, data: dict) -> None:
         if self._redis:
-            self._redis.setex(
-                f"tutor:session:{session_id}", SESSION_TTL, json.dumps(data)
-            )
+            self._redis.setex(f"tutor:session:{session_id}", SESSION_TTL, json.dumps(data))
         else:
             self._mem_sessions[session_id] = data
 

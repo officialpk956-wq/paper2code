@@ -1,7 +1,7 @@
 # backend/modules/auth/security/__init__.py
 from backend.modules.auth.security.hashing import (
-    validate_password_strength,
     hash_password,
-    verify_password_and_needs_rehash,
+    validate_password_strength,
     verify_constant_time,
+    verify_password_and_needs_rehash,
 )

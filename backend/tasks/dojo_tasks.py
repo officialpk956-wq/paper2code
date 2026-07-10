@@ -1,8 +1,9 @@
+import asyncio
+
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
 from backend.repositories.task_repository import TaskRepository
-from backend.services.dojo_execution_service import execute_python, RUN_TIMEOUT_MS
-import asyncio
+from backend.services.dojo_execution_service import RUN_TIMEOUT_MS, execute_python
 
 
 def _mark_best_submission(db, user_id: int, problem_id: str, submission_id: int, time_ms) -> None:
@@ -11,6 +12,7 @@ def _mark_best_submission(db, user_id: int, problem_id: str, submission_id: int,
     Also unmarks the previous best. Only applies to passing submissions.
     """
     from backend.models import DojoSubmission
+
     prev_best = (
         db.query(DojoSubmission)
         .filter_by(user_id=user_id, problem_id=problem_id, is_best=True)
@@ -33,8 +35,10 @@ def _mark_best_submission(db, user_id: int, problem_id: str, submission_id: int,
 
 def _update_acceptance_rate(db, problem_id: str) -> None:
     """Recalculate and persist Problem.acceptance_rate after each submission."""
-    from backend.models import DojoSubmission, Problem
     from sqlalchemy import func
+
+    from backend.models import DojoSubmission, Problem
+
     total = (
         db.query(func.count(func.distinct(DojoSubmission.user_id)))
         .filter_by(problem_id=problem_id)
@@ -64,6 +68,7 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
         exec_code = code
         if task and task.input_ref:
             from backend.models import Problem
+
             prob = db.query(Problem).filter_by(id=task.input_ref).first()
             if prob and prob.time_limit_ms:
                 run_timeout_ms = prob.time_limit_ms
@@ -77,6 +82,7 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
 
         # Run execute_python in a dedicated thread (avoids running event loop conflicts)
         import threading
+
         res = []
         err = []
 
@@ -84,9 +90,11 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                res.append(loop.run_until_complete(
-                    execute_python(exec_code, stdin, run_timeout_ms=run_timeout_ms)
-                ))
+                res.append(
+                    loop.run_until_complete(
+                        execute_python(exec_code, stdin, run_timeout_ms=run_timeout_ms)
+                    )
+                )
             except Exception as ex:
                 err.append(ex)
             finally:
@@ -110,7 +118,7 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
         task = TaskRepository(db).get(task_id)
         if task and task.user_id:
             from backend.models import DojoSubmission, Problem
-            from backend.services.progress_service import update_user_activity, award_xp
+            from backend.services.progress_service import award_xp, update_user_activity
 
             problem = db.query(Problem).filter_by(id=task.input_ref).first()
             prob_version = problem.version if problem else 1
@@ -132,13 +140,18 @@ def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
             update_user_activity(db, task.user_id)
             if submission.passed:
                 # Track best submission for this user+problem
-                _mark_best_submission(db, task.user_id, task.input_ref, submission.id, submission.time_ms)
+                _mark_best_submission(
+                    db, task.user_id, task.input_ref, submission.id, submission.time_ms
+                )
 
-                difficulty = problem.difficulty.lower() if (problem and problem.difficulty) else "easy"
+                difficulty = (
+                    problem.difficulty.lower() if (problem and problem.difficulty) else "easy"
+                )
                 event = f"dojo.solved.{difficulty}"
                 award_xp(db, task.user_id, event, entity_id=task.input_ref)
                 try:
                     from backend.services.achievement_service import check_and_award
+
                     check_and_award(db, task.user_id, event, {"problem_id": task.input_ref})
                 except Exception:
                     pass

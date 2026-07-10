@@ -1,19 +1,22 @@
-from typing import Optional, Dict, Any
+from typing import Any
+
 from sqlalchemy.orm import Session
+
 from backend.models import Task
+
 
 class TaskRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, type: str, user_id: Optional[int] = None, input_ref: Optional[str] = None) -> Task:
+    def create(self, type: str, user_id: int | None = None, input_ref: str | None = None) -> Task:
         task = Task(type=type, user_id=user_id, input_ref=input_ref, status="pending")
         self.db.add(task)
         self.db.commit()
         self.db.refresh(task)
         return task
 
-    def get(self, task_id: str) -> Optional[Task]:
+    def get(self, task_id: str) -> Task | None:
         return self.db.query(Task).filter(Task.id == task_id).first()
 
     def set_running(self, task_id: str) -> None:
@@ -22,7 +25,7 @@ class TaskRepository:
             task.status = "running"
             self.db.commit()
 
-    def set_complete(self, task_id: str, result_dict: Dict[str, Any]) -> None:
+    def set_complete(self, task_id: str, result_dict: dict[str, Any]) -> None:
         task = self.get(task_id)
         if task:
             task.status = "completed"

@@ -14,30 +14,31 @@ Provides:
        → Identify Pareto-optimal points (min params for given FLOPs)
 """
 
-import dataclasses
-from typing import Any, Dict, List
+from typing import Any
 
 from core.architecture_graph import ArchitectureGraph
-from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
 from core.lab.mutator import (
-    increase_depth, decrease_depth,
-    increase_width, decrease_width,
-    add_residual, remove_residual,
-    add_attention, change_patch_size, change_hidden_dim,
-    _clone_graph,
+    add_attention,
+    add_residual,
+    decrease_depth,
+    decrease_width,
+    increase_depth,
+    increase_width,
+    remove_residual,
 )
-
+from core.metrics_estimator import estimate_activation_memory, estimate_metrics_from_graph
 
 # ---------------------------------------------------------------------------
 # Scatter generation
 # ---------------------------------------------------------------------------
+
 
 def _graph_point(
     graph: ArchitectureGraph,
     label: str,
     group: str,
     batch_size: int = 1,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Extract a scatter data point from a graph."""
     metrics = estimate_metrics_from_graph(graph)
     mem_rows = estimate_activation_memory(graph, batch_size=batch_size, input_spatial=224)
@@ -56,7 +57,7 @@ def _graph_point(
 def tradeoff_scatter(
     base_graph: ArchitectureGraph,
     architecture: str = "Custom",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Build a list of scatter data points representing the tradeoff landscape.
 
@@ -76,46 +77,62 @@ def tradeoff_scatter(
 
     # Depth variants
     try:
-        points.append(_graph_point(increase_depth(base_graph, 1), f"{architecture} +1 Block", "depth"))
+        points.append(
+            _graph_point(increase_depth(base_graph, 1), f"{architecture} +1 Block", "depth")
+        )
     except Exception:
         pass
     try:
-        points.append(_graph_point(increase_depth(base_graph, 2), f"{architecture} +2 Blocks", "depth"))
+        points.append(
+            _graph_point(increase_depth(base_graph, 2), f"{architecture} +2 Blocks", "depth")
+        )
     except Exception:
         pass
     try:
-        points.append(_graph_point(decrease_depth(base_graph, 1), f"{architecture} −1 Block", "depth"))
+        points.append(
+            _graph_point(decrease_depth(base_graph, 1), f"{architecture} −1 Block", "depth")
+        )
     except Exception:
         pass
 
     # Width variants
     try:
-        points.append(_graph_point(increase_width(base_graph, 1.5), f"{architecture} Width ×1.5", "width"))
+        points.append(
+            _graph_point(increase_width(base_graph, 1.5), f"{architecture} Width ×1.5", "width")
+        )
     except Exception:
         pass
     try:
-        points.append(_graph_point(decrease_width(base_graph, 0.5), f"{architecture} Width ×0.5", "width"))
+        points.append(
+            _graph_point(decrease_width(base_graph, 0.5), f"{architecture} Width ×0.5", "width")
+        )
     except Exception:
         pass
 
     # Structural variants
     try:
-        points.append(_graph_point(add_residual(base_graph), f"{architecture} +Residual", "structure"))
+        points.append(
+            _graph_point(add_residual(base_graph), f"{architecture} +Residual", "structure")
+        )
     except Exception:
         pass
     try:
-        points.append(_graph_point(remove_residual(base_graph), f"{architecture} −Residual", "structure"))
+        points.append(
+            _graph_point(remove_residual(base_graph), f"{architecture} −Residual", "structure")
+        )
     except Exception:
         pass
     try:
-        points.append(_graph_point(add_attention(base_graph), f"{architecture} +Attention", "attention"))
+        points.append(
+            _graph_point(add_attention(base_graph), f"{architecture} +Attention", "attention")
+        )
     except Exception:
         pass
 
     return points
 
 
-def get_efficiency_frontiers(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def get_efficiency_frontiers(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Return Pareto-optimal points: those where no other point has both
     lower params and lower FLOPs score.
@@ -132,9 +149,11 @@ def get_efficiency_frontiers(points: List[Dict[str, Any]]) -> List[Dict[str, Any
             if q is p:
                 continue
             # q dominates p if q has strictly lower or equal flops AND params
-            if (q["flops_score"] <= p["flops_score"] and
-                    q["params"] <= p["params"] and
-                    (q["flops_score"] < p["flops_score"] or q["params"] < p["params"])):
+            if (
+                q["flops_score"] <= p["flops_score"]
+                and q["params"] <= p["params"]
+                and (q["flops_score"] < p["flops_score"] or q["params"] < p["params"])
+            ):
                 dominated = True
                 break
         if not dominated:
@@ -225,13 +244,16 @@ TRADEOFF_SUMMARIES = {
 }
 
 
-def get_tradeoff_summary(mutation_type: str) -> Dict[str, Any]:
+def get_tradeoff_summary(mutation_type: str) -> dict[str, Any]:
     """Return the structured tradeoff summary for a mutation type."""
-    return TRADEOFF_SUMMARIES.get(mutation_type, {
-        "compute": "unknown",
-        "memory": "unknown",
-        "expressivity": "unknown",
-        "inference_speed": "unknown",
-        "training_stability": "unknown",
-        "recommendation": "No tradeoff data available for this mutation type.",
-    })
+    return TRADEOFF_SUMMARIES.get(
+        mutation_type,
+        {
+            "compute": "unknown",
+            "memory": "unknown",
+            "expressivity": "unknown",
+            "inference_speed": "unknown",
+            "training_stability": "unknown",
+            "recommendation": "No tradeoff data available for this mutation type.",
+        },
+    )

@@ -5,6 +5,7 @@ In-app notification endpoints for authenticated users.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -38,10 +39,7 @@ def list_notifications(
     db: Session = Depends(get_db),
 ):
     """Return the current user's notifications, newest first."""
-    query = (
-        db.query(Notification)
-        .filter(Notification.user_id == current_user.id)
-    )
+    query = db.query(Notification).filter(Notification.user_id == current_user.id)
     if unread_only:
         query = query.filter(Notification.is_read == False)
 
@@ -51,8 +49,8 @@ def list_notifications(
     return {
         "total": total,
         "unread": db.query(Notification)
-            .filter(Notification.user_id == current_user.id, Notification.is_read == False)
-            .count(),
+        .filter(Notification.user_id == current_user.id, Notification.is_read == False)
+        .count(),
         "notifications": [_notif_to_dict(n) for n in items],
     }
 

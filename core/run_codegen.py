@@ -1,5 +1,7 @@
 import json
+
 import torch
+
 from core.model_builder import ResNetBuilder
 
 schema = json.load(open("outputs/code_ready/resnet_he_2015.json"))

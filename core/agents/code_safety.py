@@ -1,8 +1,17 @@
 import ast
 
 _BANNED_MODULES = {
-    "os", "subprocess", "sys", "importlib", "shutil", "pathlib",
-    "socket", "ctypes", "multiprocessing", "pty", "signal",
+    "os",
+    "subprocess",
+    "sys",
+    "importlib",
+    "shutil",
+    "pathlib",
+    "socket",
+    "ctypes",
+    "multiprocessing",
+    "pty",
+    "signal",
 }
 
 

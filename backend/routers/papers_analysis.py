@@ -1,31 +1,22 @@
+import datetime
+import json
 import logging
 import os
-import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-import json
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-import dataclasses
-import base64
+from typing import Any
 
-from backend.database import get_db
-from backend.models import Paper
-from backend.services.paper_ingestion_service import ingest_pdf_paper
+from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from backend.models import Task
+from core.codegen import _node_to_layer
+from core.explainers.graph_explainer import explain_node
+from core.metrics_estimator import estimate_activation_memory, estimate_metrics_from_graph
 from core.orchestrator.pipeline import Paper2CodePipeline
 from core.paper_to_code_generator import PaperToCodeGenerator
 from core.rag.config_extractor import ConfigExtractor
-from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
-from core.explainers.graph_explainer import explain_node
-from core.codegen import _node_to_layer
-from backend.server import limiter
-from backend.dependencies import get_current_user, get_optional_user
-from backend.repositories.task_repository import TaskRepository
-from backend.tasks.paper_tasks import generate_code_from_pdf_task
-from backend.models import Task
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +50,13 @@ def _check_paper_quota(db: Session, user_id: int) -> None:
             ),
         )
 
+
 def _check_storage_quota(db: Session, user_id: int, additional_bytes: int = 0) -> None:
     """Raise 429 if user would exceed their storage quota."""
     if _STORAGE_QUOTA_BYTES <= 0:
         return
     from backend.models import User
+
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         return
@@ -82,38 +75,43 @@ pipeline = Paper2CodePipeline()
 extractor = ConfigExtractor()
 generator = PaperToCodeGenerator()
 
+
 class TextRequest(BaseModel):
     text: str
-    
+
+
 class CompareRequest(BaseModel):
     text_a: str
     text_b: str
 
+
 class GraphRequest(BaseModel):
     name: str = "Architect Session"
-    layers: list[Dict[str, Any]]
+    layers: list[dict[str, Any]]
 
 
 def _build_response(spec, result, code, code_source):
     graph = result["graph"]
     metrics = estimate_metrics_from_graph(graph)
     mem_data = estimate_activation_memory(graph, batch_size=1, input_spatial=224)
-    total_mem_mb = sum(row['mem_mb'] for row in mem_data) if mem_data else 0
-    
+    total_mem_mb = sum(row["mem_mb"] for row in mem_data) if mem_data else 0
+
     layer_breakdown = []
     for node in graph.nodes:
         node_code = _node_to_layer(node) or f"# Custom block implementation needed for {node.type}"
-        layer_breakdown.append({
-            "id": node.id,
-            "label": node.label,
-            "type": node.type,
-            "params": node.params,
-            "semantic": node.semantic_params,
-            "description": node.description,
-            "explanation": explain_node(node),
-            "code_snippet": node_code
-        })
-        
+        layer_breakdown.append(
+            {
+                "id": node.id,
+                "label": node.label,
+                "type": node.type,
+                "params": node.params,
+                "semantic": node.semantic_params,
+                "description": node.description,
+                "explanation": explain_node(node),
+                "code_snippet": node_code,
+            }
+        )
+
     return {
         "name": graph.name,
         "svg": result["visual"]["graphviz_dot"],
@@ -126,7 +124,7 @@ def _build_response(spec, result, code, code_source):
             "flops_score": metrics["total_flops_score"],
             "params": metrics["total_params_estimate"],
             "depth": metrics["depth"],
-            "memory_mb": round(total_mem_mb, 1)
+            "memory_mb": round(total_mem_mb, 1),
         },
         "tensor_trace": graph.metadata.get("tensor_trace", []),
         "cross_attention_events": graph.metadata.get("cross_attention_events", []),
@@ -149,7 +147,7 @@ def get_paper_info(paper) -> tuple[str, str, str, str]:
     classification = arch_graph.get("classification")
     status = arch_graph.get("status", "Published")
     support = arch_graph.get("support_level", "experimental")
-    
+
     if classification:
         return paper.title, classification, status, support
 
@@ -182,6 +180,7 @@ def safe_dict(val) -> dict:
             return {}
     return {}
 
+
 def safe_list(val) -> list:
     if isinstance(val, list):
         return val
@@ -192,6 +191,7 @@ def safe_list(val) -> list:
         except (ValueError, TypeError):
             return []
     return []
+
 
 def _module_to_dict(m, paper_id: int, total: int) -> dict:
     flops = safe_dict(m.flops_context)
@@ -257,6 +257,7 @@ def _do_parse_text(text: str):
     code, code_source = generator._generate_code(spec, result["graph"])
     return _build_response(spec, result, code, code_source)
 
+
 @router.post("/papers/text-parse")
 # deprecated alias
 @router.post("/parse_text", deprecated=True)
@@ -266,6 +267,7 @@ async def parse_text(request: TextRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def _do_compare_text(text_a: str, text_b: str):
     result = pipeline.run_comparison_from_text(text_a, text_b)
     return {
@@ -274,8 +276,9 @@ def _do_compare_text(text_a: str, text_b: str):
         "svg_a": result["visual_a"]["graphviz_dot"],
         "svg_b": result["visual_b"]["graphviz_dot"],
         "explanation": result["explanation"],
-        "metadata": result["metadata"]
+        "metadata": result["metadata"],
     }
+
 
 @router.post("/papers/text-compare")
 # deprecated alias
@@ -286,19 +289,19 @@ async def compare_text(request: CompareRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def _do_analyze_graph(name: str, layers: list):
     from core.rag.normalizer import normalize_config
-    config = normalize_config({
-        "name": name,
-        "layers": layers
-    })
+
+    config = normalize_config({"name": name, "layers": layers})
     result = pipeline.run_single(name, config)
     return _build_response(
-        spec={"model_family": "Architect"}, 
-        result=result, 
-        code=result.get("code", ""), 
-        code_source="Architect Session"
+        spec={"model_family": "Architect"},
+        result=result,
+        code=result.get("code", ""),
+        code_source="Architect Session",
     )
+
 
 @router.post("/papers/graph-analysis")
 # deprecated alias
@@ -308,9 +311,9 @@ async def analyze_graph(request: GraphRequest):
         return await run_in_threadpool(_do_analyze_graph, request.name, request.layers)
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 # ---------------------------------------------------------------------------
@@ -319,13 +322,10 @@ async def analyze_graph(request: GraphRequest):
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
 MAX_SIZE = 20 * 1024 * 1024  # 20 MB hard cap
 
 _VALID_VISIBILITY = {"public", "unlisted", "private"}
+
 
 async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
     chunks = []
@@ -338,7 +338,7 @@ async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
         if received > max_bytes:
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds {max_bytes // (1024*1024)} MB limit.",
+                detail=f"File exceeds {max_bytes // (1024 * 1024)} MB limit.",
             )
         chunks.append(chunk)
     return b"".join(chunks)
@@ -348,6 +348,7 @@ async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
 # POST /api/papers/confirm-upload  — confirm direct upload, queue processing
 # ---------------------------------------------------------------------------
 
+
 class ConfirmUploadRequest(BaseModel):
     key: str
     paper_name: str
@@ -356,32 +357,18 @@ class ConfirmUploadRequest(BaseModel):
     file_size_bytes: int = 0
 
 
-
-
 # ---------------------------------------------------------------------------
 # GET /api/papers/{paper_id}/download  — presigned R2 download URL (1h expiry)
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
 # PATCH /api/papers/{id}/visibility  — change visibility (P0, ownership req.)
 # ---------------------------------------------------------------------------
 
+
 class VisibilityUpdate(BaseModel):
     visibility: str
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -389,15 +376,13 @@ class VisibilityUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # POST /api/papers/{id}/flag  — user reports a paper for review (P1)
 # ---------------------------------------------------------------------------
 
+
 class PaperFlagRequest(BaseModel):
     reason: str = "inappropriate"
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +392,3 @@ class PaperFlagRequest(BaseModel):
 
 class PaperAskRequest(BaseModel):
     question: str
-
-
-

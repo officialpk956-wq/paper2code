@@ -1,5 +1,7 @@
 from copy import deepcopy
+
 from core.schema_rules_densenet import infer_densenet_defaults
+
 
 def refine_densenet_schema(raw_schema):
     schema = deepcopy(raw_schema)

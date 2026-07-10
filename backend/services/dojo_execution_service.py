@@ -17,20 +17,21 @@ from typing import Any
 
 import httpx
 
-PISTON_URL            = os.getenv("PISTON_URL", "http://localhost:2000")
-EXECUTION_TIMEOUT_S   = 40.0        # httpx client timeout (must exceed max run_timeout_ms)
-RUN_TIMEOUT_MS        = 10_000      # 10 s — global default; can be overridden per-problem
-MEMORY_LIMIT_BYTES    = 67_108_864  # 64 MB per execution
-OUTPUT_LIMIT_BYTES    = 65_536      # 64 KB stdout cap — prevents infinite-print DoS
+PISTON_URL = os.getenv("PISTON_URL", "http://localhost:2000")
+EXECUTION_TIMEOUT_S = 40.0  # httpx client timeout (must exceed max run_timeout_ms)
+RUN_TIMEOUT_MS = 10_000  # 10 s — global default; can be overridden per-problem
+MEMORY_LIMIT_BYTES = 67_108_864  # 64 MB per execution
+OUTPUT_LIMIT_BYTES = 65_536  # 64 KB stdout cap — prevents infinite-print DoS
 
 
 from tenacity import (
+    RetryError,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    RetryError,
 )
+
 
 @retry(
     retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
@@ -43,6 +44,7 @@ async def _call_piston(payload: dict) -> dict:
         resp = await client.post(f"{PISTON_URL}/api/v2/execute", json=payload)
         resp.raise_for_status()
     return resp.json()
+
 
 async def execute_python(
     code: str,
@@ -75,7 +77,7 @@ async def execute_python(
         "run_timeout": run_timeout_ms,
         "compile_memory_limit": -1,
         "run_memory_limit": MEMORY_LIMIT_BYTES,
-        "output_limit": OUTPUT_LIMIT_BYTES,   # cap stdout at 64 KB
+        "output_limit": OUTPUT_LIMIT_BYTES,  # cap stdout at 64 KB
     }
 
     try:
@@ -89,12 +91,12 @@ async def execute_python(
             "exit_code": -1,
         }
 
-    run  = data.get("run", {})
+    run = data.get("run", {})
 
     return {
-        "passed":    run.get("code", 1) == 0,
-        "stdout":    run.get("stdout", ""),
-        "stderr":    run.get("stderr", ""),
-        "time_ms":   run.get("time"),
+        "passed": run.get("code", 1) == 0,
+        "stdout": run.get("stdout", ""),
+        "stderr": run.get("stderr", ""),
+        "time_ms": run.get("time"),
         "exit_code": run.get("code", 1),
     }

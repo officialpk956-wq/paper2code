@@ -1,28 +1,41 @@
-from typing import List, Callable, Dict, Any, Optional
+from collections.abc import Callable
+from typing import Any
+
 
 class WorkflowStep:
-    def __init__(self, name: str, action: Callable[[Dict[str, Any]], Dict[str, Any]], compensation: Optional[Callable[[Dict[str, Any]], None]] = None):
+    def __init__(
+        self,
+        name: str,
+        action: Callable[[dict[str, Any]], dict[str, Any]],
+        compensation: Callable[[dict[str, Any]], None] | None = None,
+    ):
         self.name = name
         self.action = action
         self.compensation = compensation
 
+
 class WorkflowOrchestrator:
     def __init__(self, name: str):
         self.name = name
-        self.steps: List[WorkflowStep] = []
-        self._parallel_branches: List[List[WorkflowStep]] = []
+        self.steps: list[WorkflowStep] = []
+        self._parallel_branches: list[list[WorkflowStep]] = []
 
-    def add_step(self, name: str, action: Callable[[Dict[str, Any]], Dict[str, Any]], compensation: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
+    def add_step(
+        self,
+        name: str,
+        action: Callable[[dict[str, Any]], dict[str, Any]],
+        compensation: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.steps.append(WorkflowStep(name, action, compensation))
 
-    def add_parallel_branches(self, branches: List[List[WorkflowStep]]) -> None:
+    def add_parallel_branches(self, branches: list[list[WorkflowStep]]) -> None:
         self._parallel_branches = branches
 
-    def execute(self, initial_payload: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, initial_payload: dict[str, Any]) -> dict[str, Any]:
         """Execute steps. If any step fails, roll back using compensation steps."""
         context = initial_payload.copy()
-        executed_steps: List[WorkflowStep] = []
-        
+        executed_steps: list[WorkflowStep] = []
+
         try:
             # 1. Execute sequential steps
             for step in self.steps:

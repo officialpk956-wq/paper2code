@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import Achievement, UserAchievement, User
+from backend.models import Achievement, User, UserAchievement
 
 router = APIRouter(prefix="/api/achievements", tags=["Achievements"])
 
@@ -20,9 +20,13 @@ def list_achievements(db: Session = Depends(get_db)):
     all_ach = db.query(Achievement).order_by(Achievement.category, Achievement.xp_reward).all()
     return [
         {
-            "id": a.id, "slug": a.slug, "title": a.title,
-            "description": a.description, "icon": a.icon,
-            "xp_reward": a.xp_reward, "category": a.category,
+            "id": a.id,
+            "slug": a.slug,
+            "title": a.title,
+            "description": a.description,
+            "icon": a.icon,
+            "xp_reward": a.xp_reward,
+            "category": a.category,
         }
         for a in all_ach
     ]
@@ -44,13 +48,13 @@ def my_achievements(
         "count": len(rows),
         "achievements": [
             {
-                "slug":       ach.slug,
-                "title":      ach.title,
-                "icon":       ach.icon,
-                "xp_reward":  ach.xp_reward,
-                "category":   ach.category,
-                "earned_at":  ua.earned_at.isoformat() if ua.earned_at else None,
-                "payload":    ua.payload,
+                "slug": ach.slug,
+                "title": ach.title,
+                "icon": ach.icon,
+                "xp_reward": ach.xp_reward,
+                "category": ach.category,
+                "earned_at": ua.earned_at.isoformat() if ua.earned_at else None,
+                "payload": ua.payload,
             }
             for ua, ach in rows
         ],

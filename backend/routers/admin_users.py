@@ -1,14 +1,21 @@
 import logging
-from datetime import datetime, timezone, timedelta
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Any
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import User, Paper, DojoSubmission, Task, UsageLog, Problem, LeaderboardArchive, XPEvent
+from backend.models import (
+    DojoSubmission,
+    Paper,
+    Problem,
+    Task,
+    User,
+    XPEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +25,7 @@ router = APIRouter(prefix="/api/admin", tags=["Admin Users"])
 # ---------------------------------------------------------------------------
 # Admin dependency — 403 for non-admins
 # ---------------------------------------------------------------------------
+
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
@@ -30,22 +38,21 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # GET /api/admin/costs
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------
 # GET /api/admin/users
 # ---------------------------------------------------------------------------
 
+
 @router.get("/users", include_in_schema=False)
 def admin_list_users(
     page: int = 1,
     limit: int = 50,
-    q: Optional[str] = None,
+    q: str | None = None,
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -78,9 +85,10 @@ def admin_list_users(
 # PATCH /api/admin/users/{user_id}
 # ---------------------------------------------------------------------------
 
+
 class AdminUserUpdate(BaseModel):
-    is_admin: Optional[bool] = None
-    is_email_verified: Optional[bool] = None
+    is_admin: bool | None = None
+    is_email_verified: bool | None = None
 
 
 @router.patch("/users/{user_id}", include_in_schema=False)
@@ -100,12 +108,18 @@ def admin_update_user(
     if body.is_email_verified is not None:
         user.is_email_verified = body.is_email_verified
     db.commit()
-    return {"id": user.id, "email": user.email, "is_admin": user.is_admin, "is_email_verified": user.is_email_verified}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "is_admin": user.is_admin,
+        "is_email_verified": user.is_email_verified,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Admin Problem CRUD
 # ---------------------------------------------------------------------------
+
 
 class AdminProblemCreate(BaseModel):
     id: str
@@ -115,37 +129,37 @@ class AdminProblemCreate(BaseModel):
     category: str
     description: str
     python_template: str = ""
-    test_cases: List[Any] = []
-    hints: List[Any] = []
-    explanation: List[Any] = []
-    tags: List[Any] = []
-    related_architectures: List[Any] = []
-    related_papers: List[Any] = []
-    related_math: List[Any] = []
-    learning_points: List[Any] = []
-    estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = None
-    time_limit_ms: Optional[int] = None   # None → global default (10 000 ms)
+    test_cases: list[Any] = []
+    hints: list[Any] = []
+    explanation: list[Any] = []
+    tags: list[Any] = []
+    related_architectures: list[Any] = []
+    related_papers: list[Any] = []
+    related_math: list[Any] = []
+    learning_points: list[Any] = []
+    estimated_time: int | None = None
+    visualization_url: str | None = None
+    time_limit_ms: int | None = None  # None → global default (10 000 ms)
 
 
 class AdminProblemUpdate(BaseModel):
-    slug: Optional[str] = None
-    title: Optional[str] = None
-    difficulty: Optional[str] = None
-    category: Optional[str] = None
-    description: Optional[str] = None
-    python_template: Optional[str] = None
-    test_cases: Optional[List[Any]] = None
-    hints: Optional[List[Any]] = None
-    explanation: Optional[List[Any]] = None
-    tags: Optional[List[Any]] = None
-    related_architectures: Optional[List[Any]] = None
-    related_papers: Optional[List[Any]] = None
-    related_math: Optional[List[Any]] = None
-    learning_points: Optional[List[Any]] = None
-    estimated_time: Optional[int] = None
-    visualization_url: Optional[str] = None
-    time_limit_ms: Optional[int] = None
+    slug: str | None = None
+    title: str | None = None
+    difficulty: str | None = None
+    category: str | None = None
+    description: str | None = None
+    python_template: str | None = None
+    test_cases: list[Any] | None = None
+    hints: list[Any] | None = None
+    explanation: list[Any] | None = None
+    tags: list[Any] | None = None
+    related_architectures: list[Any] | None = None
+    related_papers: list[Any] | None = None
+    related_math: list[Any] | None = None
+    learning_points: list[Any] | None = None
+    estimated_time: int | None = None
+    visualization_url: str | None = None
+    time_limit_ms: int | None = None
 
 
 def _problem_to_dict(p: Problem) -> dict:
@@ -166,19 +180,10 @@ def _problem_to_dict(p: Problem) -> dict:
     }
 
 
-
-
-
-
-
-
-
-
-
-
 # ---------------------------------------------------------------------------
 # GET /api/admin/users/{user_id}  (individual detail)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/users/{user_id}", include_in_schema=False)
 def admin_get_user(
@@ -189,12 +194,15 @@ def admin_get_user(
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    papers_count = db.query(func.count(Task.id)).filter(
-        Task.user_id == user_id, Task.type == "paper.codegen"
-    ).scalar() or 0
-    submissions_count = db.query(func.count(DojoSubmission.id)).filter_by(
-        user_id=user_id
-    ).scalar() or 0
+    papers_count = (
+        db.query(func.count(Task.id))
+        .filter(Task.user_id == user_id, Task.type == "paper.codegen")
+        .scalar()
+        or 0
+    )
+    submissions_count = (
+        db.query(func.count(DojoSubmission.id)).filter_by(user_id=user_id).scalar() or 0
+    )
     recent_xp = (
         db.query(XPEvent)
         .filter_by(user_id=user_id)
@@ -270,6 +278,7 @@ def admin_get_user(
 # DELETE /api/admin/users/{user_id}
 # ---------------------------------------------------------------------------
 
+
 @router.delete("/users/{user_id}", include_in_schema=False, status_code=200)
 def admin_delete_user(
     user_id: int,
@@ -291,25 +300,18 @@ def admin_delete_user(
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # GET /api/admin/papers/moderation-queue
 # ---------------------------------------------------------------------------
-
 
 
 class PaperFlagRequest(BaseModel):
     reason: str = "policy_violation"
 
 
-
-
-
-
 # ---------------------------------------------------------------------------
 # GET /api/admin/xp-events  — audit trail of all XP events
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------
@@ -321,28 +323,25 @@ class PaperFlagRequest(BaseModel):
 # Admin Paper Challenges CRUD
 # ---------------------------------------------------------------------------
 
-from backend.models import PaperChallenge, PaperChallengePart
 
 class AdminPaperChallengeCreate(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     order_idx: int = 0
+
 
 class AdminPaperChallengePartCreate(BaseModel):
     title: str
     description_md: str
-    paper_section_md: Optional[str] = None
-    setup_code: Optional[str] = None
+    paper_section_md: str | None = None
+    setup_code: str | None = None
     starter_code: str
-    solution_code: Optional[str] = None
+    solution_code: str | None = None
     test_code: str
-    unlock_requires_part_id: Optional[int] = None
+    unlock_requires_part_id: int | None = None
     xp_reward: int = 50
     order_idx: int = 0
 
+
 class AdminPaperChallengePublish(BaseModel):
     is_published: bool
-
-
-
-

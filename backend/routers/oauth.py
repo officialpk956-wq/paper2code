@@ -15,21 +15,21 @@ Also exposes:
   GET  /api/auth/oauth/providers                  → list of providers user has linked
 """
 
-import os
 import json
-import secrets
 import logging
-import httpx
+import os
+import secrets
 
-from backend.modules.security.rate_limit import check_sliding_window_rate_limit
-from fastapi import Request, APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import User, OAuthAccount
+from backend.models import OAuthAccount, User
+from backend.modules.security.rate_limit import check_sliding_window_rate_limit
 
 log = logging.getLogger(__name__)
 
@@ -37,19 +37,19 @@ router = APIRouter(prefix="/api/auth/oauth", tags=["OAuth"])
 
 _PROVIDERS = {
     "google": {
-        "auth_url":    "https://accounts.google.com/o/oauth2/v2/auth",
-        "token_url":   "https://oauth2.googleapis.com/token",
-        "userinfo_url":"https://openidconnect.googleapis.com/v1/userinfo",
-        "scope":       "openid email profile",
-        "client_id":     os.getenv("GOOGLE_CLIENT_ID", ""),
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
+        "scope": "openid email profile",
+        "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
         "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
     },
     "github": {
-        "auth_url":    "https://github.com/login/oauth/authorize",
-        "token_url":   "https://github.com/login/oauth/access_token",
-        "userinfo_url":"https://api.github.com/user",
-        "scope":       "user:email",
-        "client_id":     os.getenv("GITHUB_CLIENT_ID", ""),
+        "auth_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "userinfo_url": "https://api.github.com/user",
+        "scope": "user:email",
+        "client_id": os.getenv("GITHUB_CLIENT_ID", ""),
         "client_secret": os.getenv("GITHUB_CLIENT_SECRET", ""),
     },
 }
@@ -59,9 +59,12 @@ _PROVIDERS = {
 # Authorize-URL  (GET)
 # ---------------------------------------------------------------------------
 
+
 def _get_redis():
     from backend.redis_config import session_redis
+
     return session_redis
+
 
 @router.get("/{provider}/authorize-url")
 def get_authorize_url(provider: str, request: Request, redirect_uri: str = ""):
@@ -69,10 +72,15 @@ def get_authorize_url(provider: str, request: Request, redirect_uri: str = ""):
     Return the OAuth authorization URL the frontend should redirect the user to.
     """
     from backend.modules.auth.middleware.rate_limit import get_client_ip
+
     client_ip = get_client_ip(request)
-    allowed = check_sliding_window_rate_limit(f"oauth:authorize:{client_ip}", limit=10, window_seconds=60)
+    allowed = check_sliding_window_rate_limit(
+        f"oauth:authorize:{client_ip}", limit=10, window_seconds=60
+    )
     if not allowed:
-        raise HTTPException(status_code=429, detail="Too many authorization requests. Try again in a minute.")
+        raise HTTPException(
+            status_code=429, detail="Too many authorization requests. Try again in a minute."
+        )
     cfg = _PROVIDERS.get(provider)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
@@ -80,13 +88,13 @@ def get_authorize_url(provider: str, request: Request, redirect_uri: str = ""):
         raise HTTPException(status_code=503, detail=f"{provider} OAuth not configured")
 
     state = secrets.token_urlsafe(24)
-    
+
     try:
         r = _get_redis()
         r.setex(f"oauth:state:{state}", 600, "1")
     except Exception as e:
         log.warning("Redis oauth state set failed: %s", e)
-        
+
     if provider == "google":
         url = (
             f"{cfg['auth_url']}?response_type=code"
@@ -110,6 +118,7 @@ def get_authorize_url(provider: str, request: Request, redirect_uri: str = ""):
 # Code Exchange  (POST)
 # ---------------------------------------------------------------------------
 
+
 class ExchangeRequest(BaseModel):
     code: str
     state: str = ""
@@ -117,17 +126,26 @@ class ExchangeRequest(BaseModel):
 
 
 @router.post("/{provider}/exchange")
-async def exchange_code(provider: str, body: ExchangeRequest, request: Request, db: Session = Depends(get_db)):
+async def exchange_code(
+    provider: str, body: ExchangeRequest, request: Request, db: Session = Depends(get_db)
+):
     """
     Exchange an authorization code for a JWT. Creates or links the user account.
     """
     from backend.modules.auth.middleware.rate_limit import get_client_ip
+
     client_ip = get_client_ip(request)
-    allowed = check_sliding_window_rate_limit(f"oauth:exchange:{client_ip}", limit=5, window_seconds=60)
+    allowed = check_sliding_window_rate_limit(
+        f"oauth:exchange:{client_ip}", limit=5, window_seconds=60
+    )
     if not allowed:
-        raise HTTPException(status_code=429, detail="Too many exchange requests. Try again in a minute.")
-    
-    allowed_state = check_sliding_window_rate_limit(f"oauth:state_attempt:{body.state[:8]}", limit=3, window_seconds=300)
+        raise HTTPException(
+            status_code=429, detail="Too many exchange requests. Try again in a minute."
+        )
+
+    allowed_state = check_sliding_window_rate_limit(
+        f"oauth:state_attempt:{body.state[:8]}", limit=3, window_seconds=300
+    )
     if not allowed_state:
         raise HTTPException(status_code=429, detail="Too many attempts with this state token.")
     cfg = _PROVIDERS.get(provider)
@@ -151,8 +169,7 @@ async def exchange_code(provider: str, body: ExchangeRequest, request: Request, 
     except Exception as e:
         log.error("Redis oauth state check failed — returning 503 to prevent CSRF bypass: %s", e)
         raise HTTPException(
-            status_code=503,
-            detail="Auth service temporarily unavailable. Please try again."
+            status_code=503, detail="Auth service temporarily unavailable. Please try again."
         )
 
     # Exchange code → access token
@@ -160,11 +177,11 @@ async def exchange_code(provider: str, body: ExchangeRequest, request: Request, 
         token_resp = await client.post(
             cfg["token_url"],
             data={
-                "code":          body.code,
-                "client_id":     cfg["client_id"],
+                "code": body.code,
+                "client_id": cfg["client_id"],
                 "client_secret": cfg["client_secret"],
-                "redirect_uri":  body.redirect_uri,
-                "grant_type":    "authorization_code",
+                "redirect_uri": body.redirect_uri,
+                "grant_type": "authorization_code",
             },
             headers={"Accept": "application/json"},
         )
@@ -186,19 +203,20 @@ async def exchange_code(provider: str, body: ExchangeRequest, request: Request, 
 
     # Issue platform JWT
     from backend.modules.auth.services import SessionService
+
     session_svc = SessionService(db)
-    jwt_access  = session_svc.create_access_token(user)
+    jwt_access = session_svc.create_access_token(user)
     jwt_refresh = session_svc.create_refresh_token(user)
     session_svc.register_session(user, jwt_refresh, None, None)
 
     return {
-        "access_token":  jwt_access,
+        "access_token": jwt_access,
         "refresh_token": jwt_refresh,
-        "token_type":    "bearer",
+        "token_type": "bearer",
         "user": {
-            "id":    user.id,
+            "id": user.id,
             "email": user.email,
-            "name":  user.name,
+            "name": user.name,
         },
     }
 
@@ -206,6 +224,7 @@ async def exchange_code(provider: str, body: ExchangeRequest, request: Request, 
 # ---------------------------------------------------------------------------
 # List linked providers  (GET, authenticated)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/providers")
 def list_linked_providers(
@@ -225,6 +244,7 @@ def list_linked_providers(
 # Firebase ID-token verification  (POST /api/auth/firebase/verify)
 # ---------------------------------------------------------------------------
 
+
 class FirebaseVerifyRequest(BaseModel):
     id_token: str
 
@@ -233,6 +253,7 @@ def _get_firebase_app():
     """Lazily initialise Firebase Admin SDK (once per process)."""
     import firebase_admin
     from firebase_admin import credentials as fb_creds
+
     if not firebase_admin._apps:
         sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
         if sa_json:
@@ -244,20 +265,27 @@ def _get_firebase_app():
 
 
 @router.post("/firebase/verify")
-async def firebase_verify(body: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_db)):
+async def firebase_verify(
+    body: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_db)
+):
     """
     Verify a Firebase ID token (from Firebase Google Sign-In popup) and
     return the platform JWT.  Creates the user account on first sign-in.
     """
     from backend.modules.auth.middleware.rate_limit import get_client_ip
+
     client_ip = get_client_ip(request)
-    allowed = check_sliding_window_rate_limit(f"firebase:verify:{client_ip}", limit=10, window_seconds=60)
+    allowed = check_sliding_window_rate_limit(
+        f"firebase:verify:{client_ip}", limit=10, window_seconds=60
+    )
     if not allowed:
-        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in a minute.")
+        raise HTTPException(
+            status_code=429, detail="Too many sign-in attempts. Try again in a minute."
+        )
 
     try:
-        import firebase_admin
         from firebase_admin import auth as fb_auth
+
         app = _get_firebase_app()
         decoded = fb_auth.verify_id_token(body.id_token, app=app, check_revoked=False)
     except Exception as exc:
@@ -272,22 +300,23 @@ async def firebase_verify(body: FirebaseVerifyRequest, request: Request, db: Ses
 
     userinfo = {
         "email": email,
-        "name":  decoded.get("name") or email.split("@")[0],
+        "name": decoded.get("name") or email.split("@")[0],
         "picture": decoded.get("picture"),
-        "sub":   decoded.get("uid") or decoded.get("sub"),
+        "sub": decoded.get("uid") or decoded.get("sub"),
     }
     user = _upsert_user(db, "google", userinfo)
 
     from backend.modules.auth.services import SessionService
+
     session_svc = SessionService(db)
-    jwt_access  = session_svc.create_access_token(user)
+    jwt_access = session_svc.create_access_token(user)
     jwt_refresh = session_svc.create_refresh_token(user)
     session_svc.register_session(user, jwt_refresh, None, None)
 
     return {
-        "access_token":  jwt_access,
+        "access_token": jwt_access,
         "refresh_token": jwt_refresh,
-        "token_type":    "bearer",
+        "token_type": "bearer",
         "user": {"id": user.id, "email": user.email, "name": user.name},
     }
 
@@ -296,7 +325,10 @@ async def firebase_verify(body: FirebaseVerifyRequest, request: Request, db: Ses
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-async def _fetch_userinfo(provider: str, cfg: dict, access_token: str, token_data: dict) -> dict | None:
+
+async def _fetch_userinfo(
+    provider: str, cfg: dict, access_token: str, token_data: dict
+) -> dict | None:
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=10.0) as client:
         if provider == "google":
@@ -322,14 +354,15 @@ async def _fetch_userinfo(provider: str, cfg: dict, access_token: str, token_dat
 
 
 def _upsert_user(db: Session, provider: str, userinfo: dict) -> User:
-    email     = userinfo.get("email", "")
-    name      = userinfo.get("name") or userinfo.get("login") or email.split("@")[0]
-    avatar    = userinfo.get("picture") or userinfo.get("avatar_url")
-    uid       = str(userinfo.get("sub") or userinfo.get("id") or email)
+    email = userinfo.get("email", "")
+    name = userinfo.get("name") or userinfo.get("login") or email.split("@")[0]
+    avatar = userinfo.get("picture") or userinfo.get("avatar_url")
+    uid = str(userinfo.get("sub") or userinfo.get("id") or email)
 
     user = db.query(User).filter_by(email=email).first()
     if not user:
         from backend.repositories.user_repository import UserRepository
+
         user = UserRepository(db).create(email=email, name=name, avatar_url=avatar)
         user.is_verified = True
         user.is_email_verified = True
@@ -338,18 +371,19 @@ def _upsert_user(db: Session, provider: str, userinfo: dict) -> User:
 
         try:
             from backend.services.achievement_service import check_and_award
+
             check_and_award(db, user.id, "user.registered")
         except Exception:
             pass
 
     # Upsert OAuthAccount
-    existing = db.query(OAuthAccount).filter_by(
-        provider=provider, provider_user_id=uid
-    ).first()
+    existing = db.query(OAuthAccount).filter_by(provider=provider, provider_user_id=uid).first()
     if not existing:
         oa = OAuthAccount(
-            user_id=user.id, provider=provider,
-            provider_user_id=uid, provider_email=email,
+            user_id=user.id,
+            provider=provider,
+            provider_user_id=uid,
+            provider_email=email,
         )
         db.add(oa)
         try:

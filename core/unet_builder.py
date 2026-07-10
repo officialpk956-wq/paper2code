@@ -2,7 +2,9 @@
 
 import torch
 import torch.nn as nn
+
 from core.blocks_unet import DoubleConv
+
 
 class UNetBuilder(nn.Module):
     def __init__(self, schema):
@@ -31,11 +33,7 @@ class UNetBuilder(nn.Module):
             self.decoders.append(DoubleConv(in_ch, ch))
             in_ch = ch
 
-        self.final = nn.Conv2d(
-            in_ch,
-            schema["output"]["num_classes"] or 1,
-            kernel_size=1
-        )
+        self.final = nn.Conv2d(in_ch, schema["output"]["num_classes"] or 1, kernel_size=1)
 
     def forward(self, x):
         skips = []
@@ -47,9 +45,7 @@ class UNetBuilder(nn.Module):
 
         x = self.bottleneck(x)
 
-        for up, dec, skip in zip(
-            self.upconvs, self.decoders, reversed(skips)
-        ):
+        for up, dec, skip in zip(self.upconvs, self.decoders, reversed(skips)):
             x = up(x)
             x = torch.cat([x, skip], dim=1)
             x = dec(x)

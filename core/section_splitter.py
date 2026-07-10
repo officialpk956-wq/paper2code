@@ -1,12 +1,11 @@
 # src/section_splitter.py
 
 import json
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 from core.llm_client import classify_section
 from core.utils import chunk_text
-
 
 TEXT_DIR = Path("outputs/texts")
 OUT_DIR = Path("outputs/sections")
@@ -70,10 +69,7 @@ def process_text(text: str) -> dict:
         section_store[section].append(content)
 
     # Merge chunks per section
-    return {
-        section: "\n\n".join(contents).strip()
-        for section, contents in section_store.items()
-    }
+    return {section: "\n\n".join(contents).strip() for section, contents in section_store.items()}
 
 
 def process_file(txt_path: Path):

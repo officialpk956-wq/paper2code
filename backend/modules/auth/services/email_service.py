@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -14,13 +14,16 @@ def _send(to: str, subject: str, html: str) -> None:
         return
     try:
         import resend
+
         resend.api_key = api_key
-        resend.Emails.send({
-            "from":    os.getenv("RESEND_FROM_EMAIL", "noreply@paper2code.ai"),
-            "to":      [to],
-            "subject": subject,
-            "html":    html,
-        })
+        resend.Emails.send(
+            {
+                "from": os.getenv("RESEND_FROM_EMAIL", "noreply@paper2code.ai"),
+                "to": [to],
+                "subject": subject,
+                "html": html,
+            }
+        )
     except Exception as exc:
         logger.error("Resend error sending to %s: %s", to, exc)
 

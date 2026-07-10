@@ -15,7 +15,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 _ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _ROOT not in sys.path:
@@ -26,31 +26,34 @@ import torch.nn as nn
 
 from core.blocks_transformer import TransformerEncoderBlock
 from core.blocks_vit import PatchEmbedding
-from core.blocks_resnet import Bottleneck
-from core.blocks_unet import DoubleConv
 from core.ddpm_builder import DDPMBuilder
-from core.rag.flops_engine import FLOPsEngine
-from core.param_counter import count_parameters
 from core.implementation.cost_estimator import GPU_SPECS
-
+from core.param_counter import count_parameters
+from core.rag.flops_engine import FLOPsEngine
 
 # ---------------------------------------------------------------------------
 # Lab-specific model definitions (use real blocks, not reimplementations)
 # ---------------------------------------------------------------------------
 
+
 class _TransformerLab(nn.Module):
     """Encoder-only Transformer for interactive parameter exploration."""
 
-    def __init__(self, d_model: int, num_heads: int, num_layers: int,
-                 vocab_size: int, ffn_dim: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        num_layers: int,
+        vocab_size: int,
+        ffn_dim: int | None = None,
+    ) -> None:
         super().__init__()
         ffn_dim = ffn_dim or d_model * 4
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(512, d_model)
-        self.layers = nn.Sequential(*[
-            TransformerEncoderBlock(d_model, num_heads, ffn_dim)
-            for _ in range(num_layers)
-        ])
+        self.layers = nn.Sequential(
+            *[TransformerEncoderBlock(d_model, num_heads, ffn_dim) for _ in range(num_layers)]
+        )
         self.norm = nn.LayerNorm(d_model)
         self.out_proj = nn.Linear(d_model, vocab_size)
 
@@ -67,17 +70,18 @@ class _CNNLab(nn.Module):
     def __init__(self, base_channels: int, depth: int, kernel_size: int) -> None:
         super().__init__()
         padding = kernel_size // 2
-        layers: List[nn.Module] = []
+        layers: list[nn.Module] = []
         in_c = 3
         out_c = base_channels
 
         for i in range(depth):
-            layers.extend([
-                nn.Conv2d(in_c, out_c, kernel_size=kernel_size,
-                          padding=padding, bias=False),
-                nn.BatchNorm2d(out_c),
-                nn.ReLU(inplace=True),
-            ])
+            layers.extend(
+                [
+                    nn.Conv2d(in_c, out_c, kernel_size=kernel_size, padding=padding, bias=False),
+                    nn.BatchNorm2d(out_c),
+                    nn.ReLU(inplace=True),
+                ]
+            )
             # Downsample every other layer (keeps spatial resolution manageable)
             if i % 2 == 1 and i < depth - 1:
                 layers.append(nn.MaxPool2d(2))
@@ -98,8 +102,7 @@ class _CNNLab(nn.Module):
 class _ViTLab(nn.Module):
     """Vision Transformer with parametric patch size, hidden dim, and depth."""
 
-    def __init__(self, image_size: int, patch_size: int,
-                 hidden_dim: int, num_blocks: int) -> None:
+    def __init__(self, image_size: int, patch_size: int, hidden_dim: int, num_blocks: int) -> None:
         super().__init__()
         # Ensure patch_size divides image_size
         patch_size = max(1, patch_size)
@@ -118,10 +121,9 @@ class _ViTLab(nn.Module):
         self.patch_embed = PatchEmbedding(3, patch_size, hidden_dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, hidden_dim))
-        self.blocks = nn.Sequential(*[
-            TransformerEncoderBlock(hidden_dim, num_heads, ffn_dim)
-            for _ in range(num_blocks)
-        ])
+        self.blocks = nn.Sequential(
+            *[TransformerEncoderBlock(hidden_dim, num_heads, ffn_dim) for _ in range(num_blocks)]
+        )
         self.norm = nn.LayerNorm(hidden_dim)
         self.head = nn.Linear(hidden_dim, 1000)
         self._patch_size = patch_size
@@ -149,7 +151,8 @@ def _find_valid_heads(d_model: int) -> int:
 # Shared utilities
 # ---------------------------------------------------------------------------
 
-def _module_to_params(mod: nn.Module) -> Dict[str, Any]:
+
+def _module_to_params(mod: nn.Module) -> dict[str, Any]:
     """Extract numeric param dict from a PyTorch module for FLOPsEngine."""
     if isinstance(mod, nn.Conv2d):
         k = mod.kernel_size
@@ -189,7 +192,7 @@ def _module_to_params(mod: nn.Module) -> Dict[str, Any]:
 
 def _humanize(name: str, mod: nn.Module) -> str:
     """Return a readable display name for a module."""
-    _NAMES: Dict[str, str] = {
+    _NAMES: dict[str, str] = {
         "embedding": "Token Embedding",
         "pos_embed": "Positional Embedding",
         "patch_embed": "Patch Embedding",
@@ -220,13 +223,19 @@ def _humanize(name: str, mod: nn.Module) -> str:
 # LabService
 # ---------------------------------------------------------------------------
 
-SKIP_TYPES_FLOW = frozenset({
-    "ReLU", "Dropout", "BatchNorm2d", "Identity", "GELU", "SiLU",
-})
+SKIP_TYPES_FLOW = frozenset(
+    {
+        "ReLU",
+        "Dropout",
+        "BatchNorm2d",
+        "Identity",
+        "GELU",
+        "SiLU",
+    }
+)
 
 
 class LabService:
-
     def __init__(self) -> None:
         self._flops_engine = FLOPsEngine()
 
@@ -239,13 +248,13 @@ class LabService:
         num_layers: int = 6,
         seq_len: int = 128,
         vocab_size: int = 10000,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if d_model % num_heads != 0:
             return {"error": f"d_model ({d_model}) must be divisible by num_heads ({num_heads})"}
         if num_heads <= 0 or d_model <= 0 or num_layers <= 0 or seq_len <= 0:
             return {"error": "All parameters must be positive integers"}
 
-        seq_len = min(seq_len, 512)   # pos_embed only goes to 512
+        seq_len = min(seq_len, 512)  # pos_embed only goes to 512
         model = _TransformerLab(d_model, num_heads, num_layers, vocab_size)
         model.eval()
         dummy = torch.randint(0, min(vocab_size, 100), (1, seq_len))
@@ -253,7 +262,9 @@ class LabService:
         shapes = self._capture_shapes(model, dummy)
         params = count_parameters(model)
         flow, total_flops, total_mem = self._build_flow(
-            model, shapes, max_depth=2,
+            model,
+            shapes,
+            max_depth=2,
         )
 
         attention_ops = 2 * seq_len * seq_len * d_model * num_layers
@@ -274,8 +285,8 @@ class LabService:
             "head_dim": d_model // num_heads,
             "attention_cost_mflops": round(attention_ops / 1e6, 2),
             "attention_note": (
-                f"O(N²·D) per layer: {seq_len}²×{d_model}={seq_len**2*d_model:,} ops "
-                f"× {num_layers} layers = {attention_ops/1e6:.0f} MFLOPs"
+                f"O(N²·D) per layer: {seq_len}²×{d_model}={seq_len**2 * d_model:,} ops "
+                f"× {num_layers} layers = {attention_ops / 1e6:.0f} MFLOPs"
             ),
             "flow_steps": flow,
         }
@@ -286,7 +297,7 @@ class LabService:
         depth: int = 4,
         kernel_size: int = 3,
         image_resolution: int = 224,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         kernel_size = max(1, min(kernel_size, 7))
         if kernel_size % 2 == 0:
             kernel_size += 1  # keep it odd for clean padding
@@ -309,8 +320,7 @@ class LabService:
                 "channels": v["out"][1] if v.get("out") and len(v["out"]) >= 2 else None,
             }
             for k, v in shapes.items()
-            if v.get("out") and len(v.get("out", [])) == 4
-            and k != ""
+            if v.get("out") and len(v.get("out", [])) == 4 and k != ""
         ]
 
         return {
@@ -336,7 +346,7 @@ class LabService:
         patch_size: int = 16,
         hidden_dim: int = 768,
         num_blocks: int = 12,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         patch_size = max(1, patch_size)
         if image_size % patch_size != 0:
             for ps in range(patch_size, 0, -1):
@@ -376,8 +386,8 @@ class LabService:
             "head_dim": hidden_dim // num_heads,
             "attention_cost_mflops": round(total_attn / 1e6, 2),
             "attention_note": (
-                f"O(N²·D) per block: {token_count}²×{hidden_dim}={token_count**2*hidden_dim:,} ops "
-                f"× {num_blocks} blocks = {total_attn/1e6:.0f} MFLOPs"
+                f"O(N²·D) per block: {token_count}²×{hidden_dim}={token_count**2 * hidden_dim:,} ops "
+                f"× {num_blocks} blocks = {total_attn / 1e6:.0f} MFLOPs"
             ),
             "flow_steps": flow,
         }
@@ -387,7 +397,7 @@ class LabService:
         latent_size: int = 32,
         channels: int = 3,
         diffusion_steps: int = 1000,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # DDPMBuilder: channels = input image channels, dim = base feature dim
         # We use latent_size as spatial resolution and base dim=64
         base_dim = 64
@@ -405,7 +415,7 @@ class LabService:
         training_flops_per_iter = total_flops * 3
         training_note = (
             f"{total_flops:.0f} MFLOPs/step × {diffusion_steps} steps = "
-            f"{inference_flops/1000:.1f} GFLOPs per inference image"
+            f"{inference_flops / 1000:.1f} GFLOPs per inference image"
         )
 
         # Memory scales with diffusion steps at inference (KV cache / noise schedule)
@@ -432,8 +442,8 @@ class LabService:
 
     # ── shape capture ──────────────────────────────────────────
 
-    def _capture_shapes(self, model: nn.Module, dummy: torch.Tensor) -> Dict[str, Dict]:
-        shapes: Dict[str, Dict] = {}
+    def _capture_shapes(self, model: nn.Module, dummy: torch.Tensor) -> dict[str, dict]:
+        shapes: dict[str, dict] = {}
         handles = []
 
         def make_hook(name: str):
@@ -446,6 +456,7 @@ class LabService:
                     shapes[name] = {"in": in_s, "out": out_s}
                 except Exception:
                     pass
+
             return hook
 
         for name, mod in model.named_modules():
@@ -462,8 +473,8 @@ class LabService:
 
     def _capture_shapes_ddpm(
         self, model: nn.Module, dummy_x: torch.Tensor, dummy_t: torch.Tensor
-    ) -> Dict[str, Dict]:
-        shapes: Dict[str, Dict] = {}
+    ) -> dict[str, dict]:
+        shapes: dict[str, dict] = {}
         handles = []
 
         def make_hook(name: str):
@@ -476,6 +487,7 @@ class LabService:
                     shapes[name] = {"in": in_s, "out": out_s}
                 except Exception:
                     pass
+
             return hook
 
         for name, mod in model.named_modules():
@@ -495,14 +507,14 @@ class LabService:
     def _build_flow(
         self,
         model: nn.Module,
-        shapes: Dict[str, Dict],
+        shapes: dict[str, dict],
         max_depth: int = 2,
-    ) -> Tuple[List[Dict], float, float]:
+    ) -> tuple[list[dict], float, float]:
         """
         Walk named_modules and emit one flow-step per meaningful node.
         Returns (flow_steps, total_flops_mflops, total_memory_mb).
         """
-        steps: List[Dict] = []
+        steps: list[dict] = []
         total_flops = 0.0
         total_mem = 0.0
 
@@ -533,18 +545,20 @@ class LabService:
             total_flops += fr.flops_mflops
             total_mem += fr.memory_mb
 
-            steps.append({
-                "id": name,
-                "name": _humanize(name, mod),
-                "type": mod_type,
-                "input_shape": in_s,
-                "output_shape": out_s,
-                "flops_mflops": round(fr.flops_mflops, 4),
-                "params_M": round(fr.params_M, 4),
-                "memory_mb": round(fr.memory_mb, 3),
-                "formula": fr.formula,
-                "severity": fr.severity,
-            })
+            steps.append(
+                {
+                    "id": name,
+                    "name": _humanize(name, mod),
+                    "type": mod_type,
+                    "input_shape": in_s,
+                    "output_shape": out_s,
+                    "flops_mflops": round(fr.flops_mflops, 4),
+                    "params_M": round(fr.params_M, 4),
+                    "memory_mb": round(fr.memory_mb, 3),
+                    "formula": fr.formula,
+                    "severity": fr.severity,
+                }
+            )
 
         return steps, total_flops, total_mem
 
@@ -581,32 +595,31 @@ class LabService:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Lab Service")
-    parser.add_argument("--lab", required=True,
-                        choices=["transformer", "cnn", "vit", "diffusion"])
+    parser.add_argument("--lab", required=True, choices=["transformer", "cnn", "vit", "diffusion"])
 
     # Transformer params
-    parser.add_argument("--d_model",   type=int, default=512)
+    parser.add_argument("--d_model", type=int, default=512)
     parser.add_argument("--num_heads", type=int, default=8)
-    parser.add_argument("--num_layers",type=int, default=6)
-    parser.add_argument("--seq_len",   type=int, default=128)
-    parser.add_argument("--vocab_size",type=int, default=10000)
+    parser.add_argument("--num_layers", type=int, default=6)
+    parser.add_argument("--seq_len", type=int, default=128)
+    parser.add_argument("--vocab_size", type=int, default=10000)
 
     # CNN params
-    parser.add_argument("--base_channels",    type=int, default=64)
-    parser.add_argument("--depth",            type=int, default=4)
-    parser.add_argument("--kernel_size",      type=int, default=3)
+    parser.add_argument("--base_channels", type=int, default=64)
+    parser.add_argument("--depth", type=int, default=4)
+    parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--image_resolution", type=int, default=224)
 
     # ViT params
-    parser.add_argument("--image_size",  type=int, default=224)
-    parser.add_argument("--patch_size",  type=int, default=16)
-    parser.add_argument("--hidden_dim",  type=int, default=768)
-    parser.add_argument("--num_blocks",  type=int, default=12)
+    parser.add_argument("--image_size", type=int, default=224)
+    parser.add_argument("--patch_size", type=int, default=16)
+    parser.add_argument("--hidden_dim", type=int, default=768)
+    parser.add_argument("--num_blocks", type=int, default=12)
 
     # Diffusion params
-    parser.add_argument("--latent_size",      type=int, default=32)
-    parser.add_argument("--channels",         type=int, default=3)
-    parser.add_argument("--diffusion_steps",  type=int, default=1000)
+    parser.add_argument("--latent_size", type=int, default=32)
+    parser.add_argument("--channels", type=int, default=3)
+    parser.add_argument("--diffusion_steps", type=int, default=1000)
 
     args = parser.parse_args()
     svc = LabService()
@@ -614,21 +627,31 @@ if __name__ == "__main__":
     try:
         if args.lab == "transformer":
             result = svc.transformer_metrics(
-                args.d_model, args.num_heads, args.num_layers,
-                args.seq_len, args.vocab_size,
+                args.d_model,
+                args.num_heads,
+                args.num_layers,
+                args.seq_len,
+                args.vocab_size,
             )
         elif args.lab == "cnn":
             result = svc.cnn_metrics(
-                args.base_channels, args.depth, args.kernel_size,
+                args.base_channels,
+                args.depth,
+                args.kernel_size,
                 args.image_resolution,
             )
         elif args.lab == "vit":
             result = svc.vit_metrics(
-                args.image_size, args.patch_size, args.hidden_dim, args.num_blocks,
+                args.image_size,
+                args.patch_size,
+                args.hidden_dim,
+                args.num_blocks,
             )
         elif args.lab == "diffusion":
             result = svc.diffusion_metrics(
-                args.latent_size, args.channels, args.diffusion_steps,
+                args.latent_size,
+                args.channels,
+                args.diffusion_steps,
             )
         else:
             result = {"error": f"Unknown lab: {args.lab}"}

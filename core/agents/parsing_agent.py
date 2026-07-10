@@ -6,30 +6,29 @@ Deterministic, no visualization, no reasoning, no comparison.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
-from core.architecture_graph import ArchitectureGraph
 from core.agents.types import ParsingSource
+from core.architecture_graph import ArchitectureGraph
 
 
 class ParsingAgent(ABC):
     """
     Abstract agent for parsing architecture specifications.
-    
+
     Contract:
     ─────────
     INPUT:  Raw architecture specification (config dict, paper excerpt, or symbolic notation)
     OUTPUT: ArchitectureGraph with semantic_params attached
-    
+
     GUARANTEE: Deterministic (same input → same output)
-    
+
     MUST DO:
     ✓ Parse well-formed architecture specifications
     ✓ Attach semantic_params to every node
     ✓ Validate that edges reference existing nodes
     ✓ Produce deterministic output
     ✓ Include descriptions for every node
-    
+
     MUST NOT DO:
     ✗ Create visualization objects
     ✗ Invent semantic params beyond type-based defaults
@@ -40,11 +39,7 @@ class ParsingAgent(ABC):
     """
 
     @abstractmethod
-    def parse(
-        self,
-        source: ParsingSource,
-        format_hint: str = "auto"
-    ) -> ArchitectureGraph:
+    def parse(self, source: ParsingSource, format_hint: str = "auto") -> ArchitectureGraph:
         """
         Parse architecture specification into graph structure.
 

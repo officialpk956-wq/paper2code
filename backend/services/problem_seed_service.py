@@ -34,7 +34,7 @@ def seed_dojo_problems(db) -> int:
         logger.warning("Dojo problem seed file missing: %s", path)
         return 0
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         entries = json.load(f)
 
     changed = 0

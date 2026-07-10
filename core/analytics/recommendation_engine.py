@@ -15,27 +15,32 @@ Reads from SQLite tables:
   - tutor_analytics      (for question_frequency per module/architecture)
   - learner_progress     (for completion status)
 """
+
 from __future__ import annotations
-from typing import Dict, Any, List, Optional, TypedDict
+
+from typing import Any, TypedDict
+
 
 class AttemptData(TypedDict, total=False):
-    architecture: Optional[str]
-    assessment_type: Optional[str]
+    architecture: str | None
+    assessment_type: str | None
     is_correct: bool
 
+
 class TutorAnalyticsData(TypedDict, total=False):
-    architecture: Optional[str]
-    module: Optional[str]
+    architecture: str | None
+    module: str | None
     question_count: int
 
-from collections import defaultdict
 
+from collections import defaultdict
 
 # ---------------------------------------------------------------------------
 # Min-Max Normalization
 # ---------------------------------------------------------------------------
 
-def _minmax_normalize(values: List[float]) -> List[float]:
+
+def _minmax_normalize(values: list[float]) -> list[float]:
     """
     Apply min-max normalization.
     Returns 0 for all values if max == min (edge case guard).
@@ -59,6 +64,7 @@ def _normalize_single(value: float, mn: float, mx: float) -> float:
 # RecommendationEngine
 # ---------------------------------------------------------------------------
 
+
 class RecommendationEngine:
     """
     Computes personalized learning recommendations from SQLite analytics.
@@ -68,9 +74,9 @@ class RecommendationEngine:
 
     def compute(
         self,
-        attempts: List[AttemptData],
-        tutor_rows: List[TutorAnalyticsData],
-    ) -> Dict[str, Any]:
+        attempts: list[AttemptData],
+        tutor_rows: list[TutorAnalyticsData],
+    ) -> dict[str, Any]:
         """
         Compute recommendations for a learner based on provided data dicts.
 
@@ -83,8 +89,8 @@ class RecommendationEngine:
         """
 
         # ── 2. Compute failure rate per (architecture, assessment_type) ────
-        bucket_attempts: Dict[str, int] = defaultdict(int)
-        bucket_failures: Dict[str, int] = defaultdict(int)
+        bucket_attempts: dict[str, int] = defaultdict(int)
+        bucket_failures: dict[str, int] = defaultdict(int)
 
         for a in attempts:
             arch = a.get("architecture") or "General"
@@ -94,12 +100,12 @@ class RecommendationEngine:
             if not a.get("is_correct"):
                 bucket_failures[key] += 1
 
-        failure_rates: Dict[str, float] = {}
+        failure_rates: dict[str, float] = {}
         for key, total in bucket_attempts.items():
             failure_rates[key] = bucket_failures[key] / total if total > 0 else 0.0
 
         # ── 3. Load tutor question frequency per (architecture, module) ────
-        question_freq: Dict[str, int] = defaultdict(int)
+        question_freq: dict[str, int] = defaultdict(int)
         for t in tutor_rows:
             arch = t.get("architecture") or "General"
             mod = t.get("module") or "general"
@@ -119,7 +125,7 @@ class RecommendationEngine:
         fr_min, fr_max = min(fr_values), max(fr_values)
         qf_min, qf_max = min(qf_values), max(qf_values)
 
-        scored: List[Dict[str, Any]] = []
+        scored: list[dict[str, Any]] = []
         for key in all_keys:
             arch, topic = key.split("::", 1)
             fr = failure_rates.get(key, 0.0)
@@ -130,16 +136,18 @@ class RecommendationEngine:
 
             difficulty_score = round(norm_fr * 0.6 + norm_qf * 0.4, 4)
 
-            scored.append({
-                "key": key,
-                "architecture": arch,
-                "topic": topic,
-                "failure_rate": round(fr, 3),
-                "question_frequency": int(qf),
-                "norm_failure_rate": round(norm_fr, 4),
-                "norm_question_frequency": round(norm_qf, 4),
-                "difficulty_score": difficulty_score,
-            })
+            scored.append(
+                {
+                    "key": key,
+                    "architecture": arch,
+                    "topic": topic,
+                    "failure_rate": round(fr, 3),
+                    "question_frequency": int(qf),
+                    "norm_failure_rate": round(norm_fr, 4),
+                    "norm_question_frequency": round(norm_qf, 4),
+                    "difficulty_score": difficulty_score,
+                }
+            )
 
         # Sort by difficulty_score descending (hardest topics first)
         scored.sort(key=lambda x: x["difficulty_score"], reverse=True)
@@ -152,12 +160,14 @@ class RecommendationEngine:
         seen_arch = set()
         for s in scored:
             if s["failure_rate"] > 0.3 and s["architecture"] not in seen_arch:
-                recommended_reviews.append({
-                    "architecture": s["architecture"],
-                    "topic": s["topic"],
-                    "failure_rate": s["failure_rate"],
-                    "reason": f"You answered {int(s['failure_rate']*100)}% of {s['architecture']} questions incorrectly.",
-                })
+                recommended_reviews.append(
+                    {
+                        "architecture": s["architecture"],
+                        "topic": s["topic"],
+                        "failure_rate": s["failure_rate"],
+                        "reason": f"You answered {int(s['failure_rate'] * 100)}% of {s['architecture']} questions incorrectly.",
+                    }
+                )
                 seen_arch.add(s["architecture"])
             if len(recommended_reviews) >= 3:
                 break
@@ -169,14 +179,16 @@ class RecommendationEngine:
 
         suggested_assessments = []
         for t in sorted(untried_types):
-            suggested_assessments.append({
-                "assessment_type": t,
-                "reason": f"You haven't tried {t} challenges yet.",
-                "suggested_difficulty": "beginner",
-            })
+            suggested_assessments.append(
+                {
+                    "assessment_type": t,
+                    "reason": f"You haven't tried {t} challenges yet.",
+                    "suggested_difficulty": "beginner",
+                }
+            )
 
         # Also suggest higher difficulty for consistently correct areas
-        correct_by_type: Dict[str, List[bool]] = defaultdict(list)
+        correct_by_type: dict[str, list[bool]] = defaultdict(list)
         for a in attempts:
             atype = a.get("assessment_type")
             if atype:
@@ -184,34 +196,38 @@ class RecommendationEngine:
 
         for atype, results in correct_by_type.items():
             if len(results) >= 3 and sum(results) / len(results) >= 0.8:
-                suggested_assessments.append({
-                    "assessment_type": atype,
-                    "reason": f"You're performing well ({int(sum(results)/len(results)*100)}% correct) — try advanced {atype} challenges.",
-                    "suggested_difficulty": "advanced",
-                })
+                suggested_assessments.append(
+                    {
+                        "assessment_type": atype,
+                        "reason": f"You're performing well ({int(sum(results) / len(results) * 100)}% correct) — try advanced {atype} challenges.",
+                        "suggested_difficulty": "advanced",
+                    }
+                )
 
         return {
             "recommended_reviews": recommended_reviews,
-            "weakest_topics": [
-                {k: v for k, v in s.items() if k != "key"}
-                for s in weakest_topics
-            ],
+            "weakest_topics": [{k: v for k, v in s.items() if k != "key"} for s in weakest_topics],
             "suggested_assessments": suggested_assessments[:5],
             "total_attempts": len(attempts),
             "overall_accuracy": (
                 round(sum(1 for a in attempts if a.get("is_correct")) / len(attempts), 3)
-                if attempts else 0.0
+                if attempts
+                else 0.0
             ),
         }
 
 
-def _empty_recommendations() -> Dict[str, Any]:
+def _empty_recommendations() -> dict[str, Any]:
     """Return empty recommendations when no data exists."""
     return {
         "recommended_reviews": [],
         "weakest_topics": [],
         "suggested_assessments": [
-            {"assessment_type": t, "reason": "No assessment data yet — start here!", "suggested_difficulty": "beginner"}
+            {
+                "assessment_type": t,
+                "reason": "No assessment data yet — start here!",
+                "suggested_difficulty": "beginner",
+            }
             for t in ["architecture", "tensor", "flops", "comparison"]
         ],
         "total_attempts": 0,

@@ -6,9 +6,8 @@ Celery Beat periodic tasks for user retention:
   - send_streak_at_risk     : daily 18:00 UTC — warn users whose streak is at risk
 """
 
-import os
-import logging
 import datetime
+import logging
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -27,8 +26,9 @@ _DRIP_DAYS = (1, 3, 7)
 # Onboarding drip (testable inner function)
 # ---------------------------------------------------------------------------
 
+
 def _do_onboarding_drips(db) -> dict:
-    from backend.models import User, EmailDripLog
+    from backend.models import EmailDripLog, User
 
     today = datetime.datetime.utcnow().date()
     sent = 0
@@ -37,20 +37,20 @@ def _do_onboarding_drips(db) -> dict:
     for day in _DRIP_DAYS:
         target_date = today - datetime.timedelta(days=day)
         window_start = datetime.datetime.combine(target_date, datetime.time.min)
-        window_end   = datetime.datetime.combine(target_date + datetime.timedelta(days=1), datetime.time.min)
+        window_end = datetime.datetime.combine(
+            target_date + datetime.timedelta(days=1), datetime.time.min
+        )
         users = (
             db.query(User)
             .filter(
                 User.email.isnot(None),
                 User.created_at >= window_start,
-                User.created_at <  window_end,
+                User.created_at < window_end,
             )
             .all()
         )
         for user in users:
-            already_sent = db.query(EmailDripLog).filter_by(
-                user_id=user.id, drip_day=day
-            ).first()
+            already_sent = db.query(EmailDripLog).filter_by(user_id=user.id, drip_day=day).first()
             if already_sent:
                 continue
             try:
@@ -82,10 +82,11 @@ def send_onboarding_drips():
 # Streak-at-risk  (testable inner function)
 # ---------------------------------------------------------------------------
 
+
 def _do_streak_at_risk(db) -> dict:
     from backend.models import User
 
-    today     = datetime.datetime.utcnow().date()
+    today = datetime.datetime.utcnow().date()
     yesterday = today - datetime.timedelta(days=1)
 
     # Users with streak > 0 whose last_active was yesterday (not yet active today)
@@ -95,7 +96,7 @@ def _do_streak_at_risk(db) -> dict:
             User.streak > 0,
             User.email.isnot(None),
             User.last_active >= datetime.datetime.combine(yesterday, datetime.time.min),
-            User.last_active <  datetime.datetime.combine(today,     datetime.time.min),
+            User.last_active < datetime.datetime.combine(today, datetime.time.min),
         )
         .all()
     )
@@ -129,20 +130,21 @@ def send_streak_at_risk():
 # Weekly leaderboard reset  (Mon 00:00 UTC)
 # ---------------------------------------------------------------------------
 
-def _do_weekly_leaderboard_reset(db) -> dict:
-    from backend.models import User, LeaderboardArchive
 
-    now       = datetime.datetime.utcnow()
+def _do_weekly_leaderboard_reset(db) -> dict:
+    from backend.models import LeaderboardArchive, User
+
+    now = datetime.datetime.utcnow()
     week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     users = db.query(User).filter(User.weekly_points > 0).order_by(User.weekly_points.desc()).all()
     archived = 0
     for rank, user in enumerate(users, start=1):
         entry = LeaderboardArchive(
-            week_start    = week_start,
-            user_id       = user.id,
-            weekly_points = user.weekly_points,
-            rank          = rank,
+            week_start=week_start,
+            user_id=user.id,
+            weekly_points=user.weekly_points,
+            rank=rank,
         )
         db.add(entry)
         user.weekly_points = 0
@@ -159,12 +161,9 @@ def _do_weekly_leaderboard_reset(db) -> dict:
     lb_achievements = 0
     try:
         from backend.services.achievement_service import check_and_award
+
         top_users = (
-            db.query(User)
-            .filter(User.points > 0)
-            .order_by(User.points.desc())
-            .limit(10)
-            .all()
+            db.query(User).filter(User.points > 0).order_by(User.points.desc()).limit(10).all()
         )
         for user in top_users:
             newly = check_and_award(db, user.id, "leaderboard.top10")
@@ -172,8 +171,16 @@ def _do_weekly_leaderboard_reset(db) -> dict:
     except Exception as exc:
         log.error("leaderboard achievement check failed: %s", exc)
 
-    log.info("Weekly leaderboard reset: archived %d entries, %d lb achievements", archived, lb_achievements)
-    return {"archived": archived, "week_start": week_start.isoformat(), "lb_achievements_awarded": lb_achievements}
+    log.info(
+        "Weekly leaderboard reset: archived %d entries, %d lb achievements",
+        archived,
+        lb_achievements,
+    )
+    return {
+        "archived": archived,
+        "week_start": week_start.isoformat(),
+        "lb_achievements_awarded": lb_achievements,
+    }
 
 
 @celery_app.task(name="backend.tasks.growth_tasks.weekly_leaderboard_reset")
@@ -192,12 +199,15 @@ def weekly_leaderboard_reset():
 # Monthly usage quota reset  (1st of month 00:01 UTC)
 # ---------------------------------------------------------------------------
 
+
 def _do_monthly_quota_reset(db) -> dict:
     from backend.models import UsageLog
 
     # Clear usage logs older than 60 days to prevent unbounded table growth
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=60)
-    deleted = db.query(UsageLog).filter(UsageLog.created_at < cutoff).delete(synchronize_session=False)
+    deleted = (
+        db.query(UsageLog).filter(UsageLog.created_at < cutoff).delete(synchronize_session=False)
+    )
     try:
         db.commit()
     except Exception as exc:
@@ -225,33 +235,36 @@ def monthly_quota_reset():
 # Weekly digest emails  (Sun 08:00 UTC)
 # ---------------------------------------------------------------------------
 
+
 def _do_weekly_digest(db) -> dict:
-    from backend.models import User, DojoSubmission
     from sqlalchemy import func
+
+    from backend.models import DojoSubmission, User
 
     # Stats window: past 7 days
     since = datetime.datetime.utcnow() - datetime.timedelta(days=7)
     users = db.query(User).filter(User.email.isnot(None)).all()
 
-    sent   = 0
+    sent = 0
     errors = 0
     for user in users:
         problems_solved = (
             db.query(func.count(DojoSubmission.id))
             .filter(
                 DojoSubmission.user_id == user.id,
-                DojoSubmission.passed  == True,
+                DojoSubmission.passed == True,
                 DojoSubmission.created_at >= since,
             )
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         # Only send if user did something this week
         if problems_solved == 0 and (user.weekly_points or 0) == 0:
             continue
         stats = {
             "problems_solved": problems_solved,
-            "xp_earned":       user.weekly_points or 0,
-            "rank_change":     0,
+            "xp_earned": user.weekly_points or 0,
+            "rank_change": 0,
         }
         try:
             send_weekly_digest_email_sync(user.email, user.name or user.email, stats)

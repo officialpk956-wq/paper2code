@@ -10,10 +10,11 @@ Usage:
 """
 
 import logging
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
-from backend.models import Achievement, UserAchievement, DojoSubmission, Task, User
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from backend.models import Achievement, DojoSubmission, Task, User, UserAchievement
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ def seed_achievements(db: Session) -> int:
 # Award logic
 # ---------------------------------------------------------------------------
 
+
 def _award(db: Session, user_id: int, slug: str, payload: dict | None = None) -> bool:
     """
     Award achievement `slug` to `user_id`.
@@ -142,6 +144,7 @@ def _award(db: Session, user_id: int, slug: str, payload: dict | None = None) ->
     # Award XP
     try:
         from backend.services.progress_service import award_xp
+
         award_xp(db, user_id, "achievement.earned")
         user = db.get(User, user_id)
         if user:
@@ -152,6 +155,7 @@ def _award(db: Session, user_id: int, slug: str, payload: dict | None = None) ->
     # Create in-app notification
     try:
         from backend.models import Notification
+
         notif = Notification(
             user_id=user_id,
             type="achievement.unlocked",
@@ -168,7 +172,9 @@ def _award(db: Session, user_id: int, slug: str, payload: dict | None = None) ->
     return True
 
 
-def check_and_award(db: Session, user_id: int, event: str, context: dict | None = None) -> list[str]:
+def check_and_award(
+    db: Session, user_id: int, event: str, context: dict | None = None
+) -> list[str]:
     """
     Check all achievements that can be triggered by `event`.
     Returns list of newly-awarded slugs.
@@ -178,11 +184,15 @@ def check_and_award(db: Session, user_id: int, event: str, context: dict | None 
     if event == "paper.uploaded":
         if _award(db, user_id, "first-paper"):
             awarded.append("first-paper")
-        paper_count = db.query(Task).filter(
-            Task.user_id == user_id,
-            Task.type == "paper.codegen",
-            Task.status == "completed",
-        ).count()
+        paper_count = (
+            db.query(Task)
+            .filter(
+                Task.user_id == user_id,
+                Task.type == "paper.codegen",
+                Task.status == "completed",
+            )
+            .count()
+        )
         if paper_count >= 10 and _award(db, user_id, "paper-master"):
             awarded.append("paper-master")
 
@@ -193,12 +203,16 @@ def check_and_award(db: Session, user_id: int, event: str, context: dict | None 
         if event == "dojo.solved.hard" and _award(db, user_id, "hard-conqueror", context):
             awarded.append("hard-conqueror")
 
-        easy_solves = db.query(DojoSubmission).filter(
-            DojoSubmission.user_id == user_id,
-            DojoSubmission.passed == True,
-        ).join(
-            DojoSubmission.problem
-        ).filter_by(difficulty="Easy").count()
+        easy_solves = (
+            db.query(DojoSubmission)
+            .filter(
+                DojoSubmission.user_id == user_id,
+                DojoSubmission.passed == True,
+            )
+            .join(DojoSubmission.problem)
+            .filter_by(difficulty="Easy")
+            .count()
+        )
         if easy_solves >= 3 and _award(db, user_id, "easy-streak-3"):
             awarded.append("easy-streak-3")
 

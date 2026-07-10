@@ -1,5 +1,6 @@
 # src/schema_rules_transformer.py
 
+
 def infer_transformer_block(block_params: dict):
     """
     Fill defaults for a Transformer encoder block
@@ -15,5 +16,5 @@ def infer_transformer_block(block_params: dict):
         "num_heads": num_heads,
         "ffn_dim": ffn_dim,
         "dropout": block_params.get("dropout", 0.1),
-        "layer_norm": True
+        "layer_norm": True,
     }

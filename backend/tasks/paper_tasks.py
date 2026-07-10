@@ -1,12 +1,12 @@
+import datetime
 import io
 import logging
-import datetime
+
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
+from backend.models import Notification, Paper, User
 from backend.repositories.task_repository import TaskRepository
-from backend.models import Paper, Notification, User
-from backend.services.storage_service import fetch_pdf, cleanup, r2_key_from_ref
-from core.paper_to_code_generator import PaperToCodeGenerator
+from backend.services.storage_service import cleanup, fetch_pdf, r2_key_from_ref
 
 log = logging.getLogger(__name__)
 
@@ -42,12 +42,14 @@ def generate_code_from_pdf_task(
         # ── Stage 2: run the generator ────────────────────────────────────────
         repo.set_stage(task_id, "analyzing")
         import pdfplumber
+
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             text_pages = [page.extract_text() for page in pdf.pages[:30] if page.extract_text()]
         extracted_text = "\n\n".join(text_pages)
 
         repo.set_stage(task_id, "generating")
         from core.agents.ingestion_agent import run_ingestion
+
         agent_result = run_ingestion(
             paper_id=0,
             paper_name=paper_name,
@@ -55,15 +57,9 @@ def generate_code_from_pdf_task(
         )
         generated_code = agent_result["final_code"]
         if agent_result.get("error"):
-            log.warning("Ingestion agent error for paper %s: %s",
-                           0, agent_result["error"])
-                           
-        result = {
-            "graph": {},
-            "code": generated_code,
-            "code_source": "agent",
-            "family": "unknown"
-        }
+            log.warning("Ingestion agent error for paper %s: %s", 0, agent_result["error"])
+
+        result = {"graph": {}, "code": generated_code, "code_source": "agent", "family": "unknown"}
 
         # ── Stage 3: persist Paper row ────────────────────────────────────────
         repo.set_stage(task_id, "saving")
@@ -72,6 +68,7 @@ def generate_code_from_pdf_task(
             paper = existing
         else:
             import dataclasses
+
             graph_json = (
                 dataclasses.asdict(result["graph"])
                 if dataclasses.is_dataclass(result["graph"])
@@ -83,25 +80,27 @@ def generate_code_from_pdf_task(
                 uploaded_by=user_id,
                 visibility=visibility,
                 r2_key=r2_key_from_ref(storage_ref),
-                terms_accepted_at=(
-                    datetime.datetime.utcnow() if terms_accepted else None
-                ),
+                terms_accepted_at=(datetime.datetime.utcnow() if terms_accepted else None),
             )
             db.add(paper)
             db.commit()
             db.refresh(paper)
 
-        repo.set_complete(task_id, {
-            "paper_id":    paper.id,
-            "code":        result.get("code", ""),
-            "code_source": result.get("code_source", "skeleton"),
-            "family":      result.get("family", "unknown"),
-            "stage":       "complete",
-        })
+        repo.set_complete(
+            task_id,
+            {
+                "paper_id": paper.id,
+                "code": result.get("code", ""),
+                "code_source": result.get("code_source", "skeleton"),
+                "family": result.get("family", "unknown"),
+                "stage": "complete",
+            },
+        )
 
         # ── Stage 5: index in vector store ───────────────────────────────────
         try:
             from backend.services.vector_service import index_paper
+
             index_paper(
                 paper_id=paper.id,
                 title=paper_name,
@@ -143,6 +142,7 @@ def _notify_paper_done(db, user_id: int, paper_name: str, paper_id: int) -> None
         user = db.query(User).filter_by(id=user_id).first()
         if user and user.email:
             from backend.services.email_service import send_paper_done_email_sync
+
             send_paper_done_email_sync(user.email, paper_name, paper_id)
     except Exception as exc:
         log.warning("Failed to send paper-done email for user %s: %s", user_id, exc)

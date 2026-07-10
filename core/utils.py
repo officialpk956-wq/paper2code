@@ -1,5 +1,6 @@
 import re
 
+
 def chunk_text(text, max_chars=1200):
     """
     Conservative chunking to stay under Groq TPM limits.

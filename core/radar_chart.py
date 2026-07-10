@@ -6,15 +6,16 @@ on 4 dimensions: compute efficiency, spatial preservation, scaling, depth.
 """
 
 import math
+
 import altair as alt
 import pandas as pd
+
 from core.architecture_graph import ArchitectureGraph
 from core.comparators import (
     summarize_compute,
-    summarize_spatial_behavior,
     summarize_scaling_behavior,
+    summarize_spatial_behavior,
 )
-
 
 AXES = ["Compute Efficiency", "Spatial Preservation", "Scaling", "Depth"]
 
@@ -92,14 +93,16 @@ def build_radar_chart(records: list) -> alt.Chart:
             x = r * math.cos(angle)
             y = r * math.sin(angle)
 
-            rows.append({
-                "name": name,
-                "axis": axis,
-                "score": r,
-                "x": x,
-                "y": y,
-                "order": i,
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "axis": axis,
+                    "score": r,
+                    "x": x,
+                    "y": y,
+                    "order": i,
+                }
+            )
 
     df = pd.DataFrame(rows)
 
@@ -109,33 +112,44 @@ def build_radar_chart(records: list) -> alt.Chart:
     df = pd.concat([df, closing], ignore_index=True)
 
     # Main chart: lines + points
-    chart = alt.Chart(df).mark_line(point=True, tooltip=True).encode(
-        x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[-1.2, 1.2])),
-        y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[-1.2, 1.2])),
-        color=alt.Color("name:N", legend=alt.Legend(title="Architecture")),
-        order=alt.Order("order:Q"),
-        tooltip=["name:N", "axis:N", "score:Q"],
-    ).properties(
-        width=400,
-        height=400,
-        title="Architecture Radar Chart",
+    chart = (
+        alt.Chart(df)
+        .mark_line(point=True, tooltip=True)
+        .encode(
+            x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[-1.2, 1.2])),
+            y=alt.Y("y:Q", axis=None, scale=alt.Scale(domain=[-1.2, 1.2])),
+            color=alt.Color("name:N", legend=alt.Legend(title="Architecture")),
+            order=alt.Order("order:Q"),
+            tooltip=["name:N", "axis:N", "score:Q"],
+        )
+        .properties(
+            width=400,
+            height=400,
+            title="Architecture Radar Chart",
+        )
     )
 
     # Axis labels at r=1.25
     label_rows = []
     for i, axis in enumerate(AXES):
         angle = (2 * math.pi * i / n_axes) - math.pi / 2
-        label_rows.append({
-            "axis": axis,
-            "x": 1.25 * math.cos(angle),
-            "y": 1.25 * math.sin(angle),
-        })
+        label_rows.append(
+            {
+                "axis": axis,
+                "x": 1.25 * math.cos(angle),
+                "y": 1.25 * math.sin(angle),
+            }
+        )
 
     label_df = pd.DataFrame(label_rows)
-    labels = alt.Chart(label_df).mark_text(fontSize=11, align="center").encode(
-        x=alt.X("x:Q", axis=None),
-        y=alt.Y("y:Q", axis=None),
-        text=alt.Text("axis:N"),
+    labels = (
+        alt.Chart(label_df)
+        .mark_text(fontSize=11, align="center")
+        .encode(
+            x=alt.X("x:Q", axis=None),
+            y=alt.Y("y:Q", axis=None),
+            text=alt.Text("axis:N"),
+        )
     )
 
     return (chart + labels).configure_view(strokeWidth=0)

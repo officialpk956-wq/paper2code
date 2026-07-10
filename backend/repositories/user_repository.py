@@ -10,7 +10,7 @@ or None.  No business logic lives here — only raw CRUD.
 from __future__ import annotations
 
 import datetime
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,23 +28,18 @@ class UserRepository:
     # Read
     # ------------------------------------------------------------------
 
-    def get_by_id(self, user_id: int) -> Optional[User]:
+    def get_by_id(self, user_id: int) -> User | None:
         """Return User by primary key, or None."""
         return self._db.get(User, user_id)
 
-    def get_by_email(self, email: str) -> Optional[User]:
+    def get_by_email(self, email: str) -> User | None:
         """Return User by unique email address, or None."""
         stmt = select(User).where(User.email == email)
         return self._db.execute(stmt).scalar_one_or_none()
 
     def list_all(self, *, limit: int = 100, offset: int = 0) -> Sequence[User]:
         """Return a paginated slice of all users ordered by points descending."""
-        stmt = (
-            select(User)
-            .order_by(User.points.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        stmt = select(User).order_by(User.points.desc()).limit(limit).offset(offset)
         return self._db.execute(stmt).scalars().all()
 
     # ------------------------------------------------------------------
@@ -56,8 +51,8 @@ class UserRepository:
         *,
         email: str,
         name: str,
-        hashed_password: Optional[str] = None,
-        avatar_url: Optional[str] = None,
+        hashed_password: str | None = None,
+        avatar_url: str | None = None,
     ) -> User:
         """
         Insert a new User row.
@@ -74,14 +69,14 @@ class UserRepository:
             streak=0,
         )
         self._db.add(user)
-        self._db.flush()   # assign id without committing
+        self._db.flush()  # assign id without committing
         return user
 
     # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
 
-    def add_points(self, user_id: int, points: int) -> Optional[User]:
+    def add_points(self, user_id: int, points: int) -> User | None:
         """Increment a user's point total.  Returns updated User or None."""
         user = self.get_by_id(user_id)
         if user is None:
@@ -90,7 +85,7 @@ class UserRepository:
         self._db.flush()
         return user
 
-    def update_streak(self, user_id: int, streak: int) -> Optional[User]:
+    def update_streak(self, user_id: int, streak: int) -> User | None:
         """Set a user's streak counter.  Returns updated User or None."""
         user = self.get_by_id(user_id)
         if user is None:

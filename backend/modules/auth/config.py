@@ -2,8 +2,12 @@ import os
 
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 _UNSAFE_KEYS = {
-    "", "demo", "secret", "changeme",
-    "supersecretkey", "supersecretkey_please_change_in_production",
+    "",
+    "demo",
+    "secret",
+    "changeme",
+    "supersecretkey",
+    "supersecretkey_please_change_in_production",
 }
 if SECRET_KEY in _UNSAFE_KEYS:
     if os.getenv("ENVIRONMENT", "development") == "production":

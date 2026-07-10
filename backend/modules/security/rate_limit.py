@@ -1,8 +1,7 @@
+import logging
 import os
 import time
-import redis
-import logging
-from typing import Optional
+
 from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
@@ -11,13 +10,14 @@ from backend.redis_config import rate_limit_redis as _redis_client
 
 _in_memory_store = {}
 
+
 def check_sliding_window_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     """Redis or in-memory sliding window rate limiter."""
     if os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "false":
         return True
 
     now = int(time.time())
-    
+
     if _redis_client is not None:
         try:
             pipe = _redis_client.pipeline()
@@ -29,19 +29,20 @@ def check_sliding_window_rate_limit(key: str, limit: int, window_seconds: int) -
             return current_count <= limit
         except Exception as e:
             logger.exception(f"Redis rate limit check error: {e}")
-            
+
     # In-memory fallback
     if key not in _in_memory_store:
         _in_memory_store[key] = []
-    
+
     history = [t for t in _in_memory_store[key] if t > now - window_seconds]
     _in_memory_store[key] = history
-    
+
     print(f"In-memory rate limit: {key=} {len(history)=} {limit=}")
     if len(history) < limit:
         _in_memory_store[key].append(now)
         return True
     return False
+
 
 def get_rate_limit_key(request: Request) -> str:
     """
@@ -52,33 +53,37 @@ def get_rate_limit_key(request: Request) -> str:
     api_key_id = request.state.api_key_id if hasattr(request.state, "api_key_id") else None
     if api_key_id:
         return f"rl:apikey:{api_key_id}"
-        
+
     # 2. User ID
     user_id = request.state.user_id if hasattr(request.state, "user_id") else None
     if user_id:
         return f"rl:user:{user_id}"
-        
+
     # 3. Org ID
     org_id = request.state.org_id if hasattr(request.state, "org_id") else None
     if org_id:
         return f"rl:org:{org_id}"
-        
+
     # 4. Client IP address (using safe proxy resolution)
     from backend.modules.auth.middleware.rate_limit import get_client_ip
+
     ip = get_client_ip(request)
     return f"rl:ip:{ip}"
 
+
 def multi_key_rate_limiter(limit: int, window_seconds: int):
     """FastAPI dependency for scoped rate limiting."""
+
     def dependency(request: Request):
         key_prefix = get_rate_limit_key(request)
         path = request.url.path
         key = f"{key_prefix}:{path}"
-        
+
         if not check_sliding_window_rate_limit(key, limit, window_seconds):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests. Please try again later."
+                detail="Too many requests. Please try again later.",
             )
         return True
+
     return dependency

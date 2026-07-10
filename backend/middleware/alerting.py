@@ -6,8 +6,8 @@ Fire-and-forget daemon thread — never blocks the response.
 No-op when SLACK_WEBHOOK_URL is unset.
 """
 
-import os
 import logging
+import os
 import threading
 import time
 

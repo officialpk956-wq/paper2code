@@ -17,20 +17,21 @@ Supported mutations:
 """
 
 import copy
-from typing import Any, Dict, List, Optional
-from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+from typing import Any
 
+from core.architecture_graph import ArchitectureGraph, GraphEdge, GraphNode
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _clone_graph(graph: ArchitectureGraph) -> ArchitectureGraph:
     """Deep-copy a graph so mutations are non-destructive."""
     return copy.deepcopy(graph)
 
 
-def _find_nodes_by_types(graph: ArchitectureGraph, types: List[str]) -> List[GraphNode]:
+def _find_nodes_by_types(graph: ArchitectureGraph, types: list[str]) -> list[GraphNode]:
     """Return all nodes whose type (case-insensitive) is in the given list."""
     lower_types = [t.lower() for t in types]
     return [n for n in graph.nodes if (n.type or "").lower() in lower_types]
@@ -49,6 +50,7 @@ def _make_node_id(graph: ArchitectureGraph, prefix: str) -> str:
 # Individual mutation functions
 # ---------------------------------------------------------------------------
 
+
 def increase_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
     """
     Add N extra convolutional blocks at the end of the graph (before the final
@@ -62,8 +64,14 @@ def increase_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
     g = _clone_graph(graph)
 
     heavy_types = [
-        "residualblock", "block", "stage", "bottleneckblock",
-        "denseblock", "conv2d", "transformerblock", "multiheadattention"
+        "residualblock",
+        "block",
+        "stage",
+        "bottleneckblock",
+        "denseblock",
+        "conv2d",
+        "transformerblock",
+        "multiheadattention",
     ]
     heavy = _find_nodes_by_types(g, heavy_types)
     if not heavy:
@@ -78,9 +86,9 @@ def increase_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
     for i in range(n):
         # Clone the node at insertion_after_idx
         template = g.nodes[insertion_after_idx]
-        new_id    = _make_node_id(g, template.type or "block")
-        new_label = f"{template.label} ×{i+2}"
-        new_node  = GraphNode(
+        new_id = _make_node_id(g, template.type or "block")
+        new_label = f"{template.label} ×{i + 2}"
+        new_node = GraphNode(
             id=new_id,
             type=template.type,
             label=new_label,
@@ -98,8 +106,7 @@ def increase_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
             next_node = g.nodes[insertion_after_idx + 2]
             # Remove direct edge prev → next if it exists
             g.edges = [
-                e for e in g.edges
-                if not (e.source == prev_node.id and e.target == next_node.id)
+                e for e in g.edges if not (e.source == prev_node.id and e.target == next_node.id)
             ]
             g.edges.append(GraphEdge(source=prev_node.id, target=new_node.id, edge_type="flow"))
             g.edges.append(GraphEdge(source=new_node.id, target=next_node.id, edge_type="flow"))
@@ -119,7 +126,14 @@ def decrease_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
       - input, embedding, patchembedding, linear (last), output
     """
     g = _clone_graph(graph)
-    protected_types = {"input", "embedding", "patchembedding", "output", "linear", "adaptiveavgpool2d"}
+    protected_types = {
+        "input",
+        "embedding",
+        "patchembedding",
+        "output",
+        "linear",
+        "adaptiveavgpool2d",
+    }
 
     removed = 0
     # Walk from second-to-last backwards
@@ -153,7 +167,15 @@ def increase_width(graph: ArchitectureGraph, factor: float = 1.5) -> Architectur
     Rounds to nearest even integer.
     """
     g = _clone_graph(graph)
-    channel_keys = ["channels", "out_channels", "filters", "hidden_size", "d_model", "embed_dim", "embedding_dim"]
+    channel_keys = [
+        "channels",
+        "out_channels",
+        "filters",
+        "hidden_size",
+        "d_model",
+        "embed_dim",
+        "embedding_dim",
+    ]
 
     for node in g.nodes:
         p = node.params or {}
@@ -174,7 +196,15 @@ def decrease_width(graph: ArchitectureGraph, factor: float = 0.5) -> Architectur
     Shrink all channel/hidden_size parameters by the given factor (minimum 4).
     """
     g = _clone_graph(graph)
-    channel_keys = ["channels", "out_channels", "filters", "hidden_size", "d_model", "embed_dim", "embedding_dim"]
+    channel_keys = [
+        "channels",
+        "out_channels",
+        "filters",
+        "hidden_size",
+        "d_model",
+        "embed_dim",
+        "embedding_dim",
+    ]
 
     for node in g.nodes:
         p = node.params or {}
@@ -198,14 +228,21 @@ def add_residual(graph: ArchitectureGraph) -> ArchitectureGraph:
     """
     g = _clone_graph(graph)
     skip_types = {"residualblock", "block", "stage", "conv2d", "denseblock", "transformerblock"}
-    light_types = {"maxpool2d", "avgpool2d", "adaptiveavgpool2d", "batchnorm2d", "layernorm",
-                   "input", "output", "patchembedding", "embedding", "dropout"}
+    light_types = {
+        "maxpool2d",
+        "avgpool2d",
+        "adaptiveavgpool2d",
+        "batchnorm2d",
+        "layernorm",
+        "input",
+        "output",
+        "patchembedding",
+        "embedding",
+        "dropout",
+    }
 
     # Collect indices of "heavy" nodes
-    heavy_indices = [
-        i for i, n in enumerate(g.nodes)
-        if (n.type or "").lower() in skip_types
-    ]
+    heavy_indices = [i for i, n in enumerate(g.nodes) if (n.type or "").lower() in skip_types]
 
     # Existing skip edges (avoid duplicates)
     existing_skip = {(e.source, e.target) for e in g.edges if e.edge_type in ("skip", "residual")}
@@ -276,8 +313,7 @@ def add_attention(graph: ArchitectureGraph) -> ArchitectureGraph:
     if insert_after_idx + 2 < len(g.nodes):
         next_node = g.nodes[insert_after_idx + 2]
         g.edges = [
-            e for e in g.edges
-            if not (e.source == prev_node.id and e.target == next_node.id)
+            e for e in g.edges if not (e.source == prev_node.id and e.target == next_node.id)
         ]
         g.edges.append(GraphEdge(source=prev_node.id, target=new_id, edge_type="flow"))
         g.edges.append(GraphEdge(source=new_id, target=next_node.id, edge_type="flow"))
@@ -316,8 +352,12 @@ def change_hidden_dim(graph: ArchitectureGraph, dim: int = 1024) -> Architecture
     """
     g = _clone_graph(graph)
     transformer_types = {
-        "transformerblock", "multiheadattention", "encoder_block",
-        "decoder_block", "feedforward", "linear"
+        "transformerblock",
+        "multiheadattention",
+        "encoder_block",
+        "decoder_block",
+        "feedforward",
+        "linear",
     }
 
     for node in g.nodes:
@@ -336,13 +376,13 @@ def change_hidden_dim(graph: ArchitectureGraph, dim: int = 1024) -> Architecture
 # ---------------------------------------------------------------------------
 
 MUTATION_REGISTRY = {
-    "increase_depth":   increase_depth,
-    "decrease_depth":   decrease_depth,
-    "increase_width":   increase_width,
-    "decrease_width":   decrease_width,
-    "add_residual":     add_residual,
-    "remove_residual":  remove_residual,
-    "add_attention":    add_attention,
+    "increase_depth": increase_depth,
+    "decrease_depth": decrease_depth,
+    "increase_width": increase_width,
+    "decrease_width": decrease_width,
+    "add_residual": add_residual,
+    "remove_residual": remove_residual,
+    "add_attention": add_attention,
     "change_patch_size": change_patch_size,
     "change_hidden_dim": change_hidden_dim,
 }
@@ -350,7 +390,7 @@ MUTATION_REGISTRY = {
 
 def apply_mutations(
     graph: ArchitectureGraph,
-    mutations: List[Dict[str, Any]],
+    mutations: list[dict[str, Any]],
 ) -> ArchitectureGraph:
     """
     Apply a list of mutations sequentially to a graph.
@@ -366,6 +406,8 @@ def apply_mutations(
         mut_params = m.get("params", {})
         fn = MUTATION_REGISTRY.get(mut_type)
         if fn is None:
-            raise ValueError(f"Unknown mutation type: '{mut_type}'. Valid types: {list(MUTATION_REGISTRY.keys())}")
+            raise ValueError(
+                f"Unknown mutation type: '{mut_type}'. Valid types: {list(MUTATION_REGISTRY.keys())}"
+            )
         g = fn(g, **mut_params)
     return g

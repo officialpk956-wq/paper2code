@@ -1,6 +1,8 @@
 import torch
-from core.schema_refiner_ldm import refine_ldm_schema
+
 from core.ldm_builder import LDMBuilder
+from core.schema_refiner_ldm import refine_ldm_schema
+
 
 def main():
     schema = {"model_family": "ldm"}
@@ -12,6 +14,7 @@ def main():
     out = model(x, t, context)
     print(f"Output shape: {out.shape}")
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
+
 
 if __name__ == "__main__":
     main()

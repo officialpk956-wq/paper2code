@@ -5,15 +5,12 @@ Wraps existing explanation functions from explainers and comparators modules.
 No new logic — extraction and structuring only.
 """
 
-from typing import Dict, Any, Optional
-from collections import OrderedDict
-
-from core.architecture_graph import ArchitectureGraph, GraphNode
 from core.agents.explanation_agent import ExplanationAgent
-from core.agents.types import ComparisonResult, VisualMetadata, TemplateLibrary
-from core.explainers import explain_node as _explain_node, explain_graph as _explain_graph
+from core.agents.types import ComparisonResult, TemplateLibrary, VisualMetadata
+from core.architecture_graph import ArchitectureGraph, GraphNode
 from core.comparators import explain_architecture_comparison as _explain_arch_comparison
-
+from core.explainers import explain_graph as _explain_graph
+from core.explainers import explain_node as _explain_node
 
 # ---------------------------------------------------------------------------
 # Template Library (extracted from existing explanation logic)
@@ -25,8 +22,14 @@ _EXPLANATION_TEMPLATES: TemplateLibrary = {
         ("flops", "very high"): "This block performs very expensive computations",
         ("flops", "medium"): "This block has moderate computational cost",
         ("attention", "quadratic"): "Scales poorly with sequence/spatial length (O(n²))",
-        ("feature_map", "downsampling"): "Reduces spatial resolution to capture contextual features",
-        ("feature_map", "upsampling"): "Recovers spatial resolution while maintaining semantic information",
+        (
+            "feature_map",
+            "downsampling",
+        ): "Reduces spatial resolution to capture contextual features",
+        (
+            "feature_map",
+            "upsampling",
+        ): "Recovers spatial resolution while maintaining semantic information",
         ("skip_connection", "yes"): "Uses skip connections to preserve earlier features",
         ("compute_role", "feature_extraction"): "Feature extraction and filtering",
         ("compute_role", "pooling"): "Spatial downsampling and feature aggregation",
@@ -60,6 +63,7 @@ _EXPLANATION_TEMPLATES: TemplateLibrary = {
 # DefaultExplanationAgent
 # ---------------------------------------------------------------------------
 
+
 class DefaultExplanationAgent(ExplanationAgent):
     """
     Concrete ExplanationAgent.
@@ -91,7 +95,7 @@ class DefaultExplanationAgent(ExplanationAgent):
 
         # Scan for repeated structures in the graph
         # CRITICAL: Read from params, as config extractor places repeat metadata there
-        repeat_groups: Dict[str, int] = {}
+        repeat_groups: dict[str, int] = {}
         for node in graph.nodes:
             if not node.params:
                 continue

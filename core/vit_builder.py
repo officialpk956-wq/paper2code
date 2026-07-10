@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from core.blocks_vit import PatchEmbedding
 from core.blocks_transformer import TransformerEncoderBlock
+from core.blocks_vit import PatchEmbedding
 
 
 class ViTBuilder(nn.Module):
@@ -21,20 +21,14 @@ class ViTBuilder(nn.Module):
 
         # ---- Patch embedding ----
         self.patch_embed = PatchEmbedding(
-            in_channels=image_channels,
-            patch_size=patch_size,
-            embed_dim=embed_dim
+            in_channels=image_channels, patch_size=patch_size, embed_dim=embed_dim
         )
 
         # ---- CLS token ----
-        self.cls_token = nn.Parameter(
-            torch.zeros(1, 1, embed_dim)
-        )
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
         # ---- Positional embedding ----
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches + 1, embed_dim)
-        )
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
 
         self.dropout = nn.Dropout(block.get("dropout", 0.1))
 
@@ -47,7 +41,7 @@ class ViTBuilder(nn.Module):
                         d_model=block["d_model"],
                         num_heads=block["num_heads"],
                         ffn_dim=block["ffn_dim"],
-                        dropout=block.get("dropout", 0.1)
+                        dropout=block.get("dropout", 0.1),
                     )
                 )
 
@@ -65,7 +59,7 @@ class ViTBuilder(nn.Module):
         B = x.size(0)
 
         # Patchify
-        x = self.patch_embed(x)          # (B, N, D)
+        x = self.patch_embed(x)  # (B, N, D)
 
         # Add CLS token
         cls_tokens = self.cls_token.expand(B, -1, -1)

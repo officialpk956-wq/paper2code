@@ -8,8 +8,9 @@ Exposed at GET /metrics (restrict to internal IPs via Nginx in production).
 No-op if prometheus_client is not installed.
 """
 
-import time
 import logging
+import time
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -17,7 +18,8 @@ from starlette.responses import Response
 log = logging.getLogger(__name__)
 
 try:
-    from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _PROMETHEUS_AVAILABLE = False
@@ -40,6 +42,7 @@ if _PROMETHEUS_AVAILABLE:
 def _normalise_path(path: str) -> str:
     """Replace numeric path segments with {id} to avoid cardinality explosion."""
     import re
+
     path = re.sub(r"/\d+", "/{id}", path)
     return path
 

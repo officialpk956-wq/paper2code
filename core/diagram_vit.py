@@ -1,7 +1,6 @@
 from core.diagram_base import create_graph
 
 
-
 def draw_vit(schema):
     dot = create_graph("Vision Transformer")
 

@@ -12,27 +12,29 @@ Routes:
 All answers are validated deterministically by comparing user_answer
 to the challenge's 'answer' field (case-insensitive, normalized).
 """
+
 from __future__ import annotations
+
 import re
 import time
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 from core.assessment.architecture_challenges import get_architecture_challenge
-from core.assessment.tensor_challenges import get_tensor_challenge
-from core.assessment.flops_challenges import get_flops_challenge
 from core.assessment.comparison_challenges import get_comparison_challenge
-
+from core.assessment.flops_challenges import get_flops_challenge
+from core.assessment.tensor_challenges import get_tensor_challenge
 
 # ---------------------------------------------------------------------------
 # Answer Validation
 # ---------------------------------------------------------------------------
+
 
 def _normalize(text: str) -> str:
     """Normalize answer for comparison: lowercase, strip, collapse whitespace."""
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
-def validate_answer(challenge: Dict[str, Any], user_answer: str) -> Dict[str, Any]:
+def validate_answer(challenge: dict[str, Any], user_answer: str) -> dict[str, Any]:
     """
     Deterministically validate a user's answer against the challenge ground truth.
 
@@ -82,6 +84,7 @@ def validate_answer(challenge: Dict[str, Any], user_answer: str) -> Dict[str, An
 # AssessmentEngine
 # ---------------------------------------------------------------------------
 
+
 class AssessmentEngine:
     """
     Central engine for generating and validating assessment challenges.
@@ -99,9 +102,9 @@ class AssessmentEngine:
         challenge_type: str = "tensor",
         architecture: str = "ResNet",
         difficulty: str = "beginner",
-        seed: Optional[int] = None,
-        db_metrics: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        seed: int | None = None,
+        db_metrics: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """
         Generate a challenge.
 
@@ -125,7 +128,7 @@ class AssessmentEngine:
         if diff not in self.SUPPORTED_DIFFICULTIES:
             diff = "beginner"
 
-        challenge: Dict[str, Any] = {}
+        challenge: dict[str, Any] = {}
 
         if ct == "architecture":
             challenge = get_architecture_challenge(
@@ -136,9 +139,7 @@ class AssessmentEngine:
         elif ct == "flops":
             challenge = get_flops_challenge(difficulty=diff, seed=seed)
         elif ct == "comparison":
-            challenge = get_comparison_challenge(
-                difficulty=diff, seed=seed, db_metrics=db_metrics
-            )
+            challenge = get_comparison_challenge(difficulty=diff, seed=seed, db_metrics=db_metrics)
 
         # Normalize: always attach metadata
         challenge["assessment_type"] = ct
@@ -150,9 +151,9 @@ class AssessmentEngine:
 
     def validate(
         self,
-        challenge: Dict[str, Any],
+        challenge: dict[str, Any],
         user_answer: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Validate a user's answer against a previously generated challenge.
 

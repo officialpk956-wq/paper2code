@@ -1,10 +1,12 @@
+import logging
+
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
 from backend.models import DojoSubmission, Problem
 from core.agents.code_review_agent import generate_code_review
-import logging
 
 logger = logging.getLogger(__name__)
+
 
 @celery_app.task(name="review_submission")
 def review_submission_task(submission_id: int):

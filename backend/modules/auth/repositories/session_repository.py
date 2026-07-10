@@ -1,15 +1,19 @@
-import uuid
 import datetime
 import hashlib
-from typing import Optional, Sequence
+import uuid
+from collections.abc import Sequence
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+
 from backend.modules.auth.models import UserSession
 from backend.modules.auth.utils.ua_parser import parse_user_agent
+
 
 def hash_token(token: str) -> str:
     """Hash refresh tokens before comparison or storage using SHA256."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 
 class SessionRepository:
     def __init__(self, db: Session):
@@ -19,13 +23,13 @@ class SessionRepository:
         self,
         user_id: int,
         refresh_token: str,
-        ip_address: Optional[str],
-        user_agent: Optional[str],
+        ip_address: str | None,
+        user_agent: str | None,
         expires_at: datetime.datetime,
     ) -> UserSession:
         token_hash = hash_token(refresh_token)
         browser, os = parse_user_agent(user_agent or "")
-        
+
         session_id = str(uuid.uuid4())
         session = UserSession(
             id=session_id,
@@ -36,19 +40,21 @@ class SessionRepository:
             browser=browser,
             os=os,
             expires_at=expires_at,
-            revoked=False
+            revoked=False,
         )
         self.db.add(session)
         self.db.flush()
         return session
 
-    def get_session_by_token_hash(self, token_hash: str, for_update: bool = False) -> Optional[UserSession]:
+    def get_session_by_token_hash(
+        self, token_hash: str, for_update: bool = False
+    ) -> UserSession | None:
         stmt = select(UserSession).where(UserSession.refresh_token_hash == token_hash)
         if for_update:
             stmt = stmt.with_for_update()
         return self.db.execute(stmt).scalar_one_or_none()
 
-    def get_session_by_id(self, session_id: str) -> Optional[UserSession]:
+    def get_session_by_id(self, session_id: str) -> UserSession | None:
         return self.db.get(UserSession, session_id)
 
     def update_last_used(self, session_id: str, new_token: str) -> None:
@@ -56,20 +62,13 @@ class SessionRepository:
         stmt = (
             update(UserSession)
             .where(UserSession.id == session_id)
-            .values(
-                refresh_token_hash=new_hash,
-                last_used_at=datetime.datetime.utcnow()
-            )
+            .values(refresh_token_hash=new_hash, last_used_at=datetime.datetime.utcnow())
         )
         self.db.execute(stmt)
         self.db.flush()
 
     def revoke_session(self, session_id: str) -> bool:
-        stmt = (
-            update(UserSession)
-            .where(UserSession.id == session_id)
-            .values(revoked=True)
-        )
+        stmt = update(UserSession).where(UserSession.id == session_id).values(revoked=True)
         res = self.db.execute(stmt)
         self.db.flush()
         return res.rowcount > 0
@@ -91,7 +90,7 @@ class SessionRepository:
             .where(
                 UserSession.user_id == user_id,
                 UserSession.revoked == False,
-                UserSession.expires_at > now
+                UserSession.expires_at > now,
             )
             .order_by(UserSession.last_used_at.desc())
         )

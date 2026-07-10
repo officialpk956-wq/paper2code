@@ -12,16 +12,17 @@ Improvements:
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from core.agents.types import ConfigDict
-from core.rag.normalizer import normalize_config
-from core.rag.section_splitter import get_architecture_text, chunk_for_retrieval
-from core.rag.retriever import retrieve_and_merge
 from core.rag.knowledge_graph import KnowledgeGraph
+from core.rag.normalizer import normalize_config
+from core.rag.retriever import retrieve_and_merge
+from core.rag.section_splitter import chunk_for_retrieval, get_architecture_text
 
 try:
     from core.llm_client import llm_complete
+
     _HAS_LLM = True
 except (ImportError, RuntimeError):
     _HAS_LLM = False
@@ -31,33 +32,33 @@ except (ImportError, RuntimeError):
 # Layer keyword patterns
 # ---------------------------------------------------------------------------
 
-_LAYER_PATTERNS: List[Tuple[str, str]] = [
+_LAYER_PATTERNS: list[tuple[str, str]] = [
     (r"\bmulti[_\s]?head[_\s]?(?:self[_\s]?)?attention\b", "multiheadattention"),
-    (r"\bself[_\s]?attention\b",                           "multiheadattention"),
-    (r"\btransformer[_\s]?encoder\b",                      "multiheadattention"),
-    (r"\btransformer[_\s]?decoder\b",                      "multiheadattention"),
-    (r"\bfully[_\s]?connected\b",                          "linear"),
-    (r"\bfully[_\s]?-[_\s]?connected\b",                   "linear"),
-    (r"\bresidual[_\s]?block\b",                           "residualblock"),
-    (r"\baverage[_\s]?pool(?:ing)?\b",                     "avgpool2d"),
-    (r"\bavg[_\s]?pool(?:ing)?\b",                         "avgpool2d"),
-    (r"\bmax[_\s]?pool(?:ing)?\b",                         "maxpool2d"),
-    (r"\bbatch[_\s]?norm(?:alization)?\b",                 "batchnorm2d"),
-    (r"\blayer[_\s]?norm(?:alization)?\b",                 "layernorm"),
-    (r"\bconv(?:olution(?:al)?)?[_\s]?layer\b",           "conv2d"),
-    (r"\bconv[1-3]?d?\b",                                  "conv2d"),
-    (r"\btransformer\b",                                   "transformerblock"),
-    (r"\battention\b",                                     "multiheadattention"),
-    (r"\bfc\b",                                            "linear"),
-    (r"\blinear\b",                                        "linear"),
-    (r"\bdense\b",                                         "linear"),
-    (r"\bupsamp(?:le|ling)\b",                             "upsample"),
-    (r"\bresidual\b",                                      "residualblock"),
-    (r"\brelu\b",                                          "relu"),
-    (r"\bdropout\b",                                       "dropout"),
-    (r"\bmha\b",                                           "multiheadattention"),
-    (r"\bmhsa\b",                                          "multiheadattention"),
-    (r"\bpatch[_\s]?embed(?:ding)?\b",                    "patchembedding"),
+    (r"\bself[_\s]?attention\b", "multiheadattention"),
+    (r"\btransformer[_\s]?encoder\b", "multiheadattention"),
+    (r"\btransformer[_\s]?decoder\b", "multiheadattention"),
+    (r"\bfully[_\s]?connected\b", "linear"),
+    (r"\bfully[_\s]?-[_\s]?connected\b", "linear"),
+    (r"\bresidual[_\s]?block\b", "residualblock"),
+    (r"\baverage[_\s]?pool(?:ing)?\b", "avgpool2d"),
+    (r"\bavg[_\s]?pool(?:ing)?\b", "avgpool2d"),
+    (r"\bmax[_\s]?pool(?:ing)?\b", "maxpool2d"),
+    (r"\bbatch[_\s]?norm(?:alization)?\b", "batchnorm2d"),
+    (r"\blayer[_\s]?norm(?:alization)?\b", "layernorm"),
+    (r"\bconv(?:olution(?:al)?)?[_\s]?layer\b", "conv2d"),
+    (r"\bconv[1-3]?d?\b", "conv2d"),
+    (r"\btransformer\b", "transformerblock"),
+    (r"\battention\b", "multiheadattention"),
+    (r"\bfc\b", "linear"),
+    (r"\blinear\b", "linear"),
+    (r"\bdense\b", "linear"),
+    (r"\bupsamp(?:le|ling)\b", "upsample"),
+    (r"\bresidual\b", "residualblock"),
+    (r"\brelu\b", "relu"),
+    (r"\bdropout\b", "dropout"),
+    (r"\bmha\b", "multiheadattention"),
+    (r"\bmhsa\b", "multiheadattention"),
+    (r"\bpatch[_\s]?embed(?:ding)?\b", "patchembedding"),
 ]
 
 _UNCERTAINTY_WORDS = re.compile(
@@ -66,54 +67,75 @@ _UNCERTAINTY_WORDS = re.compile(
     re.IGNORECASE,
 )
 
-_PARAM_PATTERNS: List[Tuple[str, List[str]]] = [
-    ("kernel_size", [
-        r"\b(\d+)\s*[x×]\s*\d+\s+(?:conv|kernel|filter)",
-        r"(?:kernel|filter)[_\s]?size[:\s]+(\d+)",
-        r"(\d+)[x×]\d+\s+kernel",
-    ]),
-    ("channels", [
-        r"(\d+)\s+channels?",
-        r"(\d+)\s+filters?",
-        r"channels?\s*[:\=]\s*(\d+)",
-        r"filters?\s*[:\=]\s*(\d+)",
-    ]),
-    ("stride", [
-        r"strides?\s*[:\=]\s*(\d+)",
-        r"stride\s+of\s+(\d+)",
-    ]),
-    ("padding", [
-        r"padding\s*[:\=]\s*(\d+)",
-    ]),
-    ("hidden_size", [
-        r"(\d+)\s+(?:hidden\s+)?units?",
-        r"hidden[_\s]?(?:size|dim(?:ension)?)\s*[:\=]\s*(\d+)",
-        r"d_model\s*[:\=]\s*(\d+)",
-    ]),
-    ("num_heads", [
-        r"(\d+)\s+(?:attention\s+)?heads?",
-        r"heads?\s*[:\=]\s*(\d+)",
-        r"num_heads\s*[:\=]\s*(\d+)",
-    ]),
-    ("num_layers", [
-        r"(\d+)\s+(?:transformer\s+)?(?:encoder\s+)?(?:decoder\s+)?layers?",
-        r"num_layers\s*[:\=]\s*(\d+)",
-        r"depth\s*[:\=]\s*(\d+)",
-    ]),
+_PARAM_PATTERNS: list[tuple[str, list[str]]] = [
+    (
+        "kernel_size",
+        [
+            r"\b(\d+)\s*[x×]\s*\d+\s+(?:conv|kernel|filter)",
+            r"(?:kernel|filter)[_\s]?size[:\s]+(\d+)",
+            r"(\d+)[x×]\d+\s+kernel",
+        ],
+    ),
+    (
+        "channels",
+        [
+            r"(\d+)\s+channels?",
+            r"(\d+)\s+filters?",
+            r"channels?\s*[:\=]\s*(\d+)",
+            r"filters?\s*[:\=]\s*(\d+)",
+        ],
+    ),
+    (
+        "stride",
+        [
+            r"strides?\s*[:\=]\s*(\d+)",
+            r"stride\s+of\s+(\d+)",
+        ],
+    ),
+    (
+        "padding",
+        [
+            r"padding\s*[:\=]\s*(\d+)",
+        ],
+    ),
+    (
+        "hidden_size",
+        [
+            r"(\d+)\s+(?:hidden\s+)?units?",
+            r"hidden[_\s]?(?:size|dim(?:ension)?)\s*[:\=]\s*(\d+)",
+            r"d_model\s*[:\=]\s*(\d+)",
+        ],
+    ),
+    (
+        "num_heads",
+        [
+            r"(\d+)\s+(?:attention\s+)?heads?",
+            r"heads?\s*[:\=]\s*(\d+)",
+            r"num_heads\s*[:\=]\s*(\d+)",
+        ],
+    ),
+    (
+        "num_layers",
+        [
+            r"(\d+)\s+(?:transformer\s+)?(?:encoder\s+)?(?:decoder\s+)?layers?",
+            r"num_layers\s*[:\=]\s*(\d+)",
+            r"depth\s*[:\=]\s*(\d+)",
+        ],
+    ),
 ]
 
 # Connection / relationship extraction patterns
 _CONNECTION_PATTERNS = [
-    (r"\bskip[_\s]?connection\b",    "skip"),
-    (r"\bskip[_\s]?connect\b",       "skip"),
+    (r"\bskip[_\s]?connection\b", "skip"),
+    (r"\bskip[_\s]?connect\b", "skip"),
     (r"\bresidual[_\s]?connection\b", "residual"),
     (r"\bshortcut[_\s]?connection\b", "skip"),
-    (r"\bconcaten(?:ate|ation)\b",    "concat"),
-    (r"\bconcat\b",                   "concat"),
-    (r"\bbranch\b",                   "branch"),
-    (r"\bfork\b",                     "branch"),
-    (r"\bmerge\b",                    "merge"),
-    (r"\badd\b",                      "add"),
+    (r"\bconcaten(?:ate|ation)\b", "concat"),
+    (r"\bconcat\b", "concat"),
+    (r"\bbranch\b", "branch"),
+    (r"\bfork\b", "branch"),
+    (r"\bmerge\b", "merge"),
+    (r"\badd\b", "add"),
     (r"\belement[_\s]?wise[_\s]?add", "add"),
 ]
 _conn_re = [(re.compile(p, re.IGNORECASE), t) for p, t in _CONNECTION_PATTERNS]
@@ -237,6 +259,7 @@ Return ONLY corrected valid JSON. If no corrections are needed, return the origi
 # ConfigExtractor
 # ---------------------------------------------------------------------------
 
+
 class ConfigExtractor:
     """
     Extract architecture config from raw text using a multi-step pipeline.
@@ -316,7 +339,7 @@ class ConfigExtractor:
     # Step 2: LLM extraction with few-shot prompt (R1)
     # ------------------------------------------------------------------
 
-    def _extract_with_llm(self, text: str) -> Dict[str, Any]:
+    def _extract_with_llm(self, text: str) -> dict[str, Any]:
         """Call LLM with few-shot prompt, KAG instructions, and connection instructions."""
         # KAG Entity Linking & Rule Extraction
         terms = self.ontology.identify_terms(text)
@@ -334,9 +357,7 @@ class ConfigExtractor:
     # Step 3: Self-correction loop (R3)
     # ------------------------------------------------------------------
 
-    def _verify_extraction(
-        self, original_text: str, extracted: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _verify_extraction(self, original_text: str, extracted: dict[str, Any]) -> dict[str, Any]:
         """
         Ask the LLM to review its own extraction against the source text.
         Returns corrected dict, or original if correction fails.
@@ -359,7 +380,7 @@ class ConfigExtractor:
     # Step 4: Rule-based fallback (enhanced R4)
     # ------------------------------------------------------------------
 
-    def _extract_rule_based(self, text: str) -> Dict[str, Any]:
+    def _extract_rule_based(self, text: str) -> dict[str, Any]:
         """Rule-based extraction: layers + connections + tables."""
         processed = preprocess_text(text)
         layers = _extract_layers(processed)
@@ -383,7 +404,7 @@ class ConfigExtractor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_json_response(response: str) -> Dict[str, Any]:
+    def _parse_json_response(response: str) -> dict[str, Any]:
         """Parse JSON from LLM response, stripping markdown if needed."""
         try:
             return json.loads(response)
@@ -398,6 +419,7 @@ class ConfigExtractor:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
 
 def preprocess_text(text: str) -> str:
     """Normalize raw text for consistent layer detection."""
@@ -419,17 +441,29 @@ def _extract_name(text: str) -> str:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             name = match.group(1).strip()
-            _stop = {"the", "a", "an", "this", "that", "with", "from",
-                     "starts", "uses", "has", "contains", "consists"}
+            _stop = {
+                "the",
+                "a",
+                "an",
+                "this",
+                "that",
+                "with",
+                "from",
+                "starts",
+                "uses",
+                "has",
+                "contains",
+                "consists",
+            }
             if name.lower() not in _stop and len(name) > 1:
                 return name
     return "UnknownModel"
 
 
-def _extract_layers(text: str) -> List[Dict[str, Any]]:
+def _extract_layers(text: str) -> list[dict[str, Any]]:
     """Detect layers in order of appearance (position-based)."""
     multi_hits = _detect_multi_blocks(text)
-    single_hits: List[Tuple[int, str]] = []
+    single_hits: list[tuple[int, str]] = []
 
     for pattern, canonical_type in _LAYER_PATTERNS:
         for m in re.finditer(pattern, text, re.IGNORECASE):
@@ -437,7 +471,7 @@ def _extract_layers(text: str) -> List[Dict[str, Any]]:
             if not _pos_claimed(m.start(), single_hits + multi_hits_2d):
                 single_hits.append((m.start(), canonical_type))
 
-    all_hits: List[Tuple[int, str, int]] = []
+    all_hits: list[tuple[int, str, int]] = []
     for pos, typ, count in multi_hits:
         all_hits.append((pos, typ, count))
     for pos, typ in single_hits:
@@ -445,7 +479,7 @@ def _extract_layers(text: str) -> List[Dict[str, Any]]:
 
     all_hits.sort(key=lambda h: (h[0], h[1]))
 
-    repeat_groups: Dict[int, List[int]] = {}
+    repeat_groups: dict[int, list[int]] = {}
     for idx, (pos, _, _) in enumerate(all_hits):
         repeat_groups.setdefault(pos, []).append(idx)
 
@@ -456,9 +490,7 @@ def _extract_layers(text: str) -> List[Dict[str, Any]]:
         if len(group_indices) > 1:
             local_index = group_indices.index(idx)
             actual_count = len(group_indices)
-            repeat_group = (
-                layer_type if layer_type.endswith("block") else f"{layer_type}_block"
-            )
+            repeat_group = layer_type if layer_type.endswith("block") else f"{layer_type}_block"
             params["_repeat_group"] = repeat_group
             params["_repeat_index"] = local_index
             params["_repeat_total"] = actual_count
@@ -471,11 +503,13 @@ def _extract_layers(text: str) -> List[Dict[str, Any]]:
     return layers
 
 
-def _detect_multi_blocks(text: str) -> List[Tuple[int, str, int]]:
+def _detect_multi_blocks(text: str) -> list[tuple[int, str, int]]:
     """Detect 'N residual blocks', '3 conv layers', etc."""
-    hits: List[Tuple[int, str, int]] = []
-    matched_ranges: List[Tuple[int, int]] = []
-    pattern = r"(\d+)\s+(?:(?:conv|residual|dense|linear|attention|transformer)\w*\s+)?(blocks?|layers?)"
+    hits: list[tuple[int, str, int]] = []
+    matched_ranges: list[tuple[int, int]] = []
+    pattern = (
+        r"(\d+)\s+(?:(?:conv|residual|dense|linear|attention|transformer)\w*\s+)?(blocks?|layers?)"
+    )
 
     for m in re.finditer(pattern, text, re.IGNORECASE):
         count = int(m.group(1))
@@ -496,18 +530,18 @@ def _detect_multi_blocks(text: str) -> List[Tuple[int, str, int]]:
     return hits
 
 
-def _pos_claimed(pos: int, hits: List[Tuple[int, str]], tol: int = 10) -> bool:
+def _pos_claimed(pos: int, hits: list[tuple[int, str]], tol: int = 10) -> bool:
     return any(abs(pos - h[0]) < tol for h in hits)
 
 
-def _extract_params_near(text: str, pos: int) -> Dict[str, Any]:
+def _extract_params_near(text: str, pos: int) -> dict[str, Any]:
     """Extract explicit parameters in a wider window around pos (R4)."""
     # R4: expanded window — 40 chars lookback, 120 chars lookahead
     window_start = max(0, pos - 40)
     window_end = min(len(text), pos + 120)
     window = text[window_start:window_end]
 
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
     for param_key, patterns in _PARAM_PATTERNS:
         for pattern in patterns:
             match = re.search(pattern, window, re.IGNORECASE)
@@ -525,15 +559,13 @@ def _extract_params_near(text: str, pos: int) -> Dict[str, Any]:
     return params
 
 
-def _extract_connections(
-    text: str, layers: List[Dict[str, Any]]
-) -> List[Tuple[str, str]]:
+def _extract_connections(text: str, layers: list[dict[str, Any]]) -> list[tuple[str, str]]:
     """Build connections: sequential chain + detected skip/residual edges."""
     # Assign IDs first
     for i, layer in enumerate(layers):
         layer["id"] = f"layer_{i}"
 
-    connections: List[Tuple[str, str]] = []
+    connections: list[tuple[str, str]] = []
     for i in range(len(layers) - 1):
         connections.append((layers[i]["id"], layers[i + 1]["id"]))
 
@@ -561,12 +593,12 @@ def _extract_connections(
     return connections
 
 
-def _extract_connection_types(text: str) -> Dict[str, str]:
+def _extract_connection_types(text: str) -> dict[str, str]:
     """
     Detect connection type keywords in text.
     Returns a dict of keyword -> type for later graph annotation.
     """
-    found: Dict[str, str] = {}
+    found: dict[str, str] = {}
     for pattern, conn_type in _conn_re:
         if pattern.search(text):
             found[conn_type] = conn_type
@@ -587,17 +619,27 @@ _TABLE_ROW_RE = re.compile(
 )
 
 _TABLE_TYPE_SYNONYMS = {
-    "conv": "conv2d", "convolution": "conv2d", "conv2d": "conv2d",
-    "fc": "linear", "linear": "linear", "dense": "linear",
-    "pool": "maxpool2d", "maxpool": "maxpool2d",
-    "bn": "batchnorm2d", "batch norm": "batchnorm2d",
-    "attention": "multiheadattention", "mha": "multiheadattention",
-    "residual": "residualblock", "res block": "residualblock",
-    "dropout": "dropout", "relu": "relu", "upsample": "upsample",
+    "conv": "conv2d",
+    "convolution": "conv2d",
+    "conv2d": "conv2d",
+    "fc": "linear",
+    "linear": "linear",
+    "dense": "linear",
+    "pool": "maxpool2d",
+    "maxpool": "maxpool2d",
+    "bn": "batchnorm2d",
+    "batch norm": "batchnorm2d",
+    "attention": "multiheadattention",
+    "mha": "multiheadattention",
+    "residual": "residualblock",
+    "res block": "residualblock",
+    "dropout": "dropout",
+    "relu": "relu",
+    "upsample": "upsample",
 }
 
 
-def extract_table_layers(text: str) -> List[Dict[str, Any]]:
+def extract_table_layers(text: str) -> list[dict[str, Any]]:
     """
     Extract architecture layers from HTML/ASCII tables in paper text.
 
@@ -621,7 +663,7 @@ def extract_table_layers(text: str) -> List[Dict[str, Any]]:
         # Parse first numeric value in params column as channels
         params_str = match.group("params")
         numbers = re.findall(r"\d+", params_str)
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if numbers:
             params["channels"] = int(numbers[0])
         if len(numbers) > 1:

@@ -5,15 +5,15 @@ F3: Compute Metrics — FLOPs score and parameter estimation from semantic_param
 F6: Memory Estimation — Activation memory per layer based on compute roles.
 """
 
-from typing import Dict, List, Any
-from core.architecture_graph import ArchitectureGraph, GraphNode
+from typing import Any
 
+from core.architecture_graph import ArchitectureGraph, GraphNode
 
 # F3: Compute Metrics
 FLOPS_SCORES = {"very high": 4, "high": 3, "medium": 2, "low": 1}
 
 
-def estimate_metrics_from_graph(graph: ArchitectureGraph) -> Dict[str, Any]:
+def estimate_metrics_from_graph(graph: ArchitectureGraph) -> dict[str, Any]:
     """
     Estimate compute metrics for a graph.
 
@@ -30,12 +30,21 @@ def estimate_metrics_from_graph(graph: ArchitectureGraph) -> Dict[str, Any]:
     for node in graph.nodes:
         sp = node.semantic_params or {}
         flops_level = sp.get("flops")
-        
+
         if not flops_level:
             t_lower = (node.type or "").lower()
             if t_lower in ("multiheadattention", "transformerblock", "mhsa"):
                 flops_level = "very high"
-            elif t_lower in ("residualblock", "bottleneckblock", "stage", "block", "encoder", "decoder", "bottleneck", "denseblock"):
+            elif t_lower in (
+                "residualblock",
+                "bottleneckblock",
+                "stage",
+                "block",
+                "encoder",
+                "decoder",
+                "bottleneck",
+                "denseblock",
+            ):
                 flops_level = "high"
             elif t_lower == "invertedresidual":
                 flops_level = "medium"  # depthwise-separable, more efficient than standard
@@ -43,24 +52,43 @@ def estimate_metrics_from_graph(graph: ArchitectureGraph) -> Dict[str, Any]:
                 flops_level = "medium"  # EfficientNet blocks, compound scaling
             elif t_lower == "transitionlayer":
                 flops_level = "medium"  # 1x1 conv + pooling
-            elif t_lower in ("conv2d", "conv1d", "linear", "upsample", "convtranspose2d", "upconvolution", "conv", "inceptionblock", "feedforward"):
+            elif t_lower in (
+                "conv2d",
+                "conv1d",
+                "linear",
+                "upsample",
+                "convtranspose2d",
+                "upconvolution",
+                "conv",
+                "inceptionblock",
+                "feedforward",
+            ):
                 flops_level = "high"
-            elif t_lower in ("maxpool2d", "avgpool2d", "adaptiveavgpool2d", "patch_embedding", "patchembedding", "embedding"):
+            elif t_lower in (
+                "maxpool2d",
+                "avgpool2d",
+                "adaptiveavgpool2d",
+                "patch_embedding",
+                "patchembedding",
+                "embedding",
+            ):
                 flops_level = "medium"
             else:
                 flops_level = "low"
-                
+
         score = FLOPS_SCORES.get(flops_level, 0)
         total_score += score
 
         node_params = _estimate_node_params(node)
         param_estimate += node_params
 
-        breakdown.append({
-            "node": node.label,
-            "flops_level": flops_level,
-            "param_estimate": node_params,
-        })
+        breakdown.append(
+            {
+                "node": node.label,
+                "flops_level": flops_level,
+                "param_estimate": node_params,
+            }
+        )
 
     return {
         "total_flops_score": total_score,
@@ -85,7 +113,8 @@ def _extract_numeric_value(val: Any, default: int = 0) -> int:
     # Convert to string and extract all numbers
     s = str(val).strip()
     import re
-    numbers = re.findall(r'\d+', s)
+
+    numbers = re.findall(r"\d+", s)
 
     # Return last number (output size for ranges like "3 → 64"), or first if only one
     if numbers:
@@ -159,7 +188,7 @@ BYTES_PER_FLOAT = 4
 
 def estimate_activation_memory(
     graph: ArchitectureGraph, batch_size: int = 1, input_spatial: int = 224
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Estimate activation memory per layer.
 
@@ -204,13 +233,15 @@ def estimate_activation_memory(
         else:
             mem_bytes = 0
 
-        results.append({
-            "node": node.label,
-            "role": role,
-            "channels": ch,
-            "spatial": spatial,
-            "mem_mb": round(mem_bytes / (1024 ** 2), 3),
-        })
+        results.append(
+            {
+                "node": node.label,
+                "role": role,
+                "channels": ch,
+                "spatial": spatial,
+                "mem_mb": round(mem_bytes / (1024**2), 3),
+            }
+        )
 
     return results
 

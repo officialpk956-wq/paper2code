@@ -14,11 +14,12 @@ Given two ArchitectureGraph objects (before and after a mutation), computes:
   - summary_text    : human-readable summary of changes
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
+
 from core.architecture_graph import ArchitectureGraph
 from core.metrics_estimator import (
-    estimate_metrics_from_graph,
     estimate_activation_memory,
+    estimate_metrics_from_graph,
 )
 
 
@@ -27,7 +28,7 @@ def compute_diff(
     after: ArchitectureGraph,
     batch_size: int = 1,
     input_spatial: int = 224,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Compute the structural and metric diff between two ArchitectureGraph objects.
 
@@ -44,9 +45,9 @@ def compute_diff(
     # 1. Node-level structural diff
     # -----------------------------------------------------------------
     before_nodes = {n.id: n for n in before.nodes}
-    after_nodes  = {n.id: n for n in after.nodes}
+    after_nodes = {n.id: n for n in after.nodes}
 
-    added_ids   = [nid for nid in after_nodes  if nid not in before_nodes]
+    added_ids = [nid for nid in after_nodes if nid not in before_nodes]
     removed_ids = [nid for nid in before_nodes if nid not in after_nodes]
 
     # Changed = same id, different params
@@ -56,28 +57,30 @@ def compute_diff(
             b_params = before_nodes[nid].params or {}
             a_params = after_nodes[nid].params or {}
             if b_params != a_params:
-                changed_nodes.append({
-                    "id": nid,
-                    "label": after_nodes[nid].label,
-                    "before": b_params,
-                    "after": a_params,
-                })
+                changed_nodes.append(
+                    {
+                        "id": nid,
+                        "label": after_nodes[nid].label,
+                        "before": b_params,
+                        "after": a_params,
+                    }
+                )
 
-    nodes_added   = [after_nodes[nid].label  for nid in added_ids]
+    nodes_added = [after_nodes[nid].label for nid in added_ids]
     nodes_removed = [before_nodes[nid].label for nid in removed_ids]
 
     # -----------------------------------------------------------------
     # 2. Edge-level structural diff
     # -----------------------------------------------------------------
     before_edges = {(e.source, e.target) for e in before.edges}
-    after_edges  = {(e.source, e.target) for e in after.edges}
+    after_edges = {(e.source, e.target) for e in after.edges}
 
-    edges_added   = list(after_edges - before_edges)
+    edges_added = list(after_edges - before_edges)
     edges_removed = list(before_edges - after_edges)
 
     # Count skip/residual edges
     before_skip = sum(1 for e in before.edges if e.edge_type in ("skip", "residual"))
-    after_skip  = sum(1 for e in after.edges  if e.edge_type in ("skip", "residual"))
+    after_skip = sum(1 for e in after.edges if e.edge_type in ("skip", "residual"))
 
     # -----------------------------------------------------------------
     # 3. Metrics diff
@@ -87,10 +90,10 @@ def compute_diff(
 
     b_params = b_metrics["total_params_estimate"]
     a_params = a_metrics["total_params_estimate"]
-    b_flops  = b_metrics["total_flops_score"]
-    a_flops  = a_metrics["total_flops_score"]
-    b_depth  = b_metrics["depth"]
-    a_depth  = a_metrics["depth"]
+    b_flops = b_metrics["total_flops_score"]
+    a_flops = a_metrics["total_flops_score"]
+    b_depth = b_metrics["depth"]
+    a_depth = a_metrics["depth"]
 
     def _pct(new, old):
         if old == 0:
@@ -119,12 +122,12 @@ def compute_diff(
     # 4. Memory diff
     # -----------------------------------------------------------------
     b_mem_rows = estimate_activation_memory(before, batch_size, input_spatial)
-    a_mem_rows = estimate_activation_memory(after,  batch_size, input_spatial)
-    b_mem_mb   = round(sum(r["mem_mb"] for r in b_mem_rows), 2)
-    a_mem_mb   = round(sum(r["mem_mb"] for r in a_mem_rows), 2)
+    a_mem_rows = estimate_activation_memory(after, batch_size, input_spatial)
+    b_mem_mb = round(sum(r["mem_mb"] for r in b_mem_rows), 2)
+    a_mem_mb = round(sum(r["mem_mb"] for r in a_mem_rows), 2)
     memory_delta = {
         "before_mb": b_mem_mb,
-        "after_mb":  a_mem_mb,
+        "after_mb": a_mem_mb,
         "absolute_mb": round(a_mem_mb - b_mem_mb, 2),
         "pct": _pct(a_mem_mb, b_mem_mb),
     }
@@ -143,9 +146,13 @@ def compute_diff(
     # -----------------------------------------------------------------
     summary_parts = []
     if nodes_added:
-        summary_parts.append(f"+{len(nodes_added)} node(s) added ({', '.join(nodes_added[:3])}{'...' if len(nodes_added) > 3 else ''})")
+        summary_parts.append(
+            f"+{len(nodes_added)} node(s) added ({', '.join(nodes_added[:3])}{'...' if len(nodes_added) > 3 else ''})"
+        )
     if nodes_removed:
-        summary_parts.append(f"-{len(nodes_removed)} node(s) removed ({', '.join(nodes_removed[:3])}{'...' if len(nodes_removed) > 3 else ''})")
+        summary_parts.append(
+            f"-{len(nodes_removed)} node(s) removed ({', '.join(nodes_removed[:3])}{'...' if len(nodes_removed) > 3 else ''})"
+        )
     if changed_nodes:
         summary_parts.append(f"{len(changed_nodes)} node(s) modified")
     if skip_delta["absolute"] > 0:
@@ -162,15 +169,15 @@ def compute_diff(
     summary_text = " | ".join(summary_parts) if summary_parts else "No structural changes detected."
 
     return {
-        "nodes_added":    nodes_added,
-        "nodes_removed":  nodes_removed,
-        "nodes_changed":  changed_nodes,
-        "edges_added":    [{"source": s, "target": t} for s, t in edges_added],
-        "edges_removed":  [{"source": s, "target": t} for s, t in edges_removed],
-        "param_delta":    param_delta,
-        "flops_delta":    flops_delta,
-        "depth_delta":    depth_delta,
-        "memory_delta":   memory_delta,
-        "skip_delta":     skip_delta,
-        "summary_text":   summary_text,
+        "nodes_added": nodes_added,
+        "nodes_removed": nodes_removed,
+        "nodes_changed": changed_nodes,
+        "edges_added": [{"source": s, "target": t} for s, t in edges_added],
+        "edges_removed": [{"source": s, "target": t} for s, t in edges_removed],
+        "param_delta": param_delta,
+        "flops_delta": flops_delta,
+        "depth_delta": depth_delta,
+        "memory_delta": memory_delta,
+        "skip_delta": skip_delta,
+        "summary_text": summary_text,
     }

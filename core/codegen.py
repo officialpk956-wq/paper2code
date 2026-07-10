@@ -6,11 +6,11 @@ F5: Generates runnable PyTorch nn.Module code from:
 - Dynamic architectures (generates skeleton)
 """
 
-import inspect
 import importlib
+import inspect
 import re
-from core.architecture_graph import ArchitectureGraph
 
+from core.architecture_graph import ArchitectureGraph
 
 _BUILDER_MAP = {
     "ResNet-18": ("core.model_builder", "ResNetBuilder"),
@@ -71,11 +71,9 @@ def _generate_skeleton(graph: ArchitectureGraph) -> str:
         "        return self.proj(x).flatten(2).transpose(1, 2)",
         "",
         f"class {name}(nn.Module):",
-
         "    def __init__(self):",
         "        super().__init__()",
     ]
-
 
     # Build __init__ layer definitions
     forward_calls = []
@@ -94,7 +92,6 @@ def _generate_skeleton(graph: ArchitectureGraph) -> str:
     return "\n".join(lines + forward)
 
 
-
 def _node_to_layer(node) -> str:
     """
     Convert a GraphNode to its nn.* constructor call.
@@ -104,17 +101,20 @@ def _node_to_layer(node) -> str:
     p = node.params or {}
     ch = p.get("channels", p.get("filters", 64))
     k = p.get("kernel_size", 3)
-    in_hs = node.input_shape[-1] if hasattr(node, "input_shape") and isinstance(node.input_shape[-1], int) else 512
+    in_hs = (
+        node.input_shape[-1]
+        if hasattr(node, "input_shape") and isinstance(node.input_shape[-1], int)
+        else 512
+    )
     out_hs = p.get("hidden_size", 512)
     heads = p.get("num_heads", p.get("heads", 8))
 
     # Map types to nn.* constructors
     MAP = {
-        "conv2d": f"nn.Conv2d({ch}, {ch}, kernel_size={k}, padding={k//2})",
-        "conv1d": f"nn.Conv1d({ch}, {ch}, kernel_size={k}, padding={k//2})",
+        "conv2d": f"nn.Conv2d({ch}, {ch}, kernel_size={k}, padding={k // 2})",
+        "conv1d": f"nn.Conv1d({ch}, {ch}, kernel_size={k}, padding={k // 2})",
         "linear": f"nn.Linear({in_hs}, {out_hs})",
         "relu": "nn.ReLU(inplace=True)",
-
         "gelu": "nn.GELU()",
         "sigmoid": "nn.Sigmoid()",
         "maxpool2d": "nn.MaxPool2d(kernel_size=2, stride=2)",
@@ -125,21 +125,10 @@ def _node_to_layer(node) -> str:
         "dropout": "nn.Dropout(p=0.1)",
         "transpose": "lambda x: x.transpose(1, 2)",
         "upsample": "nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)",
-
         "multiheadattention": f"nn.MultiheadAttention(embed_dim={in_hs}, num_heads={heads}, batch_first=True)",
         "transformerblock": f"nn.TransformerEncoderLayer(d_model={in_hs}, nhead={heads}, batch_first=True)",
         "patchembedding": f"ViTPatchEmbed(3, {p.get('embed_dim', 768)}, {p.get('patch_size', 16)})",
         "sequence_pooling": "lambda x: x.mean(dim=1)",
-
-
-
-
-
-
-
-
-
-
     }
 
     return MAP.get(node.type, None)

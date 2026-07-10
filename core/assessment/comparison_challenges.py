@@ -13,10 +13,12 @@ Questions reference:
 
 No fabricated comparisons. All numbers come from db queries.
 """
+
 from __future__ import annotations
+
 import hashlib
 import random
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 
 def _make_id(label: str) -> str:
@@ -27,7 +29,7 @@ def _make_id(label: str) -> str:
 # Static structural knowledge (graph topology facts)
 # ---------------------------------------------------------------------------
 
-STRUCTURAL_FACTS: Dict[str, Dict[str, Any]] = {
+STRUCTURAL_FACTS: dict[str, dict[str, Any]] = {
     "resnet": {
         "connection_type": "skip connections (residual add)",
         "graph_pattern": "linear with skip edges",
@@ -65,7 +67,7 @@ STRUCTURAL_FACTS: Dict[str, Dict[str, Any]] = {
 # Fallback static challenges (used when DB lacks both architectures)
 # ---------------------------------------------------------------------------
 
-STATIC_CHALLENGES: List[Dict[str, Any]] = [
+STATIC_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("resnet_vs_densenet_connectivity"),
         "arch_a": "ResNet",
@@ -178,12 +180,13 @@ STATIC_CHALLENGES: List[Dict[str, Any]] = [
 # DB-backed challenges (dynamic, uses real corpus metrics)
 # ---------------------------------------------------------------------------
 
+
 def build_db_comparison_challenge(
     arch_a: str,
     arch_b: str,
-    metrics_a: Dict[str, Any],
-    metrics_b: Dict[str, Any],
-) -> Dict[str, Any]:
+    metrics_a: dict[str, Any],
+    metrics_b: dict[str, Any],
+) -> dict[str, Any]:
     """
     Build a comparison challenge using real DB metrics.
     metrics_a/b: {params, flops, module_count, title}
@@ -196,8 +199,10 @@ def build_db_comparison_challenge(
     mods_b = metrics_b.get("module_count", 0)
 
     def fmt_params(p):
-        if p >= 1e6: return f"{p/1e6:.1f}M"
-        if p >= 1e3: return f"{p/1e3:.0f}K"
+        if p >= 1e6:
+            return f"{p / 1e6:.1f}M"
+        if p >= 1e3:
+            return f"{p / 1e3:.0f}K"
         return str(p)
 
     # Question: which has more parameters?
@@ -207,14 +212,14 @@ def build_db_comparison_challenge(
         wrongs = [
             f"{metrics_a['title']} and {metrics_b['title']} have identical parameter counts.",
             f"{metrics_b['title'] if larger == metrics_a['title'] else metrics_a['title']} has more parameters.",
-            f"Parameter count cannot be compared without runtime profiling.",
+            "Parameter count cannot be compared without runtime profiling.",
         ]
     else:
         answer = f"Both have approximately {fmt_params(params_a)} parameters"
         wrongs = [
             f"{metrics_a['title']} has 2× the parameters of {metrics_b['title']}.",
             f"{metrics_b['title']} has 2× the parameters of {metrics_a['title']}.",
-            f"Parameter count cannot be compared without runtime profiling.",
+            "Parameter count cannot be compared without runtime profiling.",
         ]
 
     choices = [answer] + wrongs[:3]
@@ -243,8 +248,18 @@ def build_db_comparison_challenge(
         "metrics_source": "corpus_db",
         "comparison_type": "parameters",
         "raw_metrics": {
-            "arch_a": {"title": metrics_a["title"], "params": params_a, "flops": flops_a, "modules": mods_a},
-            "arch_b": {"title": metrics_b["title"], "params": params_b, "flops": flops_b, "modules": mods_b},
+            "arch_a": {
+                "title": metrics_a["title"],
+                "params": params_a,
+                "flops": flops_a,
+                "modules": mods_a,
+            },
+            "arch_b": {
+                "title": metrics_b["title"],
+                "params": params_b,
+                "flops": flops_b,
+                "modules": mods_b,
+            },
         },
     }
 
@@ -253,11 +268,12 @@ def build_db_comparison_challenge(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def get_comparison_challenge(
     difficulty: str = "intermediate",
     seed: int | None = None,
-    db_metrics: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    db_metrics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """
     Return a comparison challenge.
 
@@ -284,9 +300,20 @@ def get_comparison_challenge(
             a_key, b_key = archs[0], archs[1]
             a, b = papers_by_arch[a_key], papers_by_arch[b_key]
             return build_db_comparison_challenge(
-                a_key, b_key,
-                {"title": a["title"], "params": a.get("parameter_count", 0), "flops": a.get("flops", 0), "module_count": a.get("module_count", 0)},
-                {"title": b["title"], "params": b.get("parameter_count", 0), "flops": b.get("flops", 0), "module_count": b.get("module_count", 0)},
+                a_key,
+                b_key,
+                {
+                    "title": a["title"],
+                    "params": a.get("parameter_count", 0),
+                    "flops": a.get("flops", 0),
+                    "module_count": a.get("module_count", 0),
+                },
+                {
+                    "title": b["title"],
+                    "params": b.get("parameter_count", 0),
+                    "flops": b.get("flops", 0),
+                    "module_count": b.get("module_count", 0),
+                },
             )
 
     # Fall back to static structural challenges

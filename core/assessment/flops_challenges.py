@@ -22,11 +22,12 @@ Every challenge returns:
     "computation": dict   ← exact numbers from FLOPsEngine formulas
   }
 """
+
 from __future__ import annotations
+
 import hashlib
 import random
-import math
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
 
 def _make_id(label: str) -> str:
@@ -36,6 +37,7 @@ def _make_id(label: str) -> str:
 # ---------------------------------------------------------------------------
 # Core FLOPs formulas — mirroring FLOPsEngine exactly
 # ---------------------------------------------------------------------------
+
 
 def _conv2d_flops(C_in: int, C_out: int, K: int, H_out: int, W_out: int) -> float:
     """2 × C_in × C_out × K² × H_out × W_out  (multiply-adds × 2)"""
@@ -68,7 +70,8 @@ def _fmt(mflops: float) -> str:
 # Challenge 1: Double channels
 # ---------------------------------------------------------------------------
 
-def _double_channels_challenge() -> Dict[str, Any]:
+
+def _double_channels_challenge() -> dict[str, Any]:
     C_in, C_out, K, H, W = 64, 64, 3, 56, 56
     base_flops = _conv2d_flops(C_in, C_out, K, H, W)
     # Doubling both C_in and C_out → 4× more FLOPs (C_in×C_out term)
@@ -81,7 +84,7 @@ def _double_channels_challenge() -> Dict[str, Any]:
         answer,
         f"~2× more ({_fmt(base_flops * 2)} vs {_fmt(base_flops)})",
         f"~8× more ({_fmt(base_flops * 8)} vs {_fmt(base_flops)})",
-        f"Same FLOPs — only parameter count changes.",
+        "Same FLOPs — only parameter count changes.",
     ]
     random.shuffle(choices)
 
@@ -114,7 +117,8 @@ def _double_channels_challenge() -> Dict[str, Any]:
 # Challenge 2: Increase image size
 # ---------------------------------------------------------------------------
 
-def _increase_image_size_challenge() -> Dict[str, Any]:
+
+def _increase_image_size_challenge() -> dict[str, Any]:
     C_in, C_out, K = 64, 64, 3
     H1, W1 = 56, 56
     H2, W2 = 112, 112
@@ -126,7 +130,7 @@ def _increase_image_size_challenge() -> Dict[str, Any]:
     choices = [
         answer,
         f"~{ratio / 2:.0f}× more (square root scaling applies)",
-        f"Same FLOPs — kernel size is unchanged",
+        "Same FLOPs — kernel size is unchanged",
         f"~{ratio * 2:.0f}× more (cubic scaling with spatial dims)",
     ]
     random.shuffle(choices)
@@ -161,7 +165,8 @@ def _increase_image_size_challenge() -> Dict[str, Any]:
 # Challenge 3: Add residual blocks
 # ---------------------------------------------------------------------------
 
-def _add_residual_blocks_challenge() -> Dict[str, Any]:
+
+def _add_residual_blocks_challenge() -> dict[str, Any]:
     C, H, W = 128, 28, 28
     base_blocks = 2
     new_blocks = 4
@@ -173,7 +178,7 @@ def _add_residual_blocks_challenge() -> Dict[str, Any]:
     choices = [
         answer,
         f"+{_fmt(delta * 2)} additional (doubling blocks compounds non-linearly)",
-        f"No change — residual blocks have zero FLOPs (they only add tensors)",
+        "No change — residual blocks have zero FLOPs (they only add tensors)",
         f"+{_fmt(delta / 2)} additional (shared parameters reduce cost)",
     ]
     random.shuffle(choices)
@@ -210,7 +215,8 @@ def _add_residual_blocks_challenge() -> Dict[str, Any]:
 # Challenge 4: Increase transformer heads
 # ---------------------------------------------------------------------------
 
-def _increase_transformer_heads_challenge() -> Dict[str, Any]:
+
+def _increase_transformer_heads_challenge() -> dict[str, Any]:
     D, N = 768, 197  # ViT-B/16 defaults
     H1, H2 = 12, 24
 
@@ -221,8 +227,8 @@ def _increase_transformer_heads_challenge() -> Dict[str, Any]:
     choices = [
         answer,
         f"FLOPs double — {H2} heads compute twice as many attention matrices as {H1} heads.",
-        f"FLOPs halve — more heads mean each head processes less data.",
-        f"Complexity class changes from O(N²D) to O(N²D²).",
+        "FLOPs halve — more heads mean each head processes less data.",
+        "Complexity class changes from O(N²D) to O(N²D²).",
     ]
     random.shuffle(choices)
 
@@ -245,7 +251,8 @@ def _increase_transformer_heads_challenge() -> Dict[str, Any]:
         "difficulty": "advanced",
         "computation": {
             "formula": "3·2·N·D² + 2·N²·D + 2·N²·D + 2·N·D²",
-            "N": N, "D": D,
+            "N": N,
+            "D": D,
             "h1_flops_mflops": round(flops1, 2),
             "h2_flops_mflops": round(flops2, 2),
             "delta": 0,
@@ -274,7 +281,7 @@ _DIFFICULTY_MAP = {
 def get_flops_challenge(
     difficulty: str = "intermediate",
     seed: int | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Return a deterministic FLOPs challenge computed by the backend engine.
 

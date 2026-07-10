@@ -1,6 +1,8 @@
 import torch
-from core.schema_refiner_efficientnet import refine_efficientnet_schema
+
 from core.efficientnet_builder import EfficientNetBuilder
+from core.schema_refiner_efficientnet import refine_efficientnet_schema
+
 
 def main():
     schema = {"model_family": "efficientnet", "variant": "b0"}
@@ -10,6 +12,7 @@ def main():
     out = model(x)
     print(f"Output shape: {out.shape}")
     print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
+
 
 if __name__ == "__main__":
     main()

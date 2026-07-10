@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+
 def normalize_model_spec(raw: dict) -> dict:
     """
     Normalize LLM output into strict internal schema.
@@ -40,14 +41,15 @@ def normalize_model_spec(raw: dict) -> dict:
     normalized_stages = []
 
     for stage in stages:
-        normalized_stages.append({
-            "name": stage.get("name"),
-            "repeats": stage.get("repeats", 1),
-            "out_channels": stage.get("out_channels") or
-                            stage.get("params", {}).get("num_filters")
-        })
+        normalized_stages.append(
+            {
+                "name": stage.get("name"),
+                "repeats": stage.get("repeats", 1),
+                "out_channels": stage.get("out_channels")
+                or stage.get("params", {}).get("num_filters"),
+            }
+        )
 
     spec["stages"] = normalized_stages
 
     return spec
-

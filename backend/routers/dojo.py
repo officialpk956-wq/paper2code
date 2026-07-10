@@ -1,28 +1,27 @@
 import logging
-from fastapi import APIRouter, HTTPException, Depends, Header, Query, Request
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from typing import Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
-import datetime as _dt
 from slowapi.util import get_remote_address
-from backend.server import limiter
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_current_user
-from backend.models import Problem, DojoSubmission, User
-
+from backend.models import DojoSubmission, Problem, User
+from backend.server import limiter
 from core.dojo import get_exercise_list, get_public_exercise, get_solution
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Dojo"])
 
+
 @router.get("/problems")
 def get_problems(
-    difficulty: Optional[str] = Query(None, description="Filter by difficulty: Easy, Medium, Hard"),
-    category:   Optional[str] = Query(None, description="Filter by category (partial match)"),
-    q:          Optional[str] = Query(None, min_length=2, max_length=200, description="Full-text search"),
+    difficulty: str | None = Query(None, description="Filter by difficulty: Easy, Medium, Hard"),
+    category: str | None = Query(None, description="Filter by category (partial match)"),
+    q: str | None = Query(None, min_length=2, max_length=200, description="Full-text search"),
     db: Session = Depends(get_db),
 ):
     """List active problems with optional filtering."""
@@ -33,28 +32,31 @@ def get_problems(
         query = query.filter(Problem.category.ilike(f"%{category}%"))
     if q:
         pat = f"%{q}%"
-        query = query.filter(or_(
-            Problem.title.ilike(pat),
-            Problem.description.ilike(pat),
-            Problem.category.ilike(pat),
-        ))
+        query = query.filter(
+            or_(
+                Problem.title.ilike(pat),
+                Problem.description.ilike(pat),
+                Problem.category.ilike(pat),
+            )
+        )
     problems = query.all()
     return [
         {
-            "id":              p.id,
-            "slug":            p.slug,
-            "title":           p.title,
-            "difficulty":      p.difficulty,
-            "category":        p.category,
-            "estimated_time":  p.estimated_time,
-            "tags":            p.tags,
-            "is_retired":      p.is_retired,
-            "version":         p.version,
-            "time_limit_ms":   p.time_limit_ms,
+            "id": p.id,
+            "slug": p.slug,
+            "title": p.title,
+            "difficulty": p.difficulty,
+            "category": p.category,
+            "estimated_time": p.estimated_time,
+            "tags": p.tags,
+            "is_retired": p.is_retired,
+            "version": p.version,
+            "time_limit_ms": p.time_limit_ms,
             "acceptance_rate": float(p.acceptance_rate) if p.acceptance_rate is not None else None,
         }
         for p in problems
     ]
+
 
 @router.get("/problems/{problem_id}")
 def get_problem(problem_id: str, db: Session = Depends(get_db)):
@@ -62,27 +64,29 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
     return {
-        "id":                    prob.id,
-        "slug":                  prob.slug,
-        "title":                 prob.title,
-        "difficulty":            prob.difficulty,
-        "category":              prob.category,
-        "description":           prob.description,
-        "estimated_time":        prob.estimated_time,
-        "tags":                  prob.tags,
+        "id": prob.id,
+        "slug": prob.slug,
+        "title": prob.title,
+        "difficulty": prob.difficulty,
+        "category": prob.category,
+        "description": prob.description,
+        "estimated_time": prob.estimated_time,
+        "tags": prob.tags,
         "related_architectures": prob.related_architectures,
-        "related_papers":        prob.related_papers,
-        "related_math":          prob.related_math,
-        "learning_points":       prob.learning_points,
-        "visualization_url":     prob.visualization_url,
-        "python_template":       prob.python_template,
-        "test_cases":            prob.test_cases,
-        "hints":                 prob.hints,
-        "explanation":           prob.explanation,
-        "is_retired":            prob.is_retired,
-        "version":               prob.version,
-        "time_limit_ms":         prob.time_limit_ms,
-        "acceptance_rate":       float(prob.acceptance_rate) if prob.acceptance_rate is not None else None,
+        "related_papers": prob.related_papers,
+        "related_math": prob.related_math,
+        "learning_points": prob.learning_points,
+        "visualization_url": prob.visualization_url,
+        "python_template": prob.python_template,
+        "test_cases": prob.test_cases,
+        "hints": prob.hints,
+        "explanation": prob.explanation,
+        "is_retired": prob.is_retired,
+        "version": prob.version,
+        "time_limit_ms": prob.time_limit_ms,
+        "acceptance_rate": float(prob.acceptance_rate)
+        if prob.acceptance_rate is not None
+        else None,
     }
 
 
@@ -91,9 +95,11 @@ class DojoExerciseSubmitRequest(BaseModel):
     passed: bool
     attempts: int = 1
 
+
 @router.get("/dojo/exercises")
 def dojo_list_exercises():
     return {"exercises": get_exercise_list()}
+
 
 @router.get("/dojo/exercises/{exercise_id}")
 def dojo_get_exercise(exercise_id: str):
@@ -102,19 +108,23 @@ def dojo_get_exercise(exercise_id: str):
         raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
     return ex
 
+
 @router.get("/dojo/exercises/{exercise_id}/solution")
 def dojo_get_solution(
-    exercise_id: str,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
+    exercise_id: str, current_user=Depends(get_current_user), db: Session = Depends(get_db)
 ):
     from backend.models import DojoSubmission
-    passed = db.query(DojoSubmission).filter(
-        DojoSubmission.user_id == current_user.id,
-        DojoSubmission.problem_id == exercise_id,
-        DojoSubmission.passed == True
-    ).first()
-    
+
+    passed = (
+        db.query(DojoSubmission)
+        .filter(
+            DojoSubmission.user_id == current_user.id,
+            DojoSubmission.problem_id == exercise_id,
+            DojoSubmission.passed == True,
+        )
+        .first()
+    )
+
     if not passed and not getattr(current_user, "is_admin", False):
         raise HTTPException(status_code=403, detail="Solve the problem before viewing the solution")
 
@@ -122,6 +132,7 @@ def dojo_get_solution(
     if not sol:
         raise HTTPException(status_code=404, detail=f"Exercise '{exercise_id}' not found")
     return sol
+
 
 @router.post("/dojo/submissions")
 # deprecated alias
@@ -135,10 +146,12 @@ def dojo_submit(
         raise HTTPException(status_code=404, detail=f"Exercise '{request.exercise_id}' not found")
 
     from backend import metrics
+
     metrics.increment("submissions_total")
 
     try:
         from backend.models import AssessmentAttempt
+
         attempt = AssessmentAttempt(
             learner_id=current_user.id,
             assessment_type="code",
@@ -156,23 +169,32 @@ def dojo_submit(
         db.commit()
 
         # Award XP and update user activity
-        from backend.services.progress_service import update_user_activity, award_xp
+        from backend.services.progress_service import award_xp, update_user_activity
+
         user = current_user
         if user:
             update_user_activity(db, user.id)
             if request.passed:
                 award_xp(db, user.id, "dojo.solved.easy")
                 try:
-                    from backend.services.analytics_service import track
                     from backend.services.achievement_service import check_and_award
+                    from backend.services.analytics_service import track
+
                     track(user.id, "problem_solved", {"exercise_id": request.exercise_id})
-                    check_and_award(db, user.id, "dojo.solved.easy", {"exercise_id": request.exercise_id})
+                    check_and_award(
+                        db, user.id, "dojo.solved.easy", {"exercise_id": request.exercise_id}
+                    )
                 except Exception:
                     pass
             else:
                 award_xp(db, user.id, "dojo.attempt")
 
-        return {"status": "ok", "recorded": True, "exercise_id": request.exercise_id, "passed": request.passed}
+        return {
+            "status": "ok",
+            "recorded": True,
+            "exercise_id": request.exercise_id,
+            "passed": request.passed,
+        }
     except Exception as e:
         db.rollback()
         logger.exception(f"Dojo submit error: {str(e)}")
@@ -191,9 +213,12 @@ def problem_submission_history(
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    total = db.query(func.count(DojoSubmission.id)).filter_by(
-        user_id=current_user.id, problem_id=problem_id
-    ).scalar() or 0
+    total = (
+        db.query(func.count(DojoSubmission.id))
+        .filter_by(user_id=current_user.id, problem_id=problem_id)
+        .scalar()
+        or 0
+    )
     rows = (
         db.query(DojoSubmission)
         .filter_by(user_id=current_user.id, problem_id=problem_id)
@@ -206,12 +231,12 @@ def problem_submission_history(
         "total": total,
         "submissions": [
             {
-                "id":         s.id,
-                "passed":     s.passed,
-                "time_ms":    s.time_ms,
+                "id": s.id,
+                "passed": s.passed,
+                "time_ms": s.time_ms,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
-                "stdout":     (s.stdout or "")[:500],
-                "stderr":     (s.stderr or "")[:300],
+                "stdout": (s.stdout or "")[:500],
+                "stderr": (s.stderr or "")[:300],
             }
             for s in rows
         ],
@@ -241,60 +266,49 @@ def problem_stats(problem_id: str, db: Session = Depends(get_db)):
     ) or 0
 
     total_submissions = (
-        db.query(func.count(DojoSubmission.id))
-        .filter_by(problem_id=problem_id)
-        .scalar()
+        db.query(func.count(DojoSubmission.id)).filter_by(problem_id=problem_id).scalar()
     ) or 0
 
     acceptance_rate = round(passed_users / total_users, 4) if total_users > 0 else 0.0
 
     return {
-        "problem_id":       problem_id,
-        "total_users":      total_users,
-        "passed_users":     passed_users,
+        "problem_id": problem_id,
+        "total_users": total_users,
+        "passed_users": passed_users,
         "total_submissions": total_submissions,
-        "acceptance_rate":  acceptance_rate,
+        "acceptance_rate": acceptance_rate,
     }
 
 
 @router.get("/dojo/submissions")
 def user_submission_history(
-    problem_id: Optional[str] = Query(None, description="Filter to a specific problem"),
-    limit:  int = Query(20, ge=1, le=100),
-    offset: int = Query(0,  ge=0),
+    problem_id: str | None = Query(None, description="Filter to a specific problem"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return the current user's submission history (all problems unless problem_id given), newest first."""
-    query = (
-        db.query(DojoSubmission)
-        .filter_by(user_id=current_user.id)
-    )
+    query = db.query(DojoSubmission).filter_by(user_id=current_user.id)
     if problem_id:
         query = query.filter(DojoSubmission.problem_id == problem_id)
     total = query.count()
-    rows = (
-        query
-        .order_by(DojoSubmission.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    rows = query.order_by(DojoSubmission.created_at.desc()).offset(offset).limit(limit).all()
     return {
         "total": total,
         "offset": offset,
         "limit": limit,
         "submissions": [
             {
-                "id":              s.id,
-                "problem_id":      s.problem_id,
-                "passed":          s.passed,
-                "is_best":         s.is_best,
-                "time_ms":         s.time_ms,
+                "id": s.id,
+                "problem_id": s.problem_id,
+                "passed": s.passed,
+                "is_best": s.is_best,
+                "time_ms": s.time_ms,
                 "problem_version": s.problem_version,
-                "created_at":      s.created_at.isoformat() if s.created_at else None,
-                "stdout":          (s.stdout or "")[:500],
-                "stderr":          (s.stderr or "")[:300],
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "stdout": (s.stdout or "")[:500],
+                "stderr": (s.stderr or "")[:300],
             }
             for s in rows
         ],
@@ -307,7 +321,9 @@ def _dojo_user_key(request: Request) -> str:
     if auth.startswith("Bearer "):
         try:
             import jwt as _jwt
-            from backend.modules.auth.config import SECRET_KEY, ALGORITHM
+
+            from backend.modules.auth.config import ALGORITHM, SECRET_KEY
+
             payload = _jwt.decode(
                 auth[7:],
                 SECRET_KEY,
@@ -325,7 +341,8 @@ def _dojo_user_key(request: Request) -> str:
 class DojoCodeSubmitRequest(BaseModel):
     problem_id: str = Field(..., max_length=256)
     code: str = Field(..., max_length=65536)
-    stdin: Optional[str] = Field(default=None, max_length=65536)
+    stdin: str | None = Field(default=None, max_length=65536)
+
 
 @router.post("/dojo/code-submissions")
 # deprecated alias
@@ -334,7 +351,7 @@ class DojoCodeSubmitRequest(BaseModel):
 async def submit_dojo_code(
     req: DojoCodeSubmitRequest,
     request: Request,
-    current_user = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     from backend.repositories.task_repository import TaskRepository
@@ -344,7 +361,7 @@ async def submit_dojo_code(
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    if len(req.code.encode('utf-8')) > 10000:
+    if len(req.code.encode("utf-8")) > 10000:
         raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10KB")
 
     task = TaskRepository(db).create(
@@ -369,26 +386,28 @@ async def submit_dojo_code(
 # worker deployed.
 # ---------------------------------------------------------------------------
 
+
 class DojoRunRequest(BaseModel):
     problem_id: str = Field(..., max_length=256)
     code: str = Field(..., max_length=65536)
-    stdin: Optional[str] = Field(default=None, max_length=65536)
+    stdin: str | None = Field(default=None, max_length=65536)
+
 
 @router.post("/dojo/runs")
 @limiter.limit("60/hour", key_func=_dojo_user_key)
 async def run_dojo_code(
     req: DojoRunRequest,
     request: Request,
-    current_user = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from backend.services.dojo_execution_service import execute_python, RUN_TIMEOUT_MS
+    from backend.services.dojo_execution_service import RUN_TIMEOUT_MS, execute_python
 
     prob = db.query(Problem).filter_by(id=req.problem_id).first()
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    if len(req.code.encode('utf-8')) > 10000:
+    if len(req.code.encode("utf-8")) > 10000:
         raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10KB")
 
     timeout_ms = prob.time_limit_ms or RUN_TIMEOUT_MS
@@ -399,6 +418,7 @@ async def run_dojo_code(
 # ---------------------------------------------------------------------------
 # POST /api/submissions/{id}/share  — mark best submission as public (P1)
 # ---------------------------------------------------------------------------
+
 
 @router.post("/submissions/{submission_id}/share")
 def share_submission(
@@ -422,6 +442,7 @@ def share_submission(
 # GET /api/problems/{id}/solutions  — top-N public best submissions (P1)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/problems/{problem_id}/solutions")
 def problem_solutions(
     problem_id: str,
@@ -443,10 +464,10 @@ def problem_solutions(
         "total": len(rows),
         "solutions": [
             {
-                "id":         s.id,
-                "user_id":    s.user_id,
-                "time_ms":    s.time_ms,
-                "code":       s.code,
+                "id": s.id,
+                "user_id": s.user_id,
+                "time_ms": s.time_ms,
+                "code": s.code,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
             }
             for s in rows
@@ -458,12 +479,14 @@ def problem_solutions(
 # GET /api/dojo/global-stats  — global aggregate stats (P2)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/dojo/global-stats")
 @router.get("/dojo/stats")
 def dojo_global_stats(db: Session = Depends(get_db)):
-    from backend.redis_config import cache_redis
     import json
-    
+
+    from backend.redis_config import cache_redis
+
     cache_key = "dojo:global_stats"
     if cache_redis:
         cached = cache_redis.get(cache_key)
@@ -474,34 +497,38 @@ def dojo_global_stats(db: Session = Depends(get_db)):
 
     total_submissions = db.query(func.count(DojoSubmission.id)).scalar() or 0
 
-    total_problems = db.query(func.count(Problem.id)).filter(Problem.is_retired == False).scalar() or 0
+    total_problems = (
+        db.query(func.count(Problem.id)).filter(Problem.is_retired == False).scalar() or 0
+    )
 
     rates = [
         float(r[0])
-        for r in db.query(Problem.acceptance_rate).filter(
+        for r in db.query(Problem.acceptance_rate)
+        .filter(
             Problem.is_retired == False,
             Problem.acceptance_rate.isnot(None),
-        ).all()
+        )
+        .all()
     ]
     avg_acceptance = round(sum(rates) / len(rates), 4) if rates else 0.0
 
     res = {
-        "total_problems":      total_problems,
-        "total_submissions":   total_submissions,
-        "total_users":         total_users,
+        "total_problems": total_problems,
+        "total_submissions": total_submissions,
+        "total_users": total_users,
         "avg_acceptance_rate": avg_acceptance,
     }
-    
+
     if cache_redis:
         cache_redis.setex(cache_key, 300, json.dumps(res))
-        
-    return res
 
+    return res
 
 
 # ---------------------------------------------------------------------------
 # GET /api/me/dojo-stats  — per-user summary (P2)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/me/dojo-stats")
 def my_dojo_stats(
@@ -510,52 +537,56 @@ def my_dojo_stats(
 ):
     # Best passing submissions (one per problem)
     best_subs = (
-        db.query(DojoSubmission)
-        .filter_by(user_id=current_user.id, is_best=True, passed=True)
-        .all()
+        db.query(DojoSubmission).filter_by(user_id=current_user.id, is_best=True, passed=True).all()
     )
     solved_problem_ids = {s.problem_id for s in best_subs}
 
     # Count solved problems by difficulty
     solved_by_difficulty: dict = {}
-    
+
     if solved_problem_ids:
-        problems = db.query(Problem.id, Problem.difficulty).filter(
-            Problem.id.in_(solved_problem_ids)
-        ).all()
+        problems = (
+            db.query(Problem.id, Problem.difficulty)
+            .filter(Problem.id.in_(solved_problem_ids))
+            .all()
+        )
         for pid, diff_val in problems:
             diff = diff_val or "Unknown"
             solved_by_difficulty[diff] = solved_by_difficulty.get(diff, 0) + 1
 
-    total_submissions = db.query(func.count(DojoSubmission.id)).filter_by(
-        user_id=current_user.id
-    ).scalar() or 0
+    total_submissions = (
+        db.query(func.count(DojoSubmission.id)).filter_by(user_id=current_user.id).scalar() or 0
+    )
 
-    problems_attempted = db.query(
-        func.count(func.distinct(DojoSubmission.problem_id))
-    ).filter_by(user_id=current_user.id).scalar() or 0
+    problems_attempted = (
+        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
+        .filter_by(user_id=current_user.id)
+        .scalar()
+        or 0
+    )
 
     # Leaderboard rank by all-time points (1-indexed)
-    higher_count = db.query(func.count(User.id)).filter(
-        User.points > (current_user.points or 0)
-    ).scalar() or 0
+    higher_count = (
+        db.query(func.count(User.id)).filter(User.points > (current_user.points or 0)).scalar() or 0
+    )
     leaderboard_rank = higher_count + 1
 
     return {
-        "user_id":             current_user.id,
-        "total_solved":        len(solved_problem_ids),
+        "user_id": current_user.id,
+        "total_solved": len(solved_problem_ids),
         "solved_by_difficulty": solved_by_difficulty,
-        "total_submissions":   total_submissions,
-        "problems_attempted":  problems_attempted,
-        "streak":              current_user.streak,
-        "points":              current_user.points,
-        "leaderboard_rank":    leaderboard_rank,
+        "total_submissions": total_submissions,
+        "problems_attempted": problems_attempted,
+        "streak": current_user.streak,
+        "points": current_user.points,
+        "leaderboard_rank": leaderboard_rank,
     }
 
 
 # ---------------------------------------------------------------------------
 # POST /api/submissions/{id}/review  — trigger an AI code review
 # ---------------------------------------------------------------------------
+
 
 @router.post("/submissions/{submission_id}/review")
 def trigger_submission_review(
@@ -568,16 +599,18 @@ def trigger_submission_review(
         raise HTTPException(status_code=404, detail="Submission not found")
     if sub.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not your submission")
-    
+
     from backend.tasks.review_tasks import review_submission_task
+
     review_submission_task.delay(submission_id)
-    
+
     return {"status": "pending", "submission_id": submission_id}
 
 
 # ---------------------------------------------------------------------------
 # GET /api/submissions/{id}/review  — get the AI code review text
 # ---------------------------------------------------------------------------
+
 
 @router.get("/submissions/{submission_id}/review")
 def get_submission_review(
@@ -590,8 +623,8 @@ def get_submission_review(
         raise HTTPException(status_code=404, detail="Submission not found")
     if sub.user_id != current_user.id and not sub.is_public:
         raise HTTPException(status_code=403, detail="Not your submission")
-    
+
     if not sub.review_text:
         return {"status": "pending", "review_text": None}
-    
+
     return {"status": "ready", "review_text": sub.review_text}

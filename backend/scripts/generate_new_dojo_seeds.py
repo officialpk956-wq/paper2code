@@ -928,10 +928,10 @@ print('ALL TESTS PASSED')
 
 
 def main():
-    with open(METADATA_PATH, "r", encoding="utf-8") as f:
+    with open(METADATA_PATH, encoding="utf-8") as f:
         ts_problems = {p["slug"]: p for p in json.load(f)}
 
-    with open(SEED_PATH, "r", encoding="utf-8") as f:
+    with open(SEED_PATH, encoding="utf-8") as f:
         existing = json.load(f)
     existing_slugs = {e["slug"] for e in existing}
 
@@ -948,23 +948,27 @@ def main():
 
         # Self-verify: reference + harness must execute cleanly and print the pass marker.
         script = ref + "\n" + harness
-        proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+        )
         if proc.returncode != 0 or "ALL TESTS PASSED" not in proc.stdout:
             failures.append((slug, proc.stderr.strip() or proc.stdout.strip()))
             continue
 
-        new_entries.append({
-            "id": slug,
-            "slug": slug,
-            "title": meta["title"],
-            "category": (meta.get("topics") or ["General"])[0],
-            "difficulty": meta["difficulty"],
-            "estimated_time": DIFFICULTY_TIME.get(meta["difficulty"], 15),
-            "description": meta["description"],
-            "tags": meta.get("topics", []),
-            "python_template": meta["starter_code"],
-            "test_cases": [{"type": "harness", "code": harness.strip()}],
-        })
+        new_entries.append(
+            {
+                "id": slug,
+                "slug": slug,
+                "title": meta["title"],
+                "category": (meta.get("topics") or ["General"])[0],
+                "difficulty": meta["difficulty"],
+                "estimated_time": DIFFICULTY_TIME.get(meta["difficulty"], 15),
+                "description": meta["description"],
+                "tags": meta.get("topics", []),
+                "python_template": meta["starter_code"],
+                "test_cases": [{"type": "harness", "code": harness.strip()}],
+            }
+        )
 
     if failures:
         print(f"FAILED self-verification for {len(failures)} problem(s):")

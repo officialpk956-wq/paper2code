@@ -1,6 +1,7 @@
 # src/model_builder.py
 
 import torch.nn as nn
+
 from core.blocks_resnet import Bottleneck
 
 
@@ -22,10 +23,7 @@ class ResNetBuilder(nn.Module):
             self.stages.append(self._make_stage(stage))
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(
-            self.in_channels,
-            schema["output"]["num_classes"] or 1000
-        )
+        self.fc = nn.Linear(self.in_channels, schema["output"]["num_classes"] or 1000)
 
     def _make_stage(self, stage):
         blocks = []
@@ -35,7 +33,7 @@ class ResNetBuilder(nn.Module):
                 in_channels=stage["in_channels"],
                 out_channels=stage["out_channels"],
                 stride=stage["stride"],
-                downsample=stage["downsample"]
+                downsample=stage["downsample"],
             )
         )
 
@@ -43,10 +41,7 @@ class ResNetBuilder(nn.Module):
 
         for _ in range(1, stage["num_blocks"]):
             blocks.append(
-                Bottleneck(
-                    in_channels=self.in_channels,
-                    out_channels=stage["out_channels"]
-                )
+                Bottleneck(in_channels=self.in_channels, out_channels=stage["out_channels"])
             )
 
         return nn.Sequential(*blocks)

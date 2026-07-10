@@ -12,11 +12,9 @@ Each card provides:
   - Common failure modes
 """
 
-from typing import Dict, Any
+from typing import Any
 
-
-REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
-
+REPRODUCTION_CARDS: dict[str, dict[str, Any]] = {
     "ResNet": {
         "classification": "ResNet",
         "paper": "Deep Residual Learning for Image Recognition",
@@ -32,10 +30,14 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
         "architecture": {
             "key_insight": "Learning residual functions F(x) = H(x) - x is easier than learning H(x) directly",
             "building_block": "3×3 Conv → BN → ReLU → 3×3 Conv → BN → (+x) → ReLU",
-            "variants": ["ResNet-18", "ResNet-34", "ResNet-50 (bottleneck)", "ResNet-101", "ResNet-152"],
-            "parameter_counts": {
-                "ResNet-18": "11.7M", "ResNet-50": "25.6M", "ResNet-101": "44.5M"
-            }
+            "variants": [
+                "ResNet-18",
+                "ResNet-34",
+                "ResNet-50 (bottleneck)",
+                "ResNet-101",
+                "ResNet-152",
+            ],
+            "parameter_counts": {"ResNet-18": "11.7M", "ResNet-50": "25.6M", "ResNet-101": "44.5M"},
         },
         "training_config": {
             "dataset": "ImageNet ILSVRC 2012 (1.28M training images)",
@@ -61,23 +63,22 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             {
                 "symptom": "NaN loss in early training",
                 "cause": "Learning rate too high (0.1 can be unstable without batch=256)",
-                "fix": "Use warmup for first 5 epochs, or reduce initial LR to 0.01"
+                "fix": "Use warmup for first 5 epochs, or reduce initial LR to 0.01",
             },
             {
                 "symptom": "Accuracy plateaus at ~60% on ImageNet",
                 "cause": "Missing weight decay or incorrect data augmentation pipeline",
-                "fix": "Verify weight_decay=1e-4 and ensure RandomResizedCrop is applied"
+                "fix": "Verify weight_decay=1e-4 and ensure RandomResizedCrop is applied",
             },
             {
                 "symptom": "Skip connection shape mismatch RuntimeError",
                 "cause": "Stride=2 block without downsample projection shortcut",
-                "fix": "Add 1×1 Conv projection when stride≠1 or channels change"
+                "fix": "Add 1×1 Conv projection when stride≠1 or channels change",
             },
         ],
         "reproduction_difficulty": "Easy",
         "reproduction_notes": "Well-reproduced. torchvision provides official pretrained weights.",
     },
-
     "Transformer": {
         "classification": "Transformer",
         "paper": "Attention Is All You Need",
@@ -95,9 +96,7 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             "key_insight": "Multi-head attention can replace sequential processing — no recurrence needed",
             "building_block": "LayerNorm → MHSA → Residual → LayerNorm → FFN → Residual",
             "variants": ["Transformer Base (512d, 6L, 8H)", "Transformer Large (1024d, 6L, 16H)"],
-            "parameter_counts": {
-                "Transformer Base": "65M", "Transformer Large": "213M"
-            }
+            "parameter_counts": {"Transformer Base": "65M", "Transformer Large": "213M"},
         },
         "training_config": {
             "dataset": "WMT 2014 English-German (4.5M sentence pairs)",
@@ -122,23 +121,22 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             {
                 "symptom": "Loss NaN or divergence in first 100 steps",
                 "cause": "Missing LR warmup — Adam with high LR and no warmup is unstable",
-                "fix": "Implement the paper's warmup schedule exactly: lrate = d_model^(-0.5) * min(step^(-0.5), step × warmup^(-1.5))"
+                "fix": "Implement the paper's warmup schedule exactly: lrate = d_model^(-0.5) * min(step^(-0.5), step × warmup^(-1.5))",
             },
             {
                 "symptom": "BLEU score much lower than paper (~20 vs 27)",
                 "cause": "Missing label smoothing or incorrect tokenization (not BPE)",
-                "fix": "Use sentencepiece BPE tokenizer, add label_smoothing=0.1 to CrossEntropyLoss"
+                "fix": "Use sentencepiece BPE tokenizer, add label_smoothing=0.1 to CrossEntropyLoss",
             },
             {
                 "symptom": "OOM on long sequences",
                 "cause": "Attention matrix is O(n²·d) — 2048 tokens × 768d saturates 16GB GPU",
-                "fix": "Use gradient checkpointing, reduce batch size, or use FlashAttention"
+                "fix": "Use gradient checkpointing, reduce batch size, or use FlashAttention",
             },
         ],
         "reproduction_difficulty": "Medium",
         "reproduction_notes": "Warmup schedule is critical and often missed. Use HuggingFace transformers for reference.",
     },
-
     "ViT": {
         "classification": "ViT",
         "paper": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
@@ -156,9 +154,7 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             "key_insight": "Images as token sequences: split into P×P patches, project to embeddings, apply Transformer",
             "building_block": "PatchEmbed → [CLS] concat → +PosEmbed → N×TransformerBlock → MLP Head",
             "variants": ["ViT-S/16 (22M)", "ViT-B/16 (86M)", "ViT-L/16 (307M)", "ViT-H/14 (632M)"],
-            "parameter_counts": {
-                "ViT-B/16": "86.6M", "ViT-L/16": "307M", "ViT-H/14": "632M"
-            }
+            "parameter_counts": {"ViT-B/16": "86.6M", "ViT-L/16": "307M", "ViT-H/14": "632M"},
         },
         "training_config": {
             "dataset": "JFT-300M (Google internal) for pretraining, ImageNet for fine-tuning",
@@ -183,23 +179,22 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             {
                 "symptom": "ViT trained from scratch on ImageNet achieves only ~70% (vs 77%)",
                 "cause": "Insufficient data augmentation or small batch size",
-                "fix": "Use DeiT training recipe: Mixup+CutMix+RandAugment, batch=1024, label_smoothing=0.1"
+                "fix": "Use DeiT training recipe: Mixup+CutMix+RandAugment, batch=1024, label_smoothing=0.1",
             },
             {
                 "symptom": "Patch embedding dimension mismatch",
                 "cause": "Input image size not divisible by patch_size",
-                "fix": "Ensure img_size % patch_size == 0; use img_size=224, patch_size=16"
+                "fix": "Ensure img_size % patch_size == 0; use img_size=224, patch_size=16",
             },
             {
                 "symptom": "Loss does not decrease after warmup",
                 "cause": "Very high weight_decay (0.3) may be too aggressive for your dataset",
-                "fix": "Reduce weight_decay to 0.05-0.1, check learning rate scale with batch size"
+                "fix": "Reduce weight_decay to 0.05-0.1, check learning rate scale with batch size",
             },
         ],
         "reproduction_difficulty": "Hard (requires large pretraining or DeiT recipe)",
         "reproduction_notes": "Use DeiT (Data-efficient Image Transformer) for ImageNet-only reproduction.",
     },
-
     "Encoder-Decoder": {
         "classification": "Encoder-Decoder",
         "paper": "U-Net: Convolutional Networks for Biomedical Image Segmentation",
@@ -217,9 +212,7 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             "key_insight": "Skip connections concatenate high-resolution encoder features directly to decoder — preserving spatial detail",
             "building_block": "Encoder: DoubleConv→MaxPool; Decoder: Upsample+Concat(skip)→DoubleConv",
             "variants": ["U-Net (original)", "U-Net++", "Attention U-Net", "3D U-Net"],
-            "parameter_counts": {
-                "U-Net original": "31M"
-            }
+            "parameter_counts": {"U-Net original": "31M"},
         },
         "training_config": {
             "dataset": "ISBI 2012 EM segmentation challenge (30 training images — very small!)",
@@ -244,23 +237,22 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             {
                 "symptom": "Skip connection concat fails with shape mismatch",
                 "cause": "Encoder output spatial size ≠ decoder upsample output size",
-                "fix": "Use CenterCrop or pad to align; or use 'same' padding in all convolutions"
+                "fix": "Use CenterCrop or pad to align; or use 'same' padding in all convolutions",
             },
             {
                 "symptom": "Model learns to output all zeros (mode collapse for segmentation)",
                 "cause": "Severe class imbalance — background >> foreground pixels",
-                "fix": "Add Dice Loss or Focal Loss; use pos_weight in BCEWithLogitsLoss"
+                "fix": "Add Dice Loss or Focal Loss; use pos_weight in BCEWithLogitsLoss",
             },
             {
                 "symptom": "Training with batch=1 causes unstable BN",
                 "cause": "BatchNorm statistics with B=1 are meaningless",
-                "fix": "Replace BatchNorm2d with nn.GroupNorm(8, channels) or nn.InstanceNorm2d"
+                "fix": "Replace BatchNorm2d with nn.GroupNorm(8, channels) or nn.InstanceNorm2d",
             },
         ],
         "reproduction_difficulty": "Easy (biomedical) / Medium (natural image segmentation)",
         "reproduction_notes": "For natural images, use DeepLab or SegFormer. U-Net shines in medical imaging.",
     },
-
     "DenseNet": {
         "classification": "DenseNet",
         "paper": "Densely Connected Convolutional Networks",
@@ -277,10 +269,13 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
         "architecture": {
             "key_insight": "Concatenate (not add) feature maps from all previous layers — maximum feature reuse",
             "building_block": "DenseBlock: BN+ReLU+Conv(growth_rate) × L layers; TransitionLayer: BN+1×1Conv+AvgPool",
-            "variants": ["DenseNet-121 (8M)", "DenseNet-169 (14M)", "DenseNet-201 (20M)", "DenseNet-264 (34M)"],
-            "parameter_counts": {
-                "DenseNet-121": "8M", "DenseNet-201": "20M"
-            }
+            "variants": [
+                "DenseNet-121 (8M)",
+                "DenseNet-169 (14M)",
+                "DenseNet-201 (20M)",
+                "DenseNet-264 (34M)",
+            ],
+            "parameter_counts": {"DenseNet-121": "8M", "DenseNet-201": "20M"},
         },
         "training_config": {
             "dataset": "ImageNet ILSVRC 2012 / CIFAR-10/100",
@@ -306,12 +301,12 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
             {
                 "symptom": "CUDA out of memory during forward pass",
                 "cause": "Dense connections accumulate all feature maps — memory grows as O(L² × growth_rate)",
-                "fix": "Use DenseNet memory-efficient implementation (on-the-fly recomputation); reduce growth_rate"
+                "fix": "Use DenseNet memory-efficient implementation (on-the-fly recomputation); reduce growth_rate",
             },
             {
                 "symptom": "Lower accuracy than expected (~72% vs 74.7%)",
                 "cause": "Missing transition layer compression (should reduce channels by θ=0.5)",
-                "fix": "Ensure transition layers have Conv2d(in, in*0.5) to compress feature count"
+                "fix": "Ensure transition layers have Conv2d(in, in*0.5) to compress feature count",
             },
         ],
         "reproduction_difficulty": "Medium",
@@ -320,7 +315,7 @@ REPRODUCTION_CARDS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_reproduction_card(classification: str) -> Dict[str, Any]:
+def get_reproduction_card(classification: str) -> dict[str, Any]:
     """
     Return the research reproduction card for a given architecture classification.
     Falls back to ResNet if classification not found.

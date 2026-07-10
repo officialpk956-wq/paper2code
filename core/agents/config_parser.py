@@ -5,14 +5,16 @@ Converts ConfigDict → ArchitectureGraph with semantic_params attached.
 Deterministic, type-based rule application, no LLM or inference.
 """
 
-from typing import Dict, Any
-from core.architecture_graph import ArchitectureGraph, GraphNode
+from typing import Any
+
 from core.agents.parsing_agent import ParsingAgent
 from core.agents.types import ParsingSource
+from core.architecture_graph import ArchitectureGraph, GraphNode
 
 
 class ParsingError(Exception):
     """Raised when ConfigDict parsing fails."""
+
     pass
 
 
@@ -41,7 +43,11 @@ class ConfigParsingAgent(ParsingAgent):
         "conv2d": {"flops": "high", "compute_role": "feature_extraction"},
         "conv1d": {"flops": "high", "compute_role": "feature_extraction"},
         "linear": {"flops": "high", "compute_role": "projection"},
-        "multiheadattention": {"flops": "very high", "attention": "quadratic", "compute_role": "attention"},
+        "multiheadattention": {
+            "flops": "very high",
+            "attention": "quadratic",
+            "compute_role": "attention",
+        },
         "attention": {"flops": "very high", "attention": "quadratic", "compute_role": "attention"},
         "maxpool": {"feature_map": "downsampling", "compute_role": "pooling"},
         "maxpool2d": {"feature_map": "downsampling", "compute_role": "pooling"},
@@ -57,19 +63,67 @@ class ConfigParsingAgent(ParsingAgent):
         "residual": {"skip_connection": "yes", "compute_role": "residual"},
         "residualblock": {"skip_connection": "yes", "compute_role": "residual"},
         "dropout": {"compute_role": "regularization"},
-        "patchembedding": {"semantic_role": "patch_embedding", "compute_role": "feature_extraction"},
-        "query_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
-        "key_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
-        "value_projection": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
-        "attention_merge": {"semantic_role": "token_mixer", "compute_role": "projection", "flops": "high"},
-        "mhsa": {"semantic_role": "token_mixer", "compute_role": "attention", "flops": "very high", "attention": "quadratic"},
-        "feedforward": {"semantic_role": "sequence_encoder", "compute_role": "projection", "flops": "high"},
-        "residual_add": {"semantic_role": "residual", "compute_role": "residual", "skip_connection": "yes"},
-        "transformerblock": {"semantic_role": "sequence_encoder", "compute_role": "attention", "flops": "very high"},
+        "patchembedding": {
+            "semantic_role": "patch_embedding",
+            "compute_role": "feature_extraction",
+        },
+        "query_projection": {
+            "semantic_role": "token_mixer",
+            "compute_role": "projection",
+            "flops": "high",
+        },
+        "key_projection": {
+            "semantic_role": "token_mixer",
+            "compute_role": "projection",
+            "flops": "high",
+        },
+        "value_projection": {
+            "semantic_role": "token_mixer",
+            "compute_role": "projection",
+            "flops": "high",
+        },
+        "attention_merge": {
+            "semantic_role": "token_mixer",
+            "compute_role": "projection",
+            "flops": "high",
+        },
+        "mhsa": {
+            "semantic_role": "token_mixer",
+            "compute_role": "attention",
+            "flops": "very high",
+            "attention": "quadratic",
+        },
+        "feedforward": {
+            "semantic_role": "sequence_encoder",
+            "compute_role": "projection",
+            "flops": "high",
+        },
+        "residual_add": {
+            "semantic_role": "residual",
+            "compute_role": "residual",
+            "skip_connection": "yes",
+        },
+        "transformerblock": {
+            "semantic_role": "sequence_encoder",
+            "compute_role": "attention",
+            "flops": "very high",
+        },
         "denseblock": {"compute_role": "feature_extraction", "flops": "high"},
-        "transitionlayer": {"compute_role": "pooling", "feature_map": "downsampling", "flops": "medium"},
-        "invertedresidual": {"compute_role": "feature_extraction", "skip_connection": "yes", "flops": "medium"},
-        "mbconvblock": {"compute_role": "feature_extraction", "skip_connection": "yes", "flops": "medium"},
+        "transitionlayer": {
+            "compute_role": "pooling",
+            "feature_map": "downsampling",
+            "flops": "medium",
+        },
+        "invertedresidual": {
+            "compute_role": "feature_extraction",
+            "skip_connection": "yes",
+            "flops": "medium",
+        },
+        "mbconvblock": {
+            "compute_role": "feature_extraction",
+            "skip_connection": "yes",
+            "flops": "medium",
+        },
         "bottleneckblock": {"compute_role": "residual", "skip_connection": "yes", "flops": "high"},
         "inceptionblock": {"compute_role": "feature_extraction", "flops": "high"},
     }
@@ -80,11 +134,7 @@ class ConfigParsingAgent(ParsingAgent):
         "compute_role": "unknown",
     }
 
-    def parse(
-        self,
-        source: ParsingSource,
-        format_hint: str = "auto"
-    ) -> ArchitectureGraph:
+    def parse(self, source: ParsingSource, format_hint: str = "auto") -> ArchitectureGraph:
         """
         Parse ConfigDict into ArchitectureGraph.
 
@@ -149,7 +199,7 @@ class ConfigParsingAgent(ParsingAgent):
 
         return graph
 
-    def _layer_to_node(self, layer: Dict[str, Any], idx: int) -> GraphNode:
+    def _layer_to_node(self, layer: dict[str, Any], idx: int) -> GraphNode:
         """
         Convert layer dict to GraphNode with complete semantic_params.
 
@@ -185,11 +235,7 @@ class ConfigParsingAgent(ParsingAgent):
 
         return node
 
-    def _compute_semantic_params(
-        self,
-        layer_type: str,
-        layer: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _compute_semantic_params(self, layer_type: str, layer: dict[str, Any]) -> dict[str, Any]:
         """
         Compute complete semantic_params for a node.
 
@@ -223,7 +269,7 @@ class ConfigParsingAgent(ParsingAgent):
             for key in ["_repeat_group", "_repeat_index", "_repeat_total", "_repeat_truncated"]:
                 if key in params:
                     result[key] = params[key]
-            
+
             # Transfer ViT specific metadata if this is a patch embedding
             if type_lower == "patchembedding":
                 for key in ["patch_size", "num_patches", "embed_dim", "embedding_dim"]:

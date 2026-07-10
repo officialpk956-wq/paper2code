@@ -6,25 +6,50 @@ No inference, no reasoning, pure transformation only.
 """
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from core.agents.types import ConfigDict
 
-
 # Canonical layer types (authoritative set)
 CANONICAL_TYPES = {
-    "conv1d", "conv2d", "conv3d", "depthwise_conv2d", "convtranspose2d",
-    "linear", "dense",
-    "maxpool2d", "avgpool2d", "globalavgpool2d",
+    "conv1d",
+    "conv2d",
+    "conv3d",
+    "depthwise_conv2d",
+    "convtranspose2d",
+    "linear",
+    "dense",
+    "maxpool2d",
+    "avgpool2d",
+    "globalavgpool2d",
     "multiheadattention",
     "transformerblock",
-    "batchnorm2d", "layernorm", "groupnorm", "rmsnorm",
-    "relu", "leakyrelu", "gelu", "silu", "swish", "dropout",
+    "batchnorm2d",
+    "layernorm",
+    "groupnorm",
+    "rmsnorm",
+    "relu",
+    "leakyrelu",
+    "gelu",
+    "silu",
+    "swish",
+    "dropout",
     "upsample",
     "residualblock",
-    "ssm", "patchembedding", "clstoken", "positionalembedding", "flatten",
-    "query_projection", "key_projection", "value_projection", "attention_merge",
-    "residual_add", "feedforward", "causal_attention", "cross_attention", "sequence_pooling"
+    "ssm",
+    "patchembedding",
+    "clstoken",
+    "positionalembedding",
+    "flatten",
+    "query_projection",
+    "key_projection",
+    "value_projection",
+    "attention_merge",
+    "residual_add",
+    "feedforward",
+    "causal_attention",
+    "cross_attention",
+    "sequence_pooling",
 }
 
 # Comprehensive type synonym map: any variant → canonical type
@@ -45,7 +70,6 @@ _SYNONYM_MAP = {
     "depthwiseconv2d": "depthwise_conv2d",
     "depthwise_conv2d": "depthwise_conv2d",
     "convtranspose2d": "convtranspose2d",
-
     # Linear variants
     "linear": "linear",
     "linearlayer": "linear",
@@ -56,7 +80,6 @@ _SYNONYM_MAP = {
     "fully-connected": "linear",
     "fc": "linear",
     "fclayer": "linear",
-
     # MaxPool variants
     "maxpool": "maxpool2d",
     "maxpool2d": "maxpool2d",
@@ -66,7 +89,6 @@ _SYNONYM_MAP = {
     "max_pooling": "maxpool2d",
     "max-pooling": "maxpool2d",
     "maxpoollayer": "maxpool2d",
-
     # AvgPool variants
     "avgpool": "avgpool2d",
     "avgpool2d": "avgpool2d",
@@ -79,7 +101,6 @@ _SYNONYM_MAP = {
     "avgpoollayer": "avgpool2d",
     "globalavgpool": "globalavgpool2d",
     "globalavgpool2d": "globalavgpool2d",
-
     # Attention variants
     "attention": "multiheadattention",
     "selfattention": "multiheadattention",
@@ -98,7 +119,6 @@ _SYNONYM_MAP = {
     "sequencepooling": "sequence_pooling",
     "sequence_pooling": "sequence_pooling",
     "global_pool": "globalavgpool2d",
-
     # Transformer variants
     "transformer": "transformerblock",
     "transformerblock": "transformerblock",
@@ -108,7 +128,6 @@ _SYNONYM_MAP = {
     "transformer_encoder": "multiheadattention",
     "transformerdecoder": "multiheadattention",
     "transformer_decoder": "multiheadattention",
-
     # Norm variants
     "batchnorm": "batchnorm2d",
     "batchnorm2d": "batchnorm2d",
@@ -128,7 +147,6 @@ _SYNONYM_MAP = {
     "group_norm": "groupnorm",
     "rmsnorm": "rmsnorm",
     "rms_norm": "rmsnorm",
-
     # Activation variants
     "relu": "relu",
     "relulayer": "relu",
@@ -139,24 +157,20 @@ _SYNONYM_MAP = {
     "gelu": "gelu",
     "silu": "silu",
     "swish": "swish",
-
     # Dropout
     "dropout": "dropout",
     "dropoutlayer": "dropout",
-
     # Upsample variants
     "upsample": "upsample",
     "upsampling": "upsample",
     "upsamplelayer": "upsample",
     "upsamplayer": "upsample",
-
     # Residual variants
     "residual": "residualblock",
     "residualblock": "residualblock",
     "residual_block": "residualblock",
     "residual-block": "residualblock",
     "residuallayer": "residualblock",
-
     # Modern modules
     "ssm": "ssm",
     "selectivestatespace": "ssm",
@@ -225,7 +239,7 @@ def _validate_synonym_map() -> None:
         AssertionError: If any validation fails
     """
     # Build reverse map: canonical_type → set of input keys
-    reverse_map: Dict[str, set] = {}
+    reverse_map: dict[str, set] = {}
     for key, canonical in _SYNONYM_MAP.items():
         if canonical not in reverse_map:
             reverse_map[canonical] = set()
@@ -233,16 +247,16 @@ def _validate_synonym_map() -> None:
 
     # Verify all canonical types in the map are valid
     for canonical in reverse_map.keys():
-        assert canonical in CANONICAL_TYPES, \
-            f"Unknown canonical type in _SYNONYM_MAP: {canonical}"
+        assert canonical in CANONICAL_TYPES, f"Unknown canonical type in _SYNONYM_MAP: {canonical}"
 
     # No collisions (synonyms don't map to multiple canonical types)
     for canonical, keys in reverse_map.items():
-        assert all(_SYNONYM_MAP[k] == canonical for k in keys), \
+        assert all(_SYNONYM_MAP[k] == canonical for k in keys), (
             f"Collision detected in synonym map for {canonical}"
+        )
 
 
-def normalize_config(config: Dict[str, Any]) -> ConfigDict:
+def normalize_config(config: dict[str, Any]) -> ConfigDict:
     """
     Normalize ConfigDict to stable, deterministic form.
 
@@ -286,7 +300,7 @@ def _normalize_name(name: Any) -> str:
     return name_str if name_str else "UnknownModel"
 
 
-def _normalize_layers(layers: Any) -> List[Dict[str, Any]]:
+def _normalize_layers(layers: Any) -> list[dict[str, Any]]:
     """
     Normalize layer list.
 
@@ -305,10 +319,12 @@ def _normalize_layers(layers: Any) -> List[Dict[str, Any]]:
         layer_type = _normalize_type(layer.get("type", "conv2d"))
         params = _normalize_params(layer.get("params", {}))
 
-        normalized.append({
-            "type": layer_type,
-            "params": params,
-        })
+        normalized.append(
+            {
+                "type": layer_type,
+                "params": params,
+            }
+        )
 
     if not normalized:
         normalized = [{"type": "conv2d", "params": {}}]
@@ -339,13 +355,14 @@ def _normalize_type(layer_type: Any) -> str:
     canonical = _SYNONYM_MAP.get(type_normalized, type_str)
 
     # ENFORCE: only canonical types allowed
-    assert canonical in CANONICAL_TYPES, \
+    assert canonical in CANONICAL_TYPES, (
         f"Invalid canonical type after normalization: {canonical} (from input: {layer_type})"
+    )
 
     return canonical
 
 
-def _normalize_params(params: Any) -> Dict[str, Any]:
+def _normalize_params(params: Any) -> dict[str, Any]:
     """
     Normalize parameters.
 
@@ -387,7 +404,7 @@ def _normalize_params(params: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _build_sequential_connections(layers: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+def _build_sequential_connections(layers: list[dict[str, Any]]) -> list[tuple[str, str]]:
     """Build sequential connections with optional residual skip edges."""
     connections = []
 
@@ -411,7 +428,9 @@ def _build_sequential_connections(layers: List[Dict[str, Any]]) -> List[Tuple[st
     return connections
 
 
-def _validate_config(name: str, layers: List[Dict[str, Any]], connections: List[Tuple[str, str]]) -> None:
+def _validate_config(
+    name: str, layers: list[dict[str, Any]], connections: list[tuple[str, str]]
+) -> None:
     """Validate normalized config."""
     # Name must exist
     assert name, "Name is required"

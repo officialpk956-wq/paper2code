@@ -1,11 +1,10 @@
 import json
+
 import torch
 
 from core.vit_builder import ViTBuilder
 
-schema = json.load(
-    open("outputs/code_ready/attention_all_you_need_2017.json")
-)
+schema = json.load(open("outputs/code_ready/attention_all_you_need_2017.json"))
 
 model = ViTBuilder(schema)
 

@@ -10,18 +10,18 @@ Storage refs:
   - Local mode: absolute path to a tempfile (e.g. "/tmp/xxx.pdf")
 """
 
-import os
-import uuid
 import logging
+import os
 import tempfile
+import uuid
 
 log = logging.getLogger(__name__)
 
-_R2_ACCOUNT_ID       = os.getenv("R2_ACCOUNT_ID", "")
-_R2_ACCESS_KEY_ID    = os.getenv("R2_ACCESS_KEY_ID", "")
+_R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
+_R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
 _R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
-_R2_BUCKET_NAME      = os.getenv("R2_BUCKET_NAME", "")
-_R2_PUBLIC_URL       = os.getenv("R2_PUBLIC_URL", "")
+_R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
+_R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
 R2_AVAILABLE = bool(
     _R2_ACCOUNT_ID and _R2_ACCESS_KEY_ID and _R2_SECRET_ACCESS_KEY and _R2_BUCKET_NAME
@@ -30,6 +30,7 @@ R2_AVAILABLE = bool(
 
 def _r2_client():
     import boto3
+
     return boto3.client(
         "s3",
         endpoint_url=f"https://{_R2_ACCOUNT_ID}.r2.cloudflarestorage.com",

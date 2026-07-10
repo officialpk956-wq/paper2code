@@ -1,6 +1,7 @@
-import re
-import bcrypt
 import hmac
+import re
+
+import bcrypt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
@@ -13,12 +14,9 @@ REQUIRE_SPECIAL = True
 
 # Argon2id Configuration (Default parameters from argon2)
 argon2_hasher = PasswordHasher(
-    time_cost=3,
-    memory_cost=65536,
-    parallelism=4,
-    hash_len=32,
-    salt_len=16
+    time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16
 )
+
 
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """Validate password according to policy. Returns (is_valid, error_message)."""
@@ -34,11 +32,15 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
         return False, "Password must contain at least one special character."
     return True, ""
 
+
 def hash_password(password: str) -> str:
     """Hash password using Argon2id."""
     return argon2_hasher.hash(password)
 
-def verify_password_and_needs_rehash(plain_password: str, hashed_password: str) -> tuple[bool, bool]:
+
+def verify_password_and_needs_rehash(
+    plain_password: str, hashed_password: str
+) -> tuple[bool, bool]:
     """
     Verify password. Handles both Argon2id and legacy bcrypt hashes.
     Returns (is_verified, needs_rehash).
@@ -57,7 +59,7 @@ def verify_password_and_needs_rehash(plain_password: str, hashed_password: str) 
             return False, False
         except Exception:
             return False, False
-    
+
     # Try legacy bcrypt verification
     try:
         # constant-time verification for bcrypt
@@ -69,6 +71,7 @@ def verify_password_and_needs_rehash(plain_password: str, hashed_password: str) 
         pass
 
     return False, False
+
 
 def verify_constant_time(val1: str, val2: str) -> bool:
     """Compare two strings in constant time (e.g. tokens)."""

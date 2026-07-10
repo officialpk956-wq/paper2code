@@ -8,16 +8,17 @@ Usage:
     track(user_id, "paper_uploaded", {"paper_id": 7, "visibility": "public"})
 """
 
-import os
 import logging
+import os
 import threading
+
 import httpx
 
 log = logging.getLogger(__name__)
 
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "")
-POSTHOG_HOST    = os.getenv("POSTHOG_HOST", "https://app.posthog.com").rstrip("/")
-_CAPTURE_URL    = f"{POSTHOG_HOST}/capture/"
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://app.posthog.com").rstrip("/")
+_CAPTURE_URL = f"{POSTHOG_HOST}/capture/"
 
 
 def track(user_id: int | None, event: str, properties: dict | None = None) -> None:

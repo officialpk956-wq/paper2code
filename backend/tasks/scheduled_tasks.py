@@ -6,9 +6,9 @@ Celery Beat periodic tasks:
   - daily_db_backup         — daily at 03:00 UTC: pg_dump → R2
 """
 
-import os
-import logging
 import datetime
+import logging
+import os
 import subprocess
 from datetime import timedelta
 
@@ -26,7 +26,7 @@ XP_EVENT_RETENTION_DAYS = int(os.getenv("XP_EVENT_RETENTION_DAYS", "365"))
 
 def _do_cleanup_zombie_tasks(db) -> dict:
     """Business logic for zombie cleanup — accepts any SQLAlchemy session."""
-    from sqlalchemy import or_, and_
+    from sqlalchemy import and_, or_
 
     cutoff = datetime.datetime.utcnow() - timedelta(hours=ZOMBIE_THRESHOLD_HOURS)
     zombies = (
@@ -71,6 +71,7 @@ def _do_daily_db_backup() -> dict:
         return {"skipped": True, "reason": "not_postgres"}
 
     from backend.services.storage_service import R2_AVAILABLE
+
     if not R2_AVAILABLE:
         log.info("daily_db_backup: R2 not configured — skipping")
         return {"skipped": True, "reason": "r2_not_configured"}
@@ -79,6 +80,7 @@ def _do_daily_db_backup() -> dict:
     filename = f"backup_{stamp}.dump"
     try:
         import urllib.parse
+
         parsed = urllib.parse.urlparse(DATABASE_URL)
         env = os.environ.copy()
         if parsed.password:
@@ -105,6 +107,7 @@ def _do_daily_db_backup() -> dict:
 
         dump_bytes = result.stdout
         from backend.services.storage_service import store_pdf as _store
+
         ref = _store(dump_bytes, filename)
         log.info("daily_db_backup: uploaded %s (%d bytes) → %s", filename, len(dump_bytes), ref)
         return {"success": True, "ref": ref, "size_bytes": len(dump_bytes), "stamp": stamp}
@@ -123,9 +126,11 @@ def daily_db_backup():
 # Prune old tutor sessions  (Tue 02:00 UTC)
 # ---------------------------------------------------------------------------
 
+
 def _do_prune_tutor_sessions(db) -> dict:
+    from sqlalchemy import and_, or_
+
     from backend.models import TutorSessionRecord
-    from sqlalchemy import or_, and_
 
     cutoff = datetime.datetime.utcnow() - timedelta(days=TUTOR_SESSION_RETENTION_DAYS)
     deleted = (
@@ -163,17 +168,18 @@ def prune_old_tutor_sessions():
 # Prune old XP events  (2nd of month 01:00 UTC)
 # ---------------------------------------------------------------------------
 
+
 def _do_prune_xp_events(db) -> dict:
     from backend.models import XPEvent
 
     cutoff = datetime.datetime.utcnow() - timedelta(days=XP_EVENT_RETENTION_DAYS)
     deleted = (
-        db.query(XPEvent)
-        .filter(XPEvent.created_at < cutoff)
-        .delete(synchronize_session=False)
+        db.query(XPEvent).filter(XPEvent.created_at < cutoff).delete(synchronize_session=False)
     )
     db.commit()
-    log.info("prune_xp_events: deleted %d XP events older than %d days", deleted, XP_EVENT_RETENTION_DAYS)
+    log.info(
+        "prune_xp_events: deleted %d XP events older than %d days", deleted, XP_EVENT_RETENTION_DAYS
+    )
     return {"deleted": deleted, "cutoff_days": XP_EVENT_RETENTION_DAYS}
 
 
@@ -194,14 +200,13 @@ def prune_old_xp_events():
 # Nightly acceptance-rate reconciliation  (04:00 UTC)
 # ---------------------------------------------------------------------------
 
+
 def _do_recalc_acceptance_rates(db) -> dict:
-    from backend.models import Problem, DojoSubmission
     from sqlalchemy import func
 
-    problem_ids = [
-        row[0]
-        for row in db.query(DojoSubmission.problem_id).distinct().all()
-    ]
+    from backend.models import DojoSubmission, Problem
+
+    problem_ids = [row[0] for row in db.query(DojoSubmission.problem_id).distinct().all()]
     updated = 0
     for pid in problem_ids:
         total = (

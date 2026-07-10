@@ -10,37 +10,34 @@ No implementation, no logic, no behavior.
 Pure interfaces and type definitions.
 """
 
+from core.agents.config_parser import ConfigParsingAgent
+from core.agents.explanation_agent import ExplanationAgent
+from core.agents.explanation_agent_impl import DefaultExplanationAgent
+from core.agents.parsing_agent import ParsingAgent
+from core.agents.parsing_agent_impl import ParsingAgentImpl
 from core.agents.types import (
-    # Parsing inputs
-    ConfigDict,
-    PaperExcerpt,
-    SymbolicDesc,
-    ParsingSource,
     # Visualization types
     ComparisonContext,
-    VisualizationOptions,
-    VisualizationMode,
-    NodeVisuals,
-    VisualRepresentation,
+    ComparisonResult,
     # Explanation types
     ComputeSummary,
-    SpatialSummary,
-    ScalingSummary,
-    ComparisonResult,
-    VisualMetadata,
+    # Parsing inputs
+    ConfigDict,
     ExplanationTemplate,
+    NodeVisuals,
+    PaperExcerpt,
+    ParsingSource,
+    ScalingSummary,
+    SpatialSummary,
+    SymbolicDesc,
     TemplateLibrary,
+    VisualizationMode,
+    VisualizationOptions,
+    VisualMetadata,
+    VisualRepresentation,
 )
-
-from core.agents.parsing_agent import ParsingAgent
 from core.agents.visualization_agent import VisualizationAgent
-from core.agents.explanation_agent import ExplanationAgent
-from core.agents.config_parser import ConfigParsingAgent
 from core.agents.visualization_agent_impl import DefaultVisualizationAgent
-from core.agents.explanation_agent_impl import DefaultExplanationAgent
-
-
-from core.agents.parsing_agent_impl import ParsingAgentImpl
 
 __all__ = [
     # Types

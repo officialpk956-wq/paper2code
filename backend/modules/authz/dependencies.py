@@ -1,4 +1,5 @@
-from typing import Optional, Any
+from typing import Any
+
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -7,7 +8,8 @@ from backend.models import User
 from backend.modules.auth.dependencies import get_current_user
 from backend.modules.authz.engine import authorize
 
-def get_route_param(request: Request, name: str) -> Optional[Any]:
+
+def get_route_param(request: Request, name: str) -> Any | None:
     """Helper to extract parameter from path, query or json body."""
     val = request.path_params.get(name)
     if val is not None:
@@ -17,18 +19,16 @@ def get_route_param(request: Request, name: str) -> Optional[Any]:
         return val
     return None
 
+
 def check_permission(
-    action: str,
-    resource_type: Optional[str] = None,
-    resource_id_param: Optional[str] = None
+    action: str, resource_type: str | None = None, resource_id_param: str | None = None
 ):
     """
     FastAPI dependency to enforce action permission, ownership, or sharing level checks on routes.
     """
+
     def dependency(
-        request: Request,
-        user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)
     ):
         # Resolve org_id parameter if present
         org_id_val = get_route_param(request, "org_id")
@@ -51,13 +51,10 @@ def check_permission(
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            org_id=org_id
+            org_id=org_id,
         )
         if not is_allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
         return True
 
     return dependency

@@ -1,8 +1,10 @@
-import uuid
 import datetime
-import threading
 import logging
-from typing import Dict, Any, Callable, Optional
+import threading
+import uuid
+from collections.abc import Callable
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
@@ -12,17 +14,20 @@ from backend.modules.jobs.retry import handle_job_failure
 
 logger = logging.getLogger(__name__)
 
+
 class WorkerPool:
     def __init__(self, queue_backend: QueueBackend, queue_name: str, concurrency: int = 2):
         self.queue_backend = queue_backend
         self.queue_name = queue_name
         self.concurrency = concurrency
-        self.handlers: Dict[str, Callable[[Dict[str, Any], BackgroundJob, Session], None]] = {}
-        
+        self.handlers: dict[str, Callable[[dict[str, Any], BackgroundJob, Session], None]] = {}
+
         self._threads = []
         self._stop_event = threading.Event()
 
-    def register_handler(self, job_name: str, handler: Callable[[Dict[str, Any], BackgroundJob, Session], None]) -> None:
+    def register_handler(
+        self, job_name: str, handler: Callable[[dict[str, Any], BackgroundJob, Session], None]
+    ) -> None:
         self.handlers[job_name] = handler
 
     def start(self) -> None:
@@ -42,12 +47,12 @@ class WorkerPool:
         self,
         db: Session,
         name: str,
-        payload: Dict[str, Any],
-        user_id: Optional[int] = None,
-        org_id: Optional[int] = None,
-        api_key_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-        max_retries: int = 3
+        payload: dict[str, Any],
+        user_id: int | None = None,
+        org_id: int | None = None,
+        api_key_id: str | None = None,
+        correlation_id: str | None = None,
+        max_retries: int = 3,
     ) -> BackgroundJob:
         """Create database entry and enqueue the job."""
         job_id = str(uuid.uuid4())
@@ -61,7 +66,7 @@ class WorkerPool:
             status="Queued",
             payload=payload,
             max_retries=max_retries,
-            created_at=datetime.datetime.utcnow()
+            created_at=datetime.datetime.utcnow(),
         )
         db.add(job)
         db.commit()
@@ -82,7 +87,7 @@ class WorkerPool:
             except Exception as e:
                 logger.exception(f"Worker loop error: {e}", exc_info=True)
 
-    def _execute_job(self, job_id: str, payload: Dict[str, Any]) -> None:
+    def _execute_job(self, job_id: str, payload: dict[str, Any]) -> None:
         db = SessionLocal()
         try:
             job = db.get(BackgroundJob, job_id)

@@ -17,16 +17,17 @@ Each challenge returns:
     "mutation": str
   }
 """
-from __future__ import annotations
-import random
-import hashlib
-import json
-from typing import Dict, Any, List
 
+from __future__ import annotations
+
+import hashlib
+import random
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_id(arch: str, mutation: str) -> str:
     raw = f"{arch}::{mutation}"
@@ -37,7 +38,7 @@ def _make_id(arch: str, mutation: str) -> str:
 # ResNet Challenges
 # ---------------------------------------------------------------------------
 
-RESNET_CHALLENGES: List[Dict[str, Any]] = [
+RESNET_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("ResNet", "remove_skip"),
         "mutation": "remove_skip_connection",
@@ -49,7 +50,7 @@ RESNET_CHALLENGES: List[Dict[str, Any]] = [
             "Gradient flow is unaffected because batch normalization compensates.",
             "The vanishing gradient problem returns — deep layers receive near-zero gradients during backprop.",
             "The model becomes faster but maintains the same accuracy.",
-            "The output shape of the block changes from (B, C, H, W) to (B, 2C, H, W)."
+            "The output shape of the block changes from (B, C, H, W) to (B, 2C, H, W).",
         ],
         "answer": "The vanishing gradient problem returns — deep layers receive near-zero gradients during backprop.",
         "answer_index": 1,
@@ -72,7 +73,7 @@ RESNET_CHALLENGES: List[Dict[str, Any]] = [
             "Nothing — the addition still works because channels are broadcast automatically.",
             "A dimension mismatch error occurs: the skip tensor (B, C_in, H, W) cannot be added to the main path output (B, C_out, H, W).",
             "The model doubles its parameter count to compensate.",
-            "The pooling layer absorbs the mismatch at runtime."
+            "The pooling layer absorbs the mismatch at runtime.",
         ],
         "answer": "A dimension mismatch error occurs: the skip tensor (B, C_in, H, W) cannot be added to the main path output (B, C_out, H, W).",
         "answer_index": 1,
@@ -90,7 +91,7 @@ RESNET_CHALLENGES: List[Dict[str, Any]] = [
 # DenseNet Challenges
 # ---------------------------------------------------------------------------
 
-DENSENET_CHALLENGES: List[Dict[str, Any]] = [
+DENSENET_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("DenseNet", "remove_dense_connection"),
         "mutation": "remove_dense_connection",
@@ -102,7 +103,7 @@ DENSENET_CHALLENGES: List[Dict[str, Any]] = [
             "Input channels increase by growth_rate per layer → removing dense connections reduces input channels to just growth_rate.",
             "The input stays the same because the first layer still feeds into all subsequent layers.",
             "Each layer's input becomes 2× larger since skip connections double the channel count.",
-            "Output channels double because the dense block concatenates in both directions."
+            "Output channels double because the dense block concatenates in both directions.",
         ],
         "answer": "Input channels increase by growth_rate per layer → removing dense connections reduces input channels to just growth_rate.",
         "answer_index": 0,
@@ -125,7 +126,7 @@ DENSENET_CHALLENGES: List[Dict[str, Any]] = [
             "Resolution stays constant — only the dense connections change spatial size.",
             "Resolution doubles because pooling is removed.",
             "Resolution remains constant across all blocks — no downsampling occurs, feature maps grow unbounded in channel count.",
-            "The model crashes because batch normalization fails without pooling."
+            "The model crashes because batch normalization fails without pooling.",
         ],
         "answer": "Resolution remains constant across all blocks — no downsampling occurs, feature maps grow unbounded in channel count.",
         "answer_index": 2,
@@ -144,7 +145,7 @@ DENSENET_CHALLENGES: List[Dict[str, Any]] = [
 # U-Net Challenges
 # ---------------------------------------------------------------------------
 
-UNET_CHALLENGES: List[Dict[str, Any]] = [
+UNET_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("UNet", "remove_skip_path"),
         "mutation": "remove_encoder_decoder_skip",
@@ -156,7 +157,7 @@ UNET_CHALLENGES: List[Dict[str, Any]] = [
             "No effect — the decoder can reconstruct fine details from the bottleneck alone.",
             "The model can no longer localize — fine spatial detail from the encoder is lost, and the decoder only sees coarse semantic information from the bottleneck.",
             "The model's parameter count doubles because decoder convolutions must compensate.",
-            "Pooling operations fail because there's no skip tensor to add."
+            "Pooling operations fail because there's no skip tensor to add.",
         ],
         "answer": "The model can no longer localize — fine spatial detail from the encoder is lost, and the decoder only sees coarse semantic information from the bottleneck.",
         "answer_index": 1,
@@ -195,7 +196,7 @@ UNET_CHALLENGES: List[Dict[str, Any]] = [
 # Transformer Challenges
 # ---------------------------------------------------------------------------
 
-TRANSFORMER_CHALLENGES: List[Dict[str, Any]] = [
+TRANSFORMER_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("Transformer", "remove_attention_block"),
         "mutation": "remove_attention_block",
@@ -207,7 +208,7 @@ TRANSFORMER_CHALLENGES: List[Dict[str, Any]] = [
             "O(N) — each remaining block processes tokens sequentially.",
             "O(N²) — unchanged. Each block independently computes N×N attention scores.",
             "O(N²/2) — halved because only 3 blocks remain.",
-            "O(N log N) — the reduced depth changes the computational class."
+            "O(N log N) — the reduced depth changes the computational class.",
         ],
         "answer": "O(N²) — unchanged. Each block independently computes N×N attention scores.",
         "answer_index": 1,
@@ -230,7 +231,7 @@ TRANSFORMER_CHALLENGES: List[Dict[str, Any]] = [
             "Token mixing — the model can no longer compute relationships between tokens.",
             "Position-wise nonlinear feature transformation — each token's representation is processed only linearly through attention projections.",
             "Gradient flow — residual connections fail without the FFN.",
-            "Sequence length handling — the model can only process sequences up to 512 tokens."
+            "Sequence length handling — the model can only process sequences up to 512 tokens.",
         ],
         "answer": "Position-wise nonlinear feature transformation — each token's representation is processed only linearly through attention projections.",
         "answer_index": 1,
@@ -249,7 +250,7 @@ TRANSFORMER_CHALLENGES: List[Dict[str, Any]] = [
 # ViT Challenges
 # ---------------------------------------------------------------------------
 
-VIT_CHALLENGES: List[Dict[str, Any]] = [
+VIT_CHALLENGES: list[dict[str, Any]] = [
     {
         "challenge_id": _make_id("ViT", "remove_patch_embedding"),
         "mutation": "remove_patch_embedding",
@@ -262,7 +263,7 @@ VIT_CHALLENGES: List[Dict[str, Any]] = [
             "The attention block processes pixel-level tokens — 50176 tokens per image, causing quadratic memory explosion.",
             "The attention block reshapes the image automatically and computation proceeds normally.",
             "The model outputs NaN because batch normalization fails on raw image pixels.",
-            "Only 196 tokens are processed because the attention block truncates automatically."
+            "Only 196 tokens are processed because the attention block truncates automatically.",
         ],
         "answer": "The attention block processes pixel-level tokens — 50176 tokens per image, causing quadratic memory explosion.",
         "answer_index": 0,
@@ -299,7 +300,7 @@ VIT_CHALLENGES: List[Dict[str, Any]] = [
 # Registry
 # ---------------------------------------------------------------------------
 
-ARCHITECTURE_CHALLENGES: Dict[str, List[Dict[str, Any]]] = {
+ARCHITECTURE_CHALLENGES: dict[str, list[dict[str, Any]]] = {
     "resnet": RESNET_CHALLENGES,
     "densenet": DENSENET_CHALLENGES,
     "unet": UNET_CHALLENGES,
@@ -313,7 +314,7 @@ def get_architecture_challenge(
     architecture: str = "ResNet",
     difficulty: str | None = None,
     seed: int | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Return a deterministic architecture-mutation challenge.
 
