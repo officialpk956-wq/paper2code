@@ -1,36 +1,42 @@
 import logging
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-import dataclasses
 
 from backend.database import get_db
 from backend.models import Paper, PaperModule
-
-from core.implementation.code_mapper import get_module_implementation, get_architecture_implementation
-from core.implementation.training_config import get_training_config, get_hyperparameter_explanations
+from core.implementation.code_mapper import (
+    get_architecture_implementation,
+    get_module_implementation,
+)
 from core.implementation.cost_estimator import estimate_training_cost
 from core.implementation.reproduction_cards import get_reproduction_card
-
+from core.implementation.training_config import get_hyperparameter_explanations, get_training_config
 from core.lab.diff_engine import compute_diff
-from core.lab.mutator import apply_mutations, MUTATION_REGISTRY
 from core.lab.hypothesis_engine import hypothesis_engine
-from core.lab.tradeoff_analyzer import tradeoff_scatter, get_efficiency_frontiers, get_tradeoff_summary
+from core.lab.mutator import MUTATION_REGISTRY, apply_mutations
+from core.lab.tradeoff_analyzer import (
+    get_efficiency_frontiers,
+    get_tradeoff_summary,
+    tradeoff_scatter,
+)
 from core.visualizer_resnet import build_resnet18_graph
-from core.visualizer_vit import build_vit_graph
 from core.visualizer_unet import build_unet_graph
+from core.visualizer_vit import build_vit_graph
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Lab"])
+
 
 def get_paper_info(paper) -> tuple[str, str, str, str]:
     arch_graph = paper.architecture_graph or {}
     classification = arch_graph.get("classification")
     status = arch_graph.get("status", "Published")
     support = arch_graph.get("support_level", "experimental")
-    
+
     if classification:
         return paper.title, classification, status, support
 
@@ -51,31 +57,37 @@ def get_paper_info(paper) -> tuple[str, str, str, str]:
         return paper.title, "Encoder-Decoder", status, support
     return paper.title, "Unknown", status, support
 
+
 class CostEstimatorRequest(BaseModel):
     architecture: str
     dataset_size: int = 1000000
     batch_size: int = 32
     gpu_type: str = "A100"
-    epochs: Optional[int] = None
+    epochs: int | None = None
     mixed_precision: bool = False
     gradient_checkpointing: bool = False
 
+
 class LabMutateRequest(BaseModel):
     architecture: str
-    mutations: list[Dict[str, Any]]
-    config: Dict[str, Any] = {}
+    mutations: list[dict[str, Any]]
+    config: dict[str, Any] = {}
+
 
 class LabPredictRequest(BaseModel):
     architecture: str
-    mutations: list[Dict[str, Any]]
-    hypothesis: Dict[str, Any]
+    mutations: list[dict[str, Any]]
+    hypothesis: dict[str, Any]
+
 
 class LabExperimentRequest(BaseModel):
     architecture: str
-    mutations: list[Dict[str, Any]]
-    hypothesis: Optional[Dict[str, Any]] = None
+    mutations: list[dict[str, Any]]
+    hypothesis: dict[str, Any] | None = None
 
-def _build_base_graph(architecture: str, config: Dict[str, Any] = {}):
+
+def _build_base_graph(architecture: str, config: dict[str, Any] | None = None):
+    config = config or {}
     if architecture == "ResNet":
         return build_resnet18_graph(
             base_channels=config.get("base_channels", 64),
@@ -94,9 +106,13 @@ def _build_base_graph(architecture: str, config: Dict[str, Any] = {}):
             stages=config.get("stages", 3),
         )
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported architecture: '{architecture}'. Valid: ResNet, Transformer, U-Net")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported architecture: '{architecture}'. Valid: ResNet, Transformer, U-Net",
+        )
 
-def _graph_to_api_dict(graph) -> Dict[str, Any]:
+
+def _graph_to_api_dict(graph) -> dict[str, Any]:
     return {
         "name": graph.name,
         "nodes": [
@@ -111,13 +127,14 @@ def _graph_to_api_dict(graph) -> Dict[str, Any]:
             for n in graph.nodes
         ],
         "edges": [
-            {"source": e.source, "target": e.target, "edge_type": e.edge_type}
-            for e in graph.edges
+            {"source": e.source, "target": e.target, "edge_type": e.edge_type} for e in graph.edges
         ],
     }
 
-def _graph_metrics(graph) -> Dict[str, Any]:
-    from core.metrics_estimator import estimate_metrics_from_graph, estimate_activation_memory
+
+def _graph_metrics(graph) -> dict[str, Any]:
+    from core.metrics_estimator import estimate_activation_memory, estimate_metrics_from_graph
+
     m = estimate_metrics_from_graph(graph)
     mem = estimate_activation_memory(graph, batch_size=1, input_spatial=224)
     mem_mb = round(sum(r["mem_mb"] for r in mem), 2)
@@ -128,6 +145,7 @@ def _graph_metrics(graph) -> Dict[str, Any]:
         "memory_mb": mem_mb,
     }
 
+
 @router.get("/implementation/{paper_id}")
 def get_architecture_implementation_view(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
@@ -137,13 +155,15 @@ def get_architecture_implementation_view(paper_id: int, db: Session = Depends(ge
     title, arch_type, status, _ = get_paper_info(p)
     modules_data = []
     for m in p.modules:
-        modules_data.append({
-            "id": m.id,
-            "layer_name": m.layer_name,
-            "module_type": m.module_type,
-            "explanation": m.explanation or "",
-            "graph_nodes": m.graph_nodes if isinstance(m.graph_nodes, list) else [],
-        })
+        modules_data.append(
+            {
+                "id": m.id,
+                "layer_name": m.layer_name,
+                "module_type": m.module_type,
+                "explanation": m.explanation or "",
+                "graph_nodes": m.graph_nodes if isinstance(m.graph_nodes, list) else [],
+            }
+        )
 
     impl_view = get_architecture_implementation(
         paper_title=title,
@@ -153,6 +173,7 @@ def get_architecture_implementation_view(paper_id: int, db: Session = Depends(ge
     impl_view["paper_id"] = paper_id
     impl_view["architecture_graph"] = p.architecture_graph or {}
     return impl_view
+
 
 @router.get("/modules/{module_id}/implementation")
 def get_module_implementation_view(module_id: int, db: Session = Depends(get_db)):
@@ -181,6 +202,7 @@ def get_module_implementation_view(module_id: int, db: Session = Depends(get_db)
         "implementation": impl,
     }
 
+
 @router.get("/training/{paper_id}")
 def get_training_pipeline(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
@@ -196,9 +218,11 @@ def get_training_pipeline(paper_id: int, db: Session = Depends(get_db)):
         "training_config": config,
     }
 
+
 @router.get("/hyperparameters")
 def get_hyperparameters():
     return {"hyperparameters": get_hyperparameter_explanations()}
+
 
 @router.post("/training-estimator")
 def training_cost_estimator(request: CostEstimatorRequest):
@@ -217,6 +241,7 @@ def training_cost_estimator(request: CostEstimatorRequest):
         logger.exception(f"Cost estimator error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/reproduction/{paper_id}")
 def get_reproduction_card_view(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
@@ -232,13 +257,14 @@ def get_reproduction_card_view(paper_id: int, db: Session = Depends(get_db)):
         "reproduction_card": card,
     }
 
+
 @router.post("/lab/mutations")
 # deprecated alias
 @router.post("/lab/mutate", deprecated=True)
 def lab_mutate(request: LabMutateRequest):
     try:
         before_graph = _build_base_graph(request.architecture, request.config)
-        after_graph  = apply_mutations(before_graph, request.mutations)
+        after_graph = apply_mutations(before_graph, request.mutations)
 
         diff = compute_diff(before_graph, after_graph)
 
@@ -261,14 +287,15 @@ def lab_mutate(request: LabMutateRequest):
         logger.exception(f"Lab mutate error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/lab/predictions")
 # deprecated alias
 @router.post("/lab/predict", deprecated=True)
 def lab_predict(request: LabPredictRequest):
     try:
         before_graph = _build_base_graph(request.architecture)
-        after_graph  = apply_mutations(before_graph, request.mutations)
-        diff         = compute_diff(before_graph, after_graph)
+        after_graph = apply_mutations(before_graph, request.mutations)
+        diff = compute_diff(before_graph, after_graph)
 
         hyp = dict(request.hypothesis)
         if "mutation_type" not in hyp and request.mutations:
@@ -281,7 +308,7 @@ def lab_predict(request: LabPredictRequest):
             "mutations_applied": request.mutations,
             "diff": diff,
             "before_metrics": _graph_metrics(before_graph),
-            "after_metrics":  _graph_metrics(after_graph),
+            "after_metrics": _graph_metrics(after_graph),
             "scoring": score_result,
         }
     except HTTPException:
@@ -290,14 +317,15 @@ def lab_predict(request: LabPredictRequest):
         logger.exception(f"Lab predict error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/lab/experiments")
 # deprecated alias
 @router.post("/lab/experiment", deprecated=True)
 def lab_experiment(request: LabExperimentRequest):
     try:
         before_graph = _build_base_graph(request.architecture)
-        after_graph  = apply_mutations(before_graph, request.mutations)
-        diff         = compute_diff(before_graph, after_graph)
+        after_graph = apply_mutations(before_graph, request.mutations)
+        diff = compute_diff(before_graph, after_graph)
 
         result = hypothesis_engine.build_experiment_result(
             hypothesis=request.hypothesis,
@@ -310,7 +338,7 @@ def lab_experiment(request: LabExperimentRequest):
             "experiment": result,
             "diff": diff,
             "before_metrics": _graph_metrics(before_graph),
-            "after_metrics":  _graph_metrics(after_graph),
+            "after_metrics": _graph_metrics(after_graph),
         }
     except HTTPException:
         raise
@@ -318,12 +346,13 @@ def lab_experiment(request: LabExperimentRequest):
         logger.exception(f"Lab experiment error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/lab/tradeoffs")
 def lab_tradeoffs(architecture: str = "ResNet"):
     try:
         base_graph = _build_base_graph(architecture)
-        points     = tradeoff_scatter(base_graph, architecture)
-        frontier   = get_efficiency_frontiers(points)
+        points = tradeoff_scatter(base_graph, architecture)
+        frontier = get_efficiency_frontiers(points)
 
         summaries = {mut: get_tradeoff_summary(mut) for mut in MUTATION_REGISTRY.keys()}
 
@@ -338,6 +367,7 @@ def lab_tradeoffs(architecture: str = "ResNet"):
         logger.exception(f"Lab tradeoffs error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/lab/prediction-prompt")
 def lab_prediction_prompt(mutation_type: str = "increase_depth", architecture: str = "ResNet"):
     try:
@@ -346,20 +376,67 @@ def lab_prediction_prompt(mutation_type: str = "increase_depth", architecture: s
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/lab/mutations")
 def lab_mutation_list():
     descriptions = {
-        "increase_depth":    {"label": "Increase Depth",       "icon": "fa-layer-group",     "description": "Add extra blocks to deepen the network", "category": "depth"},
-        "decrease_depth":    {"label": "Decrease Depth",       "icon": "fa-compress-alt",    "description": "Remove blocks to create a shallower network", "category": "depth"},
-        "increase_width":    {"label": "Increase Width",       "icon": "fa-expand",          "description": "Scale up channel sizes (×1.5)", "category": "width"},
-        "decrease_width":    {"label": "Decrease Width",       "icon": "fa-compress",        "description": "Scale down channel sizes (×0.5)", "category": "width"},
-        "add_residual":      {"label": "Add Skip Connections", "icon": "fa-code-branch",     "description": "Inject residual skip connections between blocks", "category": "structure"},
-        "remove_residual":   {"label": "Remove Skip Connections","icon": "fa-ban",            "description": "Remove all skip/residual edges", "category": "structure"},
-        "add_attention":     {"label": "Add Attention Block",  "icon": "fa-brain",           "description": "Insert a Multi-Head Attention node", "category": "attention"},
-        "change_patch_size": {"label": "Change Patch Size",    "icon": "fa-th",              "description": "Change ViT patch size (affects token count)", "category": "embedding"},
-        "change_hidden_dim": {"label": "Change Hidden Dim",    "icon": "fa-sliders",         "description": "Adjust transformer hidden dimension (d_model)", "category": "embedding"},
+        "increase_depth": {
+            "label": "Increase Depth",
+            "icon": "fa-layer-group",
+            "description": "Add extra blocks to deepen the network",
+            "category": "depth",
+        },
+        "decrease_depth": {
+            "label": "Decrease Depth",
+            "icon": "fa-compress-alt",
+            "description": "Remove blocks to create a shallower network",
+            "category": "depth",
+        },
+        "increase_width": {
+            "label": "Increase Width",
+            "icon": "fa-expand",
+            "description": "Scale up channel sizes (×1.5)",
+            "category": "width",
+        },
+        "decrease_width": {
+            "label": "Decrease Width",
+            "icon": "fa-compress",
+            "description": "Scale down channel sizes (×0.5)",
+            "category": "width",
+        },
+        "add_residual": {
+            "label": "Add Skip Connections",
+            "icon": "fa-code-branch",
+            "description": "Inject residual skip connections between blocks",
+            "category": "structure",
+        },
+        "remove_residual": {
+            "label": "Remove Skip Connections",
+            "icon": "fa-ban",
+            "description": "Remove all skip/residual edges",
+            "category": "structure",
+        },
+        "add_attention": {
+            "label": "Add Attention Block",
+            "icon": "fa-brain",
+            "description": "Insert a Multi-Head Attention node",
+            "category": "attention",
+        },
+        "change_patch_size": {
+            "label": "Change Patch Size",
+            "icon": "fa-th",
+            "description": "Change ViT patch size (affects token count)",
+            "category": "embedding",
+        },
+        "change_hidden_dim": {
+            "label": "Change Hidden Dim",
+            "icon": "fa-sliders",
+            "description": "Adjust transformer hidden dimension (d_model)",
+            "category": "embedding",
+        },
     }
     return {"mutations": descriptions}
+
 
 @router.get("/system-design/patterns")
 def get_system_patterns(db: Session = Depends(get_db)):
