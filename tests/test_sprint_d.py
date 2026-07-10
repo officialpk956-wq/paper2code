@@ -94,9 +94,21 @@ class TestOAuth:
         assert r.status_code == 404
 
     def test_02_google_authorize_url_unconfigured_503(self, client: TestClient):
-        with patch.dict("os.environ", {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""}):
+        # oauth.py reads GOOGLE_CLIENT_ID/SECRET into _PROVIDERS once at import
+        # time, not per-request — patching os.environ here has no effect on an
+        # already-imported module, so mutate the cached dict directly instead
+        # (same workaround test_03 below uses for the configured case).
+        import backend.routers.oauth as oauth_mod
+        orig_id = oauth_mod._PROVIDERS["google"]["client_id"]
+        orig_secret = oauth_mod._PROVIDERS["google"]["client_secret"]
+        oauth_mod._PROVIDERS["google"]["client_id"] = ""
+        oauth_mod._PROVIDERS["google"]["client_secret"] = ""
+        try:
             r = client.get("/api/auth/oauth/google/authorize-url?redirect_uri=http://localhost:3000/callback")
             assert r.status_code == 503
+        finally:
+            oauth_mod._PROVIDERS["google"]["client_id"] = orig_id
+            oauth_mod._PROVIDERS["google"]["client_secret"] = orig_secret
 
     def test_03_google_authorize_url_configured(self, client: TestClient):
         with patch.dict("os.environ", {"GOOGLE_CLIENT_ID": "test_client_id", "GOOGLE_CLIENT_SECRET": "test_secret"}):
