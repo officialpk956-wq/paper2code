@@ -1,24 +1,30 @@
-import time
-import threading
 import datetime
-from typing import Dict, Any, Callable, List
+import threading
+import time
+from collections.abc import Callable
+
 
 class ScheduledTask:
-    def __init__(self, name: str, interval_seconds: int, action: Callable[[], None], run_once: bool = False):
+    def __init__(
+        self, name: str, interval_seconds: int, action: Callable[[], None], run_once: bool = False
+    ):
         self.name = name
         self.interval_seconds = interval_seconds
         self.action = action
         self.run_once = run_once
-        self.last_run: Optional[datetime.datetime] = None
+        self.last_run: datetime.datetime | None = None
         self.next_run = datetime.datetime.utcnow()
+
 
 class Scheduler:
     def __init__(self):
-        self.tasks: List[ScheduledTask] = []
-        self._thread: Optional[threading.Thread] = None
+        self.tasks: list[ScheduledTask] = []
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-    def schedule_interval(self, name: str, interval_seconds: int, action: Callable[[], None], run_once: bool = False) -> None:
+    def schedule_interval(
+        self, name: str, interval_seconds: int, action: Callable[[], None], run_once: bool = False
+    ) -> None:
         task = ScheduledTask(name, interval_seconds, action, run_once)
         self.tasks.append(task)
 
