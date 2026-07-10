@@ -59,8 +59,9 @@ def encode_rotated_jwt(
     return jwt.encode(payload, secret, algorithm="HS256", headers=headers)
 
 
-def decode_rotated_jwt(token: str, audience: str, issuer: str) -> dict[str, Any]:
-    """Decode JWT resolving secret by 'kid' in headers, supporting legacy fallbacks."""
+def resolve_signing_secret(token: str) -> str:
+    """Resolve the secret that signed `token` by its 'kid' header, falling back
+    to the active key for legacy tokens with no kid."""
     ring = get_key_ring()
 
     try:
@@ -72,10 +73,13 @@ def decode_rotated_jwt(token: str, audience: str, issuer: str) -> dict[str, Any]
     if kid:
         if kid not in ring:
             raise jwt.InvalidKeyError(f"Key ID {kid} not found in configured key ring")
-        secret = ring[kid]
-    else:
-        # Fallback for legacy tokens: check overlap window or try active key
-        secret = get_active_secret()
+        return ring[kid]
+    return get_active_secret()
+
+
+def decode_rotated_jwt(token: str, audience: str, issuer: str) -> dict[str, Any]:
+    """Decode JWT resolving secret by 'kid' in headers, supporting legacy fallbacks."""
+    secret = resolve_signing_secret(token)
 
     return jwt.decode(
         token,

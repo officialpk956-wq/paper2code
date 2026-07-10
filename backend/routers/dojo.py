@@ -322,12 +322,13 @@ def _dojo_user_key(request: Request) -> str:
         try:
             import jwt as _jwt
 
-            from backend.modules.auth.config import ALGORITHM, SECRET_KEY
+            from backend.modules.security.jwt_rotation import resolve_signing_secret
 
+            token = auth[7:]
             payload = _jwt.decode(
-                auth[7:],
-                SECRET_KEY,
-                algorithms=[ALGORITHM],
+                token,
+                resolve_signing_secret(token),
+                algorithms=["HS256"],
                 options={"verify_aud": False, "verify_iss": False, "verify_exp": False},
             )
             uid = payload.get("user_id")
