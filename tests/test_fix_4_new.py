@@ -11,44 +11,38 @@ def test_fix1_trace_id():
     assert "X-Trace-ID" in response.headers
 
 def test_fix2_health_healthy():
-    with patch("redis.Redis.from_url") as mock_redis_from_url:
-        mock_redis = MagicMock()
+    # health.py imports `session_redis` from backend.redis_config directly, not
+    # via redis.Redis.from_url — patch the object it actually calls .ping() on.
+    with patch("backend.redis_config.session_redis") as mock_redis:
         mock_redis.ping.return_value = True
-        mock_redis_from_url.return_value = mock_redis
-        
-        with patch("backend.routers.health.get_db") as mock_db_dep:
-            mock_session = MagicMock()
-            mock_session.execute.return_value = True
-            mock_db_dep.return_value = mock_session
-            
-            from backend.database import get_db
-            app.dependency_overrides[get_db] = lambda: mock_session
-            
-            response = client.get("/health")
-            assert response.status_code == 200
-            assert response.json()["status"] == "healthy"
-            
-            app.dependency_overrides.clear()
+
+        mock_session = MagicMock()
+        mock_session.execute.return_value = True
+
+        from backend.database import get_db
+        app.dependency_overrides[get_db] = lambda: mock_session
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "healthy"
+
+        app.dependency_overrides.clear()
 
 def test_fix2_health_unhealthy():
-    with patch("redis.Redis.from_url") as mock_redis_from_url:
-        mock_redis = MagicMock()
+    with patch("backend.redis_config.session_redis") as mock_redis:
         mock_redis.ping.return_value = True
-        mock_redis_from_url.return_value = mock_redis
-        
-        with patch("backend.routers.health.get_db") as mock_db_dep:
-            mock_session = MagicMock()
-            mock_session.execute.side_effect = Exception("DB Error")
-            mock_db_dep.return_value = mock_session
-            
-            from backend.database import get_db
-            app.dependency_overrides[get_db] = lambda: mock_session
-            
-            response = client.get("/health")
-            assert response.status_code == 503
-            assert response.json()["status"] == "unhealthy"
-            
-            app.dependency_overrides.clear()
+
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = Exception("DB Error")
+
+        from backend.database import get_db
+        app.dependency_overrides[get_db] = lambda: mock_session
+
+        response = client.get("/health")
+        assert response.status_code == 503
+        assert response.json()["status"] == "unhealthy"
+
+        app.dependency_overrides.clear()
 
 def test_fix3_logger_exception():
     with patch("backend.routers.health.httpx.get") as mock_get:
