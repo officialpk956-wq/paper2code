@@ -634,7 +634,7 @@ class TestInfrastructureConfig:
 
     def test_01_all_required_services_present(self):
         services = self._compose()["services"]
-        for svc in ("postgres", "redis", "api", "worker", "beat", "flower", "piston"):
+        for svc in ("postgres", "redis", "api", "worker", "beat", "flower"):
             assert svc in services, f"Missing service: {svc}"
 
     def test_02_flower_bound_to_localhost(self):
@@ -642,14 +642,6 @@ class TestInfrastructureConfig:
         for p in ports:
             assert str(p).startswith("127.0.0.1"), f"Flower port {p} must not be public"
 
-    def test_03_piston_on_isolated_network(self):
-        piston = self._compose()["services"]["piston"]
-        api = self._compose()["services"]["api"]
-        piston_nets = set(piston.get("networks", []))
-        api_nets = set(api.get("networks", []))
-        # Piston must NOT share any network with API
-        shared = piston_nets & api_nets
-        assert len(shared) == 0, f"Piston shares network(s) with API: {shared}"
 
     def test_04_beat_runs_correct_command(self):
         cmd = self._compose()["services"]["beat"]["command"]

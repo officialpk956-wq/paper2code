@@ -38,34 +38,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Piston Code Execution Sandbox ─────────────────────────────────────────
-  # SECURITY: piston is on piston_network ONLY — it cannot reach postgres,
-  # redis, or the API server. User code cannot steal env vars or credentials.
-  piston:
-    image: ghcr.io/engineer-man/piston
-    ports:
-      - "2000:2000"
-    networks:
-      - piston_network   # isolated — NO api_network access
-    tmpfs:
-      - /piston/jobs     # ephemeral per-execution scratch space
-    environment:
-      PISTON_LIMIT_MEMORY:      67108864  # 64 MB per job
-      PISTON_LIMIT_MAX_PROCESS_COUNT: 32
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'           # Max 1 full CPU core for the entire container
-          memory: 512M          # Max 512 MB RAM for the container
-        reservations:
-          cpus: '0.25'
-          memory: 128M
-    ulimits:
-      nproc: 256
-      nofile:
-        soft: 1024
-        hard: 2048
 
   # ── FastAPI Application ────────────────────────────────────────────────────
   api:
@@ -79,7 +51,6 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://p2c:p2cdev@postgres:5432/p2c
       REDIS_URL:    redis://redis:6379/0
-      PISTON_URL:   http://piston:2000
       ENVIRONMENT:  development
     networks:
       - api_network
@@ -172,7 +143,6 @@ services:
 
 networks:
   api_network:
-  piston_network:   # piston is ISOLATED — no access to api_network
 
 volumes:
   pgdata:

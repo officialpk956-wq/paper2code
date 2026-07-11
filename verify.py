@@ -22,7 +22,7 @@ with httpx.Client(base_url=BASE, timeout=10) as c:
     check("GET /api/health", c.get("/api/health"), 200, "ok")
     check("GET /api/health/db", c.get("/api/health/db"), 200)
     check("GET /api/health/redis", c.get("/api/health/redis"))  # 200 or 503 (no redis in dev)
-    check("GET /api/health/piston", c.get("/api/health/piston"))  # 200 or 503 (optional)
+    check("GET /api/health/e2b", c.get("/api/health/e2b"))  # 200 or 503 (optional)
 
 print("\n=== AUTH FLOW ===")
 TEST_EMAIL = f"verify_test_{int(time.time())}@example.com"

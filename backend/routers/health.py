@@ -65,17 +65,23 @@ def health_redis():
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@router.get("/api/health/piston")
-def health_piston():
-    import os
+@router.get("/api/health/e2b")
+async def health_e2b():
+    from fastapi.concurrency import run_in_threadpool
 
-    piston_url = os.environ.get("PISTON_URL", "http://localhost:2000")
+    from backend.services.e2b_service import run_code_in_sandbox
+
     try:
-        r = httpx.get(f"{piston_url}/api/v2/runtimes", timeout=3.0)
-        r.raise_for_status()
-        return {"status": "ok", "piston": "connected"}
+        res = await run_in_threadpool(
+            run_code_in_sandbox, user_code='print("ok")', run_timeout_ms=5000
+        )
+        if res.get("passed"):
+            return {"status": "ok", "e2b": "connected"}
+        else:
+            raise Exception(res.get("stderr") or "Trivial run failed")
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
 
 
 from backend import metrics

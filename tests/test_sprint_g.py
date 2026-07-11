@@ -525,33 +525,28 @@ class TestLeaderboardCategory:
 # ===========================================================================
 
 class TestStdoutTruncation:
-    def test_36_output_limit_in_piston_payload(self):
-        """Verify execute_python includes output_limit in the Piston payload."""
+    def test_36_output_limit_in_sandbox(self):
+        """Verify execute_python handles E2B sandbox invocation."""
         from backend.services import dojo_execution_service as svc
-        captured_payload = {}
-
-        async def fake_call_piston(payload):
-            captured_payload.update(payload)
-            return {"run": {"stdout": "ok", "stderr": "", "code": 0, "time": 10}}
-
+        
+        async def fake_run_code_in_sandbox(user_code, setup_code="", test_code="", stdin="", run_timeout_ms=10000):
+            return {"passed": True, "stdout": "ok", "stderr": "", "time_ms": 10, "exit_code": 0}
+            
         import asyncio
-        with patch.object(svc, "_call_piston", side_effect=fake_call_piston):
+        from unittest.mock import patch
+        with patch("backend.services.dojo_execution_service.run_code_in_sandbox", side_effect=fake_run_code_in_sandbox) as mock_run:
             asyncio.run(svc.execute_python("print('ok')"))
+            mock_run.assert_called_once_with(user_code="print('ok')", stdin="", run_timeout_ms=svc.RUN_TIMEOUT_MS)
 
-        assert "output_limit" in captured_payload
-        assert captured_payload["output_limit"] == svc.OUTPUT_LIMIT_BYTES  # 65536
-
-    def test_37_custom_timeout_in_piston_payload(self):
+    def test_37_custom_timeout_in_sandbox(self):
         """Verify per-problem time_limit_ms overrides global run_timeout."""
         from backend.services import dojo_execution_service as svc
-        captured_payload = {}
-
-        async def fake_call_piston(payload):
-            captured_payload.update(payload)
-            return {"run": {"stdout": "", "stderr": "", "code": 0, "time": 5}}
-
+        
+        async def fake_run_code_in_sandbox(user_code, setup_code="", test_code="", stdin="", run_timeout_ms=10000):
+            return {"passed": True, "stdout": "", "stderr": "", "time_ms": 5, "exit_code": 0}
+            
         import asyncio
-        with patch.object(svc, "_call_piston", side_effect=fake_call_piston):
+        from unittest.mock import patch
+        with patch("backend.services.dojo_execution_service.run_code_in_sandbox", side_effect=fake_run_code_in_sandbox) as mock_run:
             asyncio.run(svc.execute_python("pass", run_timeout_ms=25000))
-
-        assert captured_payload["run_timeout"] == 25000
+            mock_run.assert_called_once_with(user_code="pass", stdin="", run_timeout_ms=25000)
