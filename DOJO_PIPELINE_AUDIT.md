@@ -1,91 +1,59 @@
 # Dojo Execution Pipeline Audit Report
 
-## 1. Piston Sandbox Service Deployment Guide (Render)
+## 1. Migration from Piston to E2B (Sandbox Execution)
 
-Because we lack direct access to your Render dashboard / API credentials, we cannot deploy the Piston service for you. Below are the exact, step-by-step deployment paths to get the Piston execution engine up and running with **NumPy** persistence.
+### Why We Switched
+Piston requires container-level privileges to write into `/sys/fs/cgroup` for its isolated CPU/memory sandbox limits (using `isolate`). Render's managed runtime containers (on all tiers, including paid ones) block privileged container operations, causing the self-hosted Piston sandbox service to fail to start in production. 
 
-### Option A: Custom Dockerfile (Recommended — Zero-maintenance)
-This option bakes Python 3.10 and NumPy directly into the image at build time, meaning it will survive Render container restarts and scale-downs without needing persistent volumes.
+To overcome this infrastructure blocker, the Dojo execution pipeline has been rewired to **E2B (e2b.dev)**, a hosted sandbox service designed specifically for secure code execution that does not require hosting privileged sandboxing containers on Render.
 
-1. Create a file named `piston.Dockerfile` in your repository root with the following content:
-   ```dockerfile
-   FROM ghcr.io/engineer-man/piston:latest
-   
-   # Build/install Node dependencies for the ppman CLI
-   RUN cd /piston/cli && npm install
-   
-   # Download and install Python 3.10 package using ppman
-   RUN node /piston/cli/index.js ppman install python=3.10.0
-   
-   # Install numpy directly into the Piston Python package folder
-   RUN /piston/packages/python/3.10.0/bin/pip3 install numpy
-   ```
-2. **Deploy on Render**:
-   - Go to [Render Dashboard](https://dashboard.render.com) -> **New +** -> **Web Service**.
-   - Connect your GitHub repository.
-   - Set the **Docker Path** or **Dockerfile** configuration to `piston.Dockerfile`.
-   - Set the environment variables:
-     - `PISTON_LIMIT_MEMORY` = `67108864` (64 MB per job)
-     - `PISTON_LIMIT_MAX_PROCESS_COUNT` = `32`
-   - Render will automatically expose port `2000`.
+### Piston Clean-up Decision
+Piston has been entirely removed from the local `docker-compose.yml` environment, and its associated `PISTON_URL` environment variables have been cleaned up. Standardizing on E2B for both local development and production ensures environment parity and prevents "works locally, breaks in prod" bugs.
 
 ---
 
-### Option B: Registry Image + Persistent Disk (Alternate Path)
-If you deploy directly from the public registry without a custom Dockerfile, the container filesystem is ephemeral, and any package installation (like NumPy) will be wiped on container restart. You must use a Persistent Disk:
+## 2. Hardened Sandbox Pass/Fail Logic
 
-1. **Deploy Web Service**:
-   - Go to **New +** -> **Web Service** -> **Deploy an existing image from a registry**.
-   - Registry Image URL: `ghcr.io/engineer-man/piston`
-   - Set environment variables:
-     - `PISTON_LIMIT_MEMORY` = `67108864`
-     - `PISTON_LIMIT_MAX_PROCESS_COUNT` = `32`
-2. **Add a Persistent Disk**:
-   - In your newly created Piston service settings on Render, navigate to **Disks**.
-   - Click **Add Disk**:
-     - **Name**: `piston-packages`
-     - **Mount Path**: `/piston/packages`
-     - **Size**: `1 GB` (minimum required for runtimes)
-3. **Install Python & NumPy**:
-   - Once the service is running, send a request to Piston to install Python:
-     ```bash
-     curl -X POST https://<your-piston-service-url>/api/v2/packages \
-       -H "Content-Type: application/json" \
-       -d '{"language":"python","version":"3.10.0"}'
-     ```
-   - Connect to the running container shell (via Render Shell tab or SSH) and run:
-     ```bash
-     /piston/packages/python/3.10.0/bin/pip3 install numpy
-     ```
-     Because `/piston/packages` is mounted on the persistent disk, NumPy will persist.
+The previous Piston implementation relied on fragile string-matching inside `stderr` (e.g., checking if `"AssertionError" not in stderr` or `"Error" not in stderr`), which incorrectly failed valid code containing words like "Error" in print statements (e.g. `print("No Errors found")`).
+
+This has been replaced by a robust, exit-code-based check:
+1. **Redirection & Filesystem Execution**: The sandbox writes the combined user code and test harness to `/home/user/solution.py` and the test input to `/home/user/stdin.txt`.
+2. **PTY Execution**: The code is run via `sandbox.commands.run("bash -c 'python3 /home/user/solution.py < /home/user/stdin.txt'")`.
+3. **Exit Code Validation**: The execution passes if and only if the process returns `exit_code == 0` (indicating all assertions completed successfully without throwing any unhandled exceptions).
+4. **Exception Handling**: Catching E2B SDK's `CommandExitException` ensures that assertion failures return `passed = False` and populate the `exit_code` and traceback details without raising unhandled exceptions in the backend.
+
+### Local Verification Results
+The new E2B execution logic was verified locally with a throwaway test script:
+- **Correct Solution**: Returned `passed: True` and captured correct stdout.
+- **Wrong Solution (AssertionError)**: Returned `passed: False` and captured traceback error cleanly.
+- **Printed 'Error' String**: Returned `passed: True` (fixing the old fragile string-matching bug).
 
 ---
 
-### 2. Main API & Routing Integration
-Once Piston is live:
-1. Update the Environment Variables on your **main backend service** (`paper2code-1-81y5`):
-   - Set `PISTON_URL` = `https://<your-piston-service-url>`
-2. Saving the env vars will trigger a redeploy of the main API.
-3. Verify connectivity:
-   ```bash
-   curl -i https://paper2code-1-81y5.onrender.com/api/health/piston
-   ```
-   This must now return HTTP 200 instead of the baseline HTTP 503 connection refused.
+## 3. Production Deployment Guide (Render)
 
----
+Because we lack direct access to your Render dashboard / API credentials, the following steps must be completed manually:
 
-## 3. Celery Worker (Critical Infrastructure Gap)
+### Step A: Set environment variables
+On your **main backend service** (`paper2code-1-81y5`) on Render, add the following environment variable:
+- `E2B_API_KEY` = `<your-e2b-api-key>` (obtain a free key from [e2b.dev](https://e2b.dev))
 
-*   **Audit Finding**: A Celery worker must be running in production for code-submissions (`Submit` button) to grade.
-*   **Action Required**:
-    - Ensure a separate Background Worker is deployed on Render pointing to your production Redis instance (`REDIS_URL`).
-    - The start command for this service must be:
-      ```bash
-      celery -A backend.celery_app.celery_app worker --loglevel=info
-      ```
-    - Without this background worker active, all `Submit` requests will register task IDs but hang forever in `pending` status.
+This will trigger a redeploy of the main API.
+
+### Step B: Verify main API connectivity
+Once redeployed, run the following curl command:
+```bash
+curl -i https://paper2code-1-81y5.onrender.com/api/health/e2b
+```
+This must return HTTP 200:
+`{"status":"ok","e2b":"connected"}`
+
+### Step C: Confirm Celery Worker Deployment
+Ensure a separate background worker service is running on Render pointing to your production Redis instance (`REDIS_URL`) and database (`DATABASE_URL`). 
+- **Start Command**: `celery -A backend.celery_app.celery_app worker --loglevel=info`
+- **Why this is critical**: Graded submissions are queued asynchronously. Without this worker running, all `Submit` requests will hang in `pending` status.
 
 ---
 
 ## 4. Per-Problem Correctness & Validation Table
-*Pending Piston deployment by the user. Once the Piston service is live and `PISTON_URL` is configured, we can proceed to run-through and verify grading for all 49 problems.*
+*Pending Render deployment of the `E2B_API_KEY` and verification of the Celery worker. Once the production endpoints are confirmed live, we will execute the browser audit and document the pass/fail grading results for all 49 problems here.*
