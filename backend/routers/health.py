@@ -83,7 +83,6 @@ async def health_e2b():
         raise HTTPException(status_code=503, detail=str(e))
 
 
-
 from backend import metrics
 from backend.dependencies import get_current_user
 from backend.models import User

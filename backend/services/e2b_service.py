@@ -50,7 +50,7 @@ def run_code_in_sandbox(
         ) as sandbox:
             sandbox.files.write("/home/user/solution.py", full_code)
             sandbox.files.write("/home/user/stdin.txt", stdin)
-            
+
             try:
                 result = sandbox.commands.run(
                     "bash -c 'python3 /home/user/solution.py < /home/user/stdin.txt'"
@@ -62,7 +62,7 @@ def run_code_in_sandbox(
                 stdout = getattr(e, "stdout", "") or ""
                 stderr = getattr(e, "stderr", "") or ""
                 exit_code = getattr(e, "exit_code", 1) or 1
-            
+
         elapsed_ms = int((time.monotonic() - start) * 1000)
         passed = exit_code == 0
 
@@ -83,4 +83,3 @@ def run_code_in_sandbox(
             "time_ms": 0,
             "exit_code": -1,
         }
-

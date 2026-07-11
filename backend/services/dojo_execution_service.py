@@ -16,8 +16,8 @@ import os
 from typing import Any
 
 import httpx
-
 from fastapi.concurrency import run_in_threadpool
+
 from backend.services.e2b_service import run_code_in_sandbox
 
 PISTON_URL = os.getenv("PISTON_URL", "http://localhost:2000")
@@ -54,4 +54,3 @@ async def execute_python(
         stdin=stdin,
         run_timeout_ms=run_timeout_ms,
     )
-
