@@ -4,7 +4,12 @@ import os
 log = logging.getLogger(__name__)
 
 E2B_API_KEY = os.getenv("E2B_API_KEY", "")
-SANDBOX_TEMPLATE = os.getenv("E2B_SANDBOX_TEMPLATE", "base")
+# No default template override — e2b_code_interpreter's own default template
+# (used when template=None) already has numpy/pandas/scipy preinstalled.
+# Forcing "base" here previously broke every dojo problem (they all import
+# numpy) with ModuleNotFoundError. Only set E2B_SANDBOX_TEMPLATE if you have
+# a specific custom template you actually want.
+SANDBOX_TEMPLATE = os.getenv("E2B_SANDBOX_TEMPLATE") or None
 EXECUTION_TIMEOUT = 20  # seconds
 
 
