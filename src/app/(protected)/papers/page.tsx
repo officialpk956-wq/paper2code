@@ -165,8 +165,10 @@ function PapersContent() {
     setLoading(true);
     setError('');
     try {
-      const endpoint = isLoggedIn() ? '/api/papers' : '/api/papers/public';
-      const data = await apiGet<Paper[]>(endpoint);
+      // GET /api/papers already handles the public/authenticated visibility
+      // split server-side via get_optional_user (backend/routers/papers.py) —
+      // there is no separate /public endpoint.
+      const data = await apiGet<Paper[]>('/api/papers');
       setPapers(data);
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load papers');
