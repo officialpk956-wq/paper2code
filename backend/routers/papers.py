@@ -310,9 +310,9 @@ def list_papers(
         else:
             # Fallback to ILIKE if vector search returns nothing (or fails)
             pat = f"%{q}%"
-        query = query.filter(
-            or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat))
-        )
+            query = query.filter(
+                or_(Paper.title.ilike(pat), Paper.abstract.ilike(pat), Paper.authors.ilike(pat))
+            )
     from sqlalchemy.orm import selectinload
 
     papers = query.options(selectinload(Paper.modules)).offset(skip).limit(limit).all()
