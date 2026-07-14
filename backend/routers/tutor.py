@@ -109,13 +109,81 @@ def _fetch_recommendation_data(db: Session, learner_id: str):
     return attempts_data, tutor_data
 
 
+def _build_architecture_graph(paper):
+    """
+    Reconstruct an ArchitectureGraph from a Paper ORM object.
+
+    Resolves each PaperModule's primitive graph_nodes to a GraphNode with the
+    correct underlying layer type (e.g. 'conv2d', 'linear'), then maps the
+    top-level Paper.architecture_graph edges down to module-level edges.
+
+    Returns an ArchitectureGraph, or None if the paper has no modules.
+    """
+    import json
+
+    from core.architecture_graph import ArchitectureGraph, GraphEdge, GraphNode
+
+    if not paper or not paper.modules:
+        return None
+
+    primitive_to_module: dict[str, str] = {}
+
+    def _get_module_layer_type(m):
+        nodes_list = []
+        if isinstance(m.graph_nodes, list):
+            nodes_list = m.graph_nodes
+        elif isinstance(m.graph_nodes, dict):
+            nodes_list = m.graph_nodes.get("nodes", [])
+        elif isinstance(m.graph_nodes, str):
+            try:
+                parsed = json.loads(m.graph_nodes)
+                if isinstance(parsed, list):
+                    nodes_list = parsed
+                elif isinstance(parsed, dict):
+                    nodes_list = parsed.get("nodes", [])
+            except Exception:
+                pass
+        for n in nodes_list:
+            if isinstance(n, dict) and n.get("node_id"):
+                primitive_to_module[n["node_id"]] = str(m.id)
+            if isinstance(n, dict) and n.get("type"):
+                return n["type"]
+        return m.module_type
+
+    nodes = [
+        GraphNode(id=str(m.id), type=_get_module_layer_type(m), label=m.layer_name)
+        for m in paper.modules
+    ]
+
+    edges: list[GraphEdge] = []
+    raw_edges = (paper.architecture_graph or {}).get("edges", [])
+    for edge in raw_edges:
+        src_mod = primitive_to_module.get(edge.get("source"))
+        tgt_mod = primitive_to_module.get(edge.get("target"))
+        if src_mod and tgt_mod and src_mod != tgt_mod:
+            edge_obj = GraphEdge(
+                source=src_mod,
+                target=tgt_mod,
+                edge_type=edge.get("type", "flow"),
+            )
+            if edge_obj not in edges:
+                edges.append(edge_obj)
+
+    return ArchitectureGraph(name=paper.title or "", nodes=nodes, edges=edges)
+
+
 def _get_tutor_callbacks(db: Session):
     def lookup_paper_section(paper_id: int, section: str = "abstract"):
         paper = db.query(Paper).filter_by(id=paper_id).first()
         if not paper:
             return "Paper not found."
-        content = getattr(paper, section, None) or paper.abstract or ""
-        return content[:2000] if content else "No content available."
+        content = getattr(paper, section, None)
+        if content:
+            return content[:2000]
+        fallback = paper.abstract or ""
+        if not fallback:
+            return "No content available."
+        return f"[Section '{section}' not found — showing abstract instead]\n{fallback[:2000]}"
 
     def get_user_weak_topics(user_id: int):
         attempts = db.query(AssessmentAttempt).filter_by(learner_id=str(user_id)).all()
@@ -131,34 +199,82 @@ def _get_tutor_callbacks(db: Session):
         return f"Weak topics: {', '.join(weak)}" if weak else "No weak topics found."
 
     def find_related_problem(concept: str):
-        concept = concept.lower()
+        import re
+
+        concept = concept.lower().strip()
+        if len(concept) < 3:
+            return "No confident match found."
         from backend.models import Problem
 
-        prob = (
-            db.query(Problem)
-            .filter(Problem.is_retired == False, Problem.description.ilike(f"%{concept}%"))
-            .first()
-        )
+        if db.bind.dialect.name == "postgresql":
+            pattern = r"\y" + re.escape(concept) + r"\y"
+            prob = (
+                db.query(Problem)
+                .filter(Problem.is_retired == False, Problem.description.op("~*")(pattern))
+                .first()
+            )
+        else:
+            probs = db.query(Problem).filter(Problem.is_retired == False).all()
+            pattern = re.compile(r"\b" + re.escape(concept) + r"\b", re.IGNORECASE)
+            prob = next((p for p in probs if pattern.search(p.description)), None)
+
         if prob:
             return f"Problem: {prob.title} (ID: {prob.id}, Difficulty: {prob.difficulty})"
-        return "No related problem found."
+        return "No confident match found."
 
     def search_papers_by_concept(concept: str):
-        papers = (
-            db.query(Paper)
-            .filter(Paper.visibility != "private", Paper.title.ilike(f"%{concept}%"))
-            .limit(3)
-            .all()
-        )
+        import re
+
+        concept = concept.lower().strip()
+        if len(concept) < 3:
+            return "No confident match found."
+        from backend.models import Paper
+
+        if db.bind.dialect.name == "postgresql":
+            pattern = r"\y" + re.escape(concept) + r"\y"
+            papers = (
+                db.query(Paper)
+                .filter(Paper.visibility != "private", Paper.title.op("~*")(pattern))
+                .limit(3)
+                .all()
+            )
+        else:
+            all_papers = db.query(Paper).filter(Paper.visibility != "private").all()
+            pattern = re.compile(r"\b" + re.escape(concept) + r"\b", re.IGNORECASE)
+            papers = [p for p in all_papers if pattern.search(p.title)][:3]
+
         if papers:
             return "; ".join(f"{p.title} (ID: {p.id})" for p in papers)
-        return "No papers found."
+        return "No confident match found."
+
+    def get_architecture_facts(paper_id: int):
+        from core.rag.knowledge_graph import KnowledgeGraph
+
+        paper = db.query(Paper).filter_by(id=paper_id).first()
+        if not paper or not paper.modules:
+            return "No structured architecture data available for this paper yet."
+
+        arch_graph = _build_architecture_graph(paper)
+        if arch_graph is None:
+            return "No structured architecture data available for this paper yet."
+
+        kg = KnowledgeGraph()
+        motifs = kg.detect_motifs(arch_graph)
+        anomalies = kg.verify_topology(arch_graph)
+
+        parts = []
+        if motifs:
+            parts.append("Known architectural patterns detected: " + ", ".join(motifs))
+        if anomalies:
+            parts.append("Structural notes: " + "; ".join(anomalies))
+        return "\n".join(parts) if parts else "No specific patterns or anomalies detected."
 
     return {
         "lookup_paper_section": lookup_paper_section,
         "get_user_weak_topics": get_user_weak_topics,
         "find_related_problem": find_related_problem,
         "search_papers_by_concept": search_papers_by_concept,
+        "get_architecture_facts": get_architecture_facts,
     }
 
 
@@ -247,6 +363,28 @@ def tutor_ask(
             user_id=current_user.id if current_user else None,
             knowledge_profile=profile,
         )
+
+        # ── Post-answer observability: log any structural anomalies ──────────
+        paper_id = request.context_data.get("paper_id")
+        if paper_id:
+            try:
+                from core.rag.knowledge_graph import KnowledgeGraph
+
+                paper = db.query(Paper).filter_by(id=paper_id).first()
+                if paper and paper.modules:
+                    arch_graph = _build_architecture_graph(paper)
+                    if arch_graph is not None:
+                        anomalies = KnowledgeGraph().verify_topology(arch_graph)
+                        if anomalies:
+                            logger.warning(
+                                "Tutor answered a question about paper_id=%s which has known "
+                                "structural anomalies in its extracted graph: %s",
+                                paper_id,
+                                anomalies,
+                            )
+            except Exception:
+                logger.exception("Post-answer anomaly check failed for paper_id=%s", paper_id)
+
         tutor_session_store.update_history(session_id, updated_history)
 
         # ── Analytics ────────────────────────────────────────────────────────

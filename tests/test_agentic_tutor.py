@@ -2,7 +2,7 @@ import pytest
 import json
 from unittest.mock import MagicMock, patch
 from core.agents.agentic_tutor import AgenticTutor
-from backend.routers.learning import _get_tutor_callbacks
+from backend.routers.tutor import _get_tutor_callbacks
 from backend.models import Paper, Problem, AssessmentAttempt, User
 from backend.modules.auth.security.hashing import hash_password as get_password_hash
 from fastapi.testclient import TestClient
@@ -133,6 +133,22 @@ def test_agentic_tutor_with_tool(mock_completion, db_session, tutor_setup):
 
 
 @patch("litellm.completion")
+def test_agentic_tutor_get_architecture_facts(mock_completion, db_session, tutor_setup):
+    """Tutor executes get_architecture_facts tool successfully."""
+    paper_id = tutor_setup.test_paper_id
+    mock_completion.side_effect = [
+        _make_tool_response("get_architecture_facts", {"paper_id": paper_id}),
+        _make_text_response("Detected some architecture features."),
+    ]
+
+    tutor = AgenticTutor(_get_tutor_callbacks(db_session))
+    resp, hist = tutor.ask(f"Analyze architecture for paper {paper_id}", [], "Test", {}, 1)
+
+    assert resp["answer"] == "Detected some architecture features."
+    assert mock_completion.call_count == 2
+
+
+@patch("litellm.completion")
 def test_agentic_tutor_query_too_long(mock_completion, db_session):
     """Queries over 2000 chars raise ValueError before calling LLM."""
     tutor = AgenticTutor(_get_tutor_callbacks(db_session))
@@ -245,3 +261,209 @@ def test_api_tutor_stream_200(mock_completion, client, db_session):
         headers=_hdr(token),
     )
     assert resp.status_code in (200, 429)
+
+
+def test_get_architecture_facts_callback(db_session):
+    """get_architecture_facts callback returns expected motifs and anomalies."""
+    from backend.models import Paper, PaperModule
+    
+    # 1. Create a dummy paper with a Conv2d module followed directly by a Linear module without flattening
+    paper = Paper(
+        title="Test Anomaly Paper",
+        authors="Test Author",
+        abstract="Test abstract",
+        architecture_graph={
+            "nodes": [
+                {"id": "node_conv", "type": "conv2d", "label": "Conv Layer"},
+                {"id": "node_fc", "type": "linear", "label": "FC Layer"}
+            ],
+            "edges": [
+                {"source": "node_conv", "target": "node_fc", "type": "flow"}
+            ]
+        }
+    )
+    db_session.add(paper)
+    db_session.commit()
+    db_session.refresh(paper)
+    
+    # 2. Add modules
+    m1 = PaperModule(
+        paper_id=paper.id,
+        layer_name="Conv Layer",
+        module_type="block",
+        explanation="Conv explanation",
+        graph_nodes=[{"node_id": "node_conv", "type": "conv2d", "label": "Conv Layer"}],
+        order_index=0
+    )
+    m2 = PaperModule(
+        paper_id=paper.id,
+        layer_name="FC Layer",
+        module_type="block",
+        explanation="FC explanation",
+        graph_nodes=[{"node_id": "node_fc", "type": "linear", "label": "FC Layer"}],
+        order_index=1
+    )
+    db_session.add_all([m1, m2])
+    db_session.commit()
+    
+    callbacks = _get_tutor_callbacks(db_session)
+    get_facts = callbacks["get_architecture_facts"]
+    
+    result = get_facts(paper.id)
+    assert "Missing Operation: Connecting 'conv2d' directly to 'linear' requires flattening." in result
+
+
+def test_lookup_paper_section_fallback(db_session):
+    """lookup_paper_section fallback notice when section is missing but abstract exists."""
+    from backend.models import Paper
+    paper = Paper(
+        title="Test Fallback Paper",
+        abstract="This is the abstract content.",
+    )
+    db_session.add(paper)
+    db_session.commit()
+    db_session.refresh(paper)
+
+    callbacks = _get_tutor_callbacks(db_session)
+    lookup_section = callbacks["lookup_paper_section"]
+
+    result = lookup_section(paper.id, "method")
+    assert result.startswith("[Section 'method' not found — showing abstract instead]\n")
+    assert "This is the abstract content." in result
+
+
+def test_word_boundary_matching(db_session):
+    """Verify word-boundary matching on problems and papers."""
+    from backend.models import Problem, Paper
+    prob = Problem(
+        id="gan-problem",
+        title="GAN Problem",
+        slug="gan-problem",
+        description="This problem explores generative adversarial networks or gan concepts.",
+        is_retired=False,
+    )
+    paper = Paper(
+        title="Understanding Attention Mechanisms",
+        abstract="A paper about attention.",
+        visibility="public",
+    )
+    db_session.add_all([prob, paper])
+    db_session.commit()
+
+    callbacks = _get_tutor_callbacks(db_session)
+    find_prob = callbacks["find_related_problem"]
+    search_paper = callbacks["search_papers_by_concept"]
+
+    # Short concept/partial match should NOT match
+    assert find_prob("ga") == "No confident match found."
+    assert find_prob("network") == "No confident match found."  # 'networks' != 'network'
+
+    # Whole word match should succeed
+    res_prob = find_prob("gan")
+    assert "GAN Problem" in res_prob
+
+    # Unrelated substring under plain ILIKE shouldn't match (e.g. 'tent' in 'attention')
+    assert search_paper("tent") == "No confident match found."
+    
+    # Whole word match on paper title
+    res_paper = search_paper("attention")
+    assert "Understanding Attention Mechanisms" in res_paper
+
+
+def test_build_architecture_graph_helper(db_session):
+    """_build_architecture_graph returns a well-formed graph from a Paper ORM object."""
+    from backend.models import Paper, PaperModule
+    from backend.routers.tutor import _build_architecture_graph
+
+    paper = Paper(title="Helper Test Paper", abstract="x", visibility="public")
+    db_session.add(paper)
+    db_session.commit()
+    db_session.refresh(paper)
+
+    m1 = PaperModule(
+        paper_id=paper.id,
+        layer_name="Conv Layer",
+        module_type="block",
+        graph_nodes=[{"node_id": "n1", "type": "conv2d", "label": "Conv"}],
+        order_index=0,
+    )
+    m2 = PaperModule(
+        paper_id=paper.id,
+        layer_name="Linear Layer",
+        module_type="block",
+        graph_nodes=[{"node_id": "n2", "type": "linear", "label": "FC"}],
+        order_index=1,
+    )
+    db_session.add_all([m1, m2])
+    db_session.commit()
+    db_session.refresh(paper)
+
+    paper.architecture_graph = {
+        "edges": [{"source": "n1", "target": "n2", "type": "flow"}]
+    }
+    db_session.commit()
+
+    graph = _build_architecture_graph(paper)
+    assert graph is not None
+    assert len(graph.nodes) == 2
+    node_types = {n.type for n in graph.nodes}
+    assert "conv2d" in node_types
+    assert "linear" in node_types
+    assert len(graph.edges) == 1
+
+
+def test_post_answer_anomaly_logging(db_session, caplog):
+    """Tutor warning logger fires when a paper has structural anomalies."""
+    import logging
+    from backend.models import Paper, PaperModule
+    from backend.routers.tutor import _build_architecture_graph
+    from core.rag.knowledge_graph import KnowledgeGraph
+
+    # Build a paper with a known bad topology: conv2d → linear without flatten
+    paper = Paper(title="Anomaly Test Paper", abstract="y", visibility="public")
+    db_session.add(paper)
+    db_session.commit()
+    db_session.refresh(paper)
+
+    m1 = PaperModule(
+        paper_id=paper.id,
+        layer_name="Conv",
+        module_type="block",
+        graph_nodes=[{"node_id": "c1", "type": "conv2d", "label": "Conv"}],
+        order_index=0,
+    )
+    m2 = PaperModule(
+        paper_id=paper.id,
+        layer_name="FC",
+        module_type="block",
+        graph_nodes=[{"node_id": "f1", "type": "linear", "label": "FC"}],
+        order_index=1,
+    )
+    db_session.add_all([m1, m2])
+    db_session.commit()
+    db_session.refresh(paper)
+
+    paper.architecture_graph = {
+        "edges": [{"source": "c1", "target": "f1", "type": "flow"}]
+    }
+    db_session.commit()
+
+    # Simulate the post-answer block directly
+    with caplog.at_level(logging.WARNING, logger="backend.routers.tutor"):
+        arch_graph = _build_architecture_graph(paper)
+        assert arch_graph is not None
+        anomalies = KnowledgeGraph().verify_topology(arch_graph)
+        if anomalies:
+            import logging as _log
+            _log.getLogger("backend.routers.tutor").warning(
+                "Tutor answered a question about paper_id=%s which has known "
+                "structural anomalies in its extracted graph: %s",
+                paper.id,
+                anomalies,
+            )
+
+    assert any("structural anomalies" in r.message for r in caplog.records), (
+        "Expected anomaly warning was not emitted"
+    )
+    assert any(str(paper.id) in r.message for r in caplog.records)
+

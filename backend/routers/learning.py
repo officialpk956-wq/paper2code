@@ -117,57 +117,7 @@ def _fetch_recommendation_data(db: Session, learner_id: str):
     return attempts_data, tutor_data
 
 
-def _get_tutor_callbacks(db: Session):
-    def lookup_paper_section(paper_id: int, section: str = "abstract"):
-        paper = db.query(Paper).filter_by(id=paper_id).first()
-        if not paper:
-            return "Paper not found."
-        content = getattr(paper, section, None) or paper.abstract or ""
-        return content[:2000] if content else "No content available."
-
-    def get_user_weak_topics(user_id: int):
-        attempts = db.query(AssessmentAttempt).filter_by(learner_id=str(user_id)).all()
-        arch_results = {}
-        for a in attempts:
-            if a.architecture:
-                arch_results.setdefault(a.architecture, []).append(a.is_correct)
-        weak = [
-            arch
-            for arch, results in arch_results.items()
-            if results and sum(results) / len(results) < 0.5
-        ]
-        return f"Weak topics: {', '.join(weak)}" if weak else "No weak topics found."
-
-    def find_related_problem(concept: str):
-        concept = concept.lower()
-        from backend.models import Problem
-
-        prob = (
-            db.query(Problem)
-            .filter(Problem.is_retired == False, Problem.description.ilike(f"%{concept}%"))
-            .first()
-        )
-        if prob:
-            return f"Problem: {prob.title} (ID: {prob.id}, Difficulty: {prob.difficulty})"
-        return "No related problem found."
-
-    def search_papers_by_concept(concept: str):
-        papers = (
-            db.query(Paper)
-            .filter(Paper.visibility != "private", Paper.title.ilike(f"%{concept}%"))
-            .limit(3)
-            .all()
-        )
-        if papers:
-            return "; ".join(f"{p.title} (ID: {p.id})" for p in papers)
-        return "No papers found."
-
-    return {
-        "lookup_paper_section": lookup_paper_section,
-        "get_user_weak_topics": get_user_weak_topics,
-        "find_related_problem": find_related_problem,
-        "search_papers_by_concept": search_papers_by_concept,
-    }
+from backend.routers.tutor import _get_tutor_callbacks
 
 
 class ProgressUpdate(BaseModel):

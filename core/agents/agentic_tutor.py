@@ -68,6 +68,20 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_architecture_facts",
+            "description": "Get verified, rule-checked architectural facts (known patterns and any structural anomalies) for a specific paper by paper_id. Use this before answering any question about a paper's architecture, layer connections, or structure.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_id": {"type": "integer", "description": "The paper's database ID"}
+                },
+                "required": ["paper_id"],
+            },
+        },
+    },
 ]
 
 _ALLOWED_CONTEXT_KEYS = {"architecture", "title", "domain", "topic"}
@@ -128,7 +142,13 @@ class AgenticTutor:
             f"<context_type>{safe_ctx}</context_type>\n"
             f"<context_subject>{safe_arch}</context_subject>\n"
             "Use tools when the question requires specific data. Otherwise answer directly.\n"
-            "Always be educational and specific. Never give away full solutions to coding problems."
+            "Always be educational and specific. Never give away full solutions to coding problems.\n"
+            "When asked about a specific paper's architecture, structure, or layer connections, "
+            "you MUST call get_architecture_facts first and base your answer on its result. "
+            "If a tool returns no data or 'not available', say so explicitly — do not fill the gap "
+            "with a guess from general knowledge. Never state a specific architectural fact "
+            "(layer type, connection, dimension) about a specific paper unless it came from a "
+            "tool result in this conversation."
         )
 
         messages: list[dict] = (
