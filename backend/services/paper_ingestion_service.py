@@ -353,6 +353,9 @@ def ingest_pdf_paper(
         "paper_meta": paper_meta,
         "modules": [module.__dict__ for module in learning_modules],
         "ingestion": ingestion_summary,
+        "code": result_dict.get("code", ""),
+        "code_source": result_dict.get("code_source", "skeleton"),
+        "family": result_dict.get("family", "unknown"),
         "report": {
             "nodes": len(graph.nodes),
             "edges": len(graph.edges),

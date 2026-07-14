@@ -40,59 +40,37 @@ def generate_code_from_pdf_task(
         pdf_bytes = fetch_pdf(storage_ref)
 
         # ── Stage 2: run the generator ────────────────────────────────────────
-        repo.set_stage(task_id, "analyzing")
-        import pdfplumber
-
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            text_pages = [page.extract_text() for page in pdf.pages[:30] if page.extract_text()]
-        extracted_text = "\n\n".join(text_pages)
-
         repo.set_stage(task_id, "generating")
-        from core.agents.ingestion_agent import run_ingestion
+        from backend.services.paper_ingestion_service import ingest_pdf_paper
 
-        agent_result = run_ingestion(
-            paper_id=0,
+        ingest_result = ingest_pdf_paper(
+            db=db,
+            pdf_bytes=pdf_bytes,
+            source_filename=f"{paper_name}.pdf",
             paper_name=paper_name,
-            raw_text=extracted_text,
         )
-        generated_code = agent_result["final_code"]
-        if agent_result.get("error"):
-            log.warning("Ingestion agent error for paper %s: %s", 0, agent_result["error"])
-
-        result = {"graph": {}, "code": generated_code, "code_source": "agent", "family": "unknown"}
 
         # ── Stage 3: persist Paper row ────────────────────────────────────────
         repo.set_stage(task_id, "saving")
-        existing = db.query(Paper).filter_by(title=paper_name).first()
-        if existing:
-            paper = existing
-        else:
-            import dataclasses
+        paper_id = ingest_result["paper_id"]
+        paper = db.query(Paper).filter_by(id=paper_id).first()
+        if not paper:
+            raise ValueError(f"Paper not found in database after ingestion: {paper_id}")
 
-            graph_json = (
-                dataclasses.asdict(result["graph"])
-                if dataclasses.is_dataclass(result["graph"])
-                else {}
-            )
-            paper = Paper(
-                title=paper_name,
-                architecture_graph=graph_json,
-                uploaded_by=user_id,
-                visibility=visibility,
-                r2_key=r2_key_from_ref(storage_ref),
-                terms_accepted_at=(datetime.datetime.utcnow() if terms_accepted else None),
-            )
-            db.add(paper)
-            db.commit()
-            db.refresh(paper)
+        paper.uploaded_by = user_id
+        paper.visibility = visibility
+        paper.r2_key = r2_key_from_ref(storage_ref)
+        if terms_accepted:
+            paper.terms_accepted_at = datetime.datetime.utcnow()
+        db.commit()
 
         repo.set_complete(
             task_id,
             {
                 "paper_id": paper.id,
-                "code": result.get("code", ""),
-                "code_source": result.get("code_source", "skeleton"),
-                "family": result.get("family", "unknown"),
+                "code": ingest_result.get("code", ""),
+                "code_source": ingest_result.get("code_source", "skeleton"),
+                "family": ingest_result.get("family", "unknown"),
                 "stage": "complete",
             },
         )
@@ -103,16 +81,16 @@ def generate_code_from_pdf_task(
 
             index_paper(
                 paper_id=paper.id,
-                title=paper_name,
-                abstract=getattr(paper, "abstract", "") or "",
-                authors=getattr(paper, "authors", "") or "",
+                title=paper.title,
+                abstract=paper.abstract or "",
+                authors=paper.authors or "",
             )
         except Exception as _ve:
             log.warning("vector index failed (non-fatal): %s", _ve)
 
         # ── Stage 4: notify user ──────────────────────────────────────────────
         if user_id:
-            _notify_paper_done(db, user_id, paper_name, paper.id)
+            _notify_paper_done(db, user_id, paper.title, paper.id)
 
     except Exception as exc:
         repo.set_failed(task_id, str(exc))

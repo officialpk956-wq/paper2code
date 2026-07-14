@@ -31,7 +31,7 @@ type GraphEdge = { source: string; target: string };
 type GraphData = { status?: string; nodes?: GraphNode[]; edges?: GraphEdge[] };
 
 type BlueprintComponent = { name: string; description: string };
-type BlueprintData = { status?: string; components?: BlueprintComponent[] };
+type BlueprintData = { status?: string; components?: BlueprintComponent[]; confidence_score?: number };
 
 type ExecutableData = { status?: string; code?: string; language?: string };
 
@@ -379,7 +379,15 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
         )}
         {tab === 'blueprint' && blueprintData?.status !== 'processing' && blueprintData?.components && (
           <div className="rounded-xl border border-[#262626] bg-[#111111] p-6">
-            <div className="text-[13px] font-semibold text-white mb-4">Architecture Blueprint</div>
+            <div className="flex items-center justify-between border-b border-[#1A1A1A] pb-4 mb-4">
+              <div className="text-[13px] font-semibold text-white">Architecture Blueprint</div>
+              {blueprintData.confidence_score !== undefined && blueprintData.confidence_score < 0.70 && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#EF4444]/12 text-[#F87171] text-[11px] font-semibold border border-[#EF4444]/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#EF4444] animate-pulse" />
+                  Approximate match ({Math.round(blueprintData.confidence_score * 100)}% confidence)
+                </div>
+              )}
+            </div>
             <div className="text-sm text-[#A3A3A3]">
               {blueprintData.components?.map((c: BlueprintComponent) => (
                 <div key={c.name} className="mb-2 p-2 bg-[#1A1A1A] rounded">
