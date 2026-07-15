@@ -1,4 +1,5 @@
 import os
+import ssl
 
 from celery import Celery
 from celery.schedules import crontab
@@ -19,10 +20,12 @@ if _sentry_dsn:
         release=os.getenv("APP_VERSION", ""),
     )
 
+_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 celery_app = Celery(
     "p2c",
-    broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    backend=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+    broker=_redis_url,
+    backend=_redis_url,
     include=[
         "backend.tasks.paper_tasks",
         "backend.tasks.dojo_tasks",
@@ -35,6 +38,15 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.task_track_started = True
 celery_app.conf.worker_prefetch_multiplier = 1  # fair dispatch for long tasks
+
+# Render's managed Redis uses TLS (rediss://).  Celery requires ssl_cert_reqs
+# to be explicitly set for rediss:// connections — omitting it causes a 400
+# error at task-enqueue time ("A rediss:// URL must have parameter ssl_cert_reqs").
+if _redis_url.startswith("rediss://"):
+    _ssl_opts = {"ssl_cert_reqs": ssl.CERT_NONE}
+    celery_app.conf.broker_use_ssl = _ssl_opts
+    celery_app.conf.redis_backend_use_ssl = _ssl_opts
+
 
 celery_app.conf.beat_schedule = {
     "cleanup-zombie-tasks-hourly": {
