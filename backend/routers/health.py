@@ -65,6 +65,26 @@ def health_redis():
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@router.get("/api/health/celery")
+def health_celery():
+    from backend.celery_app import celery_app
+    import os
+    try:
+        backend_url = celery_app.backend.url
+    except Exception as e:
+        backend_url = f"ERROR: {type(e).__name__}: {str(e)}"
+    
+    return {
+        "celery_backend_url": backend_url,
+        "broker_use_ssl": getattr(celery_app.conf, "broker_use_ssl", None),
+        "redis_backend_use_ssl": getattr(celery_app.conf, "redis_backend_use_ssl", None),
+        "REDIS_URL": os.getenv("REDIS_URL"),
+        "CELERY_RESULT_BACKEND": os.getenv("CELERY_RESULT_BACKEND"),
+        "CELERY_BROKER_URL": os.getenv("CELERY_BROKER_URL")
+    }
+
+
+
 @router.get("/api/health/e2b")
 async def health_e2b():
     from fastapi.concurrency import run_in_threadpool
