@@ -61,6 +61,12 @@ if "CELERY_RESULT_BACKEND" in os.environ:
         _delimiter = "&" if "?" in _result_backend else "?"
         os.environ["CELERY_RESULT_BACKEND"] = f"{_result_backend}{_delimiter}ssl_cert_reqs=CERT_NONE"
 
+if "CELERY_BROKER_URL" in os.environ:
+    _broker_url = os.environ["CELERY_BROKER_URL"]
+    if _broker_url.startswith("rediss://") and "ssl_cert_reqs" not in _broker_url:
+        _delimiter = "&" if "?" in _broker_url else "?"
+        os.environ["CELERY_BROKER_URL"] = f"{_broker_url}{_delimiter}ssl_cert_reqs=CERT_NONE"
+
 celery_app = Celery(
     "p2c",
     broker=_redis_url,
