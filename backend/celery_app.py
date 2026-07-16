@@ -54,6 +54,13 @@ if _redis_url.startswith("rediss://") and "ssl_cert_reqs" not in _redis_url:
     _delimiter = "&" if "?" in _redis_url else "?"
     _redis_url += f"{_delimiter}ssl_cert_reqs=CERT_NONE"
 
+# If the environment explicitly overrides the result backend, we must patch that too
+if "CELERY_RESULT_BACKEND" in os.environ:
+    _result_backend = os.environ["CELERY_RESULT_BACKEND"]
+    if _result_backend.startswith("rediss://") and "ssl_cert_reqs" not in _result_backend:
+        _delimiter = "&" if "?" in _result_backend else "?"
+        os.environ["CELERY_RESULT_BACKEND"] = f"{_result_backend}{_delimiter}ssl_cert_reqs=CERT_NONE"
+
 celery_app = Celery(
     "p2c",
     broker=_redis_url,
