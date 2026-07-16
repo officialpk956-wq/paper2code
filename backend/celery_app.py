@@ -22,6 +22,12 @@ if _sentry_dsn:
 
 _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# Render's managed Redis uses TLS (rediss://). redis-py requires ssl_cert_reqs
+# in the URL query string when using rediss://.
+if _redis_url.startswith("rediss://") and "ssl_cert_reqs" not in _redis_url:
+    _delimiter = "&" if "?" in _redis_url else "?"
+    _redis_url += f"{_delimiter}ssl_cert_reqs=CERT_NONE"
+
 celery_app = Celery(
     "p2c",
     broker=_redis_url,
@@ -39,9 +45,6 @@ celery_app.conf.accept_content = ["json"]
 celery_app.conf.task_track_started = True
 celery_app.conf.worker_prefetch_multiplier = 1  # fair dispatch for long tasks
 
-# Render's managed Redis uses TLS (rediss://).  Celery requires ssl_cert_reqs
-# to be explicitly set for rediss:// connections — omitting it causes a 400
-# error at task-enqueue time ("A rediss:// URL must have parameter ssl_cert_reqs").
 if _redis_url.startswith("rediss://"):
     _ssl_opts = {"ssl_cert_reqs": ssl.CERT_NONE}
     celery_app.conf.broker_use_ssl = _ssl_opts
