@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
-from backend.dependencies import get_current_user
+from backend.dependencies import get_current_user, get_optional_user
 from backend.models import (
     AssessmentAttempt,
     InterviewQuestion,
@@ -289,8 +289,14 @@ def update_learner_progress(
 
 @router.get("/analytics/dashboard")
 def get_analytics_dashboard(
-    db: Session = Depends(get_db), x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
+    # Authenticated requests always use the real user id — the header is only
+    # a fallback for anonymous "guest" progress tracking (see test_05_auth_overrides_header_learner_id).
+    if current_user is not None:
+        x_learner_id = str(current_user.id)
     try:
         # Overview
         total_papers = db.query(func.count(Paper.id)).scalar() or 0
@@ -479,8 +485,12 @@ def get_analytics_dashboard(
 
 @router.get("/analytics/recommendations")
 def get_analytics_recommendations(
-    db: Session = Depends(get_db), x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
+    if current_user is not None:
+        x_learner_id = str(current_user.id)
     try:
         recs = recommendation_engine.compute(*_fetch_recommendation_data(db, x_learner_id))
         return recs
@@ -495,8 +505,12 @@ def get_analytics_recommendations(
 
 @router.get("/adaptive/recommendations")
 def get_adaptive_recommendations(
-    db: Session = Depends(get_db), x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
+    if current_user is not None:
+        x_learner_id = str(current_user.id)
     try:
         recs = adaptive_engine.get_personalized_recommendations(
             *_fetch_adaptive_data(db, x_learner_id), _fetch_all_papers_data(db)
@@ -513,8 +527,12 @@ def get_adaptive_recommendations(
 
 @router.get("/adaptive/review-plan")
 def get_adaptive_review_plan(
-    db: Session = Depends(get_db), x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
+    if current_user is not None:
+        x_learner_id = str(current_user.id)
     try:
         plan = adaptive_engine.get_daily_review_plan(
             *_fetch_adaptive_data(db, x_learner_id), _fetch_all_papers_data(db)
@@ -531,8 +549,12 @@ def get_adaptive_review_plan(
 
 @router.get("/adaptive/concept-graph")
 def get_adaptive_concept_graph(
-    db: Session = Depends(get_db), x_learner_id: str = Header(alias="X-Learner-ID", default="")
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    x_learner_id: str = Header(alias="X-Learner-ID", default=""),
 ):
+    if current_user is not None:
+        x_learner_id = str(current_user.id)
     try:
         graph_nodes = adaptive_engine.get_concept_graph(*_fetch_adaptive_data(db, x_learner_id))
         return {"nodes": graph_nodes}

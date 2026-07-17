@@ -78,7 +78,6 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
         "learning_points": prob.learning_points,
         "visualization_url": prob.visualization_url,
         "python_template": prob.python_template,
-        "test_cases": prob.test_cases,
         "hints": prob.hints,
         "explanation": prob.explanation,
         "is_retired": prob.is_retired,

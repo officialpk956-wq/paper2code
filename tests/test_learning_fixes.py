@@ -8,12 +8,13 @@ Covers 4 audit fixes applied to backend/routers/learning.py:
   4. GET/PATCH /api/me/notification-prefs — new endpoint, email_drip_opt_out toggle
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from unittest.mock import patch, MagicMock
 
-from backend.models import User, XPEvent
+from backend.models import AssessmentAttempt, User, XPEvent
 from backend.modules.auth.security.hashing import hash_password
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ def _auth(token: str) -> dict:
 # TestAdaptiveRecommendationsFix — GET /api/adaptive/recommendations
 # ---------------------------------------------------------------------------
 
+
 class TestAdaptiveRecommendationsFix:
     """Verify the wrong method name (generate_recommendations) is fixed."""
 
@@ -87,6 +89,7 @@ class TestAdaptiveRecommendationsFix:
 # ---------------------------------------------------------------------------
 # TestAnalyticsDashboardJWT — GET /api/analytics/dashboard
 # ---------------------------------------------------------------------------
+
 
 class TestAnalyticsDashboardJWT:
     """Verify authenticated users don't need X-Learner-ID; their user.id is used."""
@@ -134,10 +137,55 @@ class TestAnalyticsDashboardJWT:
             )
         assert r.status_code == 200
 
+    def test_05b_header_cannot_spoof_another_users_real_data(self, client, db_session):
+        # IDOR regression: previously the header was used verbatim with no
+        # auth check at all, so anyone could read ANY user's real analytics
+        # by guessing/knowing their integer id (GET /api/analytics/dashboard
+        # with X-Learner-ID: <victim id>, no login required). Confirm the
+        # authenticated caller's own data comes back even when the header
+        # names a different, real user with different attempt data.
+        victim = _seed_user(db_session, "victim05b@lf.com")
+        db_session.add(
+            AssessmentAttempt(
+                learner_id=str(victim.id),
+                assessment_type="architecture",
+                architecture="Transformer",
+                is_correct=True,
+            )
+        )
+        db_session.commit()
+
+        caller = _seed_user(db_session, "caller05b@lf.com")
+        db_session.add(
+            AssessmentAttempt(
+                learner_id=str(caller.id),
+                assessment_type="architecture",
+                architecture="ResNet",
+                is_correct=True,
+            )
+        )
+        db_session.commit()
+        token = _login(client, caller.email)
+
+        with patch(
+            "core.analytics.recommendation_engine.recommendation_engine.compute",
+            return_value=[],
+        ):
+            r = client.get(
+                "/api/analytics/dashboard",
+                headers={**_auth(token), "X-Learner-ID": str(victim.id)},
+            )
+        assert r.status_code == 200
+        data = r.json()
+        # Caller's own attempt (ResNet) must be reflected, not the victim's (Transformer).
+        assert "ResNet" in data["assessment_performance"]["strongest_architecture"]
+        assert "Transformer" not in data["assessment_performance"]["strongest_architecture"]
+
 
 # ---------------------------------------------------------------------------
 # TestAssessmentValidateXP — POST /api/assessment/validate
 # ---------------------------------------------------------------------------
+
 
 class TestAssessmentValidateXP:
     """Verify award_xp is called for correct authenticated answers."""
@@ -253,8 +301,8 @@ class TestAssessmentValidateXP:
 # TestNotificationPrefs — GET/PATCH /api/me/notification-prefs
 # ---------------------------------------------------------------------------
 
-class TestNotificationPrefs:
 
+class TestNotificationPrefs:
     def test_10_get_prefs_default_false(self, client, db_session):
         user = _seed_user(db_session, "pref10@lf.com")
         token = _login(client, user.email)

@@ -11,8 +11,15 @@ import {
 } from 'lucide-react';
 import { PROBLEMS, getProblemBySlug, getProblemIndex } from '@/data/problems';
 import { apiGet, apiPost, isLoggedIn } from '@/lib/api';
+import { loader } from '@monaco-editor/react';
 
 import { motion, AnimatePresence } from 'framer-motion';
+
+// Self-hosted Monaco assets (scripts/copy-monaco-assets.mjs) — avoids the
+// jsdelivr CDN default, whose editor.main.css failing to load leaves
+// Monaco's raw <textarea> chrome unhidden (visible white box) and the
+// cursor unstyled.
+loader.config({ paths: { vs: '/monaco-editor/vs' } });
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -73,8 +80,8 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
   const [code,       setCode]       = useState('');
   const [testInput,  setTestInput]  = useState('');
   const [runState,   setRunState]   = useState<RunState>('idle');
+  const [lastAction, setLastAction] = useState<'run' | 'submit'>('run');
   const [stdout,     setStdout]     = useState('');
-  const [expected,   setExpected]   = useState('');
   const [notes,      setNotes]      = useState('');
   const [submissions, setSubmissions] = useState<{status:string; created_at:string}[]>([]);
 
@@ -86,7 +93,6 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
     setTestInput(problem.test_input);
     setRunState('idle');
     setStdout('');
-    setExpected('');
 
     // Fetch prior submissions
     if (isLoggedIn()) {
@@ -112,32 +118,58 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
     if (slug) localStorage.setItem(`notes_${slug}`, notes);
   }, [notes, slug]);
 
-  /* ── Run / Submit ─────────────────────────────────────── */
+  /* ── Run / Submit ─────────────────────────────────────────
+     Run  → POST /api/dojo/runs            (sync, ungraded — user's own stdin)
+     Submit → POST /api/dojo/code-submissions (async — queued to Celery, the
+       response is only {task_id, status, poll_url}; the real result has to
+       be polled from GET /api/tasks/{id}). Both require `stdin`, not
+       `test_input` — the backend's Pydantic models don't have a
+       `test_input` field, so sending that name silently drops it. ────── */
+  type ExecResult = { passed: boolean; stdout: string; stderr: string };
+
+  async function pollTask(taskId: string): Promise<{ status: string; result?: ExecResult; error?: string }> {
+    for (let i = 0; i < 40; i++) {
+      const task = await apiGet<{ status: string; result?: ExecResult; error?: string }>(`/api/tasks/${taskId}`);
+      if (task.status === 'completed' || task.status === 'failed') return task;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    throw new Error('Timed out waiting for the judge — please try again.');
+  }
+
   async function handleRun(submit: boolean) {
     if (!problem) return;
     setRunState('running');
+    setLastAction(submit ? 'submit' : 'run');
     setConsoleTab('result');
     setStdout('');
-    setExpected('');
     try {
-      const res = await apiPost<{
-        passed: boolean; stdout: string; stderr: string;
-        expected_output?: string; error?: string;
-      }>(submit ? '/api/dojo/submit' : '/api/dojo/run', {
-        problem_id: slug,
-        code,
-        test_input: submit ? problem.test_input : testInput,
-      });
-      if (res?.error) {
-        setRunState('error');
-        setStdout(res.error);
-      } else {
-        setRunState(res?.passed ? 'passed' : 'failed');
-        setStdout(res?.stdout ?? res?.stderr ?? '');
-        setExpected(res?.expected_output ?? '');
-        if (submit && res?.passed) {
-          setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
+      let result: ExecResult | undefined;
+
+      if (submit) {
+        const { task_id } = await apiPost<{ task_id: string; status: string }>('/api/dojo/code-submissions', {
+          problem_id: slug,
+          code,
+          stdin: problem.test_input,
+        });
+        const task = await pollTask(task_id);
+        if (task.status === 'failed') {
+          setRunState('error');
+          setStdout(task.error ?? 'Execution failed');
+          return;
         }
+        result = task.result;
+      } else {
+        result = await apiPost<ExecResult>('/api/dojo/runs', {
+          problem_id: slug,
+          code,
+          stdin: testInput,
+        });
+      }
+
+      setRunState(result?.passed ? 'passed' : 'failed');
+      setStdout(result?.stdout || result?.stderr || '');
+      if (submit && result?.passed) {
+        setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
       }
     } catch (e: unknown) {
       setRunState('error');
@@ -580,20 +612,14 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                       transition={{ type: 'spring', stiffness: 200, damping: 20 }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                        {runState === 'passed' && <><CheckCircle size={16} style={{ color: '#4ADE80' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#4ADE80' }}>Accepted</span></>}
-                        {runState === 'failed' && <><XCircle size={16} style={{ color: '#F87171' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>Wrong Answer</span></>}
+                        {runState === 'passed' && <><CheckCircle size={16} style={{ color: '#4ADE80' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#4ADE80' }}>{lastAction === 'submit' ? 'Accepted' : 'Ran Successfully'}</span></>}
+                        {runState === 'failed' && <><XCircle size={16} style={{ color: '#F87171' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>{lastAction === 'submit' ? 'Wrong Answer' : 'Ran with Errors'}</span></>}
                         {runState === 'error' && <><XCircle size={16} style={{ color: '#F59E0B' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F59E0B' }}>Runtime Error</span></>}
                       </div>
                       {stdout && (
                         <div>
                           <p style={{ fontSize: 10, fontWeight: 600, color: '#525252', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Output</p>
                           <pre style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: runState === 'passed' ? '#4ADE80' : '#F87171', whiteSpace: 'pre-wrap' }}>{stdout}</pre>
-                        </div>
-                      )}
-                      {expected && (
-                        <div style={{ marginTop: 10 }}>
-                          <p style={{ fontSize: 10, fontWeight: 600, color: '#525252', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Expected</p>
-                          <pre style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#4ADE80', whiteSpace: 'pre-wrap' }}>{expected}</pre>
                         </div>
                       )}
                     </motion.div>

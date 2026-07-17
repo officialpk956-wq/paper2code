@@ -1,33 +1,45 @@
 import os
 import ssl
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import redis
 from celery import Celery
 from celery.schedules import crontab
-import redis
 
 # Monkey-patch redis.from_url to bypass Kombu stripping query params, which
 # causes redis-py to throw the ssl_cert_reqs ValueError on rediss:// URLs.
 _orig_from_url = redis.from_url
+
+
 def _patched_from_url(url, **kwargs):
     if isinstance(url, str) and url.startswith("rediss://") and "ssl_cert_reqs" not in url:
         url += ("&" if "?" in url else "?") + "ssl_cert_reqs=CERT_NONE"
     return _orig_from_url(url, **kwargs)
+
+
 redis.from_url = _patched_from_url
 
 if hasattr(redis.Redis, "from_url"):
     _orig_redis_from_url = redis.Redis.from_url
+
     def _patched_redis_from_url(cls, url, **kwargs):
         if isinstance(url, str) and url.startswith("rediss://") and "ssl_cert_reqs" not in url:
             url += ("&" if "?" in url else "?") + "ssl_cert_reqs=CERT_NONE"
         return _orig_redis_from_url(url, **kwargs)
+
     redis.Redis.from_url = classmethod(_patched_redis_from_url)
 
 if hasattr(redis, "ConnectionPool") and hasattr(redis.ConnectionPool, "from_url"):
     _orig_pool_from_url = redis.ConnectionPool.from_url
+
     def _patched_pool_from_url(cls, url, **kwargs):
         if isinstance(url, str) and url.startswith("rediss://") and "ssl_cert_reqs" not in url:
             url += ("&" if "?" in url else "?") + "ssl_cert_reqs=CERT_NONE"
         return _orig_pool_from_url(url, **kwargs)
+
     redis.ConnectionPool.from_url = classmethod(_patched_pool_from_url)
 
 # Initialize Sentry in the Celery worker process when DSN is configured.
@@ -59,7 +71,9 @@ if "CELERY_RESULT_BACKEND" in os.environ:
     _result_backend = os.environ["CELERY_RESULT_BACKEND"]
     if _result_backend.startswith("rediss://") and "ssl_cert_reqs" not in _result_backend:
         _delimiter = "&" if "?" in _result_backend else "?"
-        os.environ["CELERY_RESULT_BACKEND"] = f"{_result_backend}{_delimiter}ssl_cert_reqs=CERT_NONE"
+        os.environ["CELERY_RESULT_BACKEND"] = (
+            f"{_result_backend}{_delimiter}ssl_cert_reqs=CERT_NONE"
+        )
 
 if "CELERY_BROKER_URL" in os.environ:
     _broker_url = os.environ["CELERY_BROKER_URL"]
