@@ -89,6 +89,77 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
     }
 
 
+TOPIC_ARCH = {
+    "attention": ("transformer", "Transformer"),
+    "convolution": ("resnet", "ResNet"),
+    "normalization": ("vit", "ViT"),
+    "embedding": ("bert", "BERT"),
+    "residual": ("resnet", "ResNet"),
+    "transformer": ("transformer", "Transformer"),
+}
+
+TOPIC_DOMAIN = {
+    "numpy": ("/learn/mathematics", "Mathematics"),
+    "array": ("/learn/mathematics", "Mathematics"),
+    "gradient": ("/learn/deep-learning", "Deep Learning"),
+    "attention": ("/learn/natural-language-processing", "Natural Language Processing"),
+    "convolution": ("/learn/computer-vision", "Computer Vision"),
+    "embedding": ("/learn/natural-language-processing", "Natural Language Processing"),
+    "normalization": ("/learn/deep-learning", "Deep Learning"),
+}
+
+@router.get("/dojo/problems/{slug}/related")
+def get_problem_related(
+    slug: str,
+    db: Session = Depends(get_db),
+    # Assuming get_optional_user is in backend.dependencies
+):
+    from backend.dependencies import get_optional_user
+    current_user = get_optional_user
+    prob = db.query(Problem).filter_by(slug=slug).first()
+    if not prob:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    arch_slug = None
+    arch_name = None
+    learn_path = "/learn/deep-learning"
+    learn_name = "Deep Learning"
+    
+    topics = getattr(prob, "topics", getattr(prob, "tags", [])) or []
+    
+    for t in topics:
+        if t in TOPIC_ARCH and arch_slug is None:
+            arch_slug, arch_name = TOPIC_ARCH[t]
+        if t in TOPIC_DOMAIN and learn_path == "/learn/deep-learning":
+            learn_path, learn_name = TOPIC_DOMAIN[t]
+            
+    paper_id = None
+    paper_title = None
+    
+    query = (prob.title or "") + " " + " ".join(topics)
+    try:
+        from backend.services.vector_service import semantic_search
+        from backend.models import Paper
+        results = semantic_search(query, limit=1)
+        if results:
+            paper_id_val = results[0] if isinstance(results[0], int) else results[0].get("id")
+            paper = db.query(Paper).filter_by(id=paper_id_val).first()
+            if paper:
+                paper_id = paper.id
+                paper_title = paper.title
+    except Exception:
+        pass
+
+    return {
+        "arch_slug": arch_slug,
+        "arch_name": arch_name,
+        "paper_id": paper_id,
+        "paper_title": paper_title,
+        "learn_path": learn_path,
+        "learn_name": learn_name
+    }
+
+
 class DojoExerciseSubmitRequest(BaseModel):
     exercise_id: str = Field(..., max_length=256)
     passed: bool

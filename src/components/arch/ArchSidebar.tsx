@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
+import KAGRelations from './KAGRelations';
+import CompareTrigger from './CompareTrigger';
 
 function slugify(text: string): string {
   return text
@@ -15,9 +17,10 @@ function slugify(text: string): string {
 
 interface ArchSidebarProps {
   sections: string[];
+  slug?: string;
 }
 
-export default function ArchSidebar({ sections }: ArchSidebarProps) {
+export default function ArchSidebar({ sections, slug }: ArchSidebarProps) {
   const [activeId, setActiveId] = useState<string>('');
 
   useEffect(() => {
@@ -67,6 +70,12 @@ export default function ArchSidebar({ sections }: ArchSidebarProps) {
             </a>
           );
         })}
+        {slug && (
+          <div className="mt-8">
+            <CompareTrigger currentSlug={slug} />
+            <KAGRelations slug={slug} />
+          </div>
+        )}
       </div>
     </div>
   );

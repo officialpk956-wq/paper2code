@@ -156,6 +156,9 @@ app.include_router(oauth_router)
 app.include_router(announcements_router)
 app.include_router(paper_challenges_router)
 
+from backend.routers import architectures
+app.include_router(architectures.router)
+
 # Prometheus metrics endpoint (restricted to internal IPs by Nginx in production)
 from fastapi import Request as _Req
 

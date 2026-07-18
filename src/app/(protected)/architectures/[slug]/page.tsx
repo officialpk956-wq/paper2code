@@ -124,7 +124,7 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
   return (
     <div className="flex h-[calc(100vh-56px)] bg-transparent text-white overflow-hidden">
       {/* LEFT SIDEBAR (Nav) */}
-      <ArchSidebar sections={headings} />
+      <ArchSidebar sections={headings} slug={arch.slug} />
 
       {/* MAIN CONTENT */}
       <div className="flex-1 overflow-y-auto scroll-smooth">

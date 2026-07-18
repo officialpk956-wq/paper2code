@@ -85,6 +85,16 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
   const [notes,      setNotes]      = useState('');
   const [submissions, setSubmissions] = useState<{status:string; created_at:string}[]>([]);
 
+  type RelatedMeta = {
+    arch_slug: string | null;
+    arch_name: string | null;
+    paper_id: number | null;
+    paper_title: string | null;
+    learn_path: string | null;
+    learn_name: string | null;
+  };
+  const [related, setRelated] = useState<RelatedMeta | null>(null);
+
   /* load saved state on slug change */
   useEffect(() => {
     if (!problem) return;
@@ -93,6 +103,9 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
     setTestInput(problem.test_input);
     setRunState('idle');
     setStdout('');
+    
+    apiGet<RelatedMeta>(`/api/dojo/problems/${slug}/related`)
+      .then(setRelated).catch(() => {});
 
     // Fetch prior submissions
     if (isLoggedIn()) {
@@ -400,45 +413,55 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                 )}
 
                 {/* RELATED */}
-                {(SLUG_META[slug]?.archSlug || SLUG_META[slug]?.paperSlug || SLUG_META[slug]?.learnPath) && (
-                  <div style={{ marginTop: 20, border: '1px solid #262626', borderRadius: 12, padding: 16 }}>
-                    <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#A78BFA', textTransform: 'uppercase', marginBottom: 12 }}>
-                      Related
-                    </p>
-                    <div className="space-y-2">
-                      {SLUG_META[slug]?.learnPath && (
-                        <Link href={SLUG_META[slug].learnPath!}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
-                          onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-                          onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#60A5FA', flexShrink: 0 }} />
-                          Learn: {SLUG_META[slug].learnName}
-                        </Link>
-                      )}
-                      {SLUG_META[slug]?.archSlug && (
-                        <Link href={`/architectures/${SLUG_META[slug].archSlug}`}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
-                          onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-                          onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#A78BFA', flexShrink: 0 }} />
-                          Architecture: {SLUG_META[slug].archName}
-                        </Link>
-                      )}
-                      {SLUG_META[slug]?.paperSlug && (
-                        <Link href={`/papers/${SLUG_META[slug].paperSlug}`}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
-                          onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-                          onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#F97316', flexShrink: 0 }} />
-                          Paper: {SLUG_META[slug].paperTitle}
-                        </Link>
-                      )}
+                {(() => {
+                  const r = related ?? {};
+                  const s = SLUG_META[slug] ?? {};
+                  const archSlug = r.arch_slug ?? s.archSlug;
+                  const archName = r.arch_name ?? s.archName;
+                  const paperSlug = r.paper_id ? `/papers/${r.paper_id}` : (s.paperSlug ? `/papers/${s.paperSlug}` : null);
+                  const paperTitle = r.paper_title ?? s.paperTitle;
+                  const learnPath = r.learn_path ?? s.learnPath;
+                  const learnName = r.learn_name ?? s.learnName;
+                  return (archSlug || paperSlug || learnPath) ? (
+                    <div style={{ marginTop: 20, border: '1px solid #262626', borderRadius: 12, padding: 16 }}>
+                      <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#A78BFA', textTransform: 'uppercase', marginBottom: 12 }}>
+                        Related
+                      </p>
+                      <div className="space-y-2">
+                        {learnPath && (
+                          <Link href={learnPath}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
+                            onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+                            onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
+                          >
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#60A5FA', flexShrink: 0 }} />
+                            Learn: {learnName}
+                          </Link>
+                        )}
+                        {archSlug && (
+                          <Link href={`/architectures/${archSlug}`}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
+                            onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+                            onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
+                          >
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#A78BFA', flexShrink: 0 }} />
+                            Architecture: {archName}
+                          </Link>
+                        )}
+                        {paperSlug && (
+                          <Link href={paperSlug}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A3A3A3', textDecoration: 'none' }}
+                            onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+                            onMouseLeave={e => (e.currentTarget.style.color = '#A3A3A3')}
+                          >
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#F97316', flexShrink: 0 }} />
+                            Paper: {paperTitle}
+                          </Link>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  ) : null;
+                })()}
 
                 <div style={{ marginTop: 16 }}>
                   <DiffBadge d={problem.difficulty} />

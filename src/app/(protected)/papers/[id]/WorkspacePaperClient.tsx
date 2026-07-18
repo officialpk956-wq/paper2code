@@ -1,12 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
 import { findArch } from '@/lib/crosslinks';
 import { FLAGSHIP_META, FLAGSHIP_GRAPH, FLAGSHIP_BLUEPRINT, FLAGSHIP_CODE } from '@/data/flagship-papers';
+import { loader } from '@monaco-editor/react';
 
-type Tab = 'summary' | 'graph' | 'blueprint' | 'executable' | 'challenges' | 'tutor';
+loader.config({ paths: { vs: '/monaco-editor/vs' } });
+const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+
+type Tab = 'summary' | 'graph' | 'blueprint' | 'executable' | 'challenges' | 'tutor' | 'implement';
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'summary',    label: 'Summary' },
@@ -15,6 +20,7 @@ const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'executable', label: 'Executable' },
   { id: 'challenges', label: 'Challenges' },
   { id: 'tutor',      label: 'AI Tutor' },
+  { id: 'implement',  label: 'Implement' },
 ];
 
 type PaperMeta = {
@@ -34,6 +40,13 @@ type BlueprintComponent = { name: string; description: string };
 type BlueprintData = { status?: string; components?: BlueprintComponent[]; confidence_score?: number };
 
 type ExecutableData = { status?: string; code?: string; language?: string };
+
+type ImplData = {
+  status: string;
+  starter_code: string;
+  shapes: Record<string, { input: number[]; output: number[] }>;
+  layer_docs: Record<string, { summary: string; use_case?: string }>;
+};
 
 const PAPER_CHALLENGES: Record<string, Challenge[]> = {
   'attention-is-all-you-need': [
@@ -84,6 +97,15 @@ const DIFF_COLOR: Record<string, string> = {
   Easy: 'text-[#4ADE80]', Medium: 'text-[#FACC15]', Hard: 'text-[#F87171]',
 };
 
+const FLAGSHIP_TITLE_WORDS: Record<string, string> = {
+  'attention-is-all-you-need': 'attention',
+  'resnet': 'residual',
+  'bert': 'bert',
+  'vit': 'image is worth',
+  'lora': 'lora',
+  'flash-attention': 'flashattention',
+};
+
 export default function WorkspacePaperClient({ id }: { id: string }) {
   const [tab, setTab] = useState<Tab>('summary');
   
@@ -92,6 +114,8 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [blueprintData, setBlueprintData] = useState<BlueprintData | null>(null);
   const [executableData, setExecutableData] = useState<ExecutableData | null>(null);
+  const [implData, setImplData] = useState<ImplData | null>(null);
+  const [implCode, setImplCode] = useState('');
   
   // UI states
   const [loading, setLoading] = useState(true);
@@ -99,8 +123,9 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   const [error, setError] = useState('');
   
   // Tutor chat state
+  const [numericId, setNumericId] = useState<number | null>(null);
   const [chat, setChat] = useState<{ role: 'user' | 'assistant'; text: string }[]>([
-    { role: 'assistant', text: 'Ask me anything about this paper. I can explain concepts, compare with related work, and help you implement key ideas.' },
+    { role: 'assistant', text: 'Ask me anything about this paper. I can explain the architecture, compare it with related work, and discuss implementation details.' },
   ]);
   const [input, setInput] = useState('');
   const [tutorLoading, setTutorLoading] = useState(false);
@@ -114,17 +139,26 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
     if (tab === 'graph') fetchGraph();
     else if (tab === 'blueprint') fetchBlueprint();
     else if (tab === 'executable') fetchExecutable();
+    else if (tab === 'implement') fetchImplement();
   }, [tab, id]);
 
   const fetchSummary = async () => {
     if (FLAGSHIP_META[id]) {
       setMeta({ ...FLAGSHIP_META[id] });
       setLoading(false);
+      apiGet<{ papers: {id: number, title: string}[] }>('/api/papers')
+        .then(data => {
+          const found = data.papers?.find(p => p.id.toString() === id || 
+            p.title.toLowerCase().includes(FLAGSHIP_TITLE_WORDS[id] ?? ''));
+          if (found) setNumericId(found.id);
+        })
+        .catch(() => {});
       return;
     }
     try {
       const data = await apiGet<PaperMeta>(`/api/papers/${id}`);
       setMeta({ ...data, color: data.color || '#A78BFA' });
+      setNumericId(parseInt(id, 10));
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load summary');
     } finally {
@@ -174,6 +208,20 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
     }
   };
 
+  const fetchImplement = async () => {
+    if (implData) return;
+    setTabLoading(true);
+    try {
+      const data = await apiGet<ImplData>(`/api/papers/${id}/implement`);
+      setImplData(data);
+      setImplCode(data.starter_code);
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to load implementation');
+    } finally {
+      setTabLoading(false);
+    }
+  };
+
   // Poll for processing status
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
@@ -192,32 +240,45 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   }, [tab, graphData, blueprintData, executableData]);
 
   const sendMessage = async () => {
-    if (!input.trim() || tutorLoading) return;
-    
     const userMsg = input.trim();
+    if (!userMsg || tutorLoading) return;
     setChat(prev => [...prev, { role: 'user', text: userMsg }]);
     setInput('');
     setTutorLoading(true);
     
-    if (FLAGSHIP_META[id]) {
-      setChat(prev => [...prev, {
-        role: 'assistant',
-        text: 'The AI tutor works on papers you upload to your Workspace. This is a curated reference paper — explore the Knowledge Graph, Blueprint, and Executable tabs, or practice it hands-on via the Challenges tab.',
-      }]);
-      setTutorLoading(false);
-      return;
-    }
+    const nid = numericId ?? parseInt(id, 10);
+    
     try {
-      const res = await apiPost<{ answer: string; session_id: string }>('/api/tutor/ask', {
-        query: userMsg,
-        session_id: tutorSessionId,
-        context_type: 'paper',
-        context_data: { title: meta?.title ?? '', paper_id: id },
-      });
-      setTutorSessionId(res.session_id);
-      setChat(prev => [...prev, { role: 'assistant', text: res.answer }]);
+      if (numericId !== null || !isNaN(parseInt(id, 10))) {
+        // Use paper-specific RAG endpoint
+        const res = await apiPost<{ answer: string; referenced_papers: number[] }>(
+          `/api/papers/${nid}/ask`,
+          { question: userMsg }
+        );
+        setChat(prev => [...prev, { role: 'assistant', text: res.answer }]);
+        // Show referenced paper IDs as a soft follow-up message if any
+        if (res.referenced_papers?.length > 0) {
+          setChat(prev => [...prev, { 
+            role: 'assistant', 
+            text: `See also: ${res.referenced_papers.map(pid => `Paper #${pid}`).join(', ')}`
+          }]);
+        }
+      } else {
+        // Fallback: general tutor (should rarely hit)
+        const res = await apiPost<{ answer: string; session_id: string }>('/api/tutor/ask', {
+          query: userMsg,
+          session_id: tutorSessionId,
+          context_type: 'paper',
+          context_data: { title: meta?.title ?? '', paper_id: id },
+        });
+        setTutorSessionId(res.session_id);
+        setChat(prev => [...prev, { role: 'assistant', text: res.answer }]);
+      }
     } catch (err: unknown) {
-      setChat(prev => [...prev, { role: 'assistant', text: (err as Error)?.message || 'Sorry, I encountered an error answering that question.' }]);
+      setChat(prev => [...prev, { 
+        role: 'assistant', 
+        text: (err as Error)?.message || 'Sorry, I could not answer that question.' 
+      }]);
     } finally {
       setTutorLoading(false);
     }
@@ -467,6 +528,87 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 className="flex-1 bg-[#111111] border border-[#262626] rounded-xl px-4 py-2.5 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA]" />
               <button onClick={sendMessage} disabled={tutorLoading}
                 className="px-4 py-2.5 rounded-xl bg-[#A78BFA] text-black text-[13px] font-semibold hover:brightness-110 disabled:opacity-50">Send</button>
+            </div>
+          </div>
+        )}
+
+        {tab === 'implement' && (
+          <div className="flex h-full gap-4">
+            {/* Left Pane: Editor */}
+            <div className="flex flex-col w-[60%] h-full rounded-xl border border-[#262626] bg-[#0A0A0A] overflow-hidden">
+              <div className="flex flex-col border-b border-[#1A1A1A] px-4 py-3">
+                <div className="text-[14px] font-bold text-white">Implement {meta.title}</div>
+                <div className="text-[12px] text-[#A3A3A3] mt-1">Starter code generated from the architecture graph. Edit freely.</div>
+                {implData?.status === "no_graph" && (
+                  <div className="mt-2 bg-[#F59E0B]/10 border border-[#F59E0B]/20 text-[#F59E0B] px-3 py-2 text-[12px] rounded-lg">
+                    No architecture graph available for this paper. Upload the paper PDF to extract architecture data.
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-h-[400px]">
+                <MonacoEditor
+                  height="calc(100vh - 280px)"
+                  language="python"
+                  theme="vs-dark"
+                  value={implCode}
+                  onChange={v => setImplCode(v ?? '')}
+                  options={{
+                    fontSize: 13,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    fontFamily: 'JetBrains Mono, monospace',
+                  }}
+                />
+              </div>
+              <div className="border-t border-[#1A1A1A] p-3 flex justify-end">
+                <button
+                  disabled
+                  title="Coming soon"
+                  className="text-[12px] px-4 py-2 rounded-lg bg-[#262626] text-[#A3A3A3] font-semibold cursor-not-allowed border border-[#1A1A1A]"
+                >
+                  Run in Sandbox
+                </button>
+              </div>
+            </div>
+
+            {/* Right Pane: Shape Hints & Layer Guide */}
+            <div className="flex flex-col w-[40%] h-full overflow-y-auto space-y-4">
+              <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
+                <div className="text-[10px] uppercase font-bold text-[#A78BFA] tracking-wider mb-4">Tensor Shapes</div>
+                {implData?.shapes && Object.keys(implData.shapes).length > 0 ? (
+                  <div className="space-y-2">
+                    {Object.entries(implData.shapes).map(([nodeId, shape]) => {
+                      const inStr = Array.isArray(shape.input) ? `(${shape.input.join(', ')})` : String(shape.input);
+                      const outStr = Array.isArray(shape.output) ? `(${shape.output.join(', ')})` : String(shape.output);
+                      return (
+                        <div key={nodeId} className="flex flex-col py-1 border-b border-[#1A1A1A] last:border-0">
+                          <span className="text-[11px] font-semibold text-white mb-1">{nodeId}</span>
+                          <span className="text-[11px] font-mono text-[#A3A3A3]">{inStr} → {outStr}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[12px] text-[#525252]">No shape information available.</div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
+                <div className="text-[10px] uppercase font-bold text-[#A78BFA] tracking-wider mb-4">Layer Guide</div>
+                {implData?.layer_docs && Object.keys(implData.layer_docs).length > 0 ? (
+                  <div className="space-y-4">
+                    {Object.entries(implData.layer_docs).map(([nodeId, doc]) => (
+                      <div key={nodeId} className="flex flex-col pb-3 border-b border-[#1A1A1A] last:border-0 last:pb-0">
+                        <span className="text-[12px] font-semibold text-[#D4D4D4] mb-1">{nodeId}</span>
+                        <span className="text-[11px] leading-relaxed text-[#525252]">{doc.summary}</span>
+                        {doc.use_case && <span className="text-[11px] leading-relaxed text-[#525252] italic mt-1">Use case: {doc.use_case}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[12px] text-[#525252]">No layer documentation available.</div>
+                )}
+              </div>
             </div>
           </div>
         )}

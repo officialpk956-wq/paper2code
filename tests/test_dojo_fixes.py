@@ -398,3 +398,19 @@ class TestMyDojoStats:
     def test_31_unauthenticated_rejected(self, client, db_session):
         r = client.get("/api/me/dojo-stats")
         assert r.status_code in (401, 403)
+
+    def test_get_problem_related_no_qdrant(self, client, db_session):
+        prob = _seed_problem(db_session, "attn")
+        prob.slug = "ml-attention"
+        prob.tags = ["attention"]
+        db_session.commit()
+        
+        r = client.get("/api/dojo/problems/ml-attention/related")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["arch_slug"] == "transformer"
+        assert data["learn_name"] == "Natural Language Processing"
+
+    def test_get_problem_related_404(self, client, db_session):
+        r = client.get("/api/dojo/problems/nonexistent/related")
+        assert r.status_code == 404
