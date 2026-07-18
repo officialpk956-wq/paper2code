@@ -3,7 +3,7 @@
 
 
 import { use, useState, useEffect, useCallback } from 'react';
-
+import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
 
 import Link from 'next/link';
@@ -61,6 +61,46 @@ function saveProgress(id: string, completed: Set<number>) {
 }
 
 
+
+function PassCelebration() {
+  const dots = [
+    { x: -28, y: -24, color: '#4ADE80' },
+    { x:  28, y: -24, color: '#A78BFA' },
+    { x: -32, y:   8, color: '#00E5FF' },
+    { x:  32, y:   8, color: '#FACC15' },
+    { x:   0, y: -32, color: '#4ADE80' },
+    { x:   0, y:  20, color: '#A78BFA' },
+  ]
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      {dots.map((d, i) => (
+        <motion.div
+          key={i}
+          className="absolute w-2 h-2 rounded-full"
+          style={{ backgroundColor: d.color }}
+          initial={{ x: 0, y: 0, opacity: 1, scale: 0 }}
+          animate={{ x: d.x, y: d.y, opacity: 0, scale: 1 }}
+          transition={{ duration: 0.55, ease: 'easeOut', delay: i * 0.04 }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function LoadingDots() {
+  return (
+    <span className="inline-flex items-center gap-[3px]">
+      {[0, 0.12, 0.24].map((delay, i) => (
+        <motion.span
+          key={i}
+          className="block w-[4px] h-[4px] rounded-full bg-current"
+          animate={{ y: [0, -4, 0] }}
+          transition={{ duration: 0.5, repeat: Infinity, ease: 'easeInOut', delay }}
+        />
+      ))}
+    </span>
+  )
+}
 
 export default function GuidedImplementPage({ params }: { params: Promise<{ id: string }> }) {
 
@@ -396,7 +436,10 @@ export default function GuidedImplementPage({ params }: { params: Promise<{ id: 
 
             <div className="flex-shrink-0 border-t border-[#1A1A1A] bg-[#0A0A0A]" style={{ height: 160 }}>
 
-              <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A1A1A]">
+              <div className="relative flex items-center justify-between px-4 py-2 border-b border-[#1A1A1A]">
+                <AnimatePresence>
+                  {runState === 'passed' && <PassCelebration key="celebrate" />}
+                </AnimatePresence>
 
                 <span className="text-[11px] font-semibold" style={{ color: consoleColor[runState] }}>
 
@@ -404,7 +447,15 @@ export default function GuidedImplementPage({ params }: { params: Promise<{ id: 
 
                    runState === 'running' ? 'Running...' :
 
-                   runState === 'passed' ? 'All tests passed!' :
+                   runState === 'passed' ? (
+                     <motion.span
+                       animate={{ scale: [1, 1.1, 1] }}
+                       transition={{ duration: 0.4, delay: 0.1 }}
+                       style={{ display: 'inline-block' }}
+                     >
+                       All tests passed!
+                     </motion.span>
+                   ) :
 
                    runState === 'failed' ? 'Tests failed' : 'Error'}
 
@@ -450,7 +501,7 @@ export default function GuidedImplementPage({ params }: { params: Promise<{ id: 
 
                   >
 
-                    {runState === 'running' ? 'Running...' : 'Run ⌘↵'}
+                    {runState === 'running' ? <LoadingDots /> : 'Run ⌘↵'}
 
                   </button>
 

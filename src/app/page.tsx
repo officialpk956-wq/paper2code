@@ -8,7 +8,9 @@ import { SD_SYSTEMS } from '@/data/content/systemDesign';
 import { PROBLEMS as DOJO_PROBLEMS } from '@/data/problems';
 import { LEGAL } from '@/lib/legal';
 import { FadeIn } from '@/components/FadeIn';
-import AnimatedCard from '@/components/AnimatedCard';
+import { CountUp } from '@/components/CountUp';
+import StaggerList from '@/components/StaggerList';
+import TiltCard from '@/components/TiltCard';
 import { NeuralField } from '@/components/hero/NeuralField';
 import { DataTermsField } from '@/components/hero/DataTermsField';
 
@@ -132,7 +134,7 @@ export default function HomePage() {
               <FadeIn key={s.label} delay={idx * 0.05}>
                 <Link href={s.href} className="group block text-center">
                   <div className="text-2xl font-bold transition-all group-hover:brightness-125 [font-family:var(--font-display)]" style={{ color: CYAN }}>
-                    {s.value}
+                    <CountUp value={s.value} />
                   </div>
                   <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[#5C6D8C] transition-colors group-hover:text-[#8FA3C4] [font-family:var(--font-mono)]">
                     {s.label}
@@ -151,24 +153,22 @@ export default function HomePage() {
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
           Turn dense PDFs into interactive knowledge, featuring graphs, diagrams, and code that runs.
         </p>
-        <div className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
-          {PAPER_CARDS.map((c, idx) => (
-            <FadeIn key={c.title} delay={idx * 0.1}>
-              <AnimatedCard>
-                <Link
-                  href="/papers"
-                  className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#00E5FF]/30"
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `${CYAN}1F` }}>
-                    <c.icon size={18} style={{ color: CYAN }} />
-                  </div>
-                  <div className="mt-4 text-sm font-semibold text-white [font-family:var(--font-display)]">{c.title}</div>
-                  <div className="mt-1 text-xs leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">{c.desc}</div>
-                </Link>
-              </AnimatedCard>
-            </FadeIn>
+        <StaggerList className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
+          {PAPER_CARDS.map((c) => (
+            <TiltCard key={c.title} className="relative">
+              <Link
+                href="/papers"
+                className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#00E5FF]/30"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `${CYAN}1F` }}>
+                  <c.icon size={18} style={{ color: CYAN }} />
+                </div>
+                <div className="mt-4 text-sm font-semibold text-white [font-family:var(--font-display)]">{c.title}</div>
+                <div className="mt-1 text-xs leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">{c.desc}</div>
+              </Link>
+            </TiltCard>
           ))}
-        </div>
+        </StaggerList>
       </section>
 
       {/* DOJO */}
@@ -179,29 +179,27 @@ export default function HomePage() {
           <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
             Bite-sized problems that build intuition, covering everything from sigmoid to full transformers.
           </p>
-          <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {PROBLEMS.map((p, idx) => (
-              <FadeIn key={p.num} delay={idx * 0.1}>
-                <AnimatedCard>
-                  <Link href={p.href} className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#7C5CFF]/30">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#5C6D8C] [font-family:var(--font-mono)]">{p.num}</span>
-                      <span className={'rounded-full border px-2 py-0.5 text-[10px] font-semibold ' + DIFF_COLOR[p.difficulty]}>
-                        {p.difficulty}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-[15px] font-semibold text-white [font-family:var(--font-display)]">{p.title}</div>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {p.topics.map(t => (
-                        <span key={t} className="rounded-md bg-[#141E38] px-2 py-0.5 text-[10px] text-[#8FA3C4] [font-family:var(--font-mono)]">{t}</span>
-                      ))}
-                    </div>
-                    <div className="mt-4 text-xs font-semibold [font-family:var(--font-display)]" style={{ color: VIOLET }}>Solve →</div>
-                  </Link>
-                </AnimatedCard>
-              </FadeIn>
+          <StaggerList className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {PROBLEMS.map((p) => (
+              <TiltCard key={p.num} className="relative">
+                <Link href={p.href} className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#7C5CFF]/30">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-[#5C6D8C] [font-family:var(--font-mono)]">{p.num}</span>
+                    <span className={'rounded-full border px-2 py-0.5 text-[10px] font-semibold ' + DIFF_COLOR[p.difficulty]}>
+                      {p.difficulty}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-[15px] font-semibold text-white [font-family:var(--font-display)]">{p.title}</div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {p.topics.map(t => (
+                      <span key={t} className="rounded-md bg-[#141E38] px-2 py-0.5 text-[10px] text-[#8FA3C4] [font-family:var(--font-mono)]">{t}</span>
+                    ))}
+                  </div>
+                  <div className="mt-4 text-xs font-semibold [font-family:var(--font-display)]" style={{ color: VIOLET }}>Solve →</div>
+                </Link>
+              </TiltCard>
             ))}
-          </div>
+          </StaggerList>
         </div>
       </section>
 
@@ -212,29 +210,27 @@ export default function HomePage() {
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
           Structured tracks that take you from the math to the model.
         </p>
-        <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-          {topDomains.map((d, idx) => (
-            <FadeIn key={d.slug} delay={idx * 0.1}>
-              <AnimatedCard>
-                <Link href={`/learn/${d.slug}`} className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#A3E635]/30">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `${GREEN}1F` }}>
-                      <Zap size={18} style={{ color: GREEN }} />
-                    </div>
-                    <div>
-                      <div className="text-[15px] font-semibold text-white [font-family:var(--font-display)]">{d.name}</div>
-                      <div className="text-xs text-[#5C6D8C] [font-family:var(--font-mono)]">{d.topics.length} topics</div>
-                    </div>
+        <StaggerList className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
+          {topDomains.map((d) => (
+            <TiltCard key={d.slug} className="relative">
+              <Link href={`/learn/${d.slug}`} className="p2c-glass block h-full rounded-xl p-5 transition-colors hover:border-[#A3E635]/30">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `${GREEN}1F` }}>
+                    <Zap size={18} style={{ color: GREEN }} />
                   </div>
-                  <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#141E38]">
-                    <div className="h-full rounded-full transition-all" style={{ width: '0%', background: GREEN }} />
+                  <div>
+                    <div className="text-[15px] font-semibold text-white [font-family:var(--font-display)]">{d.name}</div>
+                    <div className="text-xs text-[#5C6D8C] [font-family:var(--font-mono)]">{d.topics.length} topics</div>
                   </div>
-                  <div className="mt-2 text-[11px] text-[#5C6D8C] [font-family:var(--font-mono)]">0% complete</div>
-                </Link>
-              </AnimatedCard>
-            </FadeIn>
+                </div>
+                <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[#141E38]">
+                  <div className="h-full rounded-full transition-all" style={{ width: '0%', background: GREEN }} />
+                </div>
+                <div className="mt-2 text-[11px] text-[#5C6D8C] [font-family:var(--font-mono)]">0% complete</div>
+              </Link>
+            </TiltCard>
           ))}
-        </div>
+        </StaggerList>
       </section>
 
       {/* FOOTER */}

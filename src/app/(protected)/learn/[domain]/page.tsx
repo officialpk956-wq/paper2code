@@ -2,10 +2,16 @@
 
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { ChevronLeft, ArrowRight, Clock } from 'lucide-react';
 import { CURRICULUM, CurriculumTopic } from '@/data/content/curriculum';
 import { FadeIn } from '@/components/FadeIn';
-import AnimatedCard from '@/components/AnimatedCard';
+import TiltCard from '@/components/TiltCard';
+
+const LearnField = dynamic(
+  () => import('@/components/learn/LearnField').then(m => m.LearnField),
+  { ssr: false },
+);
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -53,7 +59,10 @@ export default function DomainPage() {
     <div className="min-h-screen bg-transparent text-white">
       {/* Top Nav */}
       <FadeIn>
-        <div className="border-b border-[#262626] px-8 py-6 bg-[#0A0A0A]">
+        <div className="border-b border-[#262626] px-8 py-6 bg-[#0A0A0A] relative">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-25">
+            <LearnField color="#60A5FA" />
+          </div>
           <Link href="/learn" className="text-[#A3A3A3] hover:text-white text-[13px] flex items-center gap-1.5 mb-6 transition-colors">
             <ChevronLeft size={16} /> Back to Curriculum
           </Link>
@@ -88,52 +97,55 @@ export default function DomainPage() {
       </FadeIn>
 
       <div className="max-w-5xl mx-auto px-8 py-12 space-y-16">
-        {(['Beginner', 'Intermediate', 'Advanced', 'Expert'] as const).map(level => {
+        {(['Beginner', 'Intermediate', 'Advanced', 'Expert'] as const).map((level, levelIdx) => {
           const topics = groupedTopics[level];
           if (topics.length === 0) return null;
+          const levelDelay = levelIdx * 0.1;
           return (
-            <div key={level}>
-              <FadeIn>
-                <div className="text-[12px] font-bold tracking-widest uppercase mb-6 flex items-center gap-3"
-                  style={{ color: getDifficultyColor(level) }}>
-                  {level} 
-                  <div className="flex-1 h-px bg-[#262626]"></div>
-                </div>
-              </FadeIn>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {topics.map((t, topicIdx) => (
-                  <FadeIn key={t.slug} delay={topicIdx * 0.06}>
-                    <AnimatedCard>
-                      <Link
-                        href={`/learn/${domain.slug}/${t.slug}`}
-                        className="bg-[#111111] border border-[#262626] p-6 rounded-xl block hover:border-[#60A5FA]/40 transition-colors group flex flex-col h-full"
-                      >
-                        <div className="flex items-start justify-between mb-4">
-                          <div>
-                            <h3 className="text-[18px] font-bold text-white group-hover:text-[#60A5FA] transition-colors">{t.title}</h3>
-                            <div className="text-[14px] text-[#A3A3A3] mt-2 line-clamp-2 leading-relaxed">{t.why}</div>
+            <FadeIn key={level} delay={levelDelay}>
+              <div>
+                <FadeIn>
+                  <div className="text-[12px] font-bold tracking-widest uppercase mb-6 flex items-center gap-3"
+                    style={{ color: getDifficultyColor(level) }}>
+                    {level}
+                    <div className="flex-1 h-px bg-[#262626]"></div>
+                  </div>
+                </FadeIn>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {topics.map((t, topicIdx) => (
+                    <FadeIn key={t.slug} delay={topicIdx * 0.06}>
+                      <TiltCard className="relative h-full">
+                        <Link
+                          href={`/learn/${domain.slug}/${t.slug}`}
+                          className="bg-[#111111] border border-[#262626] p-6 rounded-xl block hover:border-[#60A5FA]/40 transition-colors group flex flex-col h-full"
+                        >
+                          <div className="flex items-start justify-between mb-4">
+                            <div>
+                              <h3 className="text-[18px] font-bold text-white group-hover:text-[#60A5FA] transition-colors">{t.title}</h3>
+                              <div className="text-[14px] text-[#A3A3A3] mt-2 line-clamp-2 leading-relaxed">{t.why}</div>
+                            </div>
                           </div>
-                        </div>
-                        <div className="mt-auto pt-4 flex items-center justify-between border-t border-[#262626]">
-                          <div className="flex items-center gap-3">
-                            <span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider" 
-                              style={{ backgroundColor: `${getDifficultyColor(t.level)}15`, color: getDifficultyColor(t.level) }}>
-                              {t.level}
-                            </span>
-                            {t.studyTime && (
-                              <span className="flex items-center gap-1.5 text-[11px] text-[#A3A3A3]">
-                                <Clock size={12} /> {t.studyTime}
+                          <div className="mt-auto pt-4 flex items-center justify-between border-t border-[#262626]">
+                            <div className="flex items-center gap-3">
+                              <span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider"
+                                style={{ backgroundColor: `${getDifficultyColor(t.level)}15`, color: getDifficultyColor(t.level) }}>
+                                {t.level}
                               </span>
-                            )}
+                              {t.studyTime && (
+                                <span className="flex items-center gap-1.5 text-[11px] text-[#A3A3A3]">
+                                  <Clock size={12} /> {t.studyTime}
+                                </span>
+                              )}
+                            </div>
+                            <ArrowRight size={16} className="text-[#525252] group-hover:text-[#60A5FA] transition-colors" />
                           </div>
-                          <ArrowRight size={16} className="text-[#525252] group-hover:text-[#60A5FA] transition-colors" />
-                        </div>
-                      </Link>
-                    </AnimatedCard>
-                  </FadeIn>
-                ))}
+                        </Link>
+                      </TiltCard>
+                    </FadeIn>
+                  ))}
+                </div>
               </div>
-            </div>
+            </FadeIn>
           );
         })}
       </div>

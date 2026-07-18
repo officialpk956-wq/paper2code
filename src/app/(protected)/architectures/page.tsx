@@ -4,7 +4,9 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ARCHITECTURES } from '@/data/content/architectures';
 
-import { motion } from 'framer-motion';
+
+import StaggerList from '@/components/StaggerList';
+import TiltCard from '@/components/TiltCard';
 
 export default function ArchitecturesPage() {
   const [active, setActive] = useState('All');
@@ -61,37 +63,36 @@ export default function ArchitecturesPage() {
       </div>
 
       {/* GRID */}
-      <div className="mx-auto max-w-7xl px-8 py-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <StaggerList className="mx-auto max-w-7xl px-8 py-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {filtered.map(a => (
-          <Link key={a.slug} href={`/architectures/${a.slug}`} className="block">
-            <motion.div
-              className="flex flex-col rounded-xl border border-[#262626] bg-[#111111] p-4 hover:border-[#A3E635]/40 transition-colors h-full"
-              whileHover={{ scale: 1.015, y: -3 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] text-[#525252]">{a.year}</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-md font-medium" style={{ backgroundColor: `${getDifficultyColor(a.difficulty)}20`, color: getDifficultyColor(a.difficulty) }}>
-                  {a.difficulty}
-                </span>
+          <TiltCard key={a.slug} className="relative h-full">
+            <Link href={`/architectures/${a.slug}`} className="block h-full">
+              <div
+                className="flex flex-col rounded-xl border border-[#262626] bg-[#111111] p-4 hover:border-[#A3E635]/40 transition-colors h-full"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[10px] text-[#525252]">{a.year}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-md font-medium" style={{ backgroundColor: `${getDifficultyColor(a.difficulty)}20`, color: getDifficultyColor(a.difficulty) }}>
+                    {a.difficulty}
+                  </span>
+                </div>
+                <div className="text-[14px] font-bold text-white">{a.name}</div>
+                <div className="mt-1 text-[11px] leading-relaxed text-[#A3A3A3] line-clamp-2 flex-1">{a.keyInnovation}</div>
+                <div className="mt-3">
+                  <span className="rounded-md bg-[#111111] border border-[#262626] px-2 py-0.5 text-[10px] text-[#A3A3A3]">
+                    {a.category}
+                  </span>
+                </div>
               </div>
-              <div className="text-[14px] font-bold text-white">{a.name}</div>
-              <div className="mt-1 text-[11px] leading-relaxed text-[#A3A3A3] line-clamp-2 flex-1">{a.keyInnovation}</div>
-              <div className="mt-3">
-                <span className="rounded-md bg-[#111111] border border-[#262626] px-2 py-0.5 text-[10px] text-[#A3A3A3]">
-                  {a.category}
-                </span>
-              </div>
-            </motion.div>
-          </Link>
+            </Link>
+          </TiltCard>
         ))}
         {filtered.length === 0 && (
           <div className="col-span-full py-20 text-center text-[#525252] border border-[#262626] border-dashed rounded-xl">
             No results found.
           </div>
         )}
-      </div>
+      </StaggerList>
     </div>
   );
 }

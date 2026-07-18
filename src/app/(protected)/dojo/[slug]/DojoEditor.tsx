@@ -41,6 +41,21 @@ type LeftTab   = 'description' | 'submissions' | 'notes';
 type ConsoleTab = 'testcase' | 'result';
 type RunState  = 'idle' | 'running' | 'passed' | 'failed' | 'error';
 
+function LoadingDots() {
+  return (
+    <span className="inline-flex items-center gap-[3px]">
+      {[0, 0.12, 0.24].map((delay, i) => (
+        <motion.span
+          key={i}
+          className="block w-[4px] h-[4px] rounded-full bg-current"
+          animate={{ y: [0, -4, 0] }}
+          transition={{ duration: 0.5, repeat: Infinity, ease: 'easeInOut', delay }}
+        />
+      ))}
+    </span>
+  )
+}
+
 /* ── Timer ─────────────────────────────────────────────── */
 function Timer() {
   const [secs, setSecs] = useState(0);
@@ -254,8 +269,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
               borderRadius: 8, padding: '5px 12px', fontSize: 12, color: '#D4D4D4', cursor: 'pointer',
             }}
           >
-            {runState === 'running' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-            Run
+            {runState === 'running' && lastAction === 'run' ? <LoadingDots /> : <><Play size={13} /> Run</>}
           </button>
           <button
             onClick={() => handleRun(true)}
@@ -266,7 +280,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
               borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 600, color: '#000', cursor: 'pointer',
             }}
           >
-            <Send size={13} /> Submit
+            {runState === 'running' && lastAction === 'submit' ? <LoadingDots /> : <><Send size={13} /> Submit</>}
           </button>
         </div>
       </div>
@@ -629,11 +643,27 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                     </div>
                   )}
                   {(runState === 'passed' || runState === 'failed' || runState === 'error') && (
-                    <motion.div
-                      initial={runState === 'passed' ? { scale: 0.98, opacity: 0 } : { opacity: 0 }}
-                      animate={runState === 'passed' ? { scale: 1, opacity: 1 } : { opacity: 1 }}
-                      transition={{ type: 'spring', stiffness: 200, damping: 20 }}
-                    >
+                    <div className="relative">
+                      <AnimatePresence>
+                        {runState === 'passed' && (
+                          <motion.div
+                            className="pointer-events-none absolute inset-0 border-2 border-[#4ADE80] rounded-lg"
+                            initial={{ scale: 0.85, opacity: 0.8 }}
+                            animate={{ scale: 1.35, opacity: 0 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.55, ease: 'easeOut' }}
+                          />
+                        )}
+                      </AnimatePresence>
+                      <motion.div
+                        animate={(runState === 'failed' || runState === 'error') ? { x: [-5, 5, -5, 5, -3, 3, 0] } : {}}
+                        transition={{ duration: 0.35, ease: 'easeInOut' }}
+                      >
+                        <motion.div
+                          initial={runState === 'passed' ? { scale: 0.98, opacity: 0 } : { opacity: 0 }}
+                          animate={runState === 'passed' ? { scale: 1, opacity: 1 } : { opacity: 1 }}
+                          transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+                        >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                         {runState === 'passed' && <><CheckCircle size={16} style={{ color: '#4ADE80' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#4ADE80' }}>{lastAction === 'submit' ? 'Accepted' : 'Ran Successfully'}</span></>}
                         {runState === 'failed' && <><XCircle size={16} style={{ color: '#F87171' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>{lastAction === 'submit' ? 'Wrong Answer' : 'Ran with Errors'}</span></>}
@@ -645,7 +675,9 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                           <pre style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: runState === 'passed' ? '#4ADE80' : '#F87171', whiteSpace: 'pre-wrap' }}>{stdout}</pre>
                         </div>
                       )}
-                    </motion.div>
+                        </motion.div>
+                      </motion.div>
+                    </div>
                   )}
                 </motion.div>
               )}

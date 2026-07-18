@@ -6,7 +6,8 @@ import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
 import ArchSidebar from '@/components/arch/ArchSidebar';
 import ArchDiagram from '@/components/arch/ArchDiagram';
-import AnimatedCard from '@/components/AnimatedCard';
+import SectionGrid from '@/components/arch/SectionGrid';
+import ArchHeroBackground from '@/components/arch/ArchHeroBackground';
 
 const ARCH_SECTIONS = [
   "Motivation",
@@ -31,15 +32,6 @@ const ARCH_SECTIONS = [
   "Further Reading"
 ];
 
-function SectionPlaceholder() {
-  return (
-    <div className="bg-[#111111] border border-[#262626] border-dashed rounded-xl p-8 text-center my-6">
-      <p className="text-[13px] text-[#A3A3A3] italic">
-        Content in production — structure follows the Paper2Code chapter template
-      </p>
-    </div>
-  );
-}
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -130,7 +122,8 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
       <div className="flex-1 overflow-y-auto scroll-smooth">
         <div className="max-w-4xl mx-auto p-12">
           {/* HEADER */}
-          <div className="mb-12">
+          <div className="mb-12 relative">
+            <ArchHeroBackground color="#7C5CFF" />
             <div className="flex items-center gap-3 mb-4">
               <span className="text-[11px] font-bold uppercase tracking-wider text-[#A3E635]">
                 {arch.category}
@@ -200,39 +193,8 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
                   <p className="text-[16px] font-semibold text-white mb-2">Deep content coming soon</p>
                   <p className="text-[13px]">We are active implementing deep chapter templates for {arch.name}.</p>
                 </div>
-                <div className="space-y-16 mt-16">
-                  {ARCH_SECTIONS.map((section, idx) => {
-                    const isRelatedPapers = section === "Related Papers";
-                    return (
-                      <section key={section} id={section.toLowerCase().trim().replace(/\s+/g, '-')} className="scroll-mt-16">
-                        <h2 className="text-[22px] font-bold text-white mb-6 border-b border-[#262626] pb-2">
-                          {idx + 1}. {section}
-                        </h2>
-                        
-                        {isRelatedPapers && relatedPapers.length > 0 ? (
-                          <div className="flex flex-col gap-3">
-                            {relatedPapers.map(p => {
-                              const workspaceId = LIBRARY_TO_WORKSPACE_ID[p.slug];
-                              const href = workspaceId ? `/papers/${workspaceId}` : `/papers?tab=library`;
-                              return (
-                                <AnimatedCard key={p.slug}>
-                                  <Link href={href} className="bg-[#111111] border border-[#262626] p-4 rounded-xl flex items-center justify-between hover:border-[#A78BFA]/50 transition-colors block">
-                                    <div className="flex items-center gap-4">
-                                      <span className="text-[#525252] font-mono text-[12px] font-medium w-8">#{p.rank}</span>
-                                      <span className="text-[14px] font-bold text-white">{p.title}</span>
-                                    </div>
-                                    {p.year && <span className="text-[12px] text-[#A3A3A3]">{p.year}</span>}
-                                  </Link>
-                                </AnimatedCard>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <SectionPlaceholder />
-                        )}
-                      </section>
-                    );
-                  })}
+                <div className="space-y-4 mt-8">
+                  <SectionGrid sections={ARCH_SECTIONS} />
                 </div>
               </div>
             )}

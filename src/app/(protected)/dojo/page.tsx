@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiGet, isLoggedIn } from '@/lib/api';
 import { PROBLEMS } from '@/data/problems';
 import { motion } from 'framer-motion';
+import StaggerList from '@/components/StaggerList';
 
 type ProblemRow = {
   id: number; slug: string; title: string;
@@ -231,40 +232,42 @@ export default function DojoPage() {
                 <div className="w-[68px] flex-shrink-0 text-right">Difficulty</div>
                 <div className="w-[60px] flex-shrink-0 text-right">Accept.</div>
               </div>
-              {filtered.map(p => {
-                const Row = (
-                  <motion.div 
-                    className="flex items-center border-b border-[#1A1A1A]/60 px-4 py-2.5 hover:bg-[#111111] cursor-pointer min-h-[52px]"
-                    whileHover={{ scale: 1.005, x: 2 }}
-                    whileTap={{ scale: 0.995 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                  >
-                    <div className="w-7 flex-shrink-0">
-                      <span className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: p.solved ? '#4ADE80' : '#262626' }} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="flex-shrink-0 text-[11px] text-[#525252]">{fmtId(p.id)}</span>
-                        <span className="truncate text-[13px] font-semibold text-white">{p.title}</span>
+              <StaggerList>
+                {filtered.map(p => {
+                  const Row = (
+                    <motion.div 
+                      className="flex items-center border-b border-[#1A1A1A]/60 px-4 py-2.5 hover:bg-[#111111] cursor-pointer min-h-[52px]"
+                      whileHover={{ scale: 1.005, x: 2 }}
+                      whileTap={{ scale: 0.995 }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                    >
+                      <div className="w-7 flex-shrink-0">
+                        <span className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: p.solved ? '#4ADE80' : '#262626' }} />
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {p.topics.slice(0, 2).map(t => (
-                          <span key={t} className="rounded bg-[#1A1A1A] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
-                        ))}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="flex-shrink-0 text-[11px] text-[#525252]">{fmtId(p.id)}</span>
+                          <span className="truncate text-[13px] font-semibold text-white">{p.title}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {p.topics.slice(0, 2).map(t => (
+                            <span key={t} className="rounded bg-[#1A1A1A] px-1.5 py-px text-[10px] text-[#525252]">{t}</span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                    <div className={'w-[68px] flex-shrink-0 text-right text-[12px] font-semibold ' + DIFF_TEXT[p.difficulty]}>{p.difficulty}</div>
-                    <div className="w-[60px] flex-shrink-0 text-right text-[11px] text-[#525252]">{p.acceptance}</div>
-                  </motion.div>
-                );
-                return <Link key={p.slug} href={`/dojo/${p.slug}`} className="block">{Row}</Link>;
-              })}
-              {filtered.length === 0 && (
-                <div className="py-20 text-center text-[#525252] border border-[#262626] border-dashed rounded-xl mx-4 mt-4">
-                  No problems match your filters.
-                </div>
-              )}
+                      <div className={'w-[68px] flex-shrink-0 text-right text-[12px] font-semibold ' + DIFF_TEXT[p.difficulty]}>{p.difficulty}</div>
+                      <div className="w-[60px] flex-shrink-0 text-right text-[11px] text-[#525252]">{p.acceptance}</div>
+                    </motion.div>
+                  );
+                  return <Link key={p.slug} href={`/dojo/${p.slug}`} className="block">{Row}</Link>;
+                })}
+                {filtered.length === 0 && (
+                  <div className="py-20 text-center text-[#525252] border border-[#262626] border-dashed rounded-xl mx-4 mt-4">
+                    No problems match your filters.
+                  </div>
+                )}
+              </StaggerList>
             </div>
           </>
         ) : (
@@ -304,7 +307,8 @@ export default function DojoPage() {
                   No leaderboard data available.
                 </div>
               ) : (
-                leaderboard.map(row => {
+              <StaggerList delay={0}>
+                {leaderboard.map(row => {
                   const isYou = typeof userProfile?.name === 'string' && row.name === userProfile.name;
                   return (
                     <div key={row.rank}
@@ -325,7 +329,8 @@ export default function DojoPage() {
                       <div className="w-24 text-[13px] text-[#F59E0B]">🔥 {row.streak}</div>
                     </div>
                   );
-                })
+                })}
+              </StaggerList>
               )}
             </div>
           </div>
