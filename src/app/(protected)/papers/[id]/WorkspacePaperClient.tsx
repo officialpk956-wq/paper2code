@@ -560,7 +560,13 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                   }}
                 />
               </div>
-              <div className="border-t border-[#1A1A1A] p-3 flex justify-end">
+              <div className="border-t border-[#1A1A1A] p-3 flex items-center justify-between">
+                <Link
+                  href={`/papers/${id}/implement`}
+                  className="text-[12px] px-4 py-2 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110"
+                >
+                  Start Guided Implementation →
+                </Link>
                 <button
                   disabled
                   title="Coming soon"

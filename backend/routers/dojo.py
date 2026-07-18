@@ -490,6 +490,27 @@ async def run_dojo_code(
     return result
 
 
+class ExecuteRequest(BaseModel):
+    code: str = Field(..., max_length=65536)
+    stdin: str = Field(default="", max_length=4096)
+
+
+@router.post("/dojo/execute")
+@limiter.limit("30/minute", key_func=_dojo_user_key)
+async def execute_code(
+    body: ExecuteRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    from backend.services.dojo_execution_service import RUN_TIMEOUT_MS, execute_python
+
+    if len(body.code.encode("utf-8")) > 65536:
+        raise HTTPException(status_code=400, detail="Code too large")
+
+    result = await execute_python(body.code, body.stdin, run_timeout_ms=RUN_TIMEOUT_MS)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # POST /api/submissions/{id}/share  — mark best submission as public (P1)
 # ---------------------------------------------------------------------------
