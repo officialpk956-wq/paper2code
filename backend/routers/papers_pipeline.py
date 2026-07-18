@@ -907,15 +907,15 @@ def implement_paper(
     current_user=Depends(get_optional_user),
 ):
     import re
-    from core.rag.tensor_tracker import TensorTracker
-    from core.rag.semantic_explainer import SemanticExplainer
+
     from backend.routers.architectures import dict_to_arch_graph
-    from core.architecture_graph import ArchitectureGraph
+    from core.rag.semantic_explainer import SemanticExplainer
+    from core.rag.tensor_tracker import TensorTracker
 
     p = db.query(Paper).filter_by(id=paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    
+
     _assert_paper_readable(p, current_user)
 
     title_slug = re.sub(r'[^a-zA-Z0-9]', '', p.title.title()) or "Model"
@@ -931,7 +931,7 @@ def implement_paper(
         }
 
     graph = dict_to_arch_graph(p.title, p.architecture_graph)
-    
+
     shapes = {}
     tracker = TensorTracker()
     try:
@@ -947,7 +947,7 @@ def implement_paper(
 
     explainer = SemanticExplainer()
     layer_docs = {}
-    
+
     nodes_data = p.architecture_graph.get("nodes", [])
     total_nodes = len(nodes_data)
     for i, n in enumerate(nodes_data):
@@ -963,17 +963,17 @@ def implement_paper(
             }
 
     # Generate PyTorch Scaffold
-    imports = set(["import torch", "import torch.nn as nn"])
+    imports = {"import torch", "import torch.nn as nn"}
     init_lines = []
     forward_lines = []
-    
+
     for i, node in enumerate(graph.nodes):
         ntype = node.type.lower()
         if not ntype:
             continue
-            
+
         layer_name = f"self.layer_{i}"
-        
+
         # Build layer init string mapping
         layer_init = None
         if ntype in ["conv2d", "conv"]:
@@ -1028,14 +1028,14 @@ def implement_paper(
     forward_str = "\n".join(forward_lines)
 
     starter_code = f"# Implement {p.title}\n"
-    starter_code += "\n".join(sorted(list(imports))) + "\n\n"
+    starter_code += "\n".join(sorted(imports)) + "\n\n"
     starter_code += f"class {title_slug}(nn.Module):\n"
-    starter_code += f"    def __init__(self):\n"
-    starter_code += f"        super().__init__()\n"
+    starter_code += "    def __init__(self):\n"
+    starter_code += "        super().__init__()\n"
     starter_code += f"{init_str}\n\n"
-    starter_code += f"    def forward(self, x):\n"
+    starter_code += "    def forward(self, x):\n"
     starter_code += f"{forward_str}\n"
-    starter_code += f"        return x"
+    starter_code += "        return x"
 
     return {
         "status": "ok",

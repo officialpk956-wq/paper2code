@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Optional
-from core.rag.knowledge_graph import KnowledgeGraph
-from core.rag.diff_engine import GraphDiffEngine
-from core.architecture_graph import ArchitectureGraph, GraphNode, GraphEdge
+
 from backend.database import get_db
 from backend.models import Paper
+from core.architecture_graph import ArchitectureGraph, GraphEdge, GraphNode
+from core.rag.diff_engine import GraphDiffEngine
+from core.rag.knowledge_graph import KnowledgeGraph
 
 router = APIRouter(prefix="/api/architectures", tags=["Architectures"])
 
@@ -28,11 +28,11 @@ def dict_to_arch_graph(name: str, data: dict) -> ArchitectureGraph:
 
 @router.get("/compare")
 def compare_architectures(
-    paper_a: Optional[int] = None,
-    paper_b: Optional[int] = None,
-    a_slug: Optional[str] = None,
-    b_slug: Optional[str] = None,
-    db: Session = Depends(get_db)
+    paper_a: int | None = None,
+    paper_b: int | None = None,
+    a_slug: str | None = None,
+    b_slug: str | None = None,
+    db: Session = Depends(get_db),
 ):
     if not ((paper_a and paper_b) or (a_slug and b_slug)):
         raise HTTPException(status_code=422, detail="Must provide either paper_a and paper_b, or a_slug and b_slug")
@@ -86,7 +86,7 @@ SLUG_NODES = {
 def get_knowledge_relations(slug: str):
     kg = KnowledgeGraph()
     G = kg.graph
-    
+
     if slug in SLUG_NODES:
         node_names = set(SLUG_NODES[slug])
     else:
@@ -103,9 +103,9 @@ def get_knowledge_relations(slug: str):
 
     if not node_names:
         return {"nodes": [], "constraints": []}
-    
+
     response_nodes = []
-    
+
     for node_id in node_names:
         if node_id in G.nodes:
             props = G.nodes[node_id]
@@ -114,7 +114,7 @@ def get_knowledge_relations(slug: str):
                 "type": props.get("type", ""),
                 "dimensionality": props.get("dimensionality", "")
             })
-            
+
     constraints = []
     # Check all edges to see if they involve any of our nodes
     for u, v, edge_data in G.edges(data=True):
@@ -127,7 +127,7 @@ def get_knowledge_relations(slug: str):
                     "relation": rel,
                     "reason": edge_data.get("reason", "")
                 })
-    
+
     # ensure unique constraints
     seen = set()
     unique_constraints = []

@@ -414,14 +414,14 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
 
                 {/* RELATED */}
                 {(() => {
-                  const r = related ?? {};
+                  const r = related;
                   const s = SLUG_META[slug] ?? {};
-                  const archSlug = r.arch_slug ?? s.archSlug;
-                  const archName = r.arch_name ?? s.archName;
-                  const paperSlug = r.paper_id ? `/papers/${r.paper_id}` : (s.paperSlug ? `/papers/${s.paperSlug}` : null);
-                  const paperTitle = r.paper_title ?? s.paperTitle;
-                  const learnPath = r.learn_path ?? s.learnPath;
-                  const learnName = r.learn_name ?? s.learnName;
+                  const archSlug = r?.arch_slug ?? s.archSlug;
+                  const archName = r?.arch_name ?? s.archName;
+                  const paperSlug = r?.paper_id ? `/papers/${r.paper_id}` : (s.paperSlug ? `/papers/${s.paperSlug}` : null);
+                  const paperTitle = r?.paper_title ?? s.paperTitle;
+                  const learnPath = r?.learn_path ?? s.learnPath;
+                  const learnName = r?.learn_name ?? s.learnName;
                   return (archSlug || paperSlug || learnPath) ? (
                     <div style={{ marginTop: 20, border: '1px solid #262626', borderRadius: 12, padding: 16 }}>
                       <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#A78BFA', textTransform: 'uppercase', marginBottom: 12 }}>

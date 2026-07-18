@@ -78,6 +78,7 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
         "learning_points": prob.learning_points,
         "visualization_url": prob.visualization_url,
         "python_template": prob.python_template,
+        "test_cases": prob.test_cases,
         "hints": prob.hints,
         "explanation": prob.explanation,
         "is_retired": prob.is_retired,
@@ -124,22 +125,23 @@ def get_problem_related(
     arch_name = None
     learn_path = "/learn/deep-learning"
     learn_name = "Deep Learning"
-    
+
     topics = getattr(prob, "topics", getattr(prob, "tags", [])) or []
-    
+
     for t in topics:
         if t in TOPIC_ARCH and arch_slug is None:
             arch_slug, arch_name = TOPIC_ARCH[t]
         if t in TOPIC_DOMAIN and learn_path == "/learn/deep-learning":
             learn_path, learn_name = TOPIC_DOMAIN[t]
-            
+
     paper_id = None
     paper_title = None
-    
+
     query = (prob.title or "") + " " + " ".join(topics)
     try:
-        from backend.services.vector_service import semantic_search
         from backend.models import Paper
+        from backend.services.vector_service import semantic_search
+
         results = semantic_search(query, limit=1)
         if results:
             paper_id_val = results[0] if isinstance(results[0], int) else results[0].get("id")
