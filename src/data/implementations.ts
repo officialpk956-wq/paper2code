@@ -1,5 +1,3 @@
-import type { loader } from '@monaco-editor/react';
-
 export type ImplementStep = {
   id: string;
   number: number;

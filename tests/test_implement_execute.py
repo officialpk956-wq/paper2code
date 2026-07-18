@@ -124,10 +124,10 @@ except AssertionError as e:
         user = _seed_user(db_session, "exec05@test.com")
         token = _login(client, user.email)
 
-        big_code = "x = 1\n" * 10000  # ~70KB — exceeds 65536 byte cap
+        big_code = "x = 1\n" * 12000  # ~72KB — exceeds 65536 byte cap
         r = client.post(
             "/api/dojo/execute",
             json={"code": big_code, "stdin": ""},
             headers=_auth(token),
         )
-        assert r.status_code == 400
+        assert r.status_code in (400, 422)  # Pydantic max_length → 422; explicit check → 400
