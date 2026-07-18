@@ -67,13 +67,15 @@ def health_redis():
 
 @router.get("/api/health/celery")
 def health_celery():
-    from backend.celery_app import celery_app
     import os
+
+    from backend.celery_app import celery_app
+
     try:
         backend_url = celery_app.backend.url
     except Exception as e:
         backend_url = f"ERROR: {type(e).__name__}: {str(e)}"
-    
+
     return {
         "celery_backend_url": backend_url,
         "broker_use_ssl": getattr(celery_app.conf, "broker_use_ssl", None),
