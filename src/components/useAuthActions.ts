@@ -39,18 +39,13 @@ export function useAuthActions() {
   };
 
   const loginWithGoogle = async (): Promise<User> => {
-    const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
-    const { firebaseAuth } = await import('@/lib/firebase');
-    const credential = await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
-    const idToken = await credential.user.getIdToken();
-    const res = await apiPost<{ access_token: string; refresh_token: string; user: { id: number; email: string; name: string } }>(
-      '/api/auth/firebase/verify',
-      { id_token: idToken },
+    const redirectUri = window.location.origin + '/auth/callback';
+    localStorage.setItem('oauth_provider', 'google');
+    const res = await apiGet<{ url: string; state: string }>(
+      `/api/auth/oauth/google/authorize-url?redirect_uri=${encodeURIComponent(redirectUri)}`
     );
-    setTokens({ access_token: res.access_token, refresh_token: res.refresh_token });
-    
-    // fetch canonical profile
-    return fetchMe(res.user);
+    window.location.href = res.url;
+    return new Promise(() => {}); // page redirects; this never resolves
   };
 
   return { loginWithPassword, signupWithPassword, loginWithGoogle };
