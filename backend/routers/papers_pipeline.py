@@ -918,7 +918,7 @@ def implement_paper(
 
     _assert_paper_readable(p, current_user)
 
-    title_slug = re.sub(r'[^a-zA-Z0-9]', '', p.title.title()) or "Model"
+    title_slug = re.sub(r"[^a-zA-Z0-9]", "", p.title.title()) or "Model"
 
     default_starter = f"# Implement {p.title}\nimport torch\nimport torch.nn as nn\n\nclass {title_slug}(nn.Module):\n    def __init__(self):\n        super().__init__()\n        # TODO: add layers\n    \n    def forward(self, x):\n        # TODO: implement forward pass\n        return x"
 
@@ -927,7 +927,7 @@ def implement_paper(
             "status": "no_graph",
             "starter_code": default_starter,
             "shapes": {},
-            "layer_docs": {}
+            "layer_docs": {},
         }
 
     graph = dict_to_arch_graph(p.title, p.architecture_graph)
@@ -939,8 +939,12 @@ def implement_paper(
         for node in graph.nodes:
             if node.input_shape or node.output_shape:
                 shapes[node.id] = {
-                    "input": list(node.input_shape) if isinstance(node.input_shape, tuple) else node.input_shape,
-                    "output": list(node.output_shape) if isinstance(node.output_shape, tuple) else node.output_shape
+                    "input": list(node.input_shape)
+                    if isinstance(node.input_shape, tuple)
+                    else node.input_shape,
+                    "output": list(node.output_shape)
+                    if isinstance(node.output_shape, tuple)
+                    else node.output_shape,
                 }
     except Exception as e:
         logger.warning(f"TensorTracker failed: {e}")
@@ -958,7 +962,7 @@ def implement_paper(
                     node_type=ntype,
                     semantic_role=n.get("semantic_role") or n.get("compute_role", ""),
                     params=n.get("params", {}),
-                    context={"index": i, "total": total_nodes}
+                    context={"index": i, "total": total_nodes},
                 )
             }
 
@@ -978,14 +982,18 @@ def implement_paper(
         layer_init = None
         if ntype in ["conv2d", "conv"]:
             c_in = node.input_shape[1] if node.input_shape and len(node.input_shape) == 4 else 3
-            c_out = node.params.get("channels", node.params.get("out_channels", node.params.get("filters", 64)))
+            c_out = node.params.get(
+                "channels", node.params.get("out_channels", node.params.get("filters", 64))
+            )
             k = node.params.get("kernel_size", 3)
             s = node.params.get("stride", 1)
             p_pad = node.params.get("padding", 1)
             layer_init = f"nn.Conv2d({c_in}, {c_out}, kernel_size={k}, stride={s}, padding={p_pad})"
         elif ntype in ["linear", "dense"]:
             d_in = node.input_shape[-1] if node.input_shape else 512
-            d_out = node.params.get("hidden_size", node.params.get("channels", node.params.get("out_features", 1000)))
+            d_out = node.params.get(
+                "hidden_size", node.params.get("channels", node.params.get("out_features", 1000))
+            )
             layer_init = f"nn.Linear({d_in}, {d_out})"
         elif ntype == "maxpool2d":
             k = node.params.get("kernel_size", 2)
@@ -1041,8 +1049,10 @@ def implement_paper(
         "status": "ok",
         "starter_code": starter_code,
         "shapes": shapes,
-        "layer_docs": layer_docs
+        "layer_docs": layer_docs,
     }
+
+
 @router.get("/tasks/{task_id}/stream")
 def stream_task_status(
     task_id: str,

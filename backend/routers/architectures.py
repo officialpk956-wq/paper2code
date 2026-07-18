@@ -9,6 +9,7 @@ from core.rag.knowledge_graph import KnowledgeGraph
 
 router = APIRouter(prefix="/api/architectures", tags=["Architectures"])
 
+
 def dict_to_arch_graph(name: str, data: dict) -> ArchitectureGraph:
     graph = ArchitectureGraph(name=name, metadata=data.get("metadata", {}))
     for n_data in data.get("nodes", []):
@@ -19,12 +20,15 @@ def dict_to_arch_graph(name: str, data: dict) -> ArchitectureGraph:
             params=n_data.get("params", {}),
             block=n_data.get("block"),
             description=n_data.get("description"),
-            semantic_params=n_data.get("semantic_params", {})
+            semantic_params=n_data.get("semantic_params", {}),
         )
         graph.add_node(node)
     for e_data in data.get("edges", []):
-        graph.add_edge(e_data.get("source"), e_data.get("target"), edge_type=e_data.get("edge_type", "flow"))
+        graph.add_edge(
+            e_data.get("source"), e_data.get("target"), edge_type=e_data.get("edge_type", "flow")
+        )
     return graph
+
 
 @router.get("/compare")
 def compare_architectures(
@@ -35,7 +39,9 @@ def compare_architectures(
     db: Session = Depends(get_db),
 ):
     if not ((paper_a and paper_b) or (a_slug and b_slug)):
-        raise HTTPException(status_code=422, detail="Must provide either paper_a and paper_b, or a_slug and b_slug")
+        raise HTTPException(
+            status_code=422, detail="Must provide either paper_a and paper_b, or a_slug and b_slug"
+        )
 
     # Fetch paper A
     pa = None
@@ -69,7 +75,7 @@ def compare_architectures(
     return {
         "paper_a": {"id": pa.id, "title": pa.title},
         "paper_b": {"id": pb.id, "title": pb.title},
-        "diff": diff_result
+        "diff": diff_result,
     }
 
 
@@ -81,6 +87,7 @@ SLUG_NODES = {
     "gpt": ["transformer_decoder", "causal_attention", "layernorm"],
     "llama": ["transformer_decoder", "causal_attention", "layernorm"],
 }
+
 
 @router.get("/{slug}/knowledge-relations")
 def get_knowledge_relations(slug: str):
@@ -109,11 +116,13 @@ def get_knowledge_relations(slug: str):
     for node_id in node_names:
         if node_id in G.nodes:
             props = G.nodes[node_id]
-            response_nodes.append({
-                "id": node_id,
-                "type": props.get("type", ""),
-                "dimensionality": props.get("dimensionality", "")
-            })
+            response_nodes.append(
+                {
+                    "id": node_id,
+                    "type": props.get("type", ""),
+                    "dimensionality": props.get("dimensionality", ""),
+                }
+            )
 
     constraints = []
     # Check all edges to see if they involve any of our nodes
@@ -121,12 +130,9 @@ def get_knowledge_relations(slug: str):
         if u in node_names or v in node_names:
             rel = edge_data.get("relation")
             if rel in ["COMPATIBLE", "INCOMPATIBLE", "REQUIRES_FLATTEN"]:
-                constraints.append({
-                    "from": u,
-                    "to": v,
-                    "relation": rel,
-                    "reason": edge_data.get("reason", "")
-                })
+                constraints.append(
+                    {"from": u, "to": v, "relation": rel, "reason": edge_data.get("reason", "")}
+                )
 
     # ensure unique constraints
     seen = set()
@@ -145,7 +151,4 @@ def get_knowledge_relations(slug: str):
             seen_nodes.add(n["id"])
             unique_nodes.append(n)
 
-    return {
-        "nodes": unique_nodes,
-        "constraints": unique_constraints
-    }
+    return {"nodes": unique_nodes, "constraints": unique_constraints}

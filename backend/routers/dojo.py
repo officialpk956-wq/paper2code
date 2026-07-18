@@ -109,6 +109,7 @@ TOPIC_DOMAIN = {
     "normalization": ("/learn/deep-learning", "Deep Learning"),
 }
 
+
 @router.get("/dojo/problems/{slug}/related")
 def get_problem_related(
     slug: str,
@@ -116,6 +117,7 @@ def get_problem_related(
     # Assuming get_optional_user is in backend.dependencies
 ):
     from backend.dependencies import get_optional_user
+
     current_user = get_optional_user
     prob = db.query(Problem).filter_by(slug=slug).first()
     if not prob:
@@ -158,7 +160,7 @@ def get_problem_related(
         "paper_id": paper_id,
         "paper_title": paper_title,
         "learn_path": learn_path,
-        "learn_name": learn_name
+        "learn_name": learn_name,
     }
 
 

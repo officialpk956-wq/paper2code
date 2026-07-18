@@ -82,9 +82,8 @@ def health_celery():
         "redis_backend_use_ssl": getattr(celery_app.conf, "redis_backend_use_ssl", None),
         "REDIS_URL": os.getenv("REDIS_URL"),
         "CELERY_RESULT_BACKEND": os.getenv("CELERY_RESULT_BACKEND"),
-        "CELERY_BROKER_URL": os.getenv("CELERY_BROKER_URL")
+        "CELERY_BROKER_URL": os.getenv("CELERY_BROKER_URL"),
     }
-
 
 
 @router.get("/api/health/e2b")
