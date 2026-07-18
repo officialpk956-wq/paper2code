@@ -2,7 +2,7 @@
 
 
 
-import { useState, useEffect, useCallback } from 'react';
+import { use, useState, useEffect, useCallback } from 'react';
 
 import dynamic from 'next/dynamic';
 
@@ -62,9 +62,9 @@ function saveProgress(id: string, completed: Set<number>) {
 
 
 
-export default function GuidedImplementPage({ params }: { params: { id: string } }) {
+export default function GuidedImplementPage({ params }: { params: Promise<{ id: string }> }) {
 
-  const { id } = params;
+  const { id } = use(params);
 
   const impl = getImpl(id);
 
