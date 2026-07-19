@@ -337,7 +337,7 @@ function PapersContent() {
                         ))}
                       </div>
                       <div className="mt-auto pt-4 flex justify-between items-center">
-                        <span className={p.status === 'Ready' || p.status.toLowerCase() === 'ready'
+                        <span className={p.status?.toLowerCase() === 'ready'
                           ? 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#4ADE80]/12 text-[#4ADE80]'
                           : 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#FACC15]/12 text-[#FACC15]'}>
                           {p.status}
