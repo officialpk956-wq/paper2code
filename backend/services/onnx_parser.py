@@ -7,10 +7,7 @@ logger = logging.getLogger(__name__)
 
 def _shape_from_type_proto(type_proto) -> list[int]:
     try:
-        return [
-            d.dim_value if d.dim_value > 0 else -1
-            for d in type_proto.tensor_type.shape.dim
-        ]
+        return [d.dim_value if d.dim_value > 0 else -1 for d in type_proto.tensor_type.shape.dim]
     except Exception:
         return []
 
@@ -18,17 +15,17 @@ def _shape_from_type_proto(type_proto) -> list[int]:
 def _parse_attr(attr) -> Any:
     """Convert ONNX AttributeProto to a plain Python value."""
     t = attr.type
-    if t == 1:   # FLOAT
+    if t == 1:  # FLOAT
         return round(float(attr.f), 6)
-    if t == 2:   # INT
+    if t == 2:  # INT
         return int(attr.i)
-    if t == 3:   # STRING
+    if t == 3:  # STRING
         return attr.s.decode("utf-8", errors="replace")
-    if t == 6:   # FLOATS
+    if t == 6:  # FLOATS
         return [round(float(v), 6) for v in attr.floats]
-    if t == 7:   # INTS
+    if t == 7:  # INTS
         return [int(v) for v in attr.ints]
-    if t == 8:   # STRINGS
+    if t == 8:  # STRINGS
         return [s.decode("utf-8", errors="replace") for s in attr.strings]
     # t == 4 (TENSOR) or t == 5 (GRAPH) — too large to serialize inline
     return None

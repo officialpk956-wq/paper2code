@@ -12,13 +12,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/model", tags=["Model Viz"])
 
-MAX_BYTES = 50 * 1024 * 1024   # 50 MB
-CHUNK = 1024 * 1024              # stream in 1 MB chunks
+MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+CHUNK = 1024 * 1024  # stream in 1 MB chunks
 
 _PYTORCH_EXTS = {".pt", ".pth"}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 async def _read_upload(file: UploadFile) -> bytes:
     """Stream-read UploadFile enforcing MAX_BYTES limit."""
@@ -37,6 +38,7 @@ async def _read_upload(file: UploadFile) -> bytes:
 
 # ── POST /api/model/parse  (ONNX) ─────────────────────────────────────────────
 
+
 @router.post("/parse")
 async def parse_model(
     file: UploadFile = File(...),
@@ -50,6 +52,7 @@ async def parse_model(
 
     try:
         from backend.services.onnx_parser import parse_onnx
+
         graph = parse_onnx(content)
     except ImportError:
         raise HTTPException(
@@ -67,10 +70,11 @@ async def parse_model(
 
 # ── POST /api/model/parse-pytorch  (PyTorch via E2B) ─────────────────────────
 
+
 @router.post("/parse-pytorch")
 async def parse_pytorch_model(
     file: UploadFile = File(...),
-    input_shape: str = Form(...),   # JSON array string, e.g. "[3,224,224]"
+    input_shape: str = Form(...),  # JSON array string, e.g. "[3,224,224]"
     _user=Depends(get_current_user),
 ):
     """
@@ -86,6 +90,7 @@ async def parse_pytorch_model(
 
     # Parse and validate input_shape
     import json as _json
+
     try:
         shape: list[int] = _json.loads(input_shape)
         if not isinstance(shape, list) or not shape:
@@ -103,6 +108,7 @@ async def parse_pytorch_model(
 
     try:
         from backend.services.pytorch_parser import parse_pytorch
+
         graph = parse_pytorch(content, shape)
     except ImportError:
         raise HTTPException(
@@ -119,6 +125,7 @@ async def parse_pytorch_model(
 
 
 # ── POST /api/model/save ──────────────────────────────────────────────────────
+
 
 @router.post("/save")
 def save_graph(
@@ -156,6 +163,7 @@ def save_graph(
 
 
 # ── GET /api/model/{graph_id} ────────────────────────────────────────────────
+
 
 @router.get("/{graph_id}")
 def get_graph(

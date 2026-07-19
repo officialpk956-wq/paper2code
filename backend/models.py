@@ -649,10 +649,12 @@ class ModelGraph(Base):
     __table_args__ = (Index("ix_model_graphs_user_created", "user_id", "created_at"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String(255), nullable=False)        # original filename
-    format = Column(String(20), nullable=False)       # "onnx" | "pytorch"
-    graph_data = Column(JSON, nullable=False)         # {nodes, edges, meta}
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False)  # original filename
+    format = Column(String(20), nullable=False)  # "onnx" | "pytorch"
+    graph_data = Column(JSON, nullable=False)  # {nodes, edges, meta}
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="model_graphs")
