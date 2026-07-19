@@ -1,0 +1,234 @@
+# GloVe
+
+## 1. Overview
+GloVe (Global Vectors for Word Representation), developed by Jeffrey Pennington, Richard Socher, and Christopher Manning at Stanford University in 2014, is a prominent algorithm for learning dense word embeddings. It was created in direct response to Word2Vec. The NLP field historically utilized two main approaches to semantic representation: global matrix factorization (like Latent Semantic Analysis or LSA) and local context window methods (like Word2Vec's Skip-Gram). LSA captured global statistical information well but performed poorly on analogy tasks. Word2Vec performed brilliantly on analogy tasks by learning from local context windows, but it entirely ignored the global statistical structure of the corpus. GloVe sought to combine the best of both worlds. It explicitly leverages global word co-occurrence statistics to train its embeddings, ensuring that the dot product of two word vectors is directly related to the logarithm of their probability of co-occurring in the entire corpus. This theoretically grounded, math-first approach results in high-quality word vectors that perform comparably or better than Word2Vec on word analogy, word similarity, and named entity recognition tasks.
+
+:::note
+While Word2Vec is a predictive neural network model that learns iteratively by minimizing a prediction error, GloVe is a count-based model that learns by explicitly factorizing a pre-computed global co-occurrence matrix.
+:::
+
+## 2. Historical Context
+Before 2013, the standard for extracting meaning from large corpora was Latent Semantic Analysis (LSA). LSA involved constructing a massive term-document or term-term matrix and using Singular Value Decomposition (SVD) to reduce its dimensionality. While mathematically sound for capturing variance, LSA struggled with the disproportionate influence of frequent words and performed poorly on complex syntactic and semantic tasks. When Mikolov introduced Word2Vec in 2013, it caused a paradigm shift because its simple local predictive model vastly outperformed SVD methods on analogy tasks. However, researchers at Stanford recognized a theoretical gap: Word2Vec's neural network was essentially a black box. It learned locally from sliding windows, implicitly updating weights, but it discarded the vast, explicit statistical information available across the entire corpus. In 2014, the Stanford team published GloVe, proving that they could achieve Word2Vec-level performance (and often exceed it) not by using a neural network to predict context, but by defining a rigorous mathematical objective function that directly modeled the global co-occurrence ratios of words.
+
+## 3. Problem It Solves
+GloVe solves the disconnect between global statistical models and local predictive models. Local models like Word2Vec learn by scanning the text with a small window, looking at a few words at a time. If the words "ice" and "solid" co-occur frequently, Word2Vec gradually nudges their vectors together. However, it fails to efficiently leverage the *global* fact that "ice" and "solid" co-occur exactly 4,521 times in a billion-word corpus. Matrix factorization methods like LSA capture this exact number but struggle to weight it properly, often getting overwhelmed by non-informative words like "the" and "and." GloVe solves this by constructing a global word-word co-occurrence matrix $X$, where $X_{ij}$ is the number of times word $j$ appears in the context of word $i$. GloVe then posits a specific, linear mathematical relationship: the dot product of word vectors $i$ and $j$ should equal the log probability of their co-occurrence. By minimizing the squared difference between the dot product and the log co-occurrence count (weighted by a carefully designed function to prevent frequent words from dominating), GloVe efficiently injects global statistical truth directly into the dense vector space.
+
+## 4. Architecture Diagram Data
+```text
+Phase 1: Build Global Matrix                 Phase 2: Train Vectors
+(Runs once over corpus)                      (Iterative Optimization)
+
+    Corpus (Text Data)
+            |
+            v
+ +-----------------------+                +-------------------------+
+ | Sliding Context Window|                | Initialize Word Vectors |
+ | (e.g., size 10)       |                | w_i, w_j (Target, Ctxt) |
+ +----------+------------+                +-----------+-------------+
+            |                                         |
+            v                                         |
+ +-----------------------+                +-----------v-------------+
+ | Accumulate Counts     |                | Calculate Dot Product   |
+ | into Matrix X         |                |      w_i^T * w_j        |
+ +----------+------------+                +-----------+-------------+
+            |                                         |
+            v                                         |
+ +-----------------------+                +-----------v-------------+
+ | Co-occurrence Matrix  |                | Objective Function (J)  |
+ |        X_{ij}         |===============>| minimize squared error  |
+ | (Sparse, V x V)       |                | between dot product and |
+ +-----------------------+                | log(X_{ij}) with bias   |
+                                          +-----------+-------------+
+                                                      |
+                                                      v
+                                          +-------------------------+
+                                          | Update Vectors w_i, w_j |
+                                          | via Gradient Descent    |
+                                          +-------------------------+
+```
+**Components:**
+- `X`: The global word-word co-occurrence matrix. Size $V \times V$.
+- `X_{ij}`: The integer count of how many times word $j$ occurs in the context of word $i$.
+- `w_i`: Vector representation for the main/target word.
+- `\tilde{w}_j` (often just denoted $w_j$ in architecture diagrams for simplicity): Vector representation for the context word.
+- `b_i`, `\tilde{b}_j`: Scalar bias terms for the target and context words.
+- `f(X_{ij})`: A weighting function applied to the cost to dampen the effect of highly frequent co-occurrences.
+
+## 5. Layer-by-Layer Breakdown
+Unlike standard neural networks, GloVe is a matrix factorization model optimized via gradient descent. It doesn't have "layers" in the traditional sense, but rather a set of embedding matrices and a specific loss function.
+1. **The Co-occurrence Matrix Construction**: Before any training begins, the algorithm passes through the entire corpus to build a massive matrix $X$ of size $V \times V$ (where $V$ is vocabulary size). If word $j$ appears in the context window of word $i$, $X_{ij}$ is incremented. The increment is usually inversely proportional to the distance between the words (e.g., an adjacent word adds 1.0, a word 3 spots away adds 1/3). This matrix is highly sparse.
+2. **Embedding Initialization**: The model initializes two embedding matrices: $W$ (main word vectors) and $\tilde{W}$ (context word vectors), both of size $V \times N$ (where $N$ is embedding dimension). It also initializes bias vectors $b$ and $\tilde{b}$ of size $V$.
+3. **The Dot Product**: For any non-zero entry $X_{ij}$ in the co-occurrence matrix, the model retrieves vectors $w_i$ and $\tilde{w}_j$, and biases $b_i$ and $\tilde{b}_j$. It computes the dot product $w_i^\top \tilde{w}_j$ and adds the biases.
+4. **The Loss Computation**: The model calculates the squared difference between the result of Step 3 and $\log(X_{ij})$.
+5. **Weighted Gradient Descent**: Crucially, this squared difference is multiplied by a weighting function $f(X_{ij})$. This function is designed to be 0 when $X_{ij}=0$, to increase slowly, and to plateau at a maximum value for very high frequencies. This prevents extremely common pairs (like "the", "and") from overwhelming the loss function. The parameters are then updated using AdaGrad or SGD.
+
+:::tip
+In practice, because $W$ and $\tilde{W}$ are equivalent in objective, the final GloVe word embedding for a word is usually taken as the sum of its main vector and its context vector: $w_{final} = w_i + \tilde{w}_i$. This has been empirically shown to improve performance.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the tensor shapes for a batch step in GloVe.
+- `B`: Batch size (number of non-zero $X_{ij}$ pairs processed at once)
+- `V`: Vocabulary size
+- `N`: Embedding dimension
+
+1. **Input Tensors**:
+   - `i_idx`: Shape `(B,)`. Indices of main words.
+   - `j_idx`: Shape `(B,)`. Indices of context words.
+   - `counts`: Shape `(B,)`. The actual co-occurrence counts $X_{ij}$ for these pairs.
+2. **Parameter Lookup**:
+   - `w_i = W[i_idx]`: Shape `(B, N)`. Main word embeddings.
+   - `w_j = W_tilde[j_idx]`: Shape `(B, N)`. Context word embeddings.
+   - `b_i = b[i_idx]`: Shape `(B,)`. Main biases.
+   - `b_j = b_tilde[j_idx]`: Shape `(B,)`. Context biases.
+3. **Computation**:
+   - `dot = torch.sum(w_i * w_j, dim=1)`: Shape `(B,)`. Element-wise multiply then sum across dimension $N$.
+   - `prediction = dot + b_i + b_j`: Shape `(B,)`.
+4. **Target Calculation**:
+   - `target = torch.log(counts)`: Shape `(B,)`.
+5. **Loss Weighting**:
+   - `weight = f(counts)`: Shape `(B,)`. Evaluates the piecewise weighting function on the counts.
+6. **Final Loss**:
+   - `loss = weight * (prediction - target)**2`: Shape `(B,)`.
+   - Take the `mean()` or `sum()` over the batch for backpropagation.
+
+## 7. Mathematical Foundations
+The foundation of GloVe rests on the idea that ratios of co-occurrence probabilities encode meaning. The authors mathematically derived their objective function from this premise, culminating in a simple log-bilinear model.
+
+The core objective function $J$ to be minimized over the entire non-zero entries of the co-occurrence matrix $X$ is:
+$$ J = \sum_{i,j=1}^V f(X_{ij}) (w_i^\top \tilde{w}_j + b_i + \tilde{b}_j - \log X_{ij})^2 $$
+
+- $X_{ij}$: The number of times word $j$ occurs in the context of word $i$.
+- $w_i, \tilde{w}_j \in \mathbb{R}^d$: The word vector and context word vector.
+- $b_i, \tilde{b}_j$: Scalar biases for the word and context word. These act as correctors for the baseline frequency of each word.
+- $\log X_{ij}$: The target value. The model forces the dot product to equal the log of the co-occurrence count.
+- $f(X_{ij})$: A crucial weighting function that solves two problems. First, $\log(0)$ is undefined, so $f(0)$ must be $0$, allowing the sum to skip sparse empty entries. Second, highly frequent words cause massive values of $X_{ij}$. $f(x)$ limits their influence. It is defined as:
+  $$ f(x) = \begin{cases} (x/x_{max})^\alpha & \text{if } x < x_{max} \\ 1 & \text{otherwise} \end{cases} $$
+  The authors empirically found that $x_{max} = 100$ and $\alpha = 3/4$ yield the best results.
+
+## 8. Training Procedure
+Training GloVe involves two distinct phases: data preparation and model optimization.
+1. **Matrix Construction (Phase 1)**: The text corpus is tokenized. A vocabulary is built based on a minimum frequency threshold. A window slides across the text. For every center word, the surrounding words within the window radius (e.g., 10 words left and right) are identified. A weighting of $1/d$ is applied (where $d$ is the distance between the center and context word). These weighted values are summed into the sparse $V \times V$ co-occurrence matrix $X$.
+2. **Shuffling**: The non-zero entries of $X$ (the triplets: `word_i`, `word_j`, `count`) are extracted and randomly shuffled.
+3. **Optimization (Phase 2)**: The model parameters ($W, \tilde{W}, b, \tilde{b}$) are initialized randomly. A batch of triplets is passed to the model. The weighted Mean Squared Error loss $J$ is calculated.
+4. **AdaGrad Optimization**: GloVe relies heavily on the AdaGrad optimizer. Because word frequencies follow a Zipfian distribution (a few words appear millions of times, most appear rarely), standard SGD struggles. AdaGrad dynamically adjusts the learning rate for each parameter, providing larger updates for infrequent words and smaller updates for frequent words, which is essential for stable convergence on this objective.
+
+## 9. PyTorch Implementation
+Here is a minimal implementation of the GloVe model and its custom loss function.
+
+```python
+import torch
+import torch.nn as nn
+
+class GloVeModel(nn.Module):
+    def __init__(self, vocab_size: int, embed_dim: int, x_max: float = 100.0, alpha: float = 0.75):
+        super(GloVeModel, self).__init__()
+        self.vocab_size = vocab_size
+        self.embed_dim = embed_dim
+        self.x_max = x_max
+        self.alpha = alpha
+        
+        # Main word vectors and biases
+        self.w = nn.Embedding(vocab_size, embed_dim)
+        self.b = nn.Embedding(vocab_size, 1)
+        
+        # Context word vectors and biases
+        self.w_tilde = nn.Embedding(vocab_size, embed_dim)
+        self.b_tilde = nn.Embedding(vocab_size, 1)
+        
+        # Initialize uniformly
+        init_range = 0.05
+        for param in self.parameters():
+            nn.init.uniform_(param, -init_range, init_range)
+            
+    def weighting_function(self, counts: torch.Tensor) -> torch.Tensor:
+        """Applies the f(X_{ij}) weighting function."""
+        # Calculate (x / x_max)^alpha
+        weights = (counts / self.x_max) ** self.alpha
+        # Clamp maximum value to 1.0
+        return torch.clamp(weights, max=1.0)
+
+    def forward(self, i_indices: torch.Tensor, j_indices: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+        # Get embeddings
+        w_i = self.w(i_indices)           # (Batch, Embed_Dim)
+        w_j = self.w_tilde(j_indices)     # (Batch, Embed_Dim)
+        
+        # Get biases and squeeze out the extra dimension
+        b_i = self.b(i_indices).squeeze() # (Batch,)
+        b_j = self.b_tilde(j_indices).squeeze() # (Batch,)
+        
+        # Calculate dot product
+        dot_product = torch.sum(w_i * w_j, dim=1) # (Batch,)
+        
+        # Prediction: w_i^T * w_j + b_i + b_j
+        prediction = dot_product + b_i + b_j
+        
+        # Target is log of co-occurrence count
+        target = torch.log(counts)
+        
+        # Squared error
+        squared_error = (prediction - target) ** 2
+        
+        # Apply weighting function
+        weights = self.weighting_function(counts)
+        
+        # Final weighted loss
+        loss = (weights * squared_error).mean()
+        return loss
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, VOCAB_SIZE, EMBED_DIM = 128, 50000, 300
+    
+    model = GloVeModel(VOCAB_SIZE, EMBED_DIM)
+    
+    # Dummy data: Batch of word pairs and their co-occurrence counts
+    idx_i = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))
+    idx_j = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))
+    # Counts must be > 0 because of log(counts)
+    counts = torch.randint(1, 200, (BATCH_SIZE,)).float()
+    
+    loss = model(idx_i, idx_j, counts)
+    
+    assert loss.dim() == 0, "Loss should be a scalar"
+    print(f"Test passed! Loss computed successfully. Value: {loss.item():.4f}")
+    
+    # To extract final embeddings, authors recommend w + w_tilde
+    final_embeddings = model.w.weight + model.w_tilde.weight
+    assert final_embeddings.shape == (VOCAB_SIZE, EMBED_DIM), "Final embedding shape incorrect"
+```
+
+## 10. Strengths
+GloVe's defining strength is its explicit mathematical foundation combining global matrix factorization with local context window mechanics. Because it trains on non-zero elements in a pre-computed global co-occurrence matrix, it does not waste computational resources scanning through the empty space of the text corpus over and over like Word2Vec's sliding window. It takes one pass to build the matrix, and then optimization happens directly on the statistical truths of the dataset. This results in embeddings that are highly robust and scale excellently with massive datasets. The performance of GloVe on word analogy tasks (e.g., finding the capital of a country given another country-capital pair) is generally considered superior to Word2Vec for equivalent training time. Furthermore, the pre-trained GloVe vectors (trained by Stanford on Common Crawl and Wikipedia) became an industry standard, serving as the foundational input layer for countless NLP systems prior to the BERT era.
+
+## 11. Weaknesses
+Like Word2Vec, GloVe produces static embeddings, which is its most significant limitation. It cannot distinguish between "apple" the fruit and "Apple" the company; both senses are irreversibly conflated into a single $N$-dimensional vector based on the weighted average of their global co-occurrences. Additionally, GloVe requires constructing a massive $V \times V$ co-occurrence matrix in memory before training can even begin. While the matrix is sparse, for large vocabularies (e.g., 2 million words), building and storing this matrix requires significant RAM and optimized sparse data structures. Finally, GloVe shares Word2Vec's Out-Of-Vocabulary (OOV) problem. If a word was not present in the training corpus and therefore absent from the $V \times V$ matrix, GloVe cannot generate an embedding for it. It lacks any understanding of subword morphology (like prefixes or suffixes) that might allow it to guess the meaning of an unseen word.
+
+## 12. Research Evolution
+GloVe effectively marked the culmination of the static word embedding era. It provided a mathematically elegant counter-argument to the purely predictive neural network approach of Word2Vec, proving that count-based models could achieve state-of-the-art results if parameterized correctly. Following GloVe, the focus of the community split. One track attempted to solve the OOV and morphology problems inherent in static vectors, leading to FastText, which applied Word2Vec-style training to subword n-grams. The other track recognized that the polysemy problem (one vector per word regardless of context) was the true bottleneck for natural language understanding. This realization fueled the development of sequence models like Bi-LSTMs and eventually Transformers, leading directly to ELMo (Embeddings from Language Models) and BERT. These newer models generate context-dependent representations on the fly, rendering static lookup tables like GloVe mostly obsolete for cutting-edge models, though GloVe remains highly useful for lightweight, resource-constrained tasks.
+
+## 13. Interview Questions
+**Q1: What fundamental limitation of Word2Vec does GloVe attempt to solve?**
+**A1:** Word2Vec learns locally; its sliding window only sees a few words at a time. It updates weights based on these local snapshots but doesn't explicitly capture the global statistical frequencies of the entire corpus. GloVe solves this by explicitly constructing a global co-occurrence matrix first, ensuring the model trains directly on the macro-level statistical truth of the dataset.
+
+**Q2: What is the mathematical relationship GloVe enforces between two word vectors?**
+**A2:** GloVe trains the word vectors such that the dot product of a target word vector and a context word vector is approximately equal to the logarithm of their probability of co-occurrence in the global corpus (plus some bias terms). $w_i^\top \tilde{w}_j \approx \log(X_{ij})$.
+
+**Q3: Why does GloVe require a weighting function $f(X_{ij})$ in its loss calculation?**
+**A3:** Without the weighting function, highly frequent word pairs (like "the" and "of") would produce massive errors and completely dominate the gradient updates, pulling the vectors in meaningless directions. The weighting function dampens the influence of these frequent pairs, capping their maximum contribution to the loss, while ensuring sparse/zero entries are ignored.
+
+**Q4: How do you obtain the final word embeddings from a trained GloVe model?**
+**A4:** The GloVe model trains two matrices: $W$ (main words) and $\tilde{W}$ (context words). Because the co-occurrence matrix is symmetric, these two matrices are theoretically equivalent but differ due to random initialization. The authors recommend summing them ($W + \tilde{W}$) to create the final embeddings, which empirically yields slightly better performance and stability.
+
+**Q5: Compare the memory requirements of training GloVe vs. Word2Vec.**
+**A5:** Word2Vec is a streaming algorithm; it requires very little RAM because it processes the text window by window and updates weights incrementally. GloVe requires high RAM initially because it must build and hold the massive sparse $V \times V$ co-occurrence matrix in memory before the optimization phase can begin.
+
+## 14. Related Papers
+- **GloVe: Global Vectors for Word Representation (Pennington et al., 2014)**: The foundational paper introducing the architecture and mathematics.
+- **Efficient Estimation of Word Representations in Vector Space (Mikolov et al., 2013)**: The Word2Vec paper, providing the contrastive predictive approach that GloVe was designed to improve upon.
+- **Improving Word Representations via Global Context and Multiple Word Prototypes (Huang et al., 2012)**: An earlier paper exploring how global context could improve word embeddings, foreshadowing the GloVe approach.
+
+## 15. Further Reading
+- [Stanford NLP GloVe Project Page](https://nlp.stanford.edu/projects/glove/) - The official repository offering pre-trained vectors, source code, and original datasets.
+- [A WEAT-based analysis of GloVe bias](https://arxiv.org/abs/1608.07187) - Important reading on how static word embeddings inherently capture and amplify human biases present in the training data.
+- [CS224N Lecture on GloVe](http://web.stanford.edu/class/cs224n/readings/cs224n-2019-notes02-wordvecs2.pdf) - Detailed mathematical derivation showing how GloVe bridges count-based and predictive models.

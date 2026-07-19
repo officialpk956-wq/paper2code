@@ -1,0 +1,198 @@
+# GPT-2
+
+## 1. Overview
+GPT-2 (Generative Pre-Trained Transformer 2), published by Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever in 2019, is the model that ignited the modern generative AI gold rush. Following the success of GPT-1, OpenAI's competitors (like Google with BERT) dominated natural language understanding benchmarks using bidirectional models. Instead of copying BERT, OpenAI doubled down on the autoregressive, left-to-right decoder architecture, theorizing that language modeling is the ultimate unsupervised task. They scaled the model up massively to 1.5 billion parameters and scraped 40GB of high-quality internet text (WebText) to train it. The breakthrough of GPT-2 was its emergent **Zero-Shot Task Generalization**. The authors discovered that when a language model becomes large enough, it stops merely predicting the next word and starts inferring the implicit *task* contained within the prompt. Without any task-specific supervised fine-tuning, GPT-2 could translate text, summarize articles, and answer questions simply by providing it with a textual prompt like "Translate to French: Hello ->", fundamentally altering how researchers interacted with neural networks.
+
+:::tip
+GPT-2 is the model that popularized the concept of "prompt engineering." It proved that you don't always need to change a model's weights to make it perform a new task; you just need to format your input text so the model naturally predicts the desired output.
+:::
+
+## 2. Historical Context
+By early 2019, the NLP landscape was heavily fragmented. BERT was the undisputed king, but deploying BERT required a complex pipeline: pre-train a massive model, build a specific dataset for your exact task, and fine-tune the model's weights. OpenAI viewed this reliance on supervised fine-tuning as a fundamental bottleneck to true Artificial General Intelligence (AGI). They hypothesized that a sufficiently capable language model, trained on enough diverse human knowledge, should inherently know how to perform tasks without being explicitly re-trained. They gathered 8 million highly upvoted outbound links from Reddit, creating the WebText dataset, and trained a 1.5B parameter model (10x larger than GPT-1). When they evaluated the model, the results were so surprisingly coherent and human-like that OpenAI made a highly controversial decision: they declared the model "too dangerous to release." Citing concerns about mass-generated fake news and spam, they initially withheld the weights, sparking a massive debate in the AI community about open-source research, AI safety, and the dual-use nature of large language models.
+
+## 3. Problem It Solves
+GPT-2 solves the **Supervised Fine-Tuning Bottleneck**. Prior models (including GPT-1) were "Foundation Models," meaning they provided a good starting point, but they were useless out-of-the-box. To get GPT-1 to summarize a document, you had to gather thousands of documents and their summaries, attach a new classification head, and update the model's weights. This process is expensive and requires machine learning expertise. GPT-2 solves this by demonstrating zero-shot capabilities. It proved that the objective of predicting the next word on a massively diverse dataset forces the model to learn the mechanics of translation, summarization, and QA internally. To get GPT-2 to summarize, you simply append "TL;DR:" to the end of your document. The model recognizes this pattern from internet forums and naturally generates a summary. By allowing users to control the model's behavior entirely through natural language text inputs (prompts) rather than gradient descent, GPT-2 democratized access to AI capabilities.
+
+## 4. Architecture Diagram Data
+```text
+           [ Zero-Shot Task Conditioning via Prompting ]
+
+   Prompt Input: "English: I love you. French: Je t'aime. English: Good morning. French:"
+                               ^
+                               |
+             +-----------------+-----------------+
+             |        GPT-2 Decoder Model        |
+             |     (1.5 Billion Parameters)      |
+             |       (48 Transformer Layers)     |
+             +-----------------+-----------------+
+                               ^
+                               | (Autoregressive Generation)
+                               |
+                       Output: " Bonjour"
+                               |
+            (Model naturally continues the pattern established in the prompt)
+```
+**Components:**
+- `Prompt Input`: A natural language string that implicitly defines the task (translation) and provides formatting cues.
+- `GPT-2 Decoder Model`: A massive stack of masked self-attention blocks. It reads the prompt, processes the context, and calculates the probability of the next logical word.
+- `Output`: The model generates "Bonjour" not because a translation specific loss function was optimized, but because statistically, "Bonjour" is the most likely next word to follow that exact sequence of characters on the internet.
+
+## 5. Layer-by-Layer Breakdown
+GPT-2's architecture is nearly identical to GPT-1, with minor modifications to support stable training at massive scale.
+1. **Input Encoding**: GPT-2 utilizes a modified Byte-Pair Encoding (BPE) that operates at the byte level rather than the unicode character level. This ensures the model can process absolutely any text string (including raw code, emojis, and foreign characters) without ever defaulting to an `<UNK>` (Unknown) token. The vocabulary size is expanded to 50,257.
+2. **Context Window**: The maximum sequence length (context window) was doubled from 512 in GPT-1 to 1024 tokens, allowing it to generate much longer, more coherent paragraphs.
+3. **Layer Normalization Movement (Pre-LN)**: A crucial architectural change. In GPT-1, LayerNorm was applied *after* the self-attention and MLP blocks (Post-LN). In GPT-2, LayerNorm is moved to the *input* of each sub-block (Pre-LN). An additional LayerNorm was also added at the very end of the final transformer block. This structural shift proved essential for stabilizing gradients when training models with billions of parameters.
+4. **Initialization Scaling**: To prevent activation variance from exploding deep in the network, the weights of residual layers were scaled at initialization by a factor of $1 / \sqrt{N}$, where $N$ is the number of residual layers.
+5. **Scale**: The largest GPT-2 model features 48 layers, a hidden dimension of 1600, and 1.5 billion parameters.
+
+:::warning
+Because it is a pure causal language model, GPT-2 is highly prone to "hallucinations"—confidently stating false information if it mathematically aligns with the pattern established in the prompt. It has no internal mechanism for truth-verification.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for a GPT-2 Large forward pass.
+- `B`: Batch size
+- `T`: Sequence length (up to 1024)
+- `D`: Hidden dimension (1600)
+- `H`: Number of attention heads (25)
+- `V`: Vocabulary size (50,257)
+
+1. **Input Tensor (`x`)**: Shape `(B, T)`. Byte-level BPE token IDs.
+2. **Embedding**:
+   - `tok_emb = TokenEmb(x)`: Shape `(B, T, D)`.
+   - `pos_emb = PosEmb(positions)`: Shape `(B, T, D)`.
+   - `embeds = tok_emb + pos_emb`: Shape `(B, T, D)`.
+3. **Decoder Block (Layer 1 of 48)**:
+   - `norm1 = LayerNorm(embeds)`: Shape `(B, T, D)`. Note this is Pre-LN.
+   - `attn_out = CausalSelfAttention(norm1)`: Shape `(B, T, D)`.
+   - `res1 = embeds + attn_out`: Shape `(B, T, D)`.
+   - `norm2 = LayerNorm(res1)`: Shape `(B, T, D)`.
+   - `mlp_out = MLP(norm2)`: Expands to `4*D` (6400), back to `D`. Shape `(B, T, D)`.
+   - `res2 = res1 + mlp_out`: Shape `(B, T, D)`.
+   - This passes to the next layer.
+4. **Final Layer**:
+   - `final_hidden = LayerNorm(res48)`: The extra LayerNorm added at the end. Shape `(B, T, D)`.
+   - `logits = Linear(final_hidden)`: Projects to vocabulary. Shape `(B, T, V)`.
+
+## 7. Mathematical Foundations
+The foundation of GPT-2 is the exact same autoregressive maximum likelihood objective as GPT-1. The primary novelty is theoretical: framing language modeling as a meta-learning process.
+
+**Language Modeling as Unsupervised Multitask Learning:**
+In standard supervised learning, a model aims to estimate $P(output | input)$. For example, $P(\text{translation} | \text{English text})$.
+The authors of GPT-2 hypothesized that because the internet contains countless examples of tasks being performed (e.g., forums where people translate words, summarize articles, or answer questions), a language model trained on this data is implicitly performing multitask learning.
+Therefore, instead of conditioning the model on just the input, the model is conditioned on the input AND the task: $P(output | input, task)$.
+In GPT-2, this is achieved structurally without changing the math. The "task" is provided as a natural language prompt. By providing the prompt "TL;DR:", the probability distribution shifts:
+$$ P(\text{next words} | \text{Document text}, \text{"TL;DR:"}) $$
+Because the model was trained to minimize the negative log-likelihood $-\sum \log P(u_i | u_{<i})$, and the sequence `[Document, "TL;DR:", Summary]` appears frequently on the internet, the model naturally transitions its internal state to output a summary, proving that generative language modeling is theoretically sufficient for general task solving if scaled sufficiently.
+
+## 8. Training Procedure
+1. **Dataset Curation (WebText)**: Standard internet scrapes (like CommonCrawl) were found to be too low quality. OpenAI created a custom scraper that only downloaded web pages linked from Reddit posts that had at least 3 karma (upvotes). This acted as a heuristic for human-filtered quality, resulting in 40GB of high-quality, long-form text containing massive amounts of implicit reasoning, translation, and factual data.
+2. **Byte-Level BPE**: To handle raw web data perfectly, they used byte-level BPE. Instead of building a vocabulary of characters or words, it builds a vocabulary of bytes (0-255). This means it can encode any string in any language, and any malformed string, into a sequence of token IDs without losing data.
+3. **Scaling**: They trained a family of models: Small (117M), Medium (345M), Large (762M), and Extra Large (1.5B). The key finding was that performance on zero-shot tasks scaled logarithmically with model size. The 1.5B parameter model was significantly better at translation and QA without fine-tuning than the smaller variants.
+4. **No Fine-Tuning**: Unlike GPT-1, the central thesis of the GPT-2 paper was evaluating the model directly on benchmarks (like CoQA for question answering or WMT for translation) strictly in a zero-shot setting, proving its emergent capabilities.
+
+## 9. PyTorch Implementation
+Because GPT-2 is architecturally almost identical to GPT-1, the implementation difference lies primarily in the Pre-LayerNorm placement.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GPT2Attention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.c_attn = nn.Linear(d_model, 3 * d_model)
+        self.c_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, D = x.shape
+        qkv = self.c_attn(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        
+        q = q.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        k = k.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (q.size(-1) ** 0.5)
+        
+        # Causal mask
+        mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+        scores.masked_fill_(mask, float('-inf'))
+        
+        attn = F.softmax(scores, dim=-1)
+        context = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, T, D)
+        return self.c_proj(context)
+
+class GPT2Block(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(d_model)
+        self.attn = GPT2Attention(d_model, n_heads)
+        self.ln_2 = nn.LayerNorm(d_model)
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Linear(4 * d_model, d_model)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # GPT-2 Pre-LN Architecture
+        # Normalization happens BEFORE the attention/mlp, residual added AFTER
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, SEQ_LEN = 2, 64
+    D_MODEL, N_HEADS = 768, 12 # Base GPT-2 specs
+    
+    block = GPT2Block(D_MODEL, N_HEADS)
+    
+    # Dummy input sequence
+    x = torch.randn(BATCH_SIZE, SEQ_LEN, D_MODEL)
+    
+    output = block(x)
+    
+    expected_shape = (BATCH_SIZE, SEQ_LEN, D_MODEL)
+    assert output.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {output.shape}"
+    print("Test passed! GPT-2 Pre-LN Decoder block executed successfully.")
+```
+
+## 10. Strengths
+GPT-2's primary strength is its emergent zero-shot generalization capability. It was the first major demonstration that scaling a simple objective (next-word prediction) on massive data imbues a neural network with task-solving abilities without explicit supervision. Its use of Byte-Level BPE made it universally robust to any string of text, eliminating preprocessing bottlenecks. Furthermore, GPT-2 generated astoundingly coherent text over long passages. Previous models would lose context and start looping or producing gibberish after a few sentences. GPT-2 could generate entire, stylistically consistent news articles based on a single prompt sentence. By releasing the model (eventually, in stages), OpenAI created an explosion of open-source fine-tuning; the community quickly realized that starting with GPT-2's massive semantic foundation made fine-tuning bespoke conversational agents, story generators, and code-completion tools incredibly easy.
+
+## 11. Weaknesses
+GPT-2's zero-shot performance, while groundbreaking, was not reliable. It established the concept of prompting, but its accuracy on complex tasks (like translation or math) was still far below that of smaller, task-specific supervised models. It proved the *concept* of zero-shot transfer, but not the *practicality* of it. Furthermore, it suffers from severe alignment issues. Because it is trained on raw Reddit-curated internet data, it absorbs and confidently regurgitates internet biases, toxicity, and misinformation. It lacks any inherent concept of truth, meaning it will happily generate highly convincing essays defending factually incorrect statements. Finally, as a pure decoder, it remained significantly worse at Natural Language Understanding (NLU) classification tasks (like sentiment analysis) compared to bidirectional models like BERT, keeping it relegated primarily to generation tasks rather than analytics.
+
+## 12. Research Evolution
+GPT-2 is a pivotal milestone in the history of AI safety and scaling laws. OpenAI's staggered release strategy (releasing the 117M model first, and the 1.5B model months later due to safety concerns) sparked massive industry debate. Some viewed it as responsible disclosure; others viewed it as a PR stunt, claiming the model wasn't actually dangerous enough to warrant withholding. Regardless, it set the precedent for how major AI labs handle the release of powerful foundation models today. Scientifically, GPT-2 validated OpenAI's core scaling hypothesis. They realized that the zero-shot performance curve was not plateauing; the 1.5B model was smarter than the 345M model, which was smarter than the 117M model. This realization logically dictated their next step: if scaling the model by 10x created these emergent properties, what would happen if they scaled it by 100x? This direct line of inquiry led to the creation of GPT-3 just a year later, shifting the entire AI industry from millions of parameters to hundreds of billions.
+
+## 13. Interview Questions
+**Q1: What is "Zero-Shot Task Generalization" in the context of GPT-2?**
+**A1:** It is the model's ability to perform a task (like summarizing text or translating) without ever having its weights updated on a supervised dataset for that specific task. You simply provide a prompt (e.g., "Translate to French:") and the model infers what to do based on patterns it learned during unsupervised pre-training on the internet.
+
+**Q2: What is the architectural difference between "Pre-LN" used in GPT-2 and "Post-LN" used in GPT-1?**
+**A2:** In Post-LN, Layer Normalization is applied *after* the residual connection (e.g., `Norm(x + Sublayer(x))`). This can cause gradients to explode in very deep networks. In Pre-LN, Layer Normalization is applied *before* the sublayer (e.g., `x + Sublayer(Norm(x))`). This provides a direct, un-normalized path for gradients to flow from the output to the input, drastically improving training stability for models with billions of parameters.
+
+**Q3: Why did OpenAI choose to use Byte-Level BPE for GPT-2's tokenizer?**
+**A3:** Standard WordPiece or character-level BPE rely on a fixed vocabulary of unicode characters. If they encounter a completely novel symbol, emoji, or foreign character, they output an `<UNK>` (Unknown) token, losing information. Byte-Level BPE operates on raw bytes (0-255). Since all computer text is made of bytes, it guarantees that any possible string can be encoded without ever using `<UNK>`.
+
+**Q4: How did the curation of the WebText dataset differ from standard web scraping?**
+**A4:** Standard scraping (like CommonCrawl) contains massive amounts of spam, repetitive boilerplate, and low-quality gibberish. Instead of raw scraping, OpenAI used Reddit as a heuristic for human curation. They only scraped outbound web links from Reddit posts that had received at least 3 karma, ensuring the text was generally coherent, interesting, and human-validated.
+
+**Q5: Why was the release of GPT-2 highly controversial in the AI community?**
+**A5:** OpenAI initially refused to release the full 1.5 billion parameter model weights. They cited safety concerns, arguing the model was so good at generating coherent text that malicious actors could use it to automate the mass production of fake news, spam, and deepfake text campaigns. This sparked a massive debate over open-source transparency versus AI safety.
+
+## 14. Related Papers
+- **Language Models are Unsupervised Multitask Learners (Radford et al., 2019)**: The foundational GPT-2 paper.
+- **Improving Language Understanding by Generative Pre-Training (Radford et al., 2018)**: The GPT-1 paper that GPT-2 scaled up.
+- **On Layer Normalization in the Transformer Architecture (Xiong et al., 2020)**: A detailed mathematical analysis of why Pre-LN (used in GPT-2) stabilizes training compared to Post-LN.
+
+## 15. Further Reading
+- [OpenAI Blog: Better Language Models and Their Implications](https://openai.com/research/better-language-models) - The famous release post discussing the safety concerns and staged release.
+- [The Illustrated GPT-2 (Jay Alammar)](https://jalammar.github.io/illustrated-gpt2/) - The definitive visual guide for understanding the autoregressive generation loop.
+- [HuggingFace GPT-2 Documentation](https://huggingface.co/docs/transformers/model_doc/gpt2) - API references for running inference and fine-tuning GPT-2 locally.

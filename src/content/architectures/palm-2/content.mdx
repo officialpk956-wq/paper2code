@@ -1,0 +1,216 @@
+# PaLM 2
+
+## 1. Overview
+PaLM 2, announced by Google at I/O in May 2023, represents Google's strategic shift from "brute-force scaling" to "compute-optimal efficiency." The original PaLM was a monstrous 540 Billion parameter model trained on a relatively small amount of data. Following the publication of DeepMind's Chinchilla scaling laws, Google realized this was highly inefficient. By merging Google Brain and DeepMind into Google DeepMind, they re-engineered the architecture. PaLM 2 is significantly smaller in parameter count than its predecessor, but it was trained on astronomically more data for much longer. The result is a model that is drastically faster, much cheaper to serve in production, and yet significantly smarter than the 540B PaLM 1. Furthermore, PaLM 2's dataset was heavily curated to include massive amounts of multilingual text and programming code, transforming it from an English-centric reasoning engine into a global, polyglot developer assistant. PaLM 2 serves as the underlying foundation for Google's API services, Workspace integrations, and specialized medical (Med-PaLM 2) and security (Sec-PaLM 2) variants.
+
+:::tip
+PaLM 2 comes in a family of sizes named after animals: Gecko (mobile deployment), Otter, Bison, and Unicorn. If you are building a commercial application requiring high-speed text generation, Bison offers an incredible balance of GPT-4-level reasoning at a fraction of the latency.
+:::
+
+## 2. Historical Context
+In late 2022, OpenAI launched ChatGPT, catching Google completely off guard. While Google had models like LaMDA and PaLM 1 internally, they were too computationally expensive and unwieldy to deploy for free to hundreds of millions of consumers. Furthermore, the scientific consensus had shifted. The Chinchilla paper (DeepMind, 2022) proved that the entire industry had been training models incorrectly; models like GPT-3 and PaLM 1 had too many parameters and not enough training data. Google needed a model that could power its global search engine and consumer chatbots (Bard, later Gemini) economically. They initiated the PaLM 2 project with a strict focus on compute-optimal scaling. Instead of just adding more parameters to beat GPT-4, they focused on data quality, multilingual coverage, and massive sequence length. When PaLM 2 launched, it proved that a highly optimized, smaller model could decisively beat a massive, under-trained model, validating the Chinchilla hypothesis at an industrial scale and restoring Google's footing in the AI arms race.
+
+## 3. Problem It Solves
+PaLM 2 solves the **Inference Cost Bottleneck** and the **Multilingual Deficit**. Deploying a 540 Billion parameter model (like PaLM 1) to billions of Google Search users would bankrupt the company in GPU/TPU compute costs. PaLM 2 solves this by strictly adhering to compute-optimal scaling laws. By shrinking the parameter count (estimated to be around 340B for the largest version) but training it on trillions of tokens, Google achieved a model that requires far less VRAM and compute to generate a word, allowing them to serve it globally at a fraction of the cost. Secondly, most LLMs (including GPT-3 and PaLM 1) were overwhelmingly trained on English, making them highly prone to cultural bias and poor at reasoning in languages like Bengali or Arabic. PaLM 2 was explicitly trained on a massive, highly curated corpus of parallel multilingual data and diverse global web text. This allows it to understand idioms, translate nuanced poetry, and write code in over 100 languages natively, rather than just acting as a rigid English-to-X translator.
+
+## 4. Architecture Diagram Data
+```text
+           [ PaLM 2: Compute-Optimal Multilingual Architecture ]
+
+   Multilingual Prompt: "Write a Python function for Fibonacci, then explain it in Japanese."
+                               ^
+                               |
+             +-----------------+-----------------+
+             |        PaLM 2 Decoder Model       |
+             |  (Compute-Optimal Parameter Count)|
+             |                                   |
+             |  +-----------------------------+  |
+             |  |   Multi-Query Attention     |  | <-- (Fast Inference)
+             |  |   RoPE Positional Embeds    |  | <-- (Long Context)
+             |  |   SwiGLU FFN + No Biases    |  |
+             |  +-----------------------------+  |
+             +-----------------+-----------------+
+                               ^
+                               | (Trained on Trillions of Tokens)
+                               |
+      +------------------------+------------------------+
+      |               The PaLM 2 Data Mix               |
+      |                                                 |
+      | [ English Web ] [ Code (GitHub) ] [ Math Data ] |
+      | [ Multi-lingual Docs ] [ Parallel Translations] |
+      +-------------------------------------------------+
+```
+**Components:**
+- `The PaLM 2 Data Mix`: The secret to PaLM 2's success. It heavily over-indexes on mathematical formulas, source code, and parallel translation data compared to PaLM 1, fundamentally altering the model's reasoning capabilities.
+- `PaLM 2 Decoder`: Retains the core engineering breakthroughs of PaLM 1 (MQA, SwiGLU, RoPE, No Biases) but scales the width and depth based strictly on Chinchilla equations.
+- `Multi-Query Attention`: Retained from PaLM 1, this is critical for the "Gecko" and "Bison" models to achieve blazing fast token generation speeds for consumer applications.
+
+## 5. Layer-by-Layer Breakdown
+PaLM 2 is an evolutionary refinement of PaLM 1, rather than a radical architectural redesign. Google intentionally kept the architecture simple (dense decoder) and focused entirely on the data and scaling recipe.
+1. **Multilingual Tokenizer**: PaLM 2 utilizes a significantly upgraded tokenizer with a vocabulary of 256,000 tokens (similar to XLM-RoBERTa's approach). This massive vocabulary allows it to encode complex non-Latin scripts (like Kanji, Cyrillic, and Arabic) in single tokens, rather than splitting them into dozens of meaningless bytes, drastically improving multilingual generation speed and reasoning.
+2. **Context Window**: PaLM 2 increased the context window significantly (supporting up to 32k tokens in API versions), relying on RoPE to maintain relative positional awareness across long documents.
+3. **Compute-Optimal Transformer Blocks**: The model uses SwiGLU activations, Multi-Query Attention (MQA), and removes all biases. Crucially, the *ratio* of hidden dimension to number of layers was optimized based on small-scale experiments, resulting in a deeper, slightly narrower model than previous iterations.
+4. **UL2 Training Objective (Rumored/Implied)**: While PaLM 1 was a strict left-to-right autoregressive model, Google Research heavily utilized the UL2 (Unifying Language Learning Paradigms) framework for models leading up to PaLM 2. This involves mixing causal language modeling (predicting the next word) with span-corruption (like BERT's masked language modeling) during pre-training, giving the model much stronger bidirectional context understanding.
+
+:::warning
+Because PaLM 2 relies on Multi-Query Attention, it is extremely fast at generation (decoding), but can be slower and memory-intensive during the initial "prompt processing" phase (pre-fill) if you feed it a massive 20,000-word prompt, as the MQA optimization primarily benefits the generation phase.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes highlighting the massive 256K vocabulary and MQA during generation.
+- `B`: Batch size (e.g., 4)
+- `T`: Sequence length
+- `D`: Hidden dimension (e.g., 8192)
+- `V`: Vocabulary size (256,000)
+
+1. **Input Tensors (`x`)**: Shape `(B, T)`.
+2. **Embedding**:
+   - `embeds = TokenEmb(x)`: Shape `(B, T, D)`. Notice the embedding matrix is massive: `256,000 * 8192 * 2 bytes = ~4.1 GB` just for the embeddings.
+3. **MQA Decoder Generation Step** (Processing token $T+1$):
+   - `Q` is generated for the new token: Shape `(B, 1, D)`.
+   - `K_new, V_new` generated for the new token: Shape `(B, 1, 128)` (Single head).
+   - `K_cache, V_cache` are updated. Because it's MQA, the cache is tiny compared to standard attention.
+   - Attention is calculated between `Q` and the full `K_cache`.
+   - Output `attn_out` shape `(B, 1, D)`.
+4. **Final Output**:
+   - `logits = Linear(hidden_states)`: Projects back up to `V`. Shape `(B, 1, 256000)`.
+   - Softmax is applied to select the next token, which is then fed back into the model.
+
+## 7. Mathematical Foundations
+The foundation of PaLM 2 is the strict adherence to the **Chinchilla Scaling Laws** (Hoffmann et al., 2022).
+
+**Compute-Optimal Scaling:**
+Prior to 2022, the Kaplan Scaling Laws (from OpenAI) dictated that to improve performance for a given compute budget $C$, you should scale the model size $N$ aggressively, and the dataset size $D$ only modestly.
+DeepMind proved this was mathematically flawed. They established the loss function as:
+$$ L(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta} $$
+Where $E$ is the irreducible entropy, and $A, B, \alpha, \beta$ are constants.
+By solving a constrained optimization problem (minimize $L$ such that $C \approx 6ND$), DeepMind found that $\alpha \approx \beta \approx 0.5$.
+Therefore, the optimal allocation of a compute budget requires scaling parameters and data equally:
+$$ N_{opt} \propto C^{0.5}, \quad D_{opt} \propto C^{0.5} $$
+In plain English: If you increase your compute budget by 10x, you should make your model $\sqrt{10} \approx 3.16$ times larger, AND train it on $3.16$ times more data.
+PaLM 1 ignored this; it scaled $N$ to 540B but kept $D$ small (780B). PaLM 2 applied this math flawlessly. By reducing $N$ and scaling $D$ into the trillions of tokens, Google created a model that reached a lower loss minimum $L(N,D)$ while being physically smaller and cheaper to run.
+
+## 8. Training Procedure
+1. **Multilingual and Code Data Mix**: Google drastically altered the training data. PaLM 2's dataset includes hundreds of human languages, heavily featuring parallel corpora (documents translated side-by-side). It also includes massive amounts of web pages, source code, and mathematics. This mix explicitly forces the model to align logic across linguistic boundaries (e.g., learning that an algorithm written in Python and described in Korean shares the same underlying semantic structure).
+2. **Compute-Optimal Duration**: PaLM 2 was trained for significantly more steps than PaLM 1. The training infrastructure utilized Google's TPU v4 supercomputers. Because the model was smaller than 540B, the tensor parallelism overhead was reduced, resulting in incredibly high hardware utilization (FLOPs/watt).
+3. **Alignment**: PaLM 2 underwent extensive RLHF (Reinforcement Learning from Human Feedback) to ensure it was helpful, harmless, and honest, preparing it directly for integration into the Bard (Gemini) consumer chatbot.
+4. **Domain Fine-Tuning**: Google took the base PaLM 2 model and immediately fine-tuned variants. Med-PaLM 2 was fine-tuned on medical licensing exams and peer-reviewed journals, becoming the first AI to perform at an "expert" level on the USMLE. Sec-PaLM 2 was fine-tuned on cybersecurity threat intelligence.
+
+## 9. PyTorch Implementation
+To highlight the efficiency of PaLM 2's generation phase, here is an implementation of Multi-Query Attention (MQA) interacting with a highly optimized KV-Cache, essential for serving models at Google's scale.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MultiQueryAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        
+        # Q has multiple heads
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        # K and V have ONLY ONE head. This is the secret to MQA.
+        self.k_proj = nn.Linear(d_model, self.head_dim, bias=False)
+        self.v_proj = nn.Linear(d_model, self.head_dim, bias=False)
+        self.o_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor, k_cache: torch.Tensor = None, v_cache: torch.Tensor = None) -> tuple:
+        """
+        x: (B, 1, D) - Processing a single new token during generation
+        k_cache: (B, 1, Seq_len, head_dim)
+        v_cache: (B, 1, Seq_len, head_dim)
+        """
+        B, T, D = x.shape
+        assert T == 1, "This forward pass assumes autoregressive generation (token-by-token)"
+        
+        # 1. Project the new token
+        q = self.q_proj(x).view(B, 1, self.n_heads, self.head_dim).transpose(1, 2) # (B, n_heads, 1, head_dim)
+        k_new = self.k_proj(x).view(B, 1, 1, self.head_dim).transpose(1, 2) # (B, 1, 1, head_dim)
+        v_new = self.v_proj(x).view(B, 1, 1, self.head_dim).transpose(1, 2) # (B, 1, 1, head_dim)
+        
+        # 2. Update the cache
+        if k_cache is not None:
+            k_cache = torch.cat([k_cache, k_new], dim=2) # Append along Seq_len dimension
+            v_cache = torch.cat([v_cache, v_new], dim=2)
+        else:
+            k_cache, v_cache = k_new, v_new
+            
+        # 3. Calculate Attention
+        # q: (B, n_heads, 1, head_dim)
+        # k_cache: (B, 1, Seq_len, head_dim) -> Transposed to (B, 1, head_dim, Seq_len)
+        # PyTorch automatically broadcasts the 1 head of K to match the n_heads of Q
+        scores = torch.matmul(q, k_cache.transpose(-2, -1)) / (self.head_dim ** 0.5) # (B, n_heads, 1, Seq_len)
+        
+        attn_weights = F.softmax(scores, dim=-1)
+        
+        # 4. Multiply by Value
+        # v_cache: (B, 1, Seq_len, head_dim) -> Broadcasted during matmul
+        context = torch.matmul(attn_weights, v_cache) # (B, n_heads, 1, head_dim)
+        
+        # 5. Output projection
+        context = context.transpose(1, 2).contiguous().view(B, 1, D)
+        out = self.o_proj(context)
+        
+        return out, k_cache, v_cache
+
+# --- Shape and Memory Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, PAST_SEQ_LEN = 32, 1024
+    D_MODEL, N_HEADS = 4096, 32
+    HEAD_DIM = D_MODEL // N_HEADS # 128
+    
+    mqa = MultiQueryAttention(D_MODEL, N_HEADS)
+    
+    # Simulate processing the next token
+    x = torch.randn(BATCH_SIZE, 1, D_MODEL)
+    
+    # Simulate existing KV cache from past 1024 tokens
+    # Note the memory footprint: 1 head instead of 32 heads!
+    k_cache = torch.randn(BATCH_SIZE, 1, PAST_SEQ_LEN, HEAD_DIM)
+    v_cache = torch.randn(BATCH_SIZE, 1, PAST_SEQ_LEN, HEAD_DIM)
+    
+    out, k_cache_new, v_cache_new = mqa(x, k_cache, v_cache)
+    
+    assert out.shape == (BATCH_SIZE, 1, D_MODEL)
+    assert k_cache_new.shape == (BATCH_SIZE, 1, PAST_SEQ_LEN + 1, HEAD_DIM)
+    print("Test passed! MQA generated next token and updated minimal KV-cache successfully.")
+```
+
+## 10. Strengths
+PaLM 2's greatest strength is its return on compute investment. By following Chinchilla scaling laws, Google built a model that matches or exceeds GPT-4 on numerous benchmarks while being significantly faster and cheaper to serve in production. This allowed Google to rapidly deploy it across their entire product ecosystem (Docs, Gmail, Bard) without taking massive infrastructure losses. Secondly, its multilingual and reasoning capabilities are profound. Because it was trained on so much parallel translation and mathematical data, it can perform highly nuanced tasks (like solving a coding problem requested in Swahili and returning the code with Arabic comments) seamlessly. Finally, the introduction of specialized variants (Med-PaLM 2) proved that a highly optimized, compute-efficient foundation model could achieve literal expert-level performance in highly regulated domains with a tiny amount of high-quality fine-tuning.
+
+## 11. Weaknesses
+While PaLM 2 is highly efficient, it lacks the massive capacity (parameter count) required for the deepest levels of emergent reasoning that the rumored MoE architecture of GPT-4 possesses. On highly complex, multi-step logic puzzles or advanced, undocumented coding frameworks, GPT-4 often maintains state and context slightly better than PaLM 2. Secondly, Google's safety alignment on PaLM 2 was notoriously rigid. The model often suffered from extreme refusal rates (refusing to answer benign questions because they vaguely brushed against safety guidelines), making it frustrating for power users. Finally, unlike open-source models (Llama) or fully transparent APIs (OpenAI), Google's ecosystem integration meant that PaLM 2 was often experienced by developers through clunky GCP interfaces, slowing its adoption in the grassroots developer community.
+
+## 12. Research Evolution
+PaLM 2 was the bridge between the "scale at all costs" era of 2020-2022 and the "omni-modal efficiency" era of 2024. It proved that DeepMind's Chinchilla laws were absolutely correct—data scale matters just as much, if not more, than parameter scale. It successfully modernized Google's AI offerings and provided a stable foundation for their enterprise APIs. However, the industry was moving toward native multimodality (processing audio and video natively, not just text). Recognizing that the dense text-only decoder architecture of PaLM was reaching its limits, Google immediately pivoted their combined deep learning teams. They took the compute-optimal scaling lessons learned from PaLM 2 and applied them to a completely new, natively multimodal architecture from the ground up. This successor architecture, designed to process text, image, audio, and video natively, was released later that year as **Gemini**.
+
+## 13. Interview Questions
+**Q1: How does PaLM 2 differ philosophically from PaLM 1 regarding parameter scaling?**
+**A1:** PaLM 1 followed the philosophy of "bigger is better," scaling up to 540 Billion parameters but training on a relatively small dataset (780B tokens). PaLM 2 followed Chinchilla "compute-optimal" scaling. It significantly reduced the parameter count to save inference costs, but trained the model on trillions of tokens, resulting in a smarter, faster, and cheaper model.
+
+**Q2: What specific data modifications gave PaLM 2 its advanced reasoning and coding capabilities?**
+**A2:** PaLM 2's dataset heavily over-indexed on three things compared to previous models: 1) Source code from GitHub. 2) Mathematical papers and formulas. 3) Parallel bilingual corpora (documents translated side-by-side). This forced the model to learn deep logical structures and cross-lingual semantic alignment, greatly boosting its reasoning scores.
+
+**Q3: How does the 256K vocabulary tokenizer in PaLM 2 improve performance for non-English languages?**
+**A3:** Standard tokenizers (vocab ~50K) split complex non-Latin characters (like Arabic or Korean) into many fragmented bytes. This wastes the context window and makes learning slow. A 256K vocabulary allows the tokenizer to assign single, dedicated token IDs to thousands of common foreign words and characters, making the model process these languages faster and with deeper semantic understanding.
+
+**Q4: What is the main benefit of Multi-Query Attention (MQA) for a consumer application like a chatbot?**
+**A4:** Chatbots generate text autoregressively (one word at a time). To do this, they must store the Key and Value vectors of all previous words in GPU memory (the KV-cache). MQA forces all Query heads to share a single Key and Value head. This shrinks the KV-cache by up to 90%, allowing the GPU to serve many more users simultaneously (higher batch size) without running out of memory.
+
+**Q5: What are Med-PaLM 2 and Sec-PaLM 2?**
+**A5:** They are specialized, domain-specific variants of the PaLM 2 foundation model. Med-PaLM 2 was fine-tuned on medical data and passed the US Medical Licensing Examination at an expert level. Sec-PaLM 2 was fine-tuned for cybersecurity to analyze threat vectors and malicious code, proving that the PaLM 2 base model is highly adaptable to rigorous professional domains.
+
+## 14. Related Papers
+- **PaLM 2 Technical Report (Google, 2023)**: The official technical report outlining the compute-optimal scaling and multilingual data mix.
+- **Training Compute-Optimal Large Language Models (Hoffmann et al., 2022)**: The DeepMind "Chinchilla" paper that established the mathematical laws PaLM 2 used to scale.
+- **UL2: Unifying Language Learning Paradigms (Tay et al., 2022)**: A Google paper establishing the mixture of denoisers (autoregressive and bidirectional) often used in Google's internal pre-training pipelines.
+
+## 15. Further Reading
+- [Google AI Blog: Introducing PaLM 2](https://blog.google/technology/ai/google-palm-2-ai-large-language-model/) - The official launch post from Google I/O 2023.
+- [Google Cloud: PaLM API](https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/text) - Documentation for interacting with the Bison and Unicorn models via Vertex AI.
+- [DeepMind: Med-PaLM](https://sites.research.google/med-palm/) - An overview of how PaLM 2 was adapted for expert-level medical reasoning.

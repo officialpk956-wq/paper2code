@@ -1,0 +1,195 @@
+# Word2Vec
+
+## 1. Overview
+Word2Vec, introduced by Tomas Mikolov and his team at Google in 2013, completely revolutionized the field of Natural Language Processing (NLP). Before Word2Vec, words were typically represented as high-dimensional, sparse, one-hot encoded vectors, which contained no semantic information about the word itself and suffered from the curse of dimensionality. Word2Vec solved this by learning dense, low-dimensional vectors (usually 100 to 300 dimensions) where words with similar meanings are mapped to nearby points in the vector space. It achieves this by leveraging the distributional hypothesis: "a word is characterized by the company it keeps." The architecture consists of two distinct but related shallow neural network models: Continuous Bag-of-Words (CBOW) and Skip-Gram. CBOW predicts a target word given its surrounding context words, while Skip-Gram predicts the surrounding context words given a single target word. The internal weights of these models become the word embeddings. This simple yet profound approach created embeddings that captured not just syntactic similarities (like "run" and "running"), but deep semantic relationships, famously demonstrated by the algebraic property: `vector("King") - vector("Man") + vector("Woman") ≈ vector("Queen")`. 
+
+:::tip
+For smaller datasets, CBOW is generally faster to train and has slightly better accuracy for frequent words. For larger datasets, Skip-Gram is preferred as it performs better with infrequent words and captures finer semantic details.
+:::
+
+## 2. Historical Context
+In the early days of NLP, the dominant paradigm for representing text was the Bag-of-Words model and TF-IDF (Term Frequency-Inverse Document Frequency). These methods treated words as atomic, independent symbols. A vocabulary of 100,000 words meant a 100,000-dimensional vector for each word, consisting of 99,999 zeros and a single one. This was computationally expensive and semantically empty; the distance between "dog" and "puppy" was exactly the same as the distance between "dog" and "spaceship." In 2003, Yoshua Bengio proposed the Neural Probabilistic Language Model (NPLM), which learned distributed representations (embeddings) alongside a language model. However, NPLM was a deep, complex network that was computationally prohibitive to train on large corpora. Mikolov's breakthrough in 2013 with Word2Vec was realizing that you didn't need a deep neural network to learn good embeddings. By stripping away the hidden layers and using a remarkably shallow, simple linear projection, Mikolov created a model that could train on billions of words in hours rather than weeks. This efficiency, combined with the stunning quality of the resulting vectors, made Word2Vec the catalyst for the deep learning revolution in NLP.
+
+## 3. Problem It Solves
+Word2Vec primarily solves the problem of semantic representation and the curse of dimensionality in language modeling. Traditional one-hot encoding fails to capture any inherent meaning or relationship between words. It treats "happy" and "joyful" as completely unrelated entities. Furthermore, feeding a 100,000-dimensional sparse vector into a machine learning algorithm is incredibly inefficient. Word2Vec transforms this sparse, discrete space into a dense, continuous vector space. By training a shallow network to predict a word's context (Skip-Gram) or predict a word from its context (CBOW), the network is forced to assign similar vectors to words that appear in similar contexts. If "happy" and "joyful" both frequently appear near words like "feeling," "very," and "day," their weights in the network will converge to similar values. These internal weights *are* the embeddings. The resulting dense, 300-dimensional vectors not only drastically reduce memory and compute requirements for downstream NLP tasks, but they also provide a rich, mathematically calculable semantic foundation that allows algorithms to understand analogy, synonymy, and topic clustering intrinsically.
+
+## 4. Architecture Diagram Data
+```text
+Continuous Bag-of-Words (CBOW)                  Skip-Gram
+
+    Context Words      Target Word              Target Word      Context Words
+  (w_{t-2}, w_{t-1})      (w_t)                    (w_t)       (w_{t-2}, w_{t-1})
+  (w_{t+1}, w_{t+2})                                           (w_{t+1}, w_{t+2})
+
+       x_{t-2}  +                                                    +  y_{t-2}
+                |                                                    |
+       x_{t-1}  |                                                    +  y_{t-1}
+          +     v       +-------+                +-------+           |
+          |  Average -> |   h   | ->  y_t        |   h   | -> Copy --+
+          +     ^       +-------+                +-------+           |
+       x_{t+1}  |                                    ^               +  y_{t+1}
+                |                                    |               |
+       x_{t+2}  +                                   x_t              +  y_{t+2}
+
+    One-Hot Input      Hidden Layer   Output       Input     Hidden Layer  Outputs
+      (1 x V)           (1 x N)      (1 x V)      (1 x V)      (1 x N)     (1 x V)
+
+                      [ Weight Matrices ]
+    W_{V \times N}: Input to Hidden (The Embeddings)
+    W'_{N \times V}: Hidden to Output (Context Weights)
+```
+**Components:**
+- `V`: Vocabulary size (e.g., 50,000).
+- `N`: Embedding dimension (e.g., 300).
+- `x`: Input vector (one-hot encoded).
+- `y`: Output vector (probability distribution over vocabulary).
+- `h`: Hidden layer vector. For CBOW, it's the average of context word embeddings. For Skip-Gram, it's the target word embedding.
+- `W`: The input weight matrix. The $i$-th row is the embedding for the $i$-th word.
+- `W'`: The output weight matrix.
+
+## 5. Layer-by-Layer Breakdown
+The beauty of Word2Vec is its simplicity. Both CBOW and Skip-Gram are shallow networks with just three layers.
+1. **Input Layer**: The input is a one-hot encoded vector representing a specific word in the vocabulary. The size of this vector is $1 \times V$, where $V$ is the vocabulary size. In CBOW, multiple context word vectors are input simultaneously. In Skip-Gram, a single target word vector is input.
+2. **Hidden Layer**: The hidden layer is simply a linear projection; there is no non-linear activation function (like ReLU or sigmoid) used here. The input one-hot vector is multiplied by the weight matrix $W$ of size $V \times N$. Mathematically, multiplying a one-hot vector by a matrix simply acts as a lookup table, selecting a specific row of $W$. This row is the $N$-dimensional embedding for the input word. In CBOW, the embeddings for all context words are retrieved and averaged (or summed) to form the hidden state $h$. In Skip-Gram, $h$ is just the embedding of the single input word.
+3. **Output Layer**: The hidden vector $h$ is multiplied by the output weight matrix $W'$ of size $N \times V$. This produces a vector of size $1 \times V$ containing raw scores (logits) for every word in the vocabulary. Finally, a Softmax function is applied to convert these logits into a probability distribution, predicting the likelihood of each word being the correct target word (in CBOW) or context word (in Skip-Gram). 
+
+:::note
+In practice, computing the full Softmax over a vocabulary of 100,000 words is too slow. Implementations use optimizations like Hierarchical Softmax or Negative Sampling to approximate the loss efficiently.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the tensor shapes for the **Skip-Gram** model.
+- `B`: Batch size (number of target words)
+- `V`: Vocabulary size
+- `N`: Embedding dimension
+- `C`: Context window size (number of context words to predict per target)
+
+1. **Input Tensor (`x`)**: Shape `(B,)`. Contains integer indices of the target words in the vocabulary.
+2. **Input Embedding Lookup (`W`)**: Matrix shape `(V, N)`.
+   - `h = W[x]`: Shape `(B, N)`. This is the hidden state; the dense embeddings of the batch of target words.
+3. **Output Projection (`W'`)**: Matrix shape `(N, V)`.
+   - `logits = h @ W'`: Shape `(B, V)`.
+4. **Target Context (`y`)**: Shape `(B, C)`. Contains integer indices of the true context words.
+5. **Loss Calculation**: The `logits` tensor of shape `(B, V)` is compared against the true target context indices `(B, C)`. Because Skip-Gram predicts multiple context words independently from the same hidden state, the loss is the sum of the Cross-Entropy losses for each of the `C` context words. (In practice, Negative Sampling replaces this massive matrix multiplication with a small number of dot products).
+
+## 7. Mathematical Foundations
+The objective of Word2Vec is to maximize the probability of observing the correct context words given a target word (or vice versa). Because computing the full softmax denominator over vocabulary $V$ is computationally intractable ($O(V)$ per step), Mikolov introduced **Negative Sampling**.
+
+**Negative Sampling Objective (Skip-Gram):**
+Instead of predicting a probability distribution over the whole vocabulary, Negative Sampling turns the task into binary classification: "Is this word pair $(w, c)$ a true context pair from the data, or a fake pair?"
+For a target word $w$ and a true context word $c$, we draw $K$ "negative" context words $c'$ from a noise distribution $P_n(w)$. The objective function to be maximized is:
+$$ \mathcal{L} = \sum_{(w,c) \in D} \log \sigma(v_c^\top \cdot v_w) + \sum_{k=1}^K \mathbb{E}_{c' \sim P_n(w)} [\log \sigma(-v_{c'}^\top \cdot v_w)] $$
+or more simply, the loss to minimize is:
+$$ \mathcal{L} = -\sum_{(w,c) \in D} \log \sigma(v_c \cdot v_w) - \sum_{(w,c') \in D'} \log \sigma(-v_{c'} \cdot v_w) $$
+
+- $v_w$: The embedding vector for the target word $w$ (from matrix $W$).
+- $v_c$: The context vector for the true context word $c$ (from matrix $W'$).
+- $v_{c'}$: The context vector for the fake/negative word $c'$ (from matrix $W'$).
+- $\sigma(x) = 1 / (1 + e^{-x})$: The sigmoid function, mapping the dot product to a probability between 0 and 1.
+- $\sigma(v_c \cdot v_w)$: The probability that $c$ is a real context word for $w$. We want to push this dot product to be positive and large.
+- $\sigma(-v_{c'} \cdot v_w)$: The probability that $c'$ is a fake context word. We want to push the dot product $v_{c'} \cdot v_w$ to be negative, making the vectors orthogonal or pointing in opposite directions.
+
+## 8. Training Procedure
+Training Word2Vec is highly efficient due to its shallow architecture and negative sampling.
+1. **Corpus Parsing & Vocabulary**: The entire text corpus is scanned. A vocabulary of the most frequent words is built. Rare words are discarded. Each word is assigned an integer index.
+2. **Subsampling Frequent Words**: Extremely common words (like "the", "a") provide little semantic value but consume vast amounts of training time. Word2Vec probabilistically drops frequent words from the training set based on their frequency, balancing the occurrence of rare and common words.
+3. **Sliding Window**: A window of size $C$ (e.g., $C=5$) slides across the text. For every word in the window, a training pair is created. For Skip-Gram, the center word is the input, and the surrounding words are the targets.
+4. **Negative Sampling Generation**: For each positive pair $(w, c)$, $K$ negative words (usually 5 to 20) are randomly sampled from the vocabulary using a unigram distribution raised to the $3/4$ power (empirically found to perform best by giving rare words slightly more weight).
+5. **Forward/Backward Pass**: The input word embedding and the context word embeddings (both positive and negative) are retrieved. The dot products are calculated, passed through the sigmoid function, and the Negative Sampling loss is computed. Gradients are backpropagated using Stochastic Gradient Descent (SGD) to update only the specific rows in $W$ and $W'$ that were used in that step.
+
+## 9. PyTorch Implementation
+Here is a minimal implementation of the Skip-Gram model with Negative Sampling in PyTorch.
+
+```python
+import torch
+import torch.nn as nn
+
+class SkipGramNegativeSampling(nn.Module):
+    def __init__(self, vocab_size: int, embed_dim: int):
+        super(SkipGramNegativeSampling, self).__init__()
+        # W matrix: Target word embeddings
+        self.target_embeddings = nn.Embedding(vocab_size, embed_dim)
+        # W' matrix: Context word embeddings
+        self.context_embeddings = nn.Embedding(vocab_size, embed_dim)
+        
+        # Initialize embeddings with small random values
+        nn.init.uniform_(self.target_embeddings.weight, -0.1, 0.1)
+        nn.init.uniform_(self.context_embeddings.weight, -0.1, 0.1)
+
+    def forward(self, target_words: torch.Tensor, context_words: torch.Tensor, negative_words: torch.Tensor) -> torch.Tensor:
+        # target_words: (Batch,)
+        # context_words: (Batch,) - true positive contexts
+        # negative_words: (Batch, K) - fake negative contexts
+        
+        # Get embeddings
+        v_w = self.target_embeddings(target_words)       # (Batch, Embed_Dim)
+        v_c = self.context_embeddings(context_words)     # (Batch, Embed_Dim)
+        v_neg = self.context_embeddings(negative_words)  # (Batch, K, Embed_Dim)
+        
+        # Positive loss: -log(sigmoid(v_w * v_c))
+        # Element-wise multiplication then sum along dim=1 is dot product
+        pos_dot = torch.sum(v_w * v_c, dim=1)            # (Batch,)
+        pos_loss = -torch.nn.functional.logsigmoid(pos_dot)
+        
+        # Negative loss: -log(sigmoid(-v_w * v_neg))
+        # Batch matrix multiplication: (Batch, K, Embed_Dim) @ (Batch, Embed_Dim, 1) -> (Batch, K, 1)
+        neg_dot = torch.bmm(v_neg, v_w.unsqueeze(2)).squeeze(2) # (Batch, K)
+        neg_loss = -torch.nn.functional.logsigmoid(-neg_dot)
+        neg_loss = torch.sum(neg_loss, dim=1)            # (Batch,)
+        
+        # Total loss is the average over the batch
+        total_loss = (pos_loss + neg_loss).mean()
+        return total_loss
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, VOCAB_SIZE, EMBED_DIM, K_NEGATIVES = 64, 10000, 300, 5
+    
+    model = SkipGramNegativeSampling(VOCAB_SIZE, EMBED_DIM)
+    
+    # Dummy data
+    target_idx = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))
+    pos_context_idx = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))
+    neg_context_idx = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, K_NEGATIVES))
+    
+    loss = model(target_idx, pos_context_idx, neg_context_idx)
+    
+    assert loss.dim() == 0, "Loss should be a scalar"
+    print(f"Test passed! Loss computed successfully. Value: {loss.item():.4f}")
+    print(f"Target Embedding Shape: {model.target_embeddings.weight.shape}")
+```
+
+## 10. Strengths
+Word2Vec is celebrated for its incredible computational efficiency and the rich semantic quality of its resulting vectors. Because the architecture removes non-linear hidden layers, the network is little more than a large projection matrix. This allows it to be trained on massive corpora (billions of words) in a matter of hours using a standard CPU, a feat impossible for deep neural language models of the time. The resulting embeddings implicitly encode complex semantic and syntactic relationships, famously capturing analogies (e.g., country-capital relationships) through simple vector arithmetic. Furthermore, the embeddings act as a highly effective pre-training step; by initializing downstream NLP models (like LSTMs or CNNs) with Word2Vec embeddings rather than random weights, performance on tasks like sentiment analysis and named entity recognition improves dramatically, requiring far less task-specific training data.
+
+## 11. Weaknesses
+Word2Vec's most significant weakness is its inability to handle polysemy (words with multiple meanings) and contextual nuances. Word2Vec generates a *static* embedding; the word "bank" has the exact same vector representation regardless of whether the sentence is "I sat on the river bank" or "I deposited money in the bank." The embedding is forced to be a mashed-up average of all its distinct usages, degrading its accuracy for specific contexts. Secondly, Word2Vec operates strictly at the word level and has a fixed vocabulary. If it encounters a word during inference that it did not see during training (an Out-Of-Vocabulary or OOV word), it cannot generate a meaningful embedding for it. Finally, it ignores morphological information; it treats "run", "runs", and "running" as entirely separate entities without recognizing that they share the same root stem, which is inefficient and requires more data to learn properly.
+
+## 12. Research Evolution
+Word2Vec sparked an explosion in representation learning for NLP. Shortly after its publication, researchers at Stanford introduced GloVe (Global Vectors for Word Representation), which achieved similar results but approached the problem through matrix factorization of global co-occurrence statistics rather than a local predictive neural network. To address Word2Vec's inability to handle Out-Of-Vocabulary words and morphological structure, Facebook AI Research developed FastText (2017), which learned embeddings for character n-grams instead of whole words. This allowed the model to construct vectors for unseen words by summing their constituent n-grams. However, the ultimate limitation of static embeddings—the polysemy problem—was only solved by the advent of deep contextualized embeddings. ELMo (2018) used Bi-LSTMs to generate representations based on the entire sentence, and BERT (2018) utilized the Transformer architecture to definitively shift the paradigm from static word embeddings to dynamic, context-aware token embeddings.
+
+## 13. Interview Questions
+**Q1: What is the primary difference between the CBOW and Skip-Gram architectures?**
+**A1:** CBOW (Continuous Bag-of-Words) takes the surrounding context words as input, averages their embeddings, and attempts to predict the central target word. Skip-Gram does the exact opposite; it takes a single central target word as input and attempts to predict the surrounding context words. Skip-Gram generally performs better with rare words, while CBOW is faster and performs well on frequent words.
+
+**Q2: Why is the full Softmax activation computationally prohibitive in Word2Vec?**
+**A2:** Computing a full Softmax requires calculating the dot product of the hidden state against the embedding of *every single word* in the vocabulary to find the denominator (normalization constant). If the vocabulary has 100,000 words, this requires 100,000 dot products per training step, making training on billions of words unfeasibly slow.
+
+**Q3: How does Negative Sampling solve the Softmax bottleneck?**
+**A3:** Negative Sampling transforms the multi-class prediction problem (predicting 1 word out of $V$) into a series of binary classification problems. Instead of calculating probabilities for all words, the model only calculates the dot product for the true context word (positive sample) and a small number ($K$, usually 5-20) of randomly chosen "fake" context words (negative samples). The goal is simply to maximize the score of the positive sample and minimize the scores of the negative samples, changing the time complexity from $O(V)$ to $O(K)$.
+
+**Q4: Explain the famous Word2Vec analogy `King - Man + Woman = Queen`.**
+**A4:** Because Word2Vec trains embeddings based on context, semantic relationships are encoded as spatial distances and directions in the vector space. The vector difference between `King` and `Man` captures the concept of "royalty". If you take the vector for `Woman` and add this "royalty" concept vector to it, the closest resulting point in the vector space is the embedding for `Queen`.
+
+**Q5: What is the "Out-Of-Vocabulary" (OOV) problem in Word2Vec?**
+**A5:** Word2Vec learns a fixed matrix $W$ where each row corresponds to a specific word seen during training. If, during inference, the model encounters a word it has never seen before, there is no corresponding row in the matrix. Word2Vec has no mechanism to infer the meaning of a novel word from its spelling or morphology, so it typically assigns it an uninformative "UNK" (unknown) token vector.
+
+## 14. Related Papers
+- **Efficient Estimation of Word Representations in Vector Space (Mikolov et al., 2013)**: The original paper introducing the CBOW and Skip-Gram architectures.
+- **Distributed Representations of Words and Phrases and their Compositionality (Mikolov et al., 2013)**: The immediate follow-up paper detailing Negative Sampling and the subsampling of frequent words.
+- **GloVe: Global Vectors for Word Representation (Pennington et al., 2014)**: A competing approach to Word2Vec that uses matrix factorization.
+
+## 15. Further Reading
+- [The Illustrated Word2Vec (Jay Alammar)](https://jalammar.github.io/illustrated-word2vec/) - An incredibly accessible visual guide to the mechanics of Negative Sampling and Skip-Gram.
+- [TensorFlow Word2Vec Tutorial](https://www.tensorflow.org/tutorials/text/word2vec) - The official guide to building and visualizing word embeddings.
+- [CS224N: Natural Language Processing with Deep Learning (Stanford)](http://web.stanford.edu/class/cs224n/) - Lecture 1 and 2 provide deep mathematical intuition into why word embeddings work.

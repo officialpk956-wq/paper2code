@@ -1,0 +1,230 @@
+# GPT-1
+
+## 1. Overview
+GPT-1 (Generative Pre-Trained Transformer), introduced by Alec Radford, Karthik Narasimhan, Tim Salimans, and Ilya Sutskever at OpenAI in 2018, marks the genesis of the modern Large Language Model era. Before GPT-1, NLP models were highly specialized, task-specific architectures (e.g., LSTMs custom-built for sentiment analysis, different LSTMs built for translation) trained entirely from scratch on narrow, annotated datasets. GPT-1 introduced a radically simpler two-stage framework: **Unsupervised Pre-training** followed by **Supervised Fine-tuning**. First, it takes a decoder-only Transformer and trains it on a massive corpus of raw, unannotated text (books) simply to predict the next word. This forces the model to learn a deep, generalized understanding of grammar, facts, and reasoning. Second, this generalized model is fine-tuned on a specific downstream task (like classification or question answering) using a small labeled dataset. By proving that generative self-supervised learning creates powerful, task-agnostic feature extractors, GPT-1 rendered bespoke NLP architectures obsolete overnight and established the foundation upon which all modern LLMs are built.
+
+:::tip
+GPT-1 is the grandparent of all modern chatbots. While it is too small and outdated for modern production use, understanding its two-stage pipeline (pre-train then fine-tune) is absolutely mandatory for understanding how the entire Generative AI industry operates today.
+:::
+
+## 2. Historical Context
+In 2017, the Google Brain team published the "Attention Is All You Need" paper, introducing the Transformer architecture. Initially, the Transformer was used exclusively as an encoder-decoder model for machine translation. Meanwhile, researchers were struggling with the bottleneck of supervised learning: acquiring high-quality, human-labeled data for every new NLP task was too expensive. In early 2018, ELMo demonstrated that pre-training recurrent models on unannotated text provided great feature extractors. The OpenAI team saw an opportunity to combine these two breakthroughs. They stripped away the Transformer's encoder, leaving only the autoregressive decoder, and trained it to predict the next word on the BooksCorpus dataset (7,000 unpublished books). Released in June 2018, just a few months before Google's BERT, GPT-1 was the first model to successfully apply deep Transformer architectures to self-supervised language modeling, setting state-of-the-art records on 9 out of 12 benchmark tasks and fundamentally shifting the direction of global AI research toward unsupervised scaling.
+
+## 3. Problem It Solves
+GPT-1 solves the **Annotation Bottleneck** and the **Architectural Fragmentation** problem. Before GPT-1, if you wanted to build a system that detects whether two sentences contradict each other (Natural Language Inference), you had to hire humans to label tens of thousands of examples, design a specific recurrent neural network just for that task, and train it for days. If you then wanted a text classifier, you had to repeat the entire process with a new dataset and a new architecture. GPT-1 solves this by recognizing that raw text on the internet is an infinitely large, free dataset. By training a model to predict the next word on this raw text, the model learns the foundational rules of human language without human annotators. Once this "foundation model" is built, you don't need a new architecture for a new task. You simply take the pre-trained GPT-1, add a single linear classification layer on top, and train it on a tiny fraction of the labeled data previously required. It unified all NLP tasks under a single, versatile architectural umbrella.
+
+## 4. Architecture Diagram Data
+```text
+           [ Downstream Task (e.g., Classification) ]
+                              ^
+                              | (Extract Final Token State)
+             +----------------+----------------+
+             |      Linear Classifier Head     | (Added during Fine-tuning)
+             +----------------+----------------+
+                              ^
+                              |
+             +----------------+----------------+
+             |    Transformer Decoder Block    | (Layer 12)
+             +----------------+----------------+
+                              ^
+                             ...
+                              ^
+             +----------------+----------------+
+             |    Transformer Decoder Block    | (Layer 1)
+             |      [ Masked Self-Attention ]  |
+             |      [ Feed-Forward Network  ]  |
+             +----------------+----------------+
+                              ^
+                              |
+             +----------------+----------------+
+             | Input Embeddings (Token + Pos)  |
+             +----------------+----------------+
+                              ^
+                              |
+      Input Sequence: [Start] "The" "cat" "sat" [Extract]
+```
+**Components:**
+- `Input Embeddings`: Byte-Pair Encoding (BPE) tokens combined with absolute position embeddings.
+- `Transformer Decoder Block`: A standard Vaswani decoder block, but *without* the cross-attention mechanism, since there is no encoder to attend to.
+- `Masked Self-Attention`: The crucial mechanism that prevents tokens from looking at future tokens during the next-word prediction pre-training.
+- `Extract`: A special token appended to the end of the sequence during fine-tuning. The model's representation at this token's position is passed to the classification head.
+- `Linear Classifier Head`: A simple dense layer used to map the high-dimensional hidden state to task-specific classes.
+
+## 5. Layer-by-Layer Breakdown
+GPT-1 is a 12-layer, 117-million parameter decoder-only Transformer.
+1. **Tokenization**: GPT-1 uses Byte-Pair Encoding (BPE) with a 40,000 subword vocabulary. This allows it to handle out-of-vocabulary words better than strict word-level models.
+2. **Embedding**: The input token IDs are mapped to 768-dimensional vectors. A learned absolute position embedding is added to provide sequence order information (since self-attention is permutation invariant).
+3. **Decoder Blocks (12x)**: The core of the network consists of 12 identical blocks. Each block contains:
+   - **Masked Multi-Head Self-Attention**: The "masking" is a lower-triangular matrix applied to the attention scores. It ensures that when calculating the representation for word $i$, the model can only look at words $1$ to $i$. It cannot look ahead to word $i+1$, preventing it from "cheating" during next-word prediction.
+   - **Layer Normalization**: Applied before and after the sub-layers.
+   - **Feed-Forward Network (MLP)**: A two-layer dense network that expands the hidden state from 768 to 3072, applies a GELU activation, and compresses it back to 768.
+4. **Pre-training Head**: A linear projection back to the 40,000 BPE vocabulary, followed by softmax to predict the next word.
+5. **Fine-tuning Head**: The pre-training head is removed. A randomly initialized linear layer is attached. Special tokens (like `[START]` and `[EXTRACT]`) are added to the input to frame tasks as a single sequence.
+
+:::warning
+Because GPT-1 is a decoder-only model, it reads text strictly left-to-right. Unlike BERT, it cannot use right-side context to disambiguate the meaning of a word early in a sentence, which is why BERT eventually outperformed it on NLU classification tasks.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for a forward pass during pre-training.
+- `B`: Batch size (e.g., 64)
+- `T`: Sequence length (GPT-1 used a maximum context of 512 tokens)
+- `D`: Hidden dimension (768)
+- `H`: Number of attention heads (12)
+- `V`: Vocabulary size (40,000)
+
+1. **Input Tensor (`x`)**: Shape `(B, T)`. Integer token IDs.
+2. **Embedding Layer**:
+   - `tok_emb = TokenEmb(x)`: Shape `(B, T, D)`.
+   - `pos_emb = PosEmb(positions)`: Shape `(B, T, D)`.
+   - `embeds = tok_emb + pos_emb`: Shape `(B, T, D)`.
+3. **Decoder Block (Layer 1)**:
+   - `Q, K, V = Linear(embeds)`: Each shape `(B, T, D)`. Reshaped to `(B, H, T, 64)`.
+   - **Attention Scores**: `Q @ K^T / sqrt(64)`. Shape `(B, H, T, T)`.
+   - **Causal Masking**: Add $-\infty$ to the upper triangle of the `(T, T)` matrix so softmax zeroes out future tokens.
+   - **Context**: `Softmax(Scores) @ V`. Reshaped back to `(B, T, D)`.
+   - **FFN**: `Linear(GELU(Linear(Context)))`. Expands to 3072, back to `(B, T, D)`.
+   - **Residuals & Norms**: Added throughout. Output shape `(B, T, D)`.
+4. **Final Output (`logits`)**:
+   - `logits = Linear(final_hidden_state)`: Projects `D` to `V`.
+   - Shape `(B, T, V)`. The loss is calculated against the target tokens (which are just the input tokens shifted left by one).
+
+## 7. Mathematical Foundations
+GPT-1's training objective is standard causal language modeling (autoregressive prediction).
+
+**Unsupervised Pre-training:**
+Given a large unsupervised corpus of tokens $\mathcal{U} = \{u_1, \dots, u_n\}$, a standard language modeling objective maximizes the following log-likelihood:
+$$ L_1(\mathcal{U}) = \sum_{i=1}^n \log P(u_i | u_{i-k}, \dots, u_{i-1}; \Theta) $$
+where $k$ is the size of the context window (512 for GPT-1), and the conditional probability $P$ is modeled by the neural network with parameters $\Theta$. These parameters are updated using stochastic gradient descent.
+
+**Supervised Fine-Tuning:**
+Given a labeled dataset $\mathcal{C}$, where each instance consists of a sequence of input tokens $x^1, \dots, x^m$ and a label $y$. The inputs are passed through the pre-trained model to obtain the final transformer block's activation $h_l^m$, which is then fed into an added linear output layer with parameters $W_y$ to predict $y$:
+$$ P(y | x^1, \dots, x^m) = \text{softmax}(h_l^m W_y) $$
+The objective is to maximize the supervised log-likelihood:
+$$ L_2(\mathcal{C}) = \sum_{(x,y)} \log P(y | x^1, \dots, x^m) $$
+**Joint Objective:**
+OpenAI found that including language modeling as an auxiliary objective during fine-tuning improved generalization. The final objective optimized during the fine-tuning phase is:
+$$ L_3(\mathcal{C}) = L_2(\mathcal{C}) + \lambda * L_1(\mathcal{C}) $$
+where $\lambda$ is a weight controlling the influence of the auxiliary language modeling objective.
+
+## 8. Training Procedure
+1. **Corpus**: GPT-1 was pre-trained on the BooksCorpus dataset. This dataset contains over 7,000 unique, unpublished books. Crucially, this dataset contains long stretches of contiguous text, allowing the generative model to learn long-range dependencies and narrative structures better than a dataset of shuffled, disjointed sentences.
+2. **Pre-training Details**: The model trained for 100 epochs on minibatches of 64 randomly sampled, contiguous sequences of 512 tokens. They used the Adam optimizer and a cosine annealing learning rate schedule, which ramps up the learning rate quickly and decays it smoothly, a standard practice for training large Transformers.
+3. **Task Formatting**: A major challenge in fine-tuning was how to pass complex tasks (like multiple-choice questions) into a model designed for a single string of text. GPT-1 solved this using traversal-style formatting. To answer a multiple-choice question, the model takes the document, a delimiter token `[$]`, and one of the answers, concatenates them into a single string `Document [$] Answer1`, and processes it. It repeats this for all answers and outputs a confidence score for each, picking the highest one.
+
+## 9. PyTorch Implementation
+Here is a minimal implementation of the GPT-1 Decoder-only Transformer block, highlighting the causal mask that enables autoregressive learning.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.d_model = d_model
+        self.n_heads = n_heads
+        
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, D = x.shape
+        
+        # Project and split into Q, K, V
+        qkv = self.qkv_proj(x)
+        q, k, v = qkv.chunk(3, dim=-1) # Each is (B, T, D)
+        
+        # Reshape to (B, H, T, D/H) for multi-head attention
+        q = q.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        k = k.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
+        
+        # Calculate attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (q.size(-1) ** 0.5)
+        
+        # Apply Causal Mask (Upper triangle becomes -inf)
+        # This prevents token 't' from looking at token 't+1'
+        causal_mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+        scores.masked_fill_(causal_mask, float('-inf'))
+        
+        # Softmax and multiply by Value
+        attn_weights = F.softmax(scores, dim=-1)
+        context = torch.matmul(attn_weights, v) # (B, H, T, D/H)
+        
+        # Reshape and project out
+        context = context.transpose(1, 2).contiguous().view(B, T, D)
+        return self.out_proj(context)
+
+class GPT1DecoderBlock(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(d_model)
+        self.attn = CausalSelfAttention(d_model, n_heads)
+        self.ln_2 = nn.LayerNorm(d_model)
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Linear(4 * d_model, d_model)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # GPT-1 puts layer norm BEFORE the sublayers (Pre-LN architecture)
+        # Note: Original GPT-1 paper used Post-LN, but OpenAI switched to Pre-LN immediately after
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, SEQ_LEN = 4, 32
+    D_MODEL, N_HEADS = 768, 12
+    
+    block = GPT1DecoderBlock(D_MODEL, N_HEADS)
+    
+    # Dummy input sequence
+    x = torch.randn(BATCH_SIZE, SEQ_LEN, D_MODEL)
+    
+    output = block(x)
+    
+    expected_shape = (BATCH_SIZE, SEQ_LEN, D_MODEL)
+    assert output.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {output.shape}"
+    print("Test passed! GPT-1 Decoder block shapes are correct and causal mask executed.")
+```
+
+## 10. Strengths
+The primary strength of GPT-1 was its massive paradigm shift in training efficiency. It proved that a model pre-trained on completely unstructured, unannotated text could learn robust semantic and syntactic features that transferred perfectly to highly specialized downstream tasks. By removing the need to train a specific neural network architecture for every new NLP problem, GPT-1 significantly reduced the barrier to entry for applied NLP. Furthermore, its task-formatting innovation (concatenating questions and documents with delimiter tokens) proved that the Transformer is a highly flexible processor capable of understanding diverse logical structures simply through clever string formatting, a precursor to modern prompt engineering. Finally, it established that standard language modeling (predicting the next word) acts as an exceptional unsupervised objective for learning general world knowledge.
+
+## 11. Weaknesses
+GPT-1's main weakness, which became highly apparent just months after its release, was its left-to-right autoregressive constraint. Because the model can only look at previous words to understand the current word, it performs poorly on tasks that require bidirectional context. For example, in sentence classification, understanding the first word often requires having read the last word; GPT-1 cannot do this natively, which is exactly the weakness Google exploited by creating the bidirectional BERT model, which immediately dethroned GPT-1 on all major leaderboards. Furthermore, GPT-1 was relatively small by modern standards (117M parameters) and trained on a small dataset (7,000 books), limiting the depth of world knowledge it could store. Finally, it still required supervised fine-tuning; it could not perform tasks "out of the box" without updating its weights on a labeled dataset.
+
+## 12. Research Evolution
+GPT-1 is arguably the most consequential paper in the history of generative AI. While the Transformer architecture was invented by Google, it was OpenAI's GPT-1 that recognized the Transformer's true potential as an unsupervised foundation model. It single-handedly triggered the pre-training revolution in NLP. However, after Google released BERT and proved that bidirectional encoders were vastly superior for discriminative tasks (like classification), OpenAI faced a choice: adopt BERT's architecture, or scale up their autoregressive decoder. They chose scale. They realized that while BERT was better at classification, GPT's autoregressive nature meant it could actually generate text natively, an ability BERT lacked. This led directly to GPT-2, where OpenAI scaled the model by 10x and discovered that if a decoder model is large enough, it can perform tasks zero-shot (without fine-tuning), setting the entire company on the path to GPT-3 and eventually ChatGPT.
+
+## 13. Interview Questions
+**Q1: What does GPT stand for, and what are the two main phases of its training pipeline?**
+**A1:** GPT stands for Generative Pre-Trained Transformer. The two phases are: 1) Unsupervised Pre-training: The model trains on a massive corpus of unannotated text, learning to predict the next word. 2) Supervised Fine-tuning: The pre-trained model is adapted to a specific task (like sentiment analysis) using a small, labeled dataset and updating the weights.
+
+**Q2: How does the architecture of GPT-1 differ from the original Transformer introduced in "Attention Is All You Need"?**
+**A2:** The original Transformer was an encoder-decoder architecture designed for translation. GPT-1 completely removes the encoder. It uses only a stack of 12 decoder blocks. Because there is no encoder, the cross-attention sublayer (where the decoder looks at the encoder output) is also completely removed.
+
+**Q3: Why is "Causal Masking" necessary in GPT-1's self-attention mechanism?**
+**A3:** GPT-1's pre-training objective is to predict word $N+1$ given words $1$ through $N$. If the self-attention mechanism could look forward, word $N$ would just look at word $N+1$ directly and perfectly predict it, collapsing the learning process. The causal mask forces the upper triangle of the attention matrix to $-\infty$, blinding the model to future words.
+
+**Q4: BERT dominated GPT-1 on classification benchmarks shortly after release. Why?**
+**A4:** GPT-1 is autoregressive (left-to-right). When processing the word "bank" at the start of a sentence, it cannot look ahead to see the word "river" at the end of the sentence to disambiguate the meaning. BERT uses Masked Language Modeling, allowing it to look at the entire sentence bidirectionally at once, giving it vastly superior context for classification tasks.
+
+**Q5: How did GPT-1 format multiple-choice questions to pass them through a single sequence model?**
+**A5:** It used traversal-style formatting. It concatenated the context, a delimiter token, and a possible answer into a single string (e.g., `Context [$] Answer A`). It passed this through the model, extracted the hidden state at the final token, and calculated a confidence score. It repeated this for all answers and picked the highest score.
+
+## 14. Related Papers
+- **Improving Language Understanding by Generative Pre-Training (Radford et al., 2018)**: The foundational GPT-1 paper.
+- **Attention Is All You Need (Vaswani et al., 2017)**: The Google paper that introduced the Transformer architecture GPT-1 relies on.
+- **Deep contextualized word representations (Peters et al., 2018)**: The ELMo paper that inspired OpenAI to use pre-trained language models for downstream tasks.
+
+## 15. Further Reading
+- [OpenAI Blog: Improving Language Understanding with Unsupervised Learning](https://openai.com/research/language-unsupervised) - The original 2018 release blog post from OpenAI.
+- [The Illustrated GPT-2 (Jay Alammar)](https://jalammar.github.io/illustrated-gpt2/) - While focused on GPT-2, this visual guide perfectly explains the decoder-only architecture that began with GPT-1.
+- [Hugging Face GPT Documentation](https://huggingface.co/docs/transformers/model_doc/openai-gpt) - API reference for the original model in the transformers library.

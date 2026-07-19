@@ -1,0 +1,216 @@
+# FastText
+
+## 1. Overview
+FastText, developed by Facebook's AI Research (FAIR) lab in 2017, is an extension of the Word2Vec model designed to address one of its most glaring flaws: the inability to handle morphology and Out-Of-Vocabulary (OOV) words. Standard Word2Vec and GloVe assign a distinct, independent vector to every single word in the vocabulary, treating "run" and "running" as entirely unrelated symbols. FastText alters this paradigm by representing each word as a bag of character n-grams. For instance, the word "apple" is broken down into subword units like "<ap", "app", "ppl", "ple", "le>". The FastText model learns embeddings for these subword n-grams rather than just the whole word. The final vector for a word is calculated as the sum of the vectors of its constituent n-grams. This simple but powerful innovation allows FastText to construct meaningful embeddings for words it has never seen during training by combining the embeddings of known subword components, making it incredibly robust for morphologically rich languages (like Turkish or Finnish) and highly resistant to typos.
+
+:::tip
+If your application deals heavily with social media text containing misspellings, slang, or highly agglutinative languages, FastText will significantly outperform Word2Vec or GloVe.
+:::
+
+## 2. Historical Context
+By 2016, Word2Vec and GloVe were the undisputed standards for word representation. However, researchers recognized a severe limitation: these models failed on morphologically complex languages. In English, adding an "s" makes a plural. In Turkish, a single word can express a complex sentence through suffixes, resulting in millions of unique word forms. A standard Word2Vec model would require an impossibly large vocabulary to capture all these forms, and rare forms would receive poor representations due to lack of training data. Piotr Bojanowski, Edouard Grave, Armand Joulin, and Tomas Mikolov (the original creator of Word2Vec, now at Facebook) set out to solve this. They published "Enriching Word Vectors with Subword Information" in 2017. Their idea was elegant: apply the proven Skip-Gram architecture with Negative Sampling, but shift the atomic unit of learning from the whole word to the character n-gram. This allowed the model to share parameters across words sharing common roots or affixes, drastically improving performance on rare words and establishing FastText as the new baseline for static word embeddings.
+
+## 3. Problem It Solves
+FastText solves two interconnected problems: the Out-Of-Vocabulary (OOV) problem and the Morphology problem.
+1. **The OOV Problem**: In a production environment, users constantly input novel words, typos ("amzing"), or new slang ("yeet"). Traditional models like GloVe assign these unknown words a generic, meaningless `<UNK>` token, discarding all semantic information. FastText solves this because even if it hasn't seen "amzing", it has seen the n-grams "amz", "mzi", "zin", and "ing" during training. It sums these subword vectors to create a highly accurate, on-the-fly embedding for the novel word.
+2. **The Morphology Problem**: Traditional models learn parameters inefficiently. They must learn the relationship between "quick" and "quickly" entirely from scratch based on co-occurrence, failing to recognize the shared root "quick". FastText explicitly shares parameters. The n-gram "quick" is shared between both words. Therefore, learning about "quickly" simultaneously improves the representation of "quick". This parameter sharing allows FastText to train highly accurate vectors for rare words, provided those rare words contain common subword structures.
+
+## 4. Architecture Diagram Data
+```text
+          Subword N-gram Generation
+          Word: "<apple>"
+          N-grams (e.g., n=3): "<ap", "app", "ppl", "ple", "le>"
+          Special N-gram: "<apple>" (the whole word itself)
+
+                 Input (Target Word)
+                          |
+             +------------+------------+
+             |                         |
+        [ "<ap" ]                  [ "app" ] ...
+             |                         |
+       +-----v-----+             +-----v-----+
+       | Embedding |             | Embedding |   (Lookup in N-gram Matrix)
+       | Vector z_1|             | Vector z_2|
+       +-----+-----+             +-----+-----+
+             |                         |
+             +------------+------------+
+                          |
+                   [ Summation ]
+                 v_w = z_1 + z_2 + ... + z_G
+                          |
+                    Target Vector v_w
+                          |
+               (Standard Skip-Gram Architecture)
+                          |
+                   [ Dot Product ] <-------- Context Vector v_c
+                          |
+                  [ Negative Sampling ]
+                          |
+                         Loss
+```
+**Components:**
+- `N-grams`: Character sequences extracted from the word, bounded by special `<` and `>` tags to denote prefixes/suffixes.
+- `z_g`: The embedding vector for a specific n-gram `g`.
+- `v_w`: The composite vector for the target word `w`, created by summing its n-gram vectors.
+- `v_c`: The vector for a context word (in FastText, context words are usually NOT split into n-grams; they are represented by a separate word-level matrix just like in Word2Vec, for computational efficiency).
+- `Negative Sampling`: The identical objective function used in Word2Vec to maximize context probability.
+
+## 5. Layer-by-Layer Breakdown
+FastText is essentially the Word2Vec Skip-Gram model with a modified input layer.
+1. **N-gram Extraction**: When a target word $w$ is processed, it is framed with angular brackets (e.g., `<where>`). The model extracts all character n-grams for $n$ typically ranging from 3 to 6. For example, for $n=3$, `<where>` yields `<wh`, `whe`, `her`, `ere`, `re>`. The model also includes the special sequence `<where>` representing the whole word.
+2. **N-gram Embedding Lookup**: The model maintains a massive embedding matrix containing a vector for every possible n-gram. Because the number of possible n-grams is astronomical, FastText uses a hashing function. Every n-gram string is hashed to an integer between 1 and $K$ (e.g., $K=2,000,000$). The model looks up the vector $z_g$ for each hashed n-gram.
+3. **Composition (Summation)**: The vectors $z_g$ for all n-grams belonging to the target word $w$ are summed together to create the final target word vector $v_w$.
+4. **Context Prediction (Skip-Gram)**: From this point forward, the model behaves exactly like Word2Vec. The composite vector $v_w$ is dotted with the context word vectors $v_c$. Negative sampling is applied, and the loss is calculated.
+5. **Backpropagation**: Gradients flow back from the loss. Crucially, the gradient for the target word vector $v_w$ is distributed equally to all the constituent n-gram vectors $z_g$, updating the subword representations.
+
+:::warning
+Because of the hashing trick, multiple distinct n-grams might hash to the same bucket (a collision). While this saves memory, a high collision rate degrades performance. Always ensure the hash bucket size $K$ is sufficiently large (typically 2 million) for large datasets.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for a FastText batch step.
+- `B`: Batch size
+- `G`: Maximum number of n-grams per word in the batch
+- `N`: Embedding dimension
+- `K`: Hash bucket size (number of rows in the n-gram embedding matrix)
+
+1. **Input Tensors**:
+   - `target_ngrams`: Shape `(B, G)`. Contains the hashed integer indices of the n-grams for each target word. Padded with zeros for words with fewer than `G` n-grams.
+   - `context_words`: Shape `(B, C)`. Positive context words.
+   - `negative_words`: Shape `(B, C, Neg)`. Negative samples.
+2. **N-gram Lookup**:
+   - `ngram_embeds = NgramMatrix[target_ngrams]`: Shape `(B, G, N)`.
+3. **Summation (Composition)**:
+   - `v_w = torch.sum(ngram_embeds, dim=1)`: Shape `(B, N)`. This collapses the n-grams into a single vector per target word.
+4. **Context Lookup**:
+   - `v_c = ContextMatrix[context_words]`: Shape `(B, C, N)`.
+   - `v_neg = ContextMatrix[negative_words]`: Shape `(B, C, Neg, N)`.
+5. **Dot Products & Loss**:
+   - Proceed exactly as in Word2Vec Skip-Gram: calculate dot products between `v_w` and `v_c` (positives), and `v_w` and `v_neg` (negatives). Apply log-sigmoid and compute the loss.
+
+## 7. Mathematical Foundations
+The objective function of FastText is identical to Word2Vec's Skip-Gram with Negative Sampling. The crucial difference lies in the definition of the target word vector.
+
+**FastText Scoring Function:**
+In Word2Vec, the score between target word $w$ and context word $c$ is a simple dot product of their respective vectors: $s(w, c) = v_w^\top v_c$.
+In FastText, let $\mathcal{G}_w \subset \{1, \dots, K\}$ be the set of hashed n-grams appearing in word $w$. Let $z_g$ be the vector representation for n-gram $g$. The target vector is redefined as the sum of its n-gram vectors. Therefore, the scoring function becomes:
+$$ s(w, c) = \left( \sum_{g \in \mathcal{G}_w} z_g \right)^\top v_c $$
+
+**Negative Sampling Objective:**
+This modified scoring function is simply plugged into the standard Negative Sampling loss $\mathcal{L}$:
+$$ \mathcal{L} = \sum_{(w,c) \in D} \left[ \log \sigma(s(w, c)) + \sum_{k=1}^K \mathbb{E}_{c' \sim P_n} [\log \sigma(-s(w, c'))] \right] $$
+- $\sigma$: Sigmoid function.
+- $D$: The dataset of valid context pairs.
+- $P_n$: The noise distribution for drawing negative samples $c'$.
+By maximizing this objective, the network forces the summation of a word's n-grams to lie close (in vector space) to the context words it frequently appears with.
+
+## 8. Training Procedure
+Training FastText is very similar to Word2Vec, with added overhead for string manipulation.
+1. **N-gram Dictionary Building**: Before training, the algorithm defines the boundaries for n-gram lengths (usually `minn=3`, `maxn=6`). For every word in the training corpus, it generates the character n-grams.
+2. **Hashing**: To avoid storing a dictionary of tens of millions of unique n-grams (which would require massive RAM), FastText uses the Fowler-Noll-Vo (FNV-1a) hash function to map every string n-gram to an integer between 0 and $K-1$ (default $K = 2 \times 10^6$). The model initializes an embedding matrix of size $K \times N$.
+3. **Sliding Window & Sampling**: As in Word2Vec, a context window slides over the text, generating positive $(w, c)$ pairs and drawing negative samples.
+4. **Forward Pass**: The target word is hashed into its constituent n-gram indices. The corresponding rows are pulled from the $K \times N$ matrix and summed. This summed vector is dotted with the context word vector.
+5. **Backpropagation**: The gradient of the loss with respect to the summed target vector is calculated. This single gradient vector is then routed back and applied equally to every n-gram vector $z_g$ that contributed to the sum, simultaneously updating the representations of all the subword components.
+
+## 9. PyTorch Implementation
+Here is a simplified PyTorch implementation demonstrating the n-gram summation and hashing logic of FastText.
+
+```python
+import torch
+import torch.nn as nn
+
+class FastTextModel(nn.Module):
+    def __init__(self, num_buckets: int, vocab_size: int, embed_dim: int):
+        super(FastTextModel, self).__init__()
+        # K x N matrix for subword n-grams
+        self.ngram_embeddings = nn.Embedding(num_buckets, embed_dim, sparse=True)
+        # V x N matrix for context words (FastText usually doesn't use subwords for contexts)
+        self.context_embeddings = nn.Embedding(vocab_size, embed_dim, sparse=True)
+        
+        init_range = 0.1
+        nn.init.uniform_(self.ngram_embeddings.weight, -init_range, init_range)
+        nn.init.uniform_(self.context_embeddings.weight, -init_range, init_range)
+
+    def forward(self, target_ngrams: torch.Tensor, context_words: torch.Tensor, negative_words: torch.Tensor) -> torch.Tensor:
+        # target_ngrams: (Batch, Max_Ngrams) - Hashed integer indices of n-grams for the target word
+        # context_words: (Batch,) - True context word indices
+        # negative_words: (Batch, K_neg) - Fake context word indices
+        
+        # 1. Lookup n-gram embeddings
+        # Shape: (Batch, Max_Ngrams, Embed_Dim)
+        ngram_vecs = self.ngram_embeddings(target_ngrams)
+        
+        # 2. Composition (Summation)
+        # We assume 0 is the padding index, so we can just sum. 
+        # In reality, a mask might be used to avoid summing pad vectors.
+        # Shape: (Batch, Embed_Dim)
+        v_w = torch.sum(ngram_vecs, dim=1)
+        
+        # 3. Lookup context embeddings
+        v_c = self.context_embeddings(context_words)    # (Batch, Embed_Dim)
+        v_neg = self.context_embeddings(negative_words) # (Batch, K_neg, Embed_Dim)
+        
+        # 4. Skip-Gram Negative Sampling Loss
+        # Positive loss
+        pos_dot = torch.sum(v_w * v_c, dim=1)           # (Batch,)
+        pos_loss = -torch.nn.functional.logsigmoid(pos_dot)
+        
+        # Negative loss
+        neg_dot = torch.bmm(v_neg, v_w.unsqueeze(2)).squeeze(2) # (Batch, K_neg)
+        neg_loss = -torch.nn.functional.logsigmoid(-neg_dot)
+        neg_loss = torch.sum(neg_loss, dim=1)           # (Batch,)
+        
+        return (pos_loss + neg_loss).mean()
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, NUM_BUCKETS, VOCAB_SIZE, EMBED_DIM = 32, 2000000, 50000, 100
+    MAX_NGRAMS, K_NEG = 15, 5
+    
+    model = FastTextModel(NUM_BUCKETS, VOCAB_SIZE, EMBED_DIM)
+    
+    # Dummy hashed n-gram indices for a batch of target words
+    target_ngrams = torch.randint(1, NUM_BUCKETS, (BATCH_SIZE, MAX_NGRAMS))
+    pos_contexts = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))
+    neg_contexts = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, K_NEG))
+    
+    loss = model(target_ngrams, pos_contexts, neg_contexts)
+    
+    assert loss.dim() == 0, "Loss should be a scalar"
+    print(f"Test passed! Loss computed successfully. Value: {loss.item():.4f}")
+```
+
+## 10. Strengths
+FastText's paramount strength is its elegant solution to the Out-Of-Vocabulary (OOV) problem. Because it constructs representations from subword n-grams, a pre-trained FastText model can generate a highly accurate, semantic embedding for any arbitrary string of characters, even if that string never appeared in the training corpus. This makes it exceptionally robust for real-world NLP pipelines that must handle misspellings, internet slang, and diverse domain-specific jargon. Furthermore, by sharing parameters across words with common sub-structures, FastText is vastly superior to Word2Vec and GloVe when dealing with morphologically rich languages (like Arabic, Russian, or Turkish) where prefixes and suffixes carry heavy grammatical and semantic meaning. Finally, despite analyzing subwords, FastText remains a shallow neural network. Thanks to highly optimized C++ implementations by Facebook, it trains with blazing speed, capable of processing billions of words and generating n-gram models in mere hours on standard CPUs.
+
+## 11. Weaknesses
+While FastText solves the morphology problem, it inherits the fundamental flaw of all static word embedding models: it cannot handle polysemy. The model generates a single, fixed vector for an input string based on its subwords. The word "bank" (financial institution) and "bank" (river side) share the exact same spelling and n-grams, meaning FastText will sum the same n-gram vectors and produce the exact same final embedding, utterly failing to capture the distinct context. Additionally, FastText models require significantly more memory to store than Word2Vec. A standard Word2Vec model stores a $V \times N$ matrix. FastText must store the massive $K \times N$ subword matrix (often 2 million rows), making the binary model files quite large (often gigabytes). Finally, the hashing trick, while memory-efficient, introduces collisions. Two completely unrelated n-grams might hash to the same bucket, sharing an embedding and introducing subtle noise into the final word vectors.
+
+## 12. Research Evolution
+FastText represented the pinnacle of static word embedding algorithms, successfully marrying the semantic richness of distributional models (Word2Vec) with the structural robustness of subword analysis. It effectively ended the dominance of Word2Vec in production pipelines, becoming the default choice for static embeddings, particularly in multi-lingual applications where morphology varies wildly. However, less than a year after FastText's publication, the NLP community experienced a tectonic shift away from static embeddings altogether. Researchers realized that summing fixed subword vectors could never solve the context problem. The focus shifted to contextualized embeddings—models that process entire sentences and output a unique vector for a word depending on its surrounding context. This transition began in earnest with ELMo (2018), which used deep Bi-LSTMs, and culminated with BERT (2018), which used Transformers. Today, FastText is primarily used as a lightweight, lightning-fast baseline, or in environments where deploying massive Transformer models is computationally impossible.
+
+## 13. Interview Questions
+**Q1: How does FastText handle a word it has never seen before (an OOV word)?**
+**A1:** Unlike Word2Vec which assigns a meaningless `<UNK>` token, FastText breaks the unseen word down into its character n-grams. It hashes these n-grams, retrieves their corresponding pre-trained vectors from its subword embedding matrix, and sums them together. Because the unseen word likely shares n-grams with words seen during training (e.g., prefixes, suffixes, roots), the resulting summed vector is usually an excellent semantic approximation of the novel word.
+
+**Q2: What is the "Hashing Trick" in FastText, and why is it necessary?**
+**A2:** The hashing trick involves using a deterministic hash function (like FNV) to map a string n-gram to a fixed integer ID between 0 and $K$. It is necessary because the total number of unique character n-grams across a large corpus is astronomical. Storing a dictionary mapping every string to an ID would consume immense amounts of RAM. Hashing bounds the memory requirement to exactly $K$ embedding rows, at the cost of occasional collisions.
+
+**Q3: Does FastText use n-grams for both the target word and the context word during training?**
+**A3:** Generally, no. In the standard implementation, the target word is represented as the sum of its n-gram vectors, but the context words are represented by single, whole-word vectors (stored in a separate matrix, just like Word2Vec). This is an engineering optimization; treating context words as n-grams as well would vastly increase the computational cost of calculating the dot product without providing significant performance gains.
+
+**Q4: Why does FastText perform significantly better on Turkish than English compared to Word2Vec?**
+**A4:** Turkish is an agglutinative language. You form new words by infinitely stacking suffixes onto roots (e.g., "evlerinizden" = from your houses). A standard Word2Vec model would treat every unique suffix combination as a totally separate word, suffering from sparse data. FastText breaks these long words into subwords. The vector for the root "ev" (house) is updated and shared across thousands of variations, allowing it to learn rich representations even for rare grammatical forms.
+
+**Q5: What is a major disadvantage of FastText compared to Word2Vec regarding deployment?**
+**A5:** Memory footprint. A Word2Vec model only needs to load the $V \times N$ matrix into RAM. FastText needs to load the massive $K \times N$ n-gram matrix (where $K$ is typically 2 million). This makes the trained FastText model files significantly larger, often consuming several gigabytes, which can be prohibitive for deployment in strict memory-constrained environments like mobile apps.
+
+## 14. Related Papers
+- **Enriching Word Vectors with Subword Information (Bojanowski et al., 2017)**: The foundational FastText paper introducing the subword n-gram architecture.
+- **Bag of Tricks for Efficient Text Classification (Joulin et al., 2017)**: A companion paper demonstrating how the FastText architecture can be modified slightly to create a blazing fast text classifier.
+- **Distributed Representations of Words and Phrases and their Compositionality (Mikolov et al., 2013)**: Essential reading to understand the baseline Skip-Gram model that FastText modifies.
+
+## 15. Further Reading
+- [Official FastText Website](https://fasttext.cc/) - Contains pre-trained models for 157 languages, tutorials, and the C++ source code.
+- [A Visual Guide to FastText (Medium)](https://towardsdatascience.com/fasttext-under-the-hood-11efc57b2b3) - A breakdown of the n-gram generation and hashing mechanics.
+- [Gensim FastText Tutorial](https://radimrehurek.com/gensim/auto_examples/tutorials/run_fasttext.html) - A practical guide to training and querying FastText models using the popular Python Gensim library.

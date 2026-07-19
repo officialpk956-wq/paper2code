@@ -1,0 +1,216 @@
+# XLM
+
+## 1. Overview
+XLM (Cross-lingual Language Model pretraining), introduced by Guillaume Lample and Alexis Conneau at Facebook AI Research in 2019, represents a massive leap forward in bridging the linguistic divide in AI. Before XLM, most powerful language models like BERT were strictly monolingual; an English BERT knew nothing about French, requiring engineers to train completely separate models for every language. XLM changed the paradigm by proving that a single Transformer model could learn the syntactic and semantic structures of up to 100 languages simultaneously. It achieves this by utilizing a shared Byte-Pair Encoding (BPE) vocabulary across all languages and introducing a novel objective called Translation Language Modeling (TLM). By feeding the model concatenated pairs of translated sentences (e.g., an English sentence next to its French translation) and masking words in both, XLM forces the network to align the latent representations of different languages. The result is a model capable of incredible zero-shot cross-lingual transfer: you can fine-tune XLM on an English sentiment analysis dataset, and it will immediately be able to classify the sentiment of French or Chinese text without ever seeing a single training example in those languages.
+
+:::tip
+XLM is foundational for understanding cross-lingual AI, but for modern production deployments requiring multi-lingual capabilities, its successor, XLM-RoBERTa (or multi-lingual variants of modern LLMs), is generally preferred due to vastly larger training data and better optimization.
+:::
+
+## 2. Historical Context
+By 2019, the NLP community had mastered monolingual representation learning via models like ELMo, BERT, and GPT. However, the world speaks thousands of languages. Training a dedicated BERT model from scratch for every language is mathematically impossible due to the sheer lack of digital text data for low-resource languages (like Swahili or Urdu). Researchers were actively searching for ways to transfer the rich linguistic knowledge learned from high-resource languages (like English) to low-resource languages. Previous attempts involved aligning word vectors (like fastText) mathematically after training. Facebook AI Research (FAIR) hypothesized that alignment should happen *during* the deep neural network pre-training phase. By modifying the BERT architecture to accept a language ID embedding, and by creating the Translation Language Modeling (TLM) objective, Lample and Conneau proved that a single Transformer could house a universal, language-agnostic representation of human language, sparking the era of massively multi-lingual foundation models.
+
+## 3. Problem It Solves
+XLM solves the **Language Silo** problem and the **Low-Resource Language** problem. In a siloed framework, an English NLP model cannot help a German NLP pipeline. This is highly inefficient because human languages share massive amounts of underlying semantic and syntactic logic. XLM breaks these silos by creating a shared mathematical space. The vector representation for the word "cat" and the word "chat" (French) are forced to be nearly identical in XLM's deep layers. This shared representation solves the low-resource problem via Zero-Shot Transfer. If you want to build a toxic comment classifier for Urdu, but you only have a dataset of toxic comments in English, you simply fine-tune XLM on the English data. Because the model has already aligned English and Urdu mathematically during pre-training, it automatically understands how to classify the Urdu text. This capability radically democratized NLP access for languages that lack the massive, labeled datasets required to train standard machine learning models.
+
+## 4. Architecture Diagram Data
+```text
+           [ Translation Language Modeling (TLM) Objective ]
+
+      To predict "chien", the model can look at the English context!
+                               ^
+                               |
+            +------------------+------------------+
+            |        Transformer Encoder          |
+            |   (Learns Cross-Lingual Alignment)  |
+            +------------------+------------------+
+                               ^
+                               |
+      +-------------------------------------------------------+
+      | Input Sequence (Concatenated Parallel Translation)    |
+      |                                                       |
+      |   English (Source)         |    French (Target)       |
+      | "the [MASK] slept"         | "le chien a [MASK]"      |
+      +-------------------------------------------------------+
+                               ^
+                               |
+   +---------+---------+---------+---------+---------+---------+
+   |  Token  |  Token  |  Token  |  Token  |  Token  |  Token  | (Shared BPE)
+   +---------+---------+---------+---------+---------+---------+
+   +---------+---------+---------+---------+---------+---------+
+   |  Pos 0  |  Pos 1  |  Pos 2  |  Pos 0  |  Pos 1  |  Pos 2  | (Position)
+   +---------+---------+---------+---------+---------+---------+
+   +---------+---------+---------+---------+---------+---------+
+   |  Lang 0 |  Lang 0 |  Lang 0 |  Lang 1 |  Lang 1 |  Lang 1 | (Language Emb)
+   +---------+---------+---------+---------+---------+---------+
+```
+**Components:**
+- `Shared BPE`: A single vocabulary built across all languages. Words with similar spellings (e.g., "Paris") are shared identically across languages.
+- `Language Emb`: A specific embedding indicating which language the current token belongs to (e.g., 0 for English, 1 for French).
+- `Position Emb`: Position is reset to 0 at the start of the target translation sentence.
+- `TLM Objective`: The core innovation. By masking "dog" in the English half and "dormi" in the French half, the model learns to use the French word "chien" to figure out the English `[MASK]` should be "dog". This forces the attention heads to map semantic concepts across the linguistic boundary.
+
+## 5. Layer-by-Layer Breakdown
+Architecturally, XLM is a standard Transformer encoder, identical to BERT, but with modifications to the input layer and training data processing.
+1. **Shared Vocabulary Construction**: Before training, data from all $N$ languages is pooled. A Byte-Pair Encoding (BPE) algorithm builds a single vocabulary of (e.g., 80,000) subwords. This naturally aligns languages that share alphabets (English/French share roots), improving cross-lingual transfer at the root level.
+2. **Input Embeddings**: The input representation is the sum of three vectors: the Token Embedding, the Absolute Position Embedding, and a new **Language Embedding**. The Language Embedding tells the model whether the current token is English, Chinese, Hindi, etc., allowing the network to contextualize the shared subwords correctly.
+3. **Transformer Encoder**: The data passes through multiple layers of standard Multi-Head Self-Attention and Feed-Forward Networks.
+4. **Pre-Training Heads (MLM & TLM)**:
+   - **Causal Language Modeling (CLM)**: XLM experimented with standard autoregressive training, but dropped it as it was less effective.
+   - **Masked Language Modeling (MLM)**: Standard BERT training, but applied to monolingual data from 100 languages.
+   - **Translation Language Modeling (TLM)**: The breakthrough. Parallel bilingual sentences are concatenated. Masks are applied. The model predicts the masks using the full bilingual context.
+5. **Output**: A standard linear classifier predicting the original token from the shared BPE vocabulary.
+
+:::warning
+XLM requires highly curated Parallel Data (exact sentence-to-sentence translations) to utilize the TLM objective. Parallel data is expensive and scarce for low-resource languages, which is a major limitation of this specific architecture.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for a TLM forward pass.
+- `B`: Batch size
+- `T`: Sequence length (Concatenated length of Source + Target sentences)
+- `D`: Hidden dimension (1024)
+- `V`: Shared Vocabulary size (80,000)
+- `L`: Number of languages (e.g., 15)
+
+1. **Input Tensors**:
+   - `x_tokens`: Shape `(B, T)`. Integer IDs of the shared subwords.
+   - `x_langs`: Shape `(B, T)`. Integer IDs indicating language (e.g., 0 for EN, 1 for FR).
+   - `x_pos`: Shape `(B, T)`. Position indices (resetting at the boundary).
+2. **Embeddings**:
+   - `tok_emb = TokenEmbedding(x_tokens)`: Shape `(B, T, D)`.
+   - `lang_emb = LangEmbedding(x_langs)`: Shape `(B, T, D)`.
+   - `pos_emb = PosEmbedding(x_pos)`: Shape `(B, T, D)`.
+   - `input_embeds = tok_emb + lang_emb + pos_emb`: Shape `(B, T, D)`.
+3. **Transformer Encoder**:
+   - `hidden_states = Encoder(input_embeds)`: Passes through $N$ layers of self-attention.
+   - Shape remains `(B, T, D)`. The self-attention matrix `(B, H, T, T)` explicitly allows tokens in the source language to attend to tokens in the target language.
+4. **Prediction Head**:
+   - `logits = Linear(hidden_states)`: Projects back to vocabulary. Shape `(B, T, V)`.
+5. **Loss**: Cross-entropy calculated only on the masked positions across both languages.
+
+## 7. Mathematical Foundations
+The primary mathematical novelty in XLM is the formulation of the Translation Language Modeling (TLM) objective, which extends standard MLM to a bilingual context.
+
+**TLM Objective:**
+Let $(S, T)$ be a parallel sentence pair, where $S = (s_1, \dots, s_n)$ is the source language sequence and $T = (t_1, \dots, t_m)$ is the target language translation.
+The model receives the concatenated sequence $X = [S; T]$ of length $n+m$.
+A masking function randomly replaces tokens in $X$ to create $\tilde{X}$. Let $M$ be the set of masked indices.
+The TLM objective maximizes the log-likelihood of the masked tokens given the concatenated bilingual context:
+$$ \mathcal{L}_{TLM} = - \sum_{i \in M} \log P(x_i | \tilde{X}; \Theta) $$
+Crucially, because $\tilde{X}$ contains both English and French tokens, if $x_i$ is a masked English word (e.g., "dog"), the self-attention mechanism $\text{softmax}(\frac{QK^\top}{\sqrt{d}})V$ allows the Query vector for the English `[MASK]` to assign high attention weight to the Key vector of the unmasked French translation (e.g., "chien"). By optimizing this loss via backpropagation, the network mathematically forces the embedding $E(\text{"dog"})$ and $E(\text{"chien"})$ to occupy the exact same region in the $D$-dimensional latent space, achieving true cross-lingual alignment.
+
+## 8. Training Procedure
+1. **Data Sampling**: Because high-resource languages (English) have vastly more data than low-resource languages (Nepali), simply sampling randomly would cause the model to only learn English. XLM uses a multi-nomial sampling strategy with a smoothing parameter $\alpha = 0.5$. It artificially downsamples English and heavily oversamples low-resource languages to ensure the model dedicates parameter capacity to all languages fairly.
+2. **Vocabulary Building**: A single BPE model is trained on the pooled, smoothed dataset of all languages. This results in a vocabulary where common prefixes/suffixes across related languages (like Latin-based languages) share the exact same token IDs.
+3. **Alternating Objectives**: During pre-training, the model alternates between batches of monolingual data (optimized via standard MLM) and batches of parallel bilingual data (optimized via TLM).
+4. **Zero-Shot Fine-Tuning**: Once pre-trained, the model is fine-tuned on a downstream task (e.g., XNLI - Cross-lingual Natural Language Inference) using *only* English data. To evaluate, the model is fed French or Swahili text. Because the latent representations are aligned, the classifier head, trained only on English vectors, correctly interprets the French vectors, yielding high accuracy without any French training labels.
+
+## 9. PyTorch Implementation
+Here is a conceptual implementation of the XLM embedding layer and a basic forward pass, highlighting the integration of the Language Embedding.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class XLMEmbeddings(nn.Module):
+    def __init__(self, vocab_size: int, embed_dim: int, max_seq_len: int, num_languages: int):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.position_embeddings = nn.Embedding(max_seq_len, embed_dim)
+        # Unique to XLM: Language Embeddings
+        self.language_embeddings = nn.Embedding(num_languages, embed_dim)
+        
+        self.LayerNorm = nn.LayerNorm(embed_dim, eps=1e-12)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, input_ids: torch.Tensor, langs: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        # Get individual embeddings
+        words_embeddings = self.word_embeddings(input_ids)
+        position_embeddings = self.position_embeddings(positions)
+        language_embeddings = self.language_embeddings(langs)
+        
+        # Sum them all together
+        embeddings = words_embeddings + position_embeddings + language_embeddings
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
+
+class MinimalXLM(nn.Module):
+    def __init__(self, vocab_size: int, embed_dim: int, num_languages: int, num_layers: int = 6, n_heads: int = 8):
+        super().__init__()
+        self.embeddings = XLMEmbeddings(vocab_size, embed_dim, 512, num_languages)
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=n_heads, batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output head tied to word embeddings
+        self.pred_head = nn.Linear(embed_dim, vocab_size, bias=False)
+        self.pred_head.weight = self.embeddings.word_embeddings.weight
+
+    def forward(self, input_ids: torch.Tensor, langs: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        # Embed and encode
+        x = self.embeddings(input_ids, langs, positions)
+        hidden_states = self.encoder(x)
+        logits = self.pred_head(hidden_states)
+        return logits
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, SEQ_LEN = 2, 20
+    VOCAB_SIZE, EMBED_DIM, NUM_LANGS = 10000, 512, 15
+    
+    model = MinimalXLM(VOCAB_SIZE, EMBED_DIM, NUM_LANGS)
+    
+    # Dummy data for a concatenated TLM batch (e.g., English + French)
+    input_ids = torch.randint(1, VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN))
+    
+    # First 10 tokens are lang 0 (EN), next 10 are lang 1 (FR)
+    langs = torch.zeros(BATCH_SIZE, SEQ_LEN, dtype=torch.long)
+    langs[:, 10:] = 1 
+    
+    # Positions reset at the language boundary
+    positions = torch.cat([torch.arange(10), torch.arange(10)]).unsqueeze(0).expand(BATCH_SIZE, -1)
+    
+    logits = model(input_ids, langs, positions)
+    
+    expected_shape = (BATCH_SIZE, SEQ_LEN, VOCAB_SIZE)
+    assert logits.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {logits.shape}"
+    print("Test passed! XLM Embeddings and TLM shapes are correct.")
+```
+
+## 10. Strengths
+XLM's paramount strength is its ability to perform Zero-Shot Cross-Lingual Transfer. By aligning the mathematical representations of over 100 languages into a single latent space, it allows developers to build robust NLP applications for low-resource languages using only English training data. This is a massive cost-saving feature for global enterprises. Furthermore, the introduction of the Translation Language Modeling (TLM) objective proved that explicit parallel data acts as a powerful structural anchor for neural networks, forcing alignment much faster and more accurately than relying on monolingual data alone. Finally, by sharing a single BPE vocabulary, the model naturally leverages the shared etymology and alphabets of related languages, meaning the network is highly efficient with its parameter usage compared to maintaining separate embedding tables for every single language.
+
+## 11. Weaknesses
+The primary weakness of XLM is its reliance on Parallel Data for the TLM objective. High-quality, sentence-by-sentence translated parallel corpora are incredibly rare for low-resource languages (e.g., Igbo or Hmong). This means the languages that need cross-lingual transfer the most are the ones that benefit the least from TLM. Secondly, XLM suffers from the "Curse of Multilinguality." A Transformer has a fixed parameter capacity. If you force a 250M parameter model to learn 100 languages, its performance on any single language (like English) will be significantly lower than a monolingual English BERT of the exact same size, because the capacity is spread too thin. Finally, the vocabulary size must be very large to accommodate different scripts (Arabic, Chinese, Cyrillic), which massively inflates the size of the embedding matrix, eating up memory that could otherwise be used for deeper Transformer layers.
+
+## 12. Research Evolution
+XLM was a landmark paper that proved massively multi-lingual modeling was possible and highly effective. However, the FAIR team quickly recognized its limitations, specifically the bottleneck of requiring parallel translation data. Later that same year, they released XLM-RoBERTa. XLM-RoBERTa completely dropped the TLM objective, relying entirely on standard Masked Language Modeling (MLM). They compensated for the lack of parallel alignment data by scaling the training corpus astronomically, utilizing 2.5 Terabytes of unfiltered CommonCrawl data across 100 languages. They proved that with enough monolingual data and parameter scale, the network naturally aligns languages without needing explicit translation pairs. Thus, while the specific TLM objective of XLM was largely abandoned in later models, the core architecture (shared BPE, single Transformer for 100 languages) established by XLM became the absolute standard for all modern multi-lingual models.
+
+## 13. Interview Questions
+**Q1: What is the primary difference between Masked Language Modeling (MLM) and Translation Language Modeling (TLM)?**
+**A1:** MLM masks tokens in a single language sentence and predicts them based on monolingual context. TLM concatenates two translated sentences (e.g., English and French) together, masks words in both, and predicts the masks. TLM allows the model to use the French context to guess the English mask, forcing explicit cross-lingual mathematical alignment.
+
+**Q2: How does XLM handle the problem of low-resource languages having very little training data compared to English?**
+**A2:** It uses multi-nomial sampling with a smoothing factor ($\alpha=0.5$). Instead of sampling based on true data distribution (which would result in 90% English batches), the smoothing factor artificially downsamples high-resource languages and heavily oversamples low-resource languages, ensuring the model sees enough data to learn minority languages.
+
+**Q3: What is "Zero-Shot Cross-Lingual Transfer" in the context of XLM?**
+**A3:** It is the ability to fine-tune the model on a task (like Sentiment Analysis) using labeled data from ONLY one language (usually English), and then evaluate the model on a completely different language (like Swahili) without retraining. The model succeeds because Swahili and English share the same aligned mathematical latent space inside the model.
+
+**Q4: Why does XLM use a single, shared Byte-Pair Encoding (BPE) vocabulary for all 100 languages?**
+**A4:** A shared BPE vocabulary improves alignment for languages that share alphabets. For example, the subword "inter" might appear in English, French, and Spanish. By assigning it the exact same token ID, the model gets a massive head start on understanding the relationship between the languages. It also saves memory compared to 100 separate vocabularies.
+
+**Q5: What is the "Curse of Multilinguality"?**
+**A5:** It is the phenomenon where adding more languages to a model of a fixed parameter size degrades its performance on any individual language. Because the parameter capacity is limited, forcing the model to learn 100 languages dilutes its understanding of English compared to a monolingual model of the exact same size.
+
+## 14. Related Papers
+- **Cross-lingual Language Model Pretraining (Lample and Conneau, 2019)**: The foundational XLM paper introducing TLM and cross-lingual BPE.
+- **Unsupervised Cross-lingual Representation Learning at Scale (Conneau et al., 2019)**: The XLM-RoBERTa paper, which evolved this architecture by scaling data and dropping TLM.
+- **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding (Devlin et al., 2018)**: The baseline monolingual architecture modified by XLM.
+
+## 15. Further Reading
+- [Facebook AI Blog: XLM](https://ai.facebook.com/blog/xic-xlm-a-new-benchmark-and-model-for-cross-lingual-natural-language-understanding/) - The official announcement detailing the zero-shot capabilities.
+- [Hugging Face XLM Documentation](https://huggingface.co/docs/transformers/model_doc/xlm) - API reference and usage guides for integrating XLM.
+- [The Illustrated Word2vec (Jay Alammar)](https://jalammar.github.io/illustrated-word2vec/) - Helpful prerequisite reading on how embeddings represent semantic space, which XLM extends to multiple languages.

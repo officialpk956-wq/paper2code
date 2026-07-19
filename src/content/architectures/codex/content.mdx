@@ -1,0 +1,208 @@
+# Codex
+
+## 1. Overview
+Codex, introduced by Mark Chen and researchers at OpenAI in 2021, is a specialized descendant of GPT-3 designed specifically to write, understand, and debug computer code. While the original GPT-3 model exhibited surprising emergent abilities to write simple code snippets because its internet training data included StackOverflow and GitHub, it was not robust enough for professional software engineering. OpenAI recognized this potential and created Codex by taking the massive 12 Billion parameter version of GPT-3 and fine-tuning it extensively on 159 GB of public Python code scraped from GitHub. The result was a model that bridged the gap between natural language and programming language. Codex powers GitHub Copilot, marking the first time a Large Language Model achieved widespread commercial integration directly into the daily workflow of millions of professional software developers. It fundamentally shifted programming from syntax-memorization to intent-expression, allowing developers to write a comment describing what they want and having the model generate the functional code.
+
+:::tip
+Codex is highly sensitive to docstrings and variable names. If you want the model to write high-quality code, you must provide it with highly descriptive, strongly typed variable names and clear step-by-step logic in the function's docstring.
+:::
+
+## 2. Historical Context
+By 2020, GPT-3 had proven that scaling autoregressive models on massive text datasets resulted in powerful zero-shot capabilities. However, a model trained primarily on Wikipedia and news articles naturally excels at writing essays, not Python scripts. Microsoft, having acquired GitHub and partnered closely with OpenAI, saw an enormous commercial opportunity. They possessed the world's largest repository of human-written code. OpenAI researchers took 54 million public GitHub repositories and filtered them down to 159 GB of high-quality Python files. They used this dataset to continue training the GPT-3 architecture. Crucially, they also realized there was no good way to measure if a model was actually good at coding; traditional NLP metrics like BLEU score are useless for code (a single missing semicolon ruins a script). Therefore, alongside Codex, they released the HumanEval benchmark, a suite of 164 hand-written programming problems with strict unit tests. Codex dominated this benchmark, proving that language models could write semantically and logically correct software.
+
+## 3. Problem It Solves
+Codex solves the **Syntax Translation Bottleneck** in software development. Programmers often know *what* logic they want to execute (e.g., "download this image, resize it, and save it to an S3 bucket"), but they have to spend significant time looking up the specific syntax, library imports, and API calls to actually write the script. Codex acts as an automated, real-time translator from human intent (Natural Language) to executable syntax (Programming Language). By typing a comment like `# Connect to the database and select all users over age 30`, Codex automatically generates the boilerplate SQL and Python connection code. This drastically reduces the time developers spend reading documentation and searching StackOverflow. Furthermore, it lowers the barrier to entry for novice programmers; they can describe the logic they want to achieve in plain English, and Codex will guide them to the correct algorithmic implementation, serving as a highly knowledgeable pair-programmer.
+
+## 4. Architecture Diagram Data
+```text
+           [ Natural Language to Code Translation ]
+
+   Prompt Input (Docstring):
+   """
+   def is_palindrome(string: str) -> bool:
+       '''
+       Check if the given string is a palindrome.
+       Ignore spaces and casing.
+       '''
+   """
+                               ^
+                               |
+             +-----------------+-----------------+
+             |        Codex Decoder Model        |
+             |       (12 Billion Parameters)     |
+             |  (Fine-tuned GPT-3 Architecture)  |
+             +-----------------+-----------------+
+                               ^
+                               | (Autoregressive Generation)
+                               |
+                       Output (Code):
+                       "string = string.lower().replace(' ', '')
+                        return string == string[::-1]"
+```
+**Components:**
+- `Prompt Input`: A natural language instruction, usually formatted as a Python docstring or a line comment, establishing the context and the intent of the code to follow.
+- `Codex Model`: The underlying GPT-3 architecture, but its probability distributions have been heavily skewed toward predicting programming syntax via fine-tuning on 159GB of GitHub data.
+- `Output`: Executable Python code that fulfills the logic described in the docstring. The model understands Python indentation, standard library usage, and algorithmic efficiency.
+
+## 5. Layer-by-Layer Breakdown
+Architecturally, Codex is practically identical to GPT-3, with specific modifications to its tokenization and data pipeline.
+1. **Tokenization (Code-Specific)**: The original GPT-3 tokenizer was built for English text, meaning it was highly inefficient at encoding code. A string of multiple spaces (common in Python indentation) would be encoded as multiple separate tokens. Codex added a specialized set of tokens representing blocks of spaces (e.g., a single token for 4 spaces, 8 spaces, etc.). This reduced the token length of code files by roughly 30%, allowing the model to fit much longer scripts into its context window.
+2. **Context Window**: Codex expanded the standard GPT-3 context window from 2048 to 4096 tokens. This was critical because software development requires immense context; a model needs to see the imports at the top of the file and the class definitions to accurately autocomplete a function at the bottom of the file.
+3. **Transformer Decoder**: The network is a 12 Billion parameter GPT-3 model (Dense self-attention). It was not trained from scratch. It was initialized with the pre-trained weights of the text-based GPT-3 model, leveraging the model's existing reasoning and logic capabilities, and then continued pre-training on the code corpus.
+4. **Output Head**: Predicts the next token over the modified vocabulary.
+
+:::warning
+Codex is a next-token predictor, not a compiler. It does not run the code it generates to check if it actually works. It frequently generates code that looks highly plausible but contains subtle logical errors or calls functions from libraries that do not exist (hallucinations).
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for a Codex forward pass during inference.
+- `B`: Batch size (e.g., 1 for real-time Copilot completion)
+- `T`: Sequence length (up to 4096)
+- `D`: Hidden dimension (roughly 5120 for 12B model)
+- `H`: Number of attention heads (40)
+- `V`: Vocabulary size (Modified GPT-3 vocab, approx 50,000)
+
+1. **Input Tensor (`x`)**: Shape `(B, T)`. Contains tokenized docstring and previous code.
+2. **Embedding**:
+   - `embeds = TokenEmb(x) + PosEmb(positions)`: Shape `(B, T, D)`.
+3. **Decoder Blocks (40 Layers)**:
+   - `Q, K, V = Linear(embeds)`: Expanded and split.
+   - Reshaped to `(B, H, T, 128)`.
+   - `Scores = Q @ K^T / sqrt(128)`: Shape `(B, H, T, T)`.
+   - **Causal Masking**: Upper triangle masked to prevent looking at future code.
+   - `Context = Softmax(Scores) @ V`.
+   - `MLP`: Expands dimension by 4, applies activation, projects back.
+   - Output shape remains `(B, T, D)`.
+4. **Logits**:
+   - `logits = Linear(final_hidden_state)`: Shape `(B, T, V)`.
+   - The logits representing the highest probability next code token are sampled (often using a temperature of 0.2 to 0.8 for code generation) and appended to the input for the next autoregressive step.
+
+## 7. Mathematical Foundations
+Codex relies on the same autoregressive objective as GPT-3, but its evaluation paradigm required a novel mathematical approach, introduced as `pass@k`.
+
+**The pass@k Metric:**
+In natural language, generating an essay that is 90% correct is still highly useful. In programming, a script that is 90% correct fails to compile. Therefore, evaluating a code generation model by asking it for one answer and checking if it works is too rigid.
+Instead, researchers generate $k$ different code samples from the model for a single prompt. If *at least one* of the $k$ samples passes the strict unit tests, the model successfully solved the problem.
+Calculating the expected `pass@k` directly requires generating hundreds of samples, which is computationally expensive. The authors derived an unbiased estimator. If a model generates $n$ total samples (e.g., $n=200$), and $c$ of those samples pass the unit tests, the estimated probability that at least one out of $k$ samples will pass (where $k \le n$) is:
+$$ \text{pass}@k \approx 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}} $$
+This mathematical framework became the absolute industry standard for evaluating all subsequent coding models (like StarCoder, Code Llama, and DeepSeek-Coder). It proved that while Codex's `pass@1` (getting it right on the very first try) was only 28%, its `pass@100` was 70%, meaning if you sample the model repeatedly, it almost always finds the correct algorithmic solution.
+
+## 8. Training Procedure
+1. **The Dataset**: The training data was collected from 54 million public software repositories hosted on GitHub in May 2020. They filtered for Python files under 1 MB, removed auto-generated code, removed files with extremely long lines (often minified data), and removed files containing syntax errors. This resulted in 159 GB of pristine, human-written Python code.
+2. **Initialization**: The weights were not initialized randomly. They were initialized using the pre-trained weights of a 12B parameter GPT-3 model. This was critical: the model already knew how to reason, translate, and understand English logic. The continued training simply mapped this existing reasoning capability to Python syntax.
+3. **Training Objective**: Standard next-token prediction (Cross-Entropy Loss).
+4. **Evaluation**: OpenAI created the HumanEval dataset. It consists of 164 Python problems. Each problem contains a function signature, a docstring, and several hidden unit tests. The model is given the signature and docstring, generates the function body, and is evaluated strictly on whether the generated code passes the hidden `assert` statements.
+
+## 9. PyTorch Implementation
+While we cannot implement the 12B model, we can implement the core generative loop concept used by Codex to sample multiple solutions to calculate `pass@k`.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ConceptualCodexGenerator(nn.Module):
+    def __init__(self, vocab_size: int = 50000, hidden_dim: int = 768):
+        super().__init__()
+        # A tiny simulated decoder model
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True) # Using LSTM for simple simulation
+        self.fc = nn.Linear(hidden_dim, vocab_size)
+
+    def forward(self, x: torch.Tensor, hidden=None) -> tuple:
+        emb = self.embedding(x)
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.fc(out)
+        return logits, hidden
+
+    @torch.no_grad()
+    def generate_k_samples(self, prompt_tokens: torch.Tensor, k: int, max_length: int, temperature: float = 0.8) -> list:
+        """
+        Generates k distinct code completions for a single prompt to be evaluated for pass@k.
+        Uses higher temperature to ensure diversity in the generated algorithms.
+        """
+        B, T = prompt_tokens.shape
+        assert B == 1, "Generation assumes single prompt for clarity"
+        
+        # Duplicate the prompt k times to process in a batch
+        input_batch = prompt_tokens.repeat(k, 1) # (k, T)
+        
+        # Pre-compute hidden state for the prompt
+        logits, hidden = self(input_batch)
+        
+        # Take the logits of the last token in the prompt
+        next_token_logits = logits[:, -1, :] # (k, V)
+        
+        generated_sequences = [[] for _ in range(k)]
+        
+        for _ in range(max_length):
+            # Apply temperature to increase diversity (explore different algorithms)
+            scaled_logits = next_token_logits / temperature
+            probs = F.softmax(scaled_logits, dim=-1)
+            
+            # Sample next token for all k sequences simultaneously
+            next_tokens = torch.multinomial(probs, num_samples=1) # (k, 1)
+            
+            for i in range(k):
+                generated_sequences[i].append(next_tokens[i].item())
+                
+            # Forward pass for the newly generated token to update hidden state
+            logits, hidden = self(next_tokens, hidden)
+            next_token_logits = logits[:, -1, :]
+            
+        return generated_sequences
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    K_SAMPLES = 5
+    VOCAB_SIZE = 1000
+    
+    model = ConceptualCodexGenerator(vocab_size=VOCAB_SIZE)
+    model.eval()
+    
+    # Dummy prompt (e.g., "def is_palindrome(s):")
+    prompt = torch.randint(0, VOCAB_SIZE, (1, 10))
+    
+    # Generate 5 different algorithmic solutions
+    samples = model.generate_k_samples(prompt, k=K_SAMPLES, max_length=20)
+    
+    assert len(samples) == K_SAMPLES, f"Expected {K_SAMPLES} samples, got {len(samples)}"
+    assert len(samples[0]) == 20, f"Expected sequence length 20, got {len(samples[0])}"
+    print(f"Test passed! Successfully generated {K_SAMPLES} diverse code samples for pass@k evaluation.")
+```
+
+## 10. Strengths
+Codex's primary strength is its ability to map natural language intent to complex programming syntax. By initializing with GPT-3, Codex already understood human logic, mathematics, and English semantics; fine-tuning on GitHub simply taught it the "language" of Python. This resulted in a model that doesn't just autocomplete variables, but writes entire functional blocks of code based on a single descriptive comment. Furthermore, by optimizing the tokenizer to handle whitespace efficiently and doubling the context window to 4096 tokens, Codex could read entire files, allowing it to understand the broader architecture of a project and generate code that conforms to the user's specific variable names and imported libraries. It successfully established that language models could be utilized as real-time, highly capable engineering assistants, birthing the AI developer tool industry (GitHub Copilot).
+
+## 11. Weaknesses
+Codex is notorious for generating code that looks superficially perfect but contains critical flaws. Because it is a next-token predictor, it generates code statistically; if developers frequently write insecure code (like SQL injection vulnerabilities) on GitHub, Codex will statistically recommend insecure code. Furthermore, Codex suffers from "API Hallucination." It will frequently confidently call methods on libraries that do not exist (e.g., `requests.get_async()`) simply because the word `async` statistically fits the context, causing the code to crash instantly upon execution. It also struggles with complex algorithmic logic that requires deep mathematical planning; because it generates code left-to-right, it cannot "think ahead" to structure a complex recursive algorithm properly unless the exact algorithm was heavily represented in its training data.
+
+## 12. Research Evolution
+Codex was a monumental commercial success via GitHub Copilot, but it exposed the limitations of raw language modeling for code generation. Predicting the next token on GitHub data produces code that mirrors average internet code—flawed, undocumented, and sometimes insecure. The AI community realized that to make coding models truly reliable, they needed to be aligned. This led to the development of models like InstructCode and eventually the integration of RLHF (Reinforcement Learning from Human Feedback) into coding models, where models are actively penalized for writing insecure or buggy code. Furthermore, Codex proved the necessity of domain-specific benchmarks. The introduction of HumanEval shifted the entire industry away from fuzzy NLP metrics and established unit-test passing (`pass@k`) as the only acceptable way to evaluate logical reasoning in foundation models.
+
+## 13. Interview Questions
+**Q1: What dataset was Codex trained on, and how was it initialized?**
+**A1:** Codex was trained on 159 GB of public Python code scraped from GitHub. Crucially, it was not trained from scratch. It was initialized with the pre-trained weights of a 12 Billion parameter GPT-3 model, allowing it to leverage GPT-3's existing understanding of natural language, logic, and reasoning, and simply map those concepts to Python syntax.
+
+**Q2: Why did OpenAI modify the GPT-3 tokenizer for Codex?**
+**A2:** The standard GPT-3 tokenizer encodes text. Code contains massive amounts of whitespace (indentation). If the tokenizer uses a separate token for every single space character, a heavily indented Python script will exhaust the context window immediately. Codex added specific tokens representing blocks of spaces, shrinking the token footprint of code files by 30%.
+
+**Q3: What is the `pass@k` metric, and why is it used instead of accuracy?**
+**A3:** In coding, generating a script that is 99% accurate is useless if a single missing bracket prevents it from compiling. `pass@k` evaluates whether the model can generate *at least one* completely functional script (that passes all unit tests) out of $k$ generated attempts. It measures algorithmic problem-solving ability rather than strict character-level accuracy.
+
+**Q4: What is "API Hallucination"?**
+**A4:** It is when Codex generates code that calls a function or method that does not actually exist in the requested library (e.g., writing `pandas.read_pdf()` when pandas has no such function). It happens because the model is predicting statistically likely tokens, and `read_pdf` statistically fits the pattern of pandas methods, even if it's factually incorrect.
+
+**Q5: How does Codex handle multi-file context if its context window is only 4096 tokens?**
+**A5:** Natively, it cannot. This is a major weakness of early coding models. To solve this in production (like in GitHub Copilot), editors use a technique called RAG (Retrieval-Augmented Generation). They parse the user's workspace, find related files and function signatures, and inject them as comments at the top of the prompt before passing it to Codex.
+
+## 14. Related Papers
+- **Evaluating Large Language Models Trained on Code (Chen et al., 2021)**: The foundational Codex paper that introduced the HumanEval benchmark and the pass@k metric.
+- **Language Models are Few-Shot Learners (Brown et al., 2020)**: The GPT-3 paper providing the base architecture for Codex.
+- **AlphaCode: Competition-Level Code Generation with AlphaCode (Li et al., 2022)**: DeepMind's competitive coding model that pushed the boundaries of massive sampling and filtering beyond Codex's baseline.
+
+## 15. Further Reading
+- [OpenAI Blog: OpenAI Codex](https://openai.com/blog/openai-codex/) - The official release post demonstrating Codex translating natural language to functional games and scripts.
+- [HumanEval GitHub Repository](https://github.com/openai/human-eval) - The official suite of 164 coding problems and the evaluation framework used to test coding models.
+- [GitHub Copilot Documentation](https://docs.github.com/en/copilot) - Practical guides on how Codex is implemented in production and how to write prompts (comments) to steer it effectively.

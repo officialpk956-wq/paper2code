@@ -1,0 +1,216 @@
+# ELMo
+
+## 1. Overview
+ELMo (Embeddings from Language Models), introduced by Matthew Peters and researchers at the Allen Institute for AI in 2018, marks one of the most significant paradigm shifts in the history of Natural Language Processing. Prior to ELMo, word embeddings (like Word2Vec, GloVe, and FastText) were *static*. The word "bank" possessed the exact same vector representation regardless of whether the sentence referred to a river bank or a financial bank. The model forced all meanings into a single, average point in vector space. ELMo destroyed this limitation by introducing *deep contextualized* word representations. ELMo does not provide a fixed dictionary of word vectors. Instead, it processes the entire sentence using a pre-trained deep Bi-directional LSTM (Bi-LSTM). The vector for the word "bank" is dynamically calculated based on the hidden states of the LSTMs, which have seen all the surrounding words in the sentence. Consequently, the embedding for "bank" dynamically changes depending on its context. By extracting and linearly combining the internal states of the Bi-LSTM layers, ELMo generates incredibly rich representations that capture both complex word characteristics (syntax) and how they vary across linguistic contexts (semantics), setting new state-of-the-art records across a massive range of NLP tasks upon release.
+
+:::tip
+ELMo embeddings are typically used as feature extractors. You freeze the pre-trained ELMo model, run your text through it to get the contextual vectors, and then feed those vectors into your own task-specific neural network.
+:::
+
+## 2. Historical Context
+By 2017, the NLP community had hit a wall with static word embeddings. Word2Vec and GloVe were powerful, but their fundamental inability to handle polysemy (multiple meanings) capped performance on advanced tasks like Question Answering and Semantic Role Labeling. Researchers began attempting to use the internal states of recurrent language models as features, notably in works like CoVe (Contextualized Word Vectors by McCann et al., 2017), which used supervised machine translation data to train an encoder. However, supervised data is limited. In 2018, Peters et al. published "Deep contextualized word representations." Their genius was returning to unsupervised Language Modeling—predicting the next word in a massive corpus of raw text. By training a massive, multi-layer Bi-LSTM to predict the next word (forward) and the previous word (backward), the internal layers of the network were forced to learn deep syntactic and semantic representations of language. When they extracted these internal states and applied them to downstream tasks, the performance jumps were unprecedented. ELMo proved that pre-training deep sequence models on raw text was the future, directly setting the stage for the Transformer-based revolution of BERT later that same year.
+
+## 3. Problem It Solves
+ELMo solves the Polysemy and Context problem inherent in static word embeddings. In a GloVe model, the vector for "play" must simultaneously encode the concepts of a theatrical production, playing a guitar, and children at recess. When this mashed-up vector is fed into a downstream model, that model has to work extremely hard to decode which specific meaning applies to the current sentence. ELMo shifts this burden to the pre-trained embedding model itself. When ELMo reads the sentence "I watched the Broadway play," the forward LSTM reads "I watched the Broadway" before arriving at "play", and the backward LSTM reads "play". Because the LSTMs have internalized the context ("Broadway", "watched"), the hidden state generated at the position of "play" is heavily biased toward the theatrical meaning. When ELMo reads "The children play outside," the hidden state is completely different. By solving this context problem at the foundational representation layer, downstream models receive unambiguous, context-aware features, allowing them to learn faster and achieve vastly higher accuracy on complex linguistic tasks.
+
+## 4. Architecture Diagram Data
+```text
+                  Downstream Task Model (e.g., QA, NER)
+                                ^
+                                |  ELMo Vector (ELMo_k)
+       +---------------------------------------------------------+
+       |   Task-Specific Learned Linear Combination (s_0, s_1, s_2) |
+       +----+-------------------+------------------------+-------+
+            |                   |                        |
+            | Weight s_2        | Weight s_1             | Weight s_0
+            v                   v                        v
+    +-------+-------+   +-------+-------+        +-------+-------+
+    | Forward LSTM 2|   | Forward LSTM 1|        |               |
+    |      h_{k,2}^f|   |      h_{k,1}^f|        |               |
+    +---------------+   +---------------+        | Character CNN |
+    | Backward LSTM2|   | Backward LSTM1|        |   Embedding   |
+    |      h_{k,2}^b|   |      h_{k,1}^b|        |      x_k      |
+    +-------^-------+   +-------^-------+        +-------^-------+
+            |                   |                        |
+            | Layer 2 Output    | Layer 1 Output         | Layer 0 (Base)
+            +-------------------+------------------------+
+                                |
+                        (Sequential Flow)
+                                |
+                             Word k
+                          "Broadway"
+```
+**Components:**
+- `Word k`: The input word at position $k$.
+- `Character CNN Embedding`: Converts the raw string of characters into a context-independent token representation $x_k$. This handles OOV words robustly.
+- `Forward LSTM`: Processes the sequence from left to right.
+- `Backward LSTM`: Processes the sequence from right to left.
+- `h_{k,j}`: The concatenated hidden state of the forward and backward LSTMs at layer $j$ for word $k$.
+- `s_j`: Softmax-normalized, task-specific learnable weights. ELMo doesn't just use the top layer; it combines all layers because different layers capture different types of linguistic information (syntax vs. semantics).
+- `ELMo_k`: The final, contextualized embedding for word $k$ fed to the downstream task.
+
+## 5. Layer-by-Layer Breakdown
+ELMo's architecture is a deep, pre-trained Bi-directional Language Model (biLM).
+1. **Character CNN Encoder (Layer 0)**: Unlike Word2Vec which uses a lookup table of word IDs, ELMo feeds the raw characters of a word into a Convolutional Neural Network. This CNN extracts features from the characters and outputs a fixed-size vector $x_k$ (usually 512 dimensions). This is brilliant because it provides a baseline representation for *any* word, completely eliminating the Out-Of-Vocabulary problem. This representation is purely morphological and entirely context-independent.
+2. **Layer 1 Bi-LSTM (Syntax Layer)**: The CNN representations are fed into a large Bi-LSTM. The forward LSTM predicts the next word, and the backward LSTM predicts the previous word. Researchers found that the hidden states $h_{k,1}$ of this lower layer tend to capture lower-level syntactic information, such as Part-of-Speech (is this a noun or a verb?).
+3. **Layer 2 Bi-LSTM (Semantic Layer)**: The outputs of Layer 1 are fed into a second, higher-level Bi-LSTM. The hidden states $h_{k,2}$ of this layer capture higher-level semantic information, such as word sense disambiguation (which definition of "bank" is this?).
+4. **Task-Specific Combination**: When using ELMo for a task (like Sentiment Analysis), you freeze the biLM weights. For each word, you extract the representations from all three layers: $[x_k, h_{k,1}, h_{k,2}]$. Your task-specific model learns three scalar weights (e.g., $s_0=0.1, s_1=0.3, s_2=0.6$) to perform a weighted sum of these three layers, creating the final ELMo vector optimally tuned for your specific task.
+
+:::warning
+Because ELMo relies on unrolling deep Bi-LSTMs over the entire input sequence, extracting embeddings during inference is significantly slower and computationally heavier than simply looking up a static vector in GloVe.
+:::
+
+## 6. Tensor Flow Walkthrough
+Let's trace the shapes for ELMo extracting features for a batch of sentences.
+- `B`: Batch size (number of sentences)
+- `L`: Maximum sequence length in the batch
+- `C`: Maximum characters per word (typically 50)
+- `D`: Base CNN embedding dimension (e.g., 512)
+- `H`: LSTM hidden dimension per direction (e.g., 512, making Bi-LSTM output 1024)
+
+1. **Input Tensor**: Shape `(B, L, C)`. The integer IDs of characters making up each word.
+2. **Character CNN Encoder**: 
+   - Processes the characters, applies max-pooling, and passes through a highway network.
+   - Output `layer_0` ($x_k$): Shape `(B, L, D)`. (Context-independent).
+3. **Bi-LSTM Layer 1**:
+   - `layer_0` is fed to the forward and backward LSTMs.
+   - The outputs are concatenated: `[forward_out, backward_out]`.
+   - Output `layer_1` ($h_{k,1}$): Shape `(B, L, 2H)`. (Captures syntax).
+4. **Bi-LSTM Layer 2**:
+   - `layer_1` is fed to the second Bi-LSTM.
+   - Output `layer_2` ($h_{k,2}$): Shape `(B, L, 2H)`. (Captures semantics).
+5. **Linear Combination (in Downstream Model)**:
+   - The three layers are stacked: `(3, B, L, 2H)` (assuming Layer 0 was projected to 2H).
+   - Multiplied by task-specific softmax weights `(3,)` and summed.
+   - Final `ELMo_vector`: Shape `(B, L, 2H)`. This is fed into the downstream classifier.
+
+## 7. Mathematical Foundations
+ELMo is built on a standard formulation of a Bi-directional Language Model (biLM).
+
+**The biLM Objective:**
+Given a sequence of $N$ tokens $(t_1, t_2, \dots, t_N)$, a forward language model computes the probability of the sequence by modeling the probability of token $t_k$ given the history $(t_1, \dots, t_{k-1})$:
+$$ p(t_1, \dots, t_N) = \prod_{k=1}^N p(t_k | t_1, \dots, t_{k-1}) $$
+A backward language model models the future context:
+$$ p(t_1, \dots, t_N) = \prod_{k=1}^N p(t_k | t_{k+1}, \dots, t_N) $$
+ELMo trains both simultaneously by maximizing the joint log-likelihood of the forward and backward directions:
+$$ \mathcal{L} = \sum_{k=1}^N \left( \log p(t_k | t_1, \dots, t_{k-1}; \Theta_x, \overrightarrow{\Theta}_{LSTM}, \Theta_s) + \log p(t_k | t_{k+1}, \dots, t_N; \Theta_x, \overleftarrow{\Theta}_{LSTM}, \Theta_s) \right) $$
+- $\Theta_x$: Shared parameters of the character CNN (the token representation).
+- $\Theta_s$: Shared parameters of the Softmax classifier layer predicting the word.
+- $\overrightarrow{\Theta}_{LSTM}, \overleftarrow{\Theta}_{LSTM}$: Independent parameters of the forward and backward LSTMs.
+
+**The ELMo Representation:**
+For a specific task, ELMo computes a task-specific weighting of all biLM layers. Let $R_k = \{h_{k,j} | j=0, \dots, L\}$ be the set of representations for token $k$ across $L$ layers. The ELMo vector is:
+$$ \text{ELMo}_k^{task} = \gamma^{task} \sum_{j=0}^L s_j^{task} h_{k,j} $$
+- $s_j^{task}$: Softmax-normalized weights. The downstream model learns which layer is most important.
+- $\gamma^{task}$: A scalar parameter that allows the downstream model to scale the entire ELMo vector to match the variance of its own internal representations.
+
+## 8. Training Procedure
+Training ELMo occurs in two distinct phases: Pre-training the biLM, and Fine-tuning on a specific task.
+1. **Unsupervised Pre-training**: The massive 2-layer Bi-LSTM model (with ~93 million parameters) is trained on a huge corpus of unannotated text (like the 1B Word Benchmark). The objective is purely self-supervised: predict the next word, and predict the previous word. Because the data is unannotated, training data is infinite. The model trains for weeks on multiple GPUs, forcing the internal LSTM layers to learn deep representations of English grammar, syntax, and semantics to minimize the language modeling loss.
+2. **Freezing**: Once pre-training is complete, the weights of the biLM are frozen. They will not be updated during the downstream task.
+3. **Task-Specific Fine-tuning**: You build a separate, smaller neural network for your specific task (e.g., a small LSTM for sentiment analysis). Instead of feeding it GloVe vectors, you pass your text through the frozen ELMo model. You extract the representations from all three ELMo layers. Your small network initializes the $s_j$ weighting parameters randomly. As you train your sentiment model on annotated data using standard backpropagation, it updates its own weights AND updates the $s_j$ weights, learning the optimal linear combination of ELMo's internal states for sentiment analysis.
+
+## 9. PyTorch Implementation
+Writing the full Character CNN and deep Bi-LSTMs from scratch is extensive. Here is a conceptual implementation demonstrating how the frozen representations are combined using learned task-specific weights, which is the core innovation of ELMo usage.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ELMoTaskCombiner(nn.Module):
+    def __init__(self, num_layers: int = 3, embed_dim: int = 1024):
+        super(ELMoTaskCombiner, self).__init__()
+        self.num_layers = num_layers
+        self.embed_dim = embed_dim
+        
+        # The unnormalized s_j weights for each layer
+        # Initialized to 0, which becomes uniform 1/3 after Softmax
+        self.layer_weights = nn.Parameter(torch.zeros(num_layers))
+        
+        # The gamma scaling parameter
+        self.gamma = nn.Parameter(torch.ones(1))
+        
+        # Example downstream task layer (e.g., Sentiment classification)
+        # In reality, this would be a full BiLSTM or CNN followed by a classifier
+        self.downstream_classifier = nn.Linear(embed_dim, 2) # Binary classification
+
+    def forward(self, elmo_representations: torch.Tensor) -> torch.Tensor:
+        # elmo_representations shape: (Num_Layers, Batch, Seq_Len, Embed_Dim)
+        # These are generated by the frozen, pre-trained biLM model.
+        
+        # 1. Normalize the layer weights using Softmax
+        # Shape: (Num_Layers,)
+        normalized_weights = F.softmax(self.layer_weights, dim=0)
+        
+        # 2. Reshape for broadcasting
+        # Shape: (Num_Layers, 1, 1, 1)
+        weights_reshaped = normalized_weights.view(self.num_layers, 1, 1, 1)
+        
+        # 3. Multiply representations by weights and sum across layers
+        # Result shape: (Batch, Seq_Len, Embed_Dim)
+        weighted_sum = torch.sum(elmo_representations * weights_reshaped, dim=0)
+        
+        # 4. Scale by gamma
+        elmo_vector = self.gamma * weighted_sum
+        
+        # 5. Feed into downstream task (e.g., classifying the final token or pooling)
+        # For simplicity, we just pool by averaging across the sequence length
+        pooled_representation = torch.mean(elmo_vector, dim=1) # (Batch, Embed_Dim)
+        
+        logits = self.downstream_classifier(pooled_representation) # (Batch, 2)
+        return logits
+
+# --- Shape Verification Test ---
+if __name__ == "__main__":
+    BATCH_SIZE, SEQ_LEN = 8, 20
+    NUM_LAYERS, EMBED_DIM = 3, 1024
+    
+    model = ELMoTaskCombiner(NUM_LAYERS, EMBED_DIM)
+    
+    # Dummy pre-calculated ELMo representations from the frozen biLM
+    # In practice, you get this tensor from the AllenNLP ELMo module
+    frozen_elmo_reps = torch.randn(NUM_LAYERS, BATCH_SIZE, SEQ_LEN, EMBED_DIM)
+    
+    # Forward pass through the task-specific combiner and classifier
+    logits = model(frozen_elmo_reps)
+    
+    expected_shape = (BATCH_SIZE, 2)
+    assert logits.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {logits.shape}"
+    print(f"Test passed! Layer weights: {F.softmax(model.layer_weights, dim=0).detach().numpy()}")
+```
+
+## 10. Strengths
+ELMo's defining strength is its destruction of the polysemy problem. By generating representations based on the full sentence context, it allows downstream models to instantly differentiate between "bank" (river) and "bank" (financial). This context-awareness led to massive, immediate performance jumps across every major NLP benchmark upon its release, effectively proving that deep, pre-trained language models were superior to static embeddings. Secondly, ELMo's use of a Character CNN at its base completely eliminates the Out-Of-Vocabulary problem. The model can process and generate a contextualized embedding for any arbitrary string of characters, making it highly robust to typos and novel slang. Finally, by exposing the internal states of *all* its layers and allowing the downstream task to learn a linear combination, ELMo elegantly solves the problem that different NLP tasks require different types of information. A Part-of-Speech tagger can heavily weight ELMo's lower, syntax-focused layer, while a Question Answering system can weight its upper, semantics-focused layer.
+
+## 11. Weaknesses
+ELMo's primary weakness is its computational architecture: it relies on deep LSTMs. Because LSTMs process text sequentially, extracting an ELMo embedding requires waiting for the forward network to unroll from left-to-right, and the backward network from right-to-left. This prevents parallelization during inference, making ELMo significantly slower than a simple matrix lookup in GloVe, and slower to run than a highly parallelized Transformer model. Secondly, ELMo is "shallowly bidirectional." The forward LSTM only sees the past, and the backward LSTM only sees the future. The representations are only concatenated at the very end. The network never possesses a true, deep understanding of the *simultaneous* bidirectional context (which is exactly the problem BERT was invented to solve). Finally, the standard usage pattern of ELMo involves freezing the massive biLM and training a separate, complex task-specific architecture on top of it, which is architecturally clunky compared to the modern paradigm of simply fine-tuning a pre-trained model end-to-end.
+
+## 12. Research Evolution
+ELMo is arguably one of the most important transition points in NLP history. It proved beyond a doubt that pre-training deep language models on massive amounts of unannotated text and extracting contextualized representations was the path to state-of-the-art performance. It decisively ended the era of static word embeddings (Word2Vec, GloVe). However, ELMo's reign as the top architecture was incredibly brief—lasting less than a year. The authors of ELMo used Bi-LSTMs because that was the standard sequence architecture of the time. In late 2018, researchers at Google released BERT (Bidirectional Encoder Representations from Transformers). BERT took ELMo's concept of contextualized embeddings but replaced the sequential, shallowly-bidirectional LSTMs with a deeply bidirectional, highly parallelizable Transformer encoder. BERT shattered ELMo's benchmark records and established the fine-tuning paradigm (updating the entire model rather than freezing it), making ELMo conceptually essential to NLP history, but architecturally obsolete in modern practice.
+
+## 13. Interview Questions
+**Q1: Contrast Static Embeddings (like Word2Vec) with Contextualized Embeddings (like ELMo).**
+**A1:** Static embeddings map each word to a single, fixed vector in a dictionary. The vector for "apple" is the same regardless of the sentence. Contextualized embeddings do not have a fixed dictionary. They pass the entire sentence through a deep neural network, generating a vector for "apple" dynamically based on the surrounding words in that specific sentence, effectively solving the polysemy (multiple meanings) problem.
+
+**Q2: How does ELMo solve the Out-Of-Vocabulary (OOV) problem?**
+**A2:** The first layer of the ELMo architecture is not a word-level embedding lookup. It is a Character Convolutional Neural Network (CNN). It reads the raw characters of a word, runs convolutional filters over them, and outputs a token representation. Because it operates on characters, it can construct a representation for any string, even if it has never seen the word before.
+
+**Q3: ELMo exposes the hidden states of all its layers. Why is this better than just exposing the top layer?**
+**A3:** Different layers of a deep neural network capture different linguistic features. Research showed that the lower LSTM layer in ELMo captures syntax (grammar, part-of-speech), while the upper LSTM layer captures deeper semantics (meaning, word sense). By exposing all layers and letting the downstream task learn a weighted average, ELMo allows a grammar-focused task to rely on the bottom layer, and a semantic-focused task to rely on the top layer.
+
+**Q4: What does it mean that ELMo is "shallowly" bidirectional?**
+**A4:** ELMo consists of two independent LSTMs. One reads strictly left-to-right (forward), and one reads strictly right-to-left (backward). Their hidden states are completely isolated from each other during processing and are only concatenated at the very output. The model never computes a representation that intrinsically combines left and right context simultaneously at lower levels (unlike BERT's self-attention).
+
+**Q5: In the standard ELMo workflow, do you update the weights of the biLM LSTMs during training on your specific task?**
+**A5:** No. In the standard paradigm introduced in the paper, the massive pre-trained biLM is completely "frozen." You only train the small, downstream task-specific neural network and the scalar weighting parameters ($s_j$) that combine ELMo's layers. This is called feature extraction. This differs from the later BERT paradigm, which favors end-to-end fine-tuning of all parameters.
+
+## 14. Related Papers
+- **Deep contextualized word representations (Peters et al., 2018)**: The foundational ELMo paper.
+- **Learned in Translation: Contextualized Word Vectors (McCann et al., 2017)**: The predecessor paper (CoVe) that attempted contextualized embeddings using supervised translation data rather than unsupervised language modeling.
+- **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding (Devlin et al., 2018)**: The architecture that immediately succeeded ELMo, applying its core concepts to the Transformer architecture.
+
+## 15. Further Reading
+- [The Illustrated BERT, ELMo, and co. (Jay Alammar)](https://jalammar.github.io/illustrated-bert/) - An absolute must-read visual guide that places ELMo in the context of the NLP representation revolution.
+- [AllenNLP ELMo Documentation](https://allennlp.org/elmo) - The official hub for the original ELMo models, tutorials, and pre-trained weights by the authors at AI2.
+- [CS224N Lecture on Contextual Word Embeddings](http://web.stanford.edu/class/cs224n/slides/cs224n-2019-lecture13-contextual-representations.pdf) - Stanford lecture notes explaining the mathematical intuition behind why deeper layers capture semantics.

@@ -1,0 +1,270 @@
+# NASNet
+## 1. Overview
+NASNet (Neural Architecture Search Network), introduced by Barret Zoph et al. at Google Brain in 2018, marked a pivotal turning point in deep learning. Before NASNet, network architectures (like ResNet, Inception, and MobileNet) were manually designed by human experts relying on intuition, trial-and-error, and mathematical heuristics. NASNet removed the human from the loop, proving that a machine learning algorithm could design a convolutional neural network architecture that outperformed the best human-designed models.
+
+To achieve this, the authors used Reinforcement Learning (RL) to search for the optimal network structure. Because searching for a massive ImageNet-scale architecture directly is computationally impossible, they introduced the concept of a **Proxy Task** and **Cell-Based Design**. The algorithm searches for two small, fundamental building blocks (a "Normal Cell" and a "Reduction Cell") on a small dataset like CIFAR-10. Once the optimal cells are discovered, humans simply stack these cells together as many times as necessary to scale the network up for massive datasets like ImageNet. NASNet-A (the best discovered model) set a new state-of-the-art on ImageNet, proving that Neural Architecture Search (NAS) was the future of computer vision.
+
+## 2. Historical Context
+By 2017, the deep learning community was hitting a wall with manual architecture engineering. The Inception family had become so complex (with arbitrary $1 \times 7$ and $3 \times 1$ parallel branches) that it was obvious human intuition had reached its limit. No human could mathematically prove why an expansion factor of 6 was better than 5 in a specific layer, or why a pooling layer was best placed exactly after the 4th convolution.
+
+In 2016, Zoph and Le published the first major Neural Architecture Search (NAS) paper. It used a Recurrent Neural Network (RNN) as a "Controller" to generate the architectural hyperparameters of a neural network, trained the generated network, and used the resulting accuracy as a reward signal to update the Controller via Policy Gradient (REINFORCE). However, that original search was insanely expensive, requiring 800 GPUs running for 28 days just to find a model for CIFAR-10. 
+
+The 2018 NASNet paper was created to solve this scalability issue. The Google Brain team needed a way to use NAS to find architectures for ImageNet, which is vastly larger than CIFAR-10. Their solution—searching for small, transferable "cells" rather than entire macro-architectures—made NAS viable for production-scale models and triggered an explosion of automated network design research.
+
+## 3. Problem It Solves
+The core problem NASNet solves is the immense computational cost of searching for large-scale neural network architectures, and the sub-optimality of human-designed heuristics.
+
+**1. The Search Space Explosion**:
+A neural network has a nearly infinite search space (number of layers, types of operations per layer, skip connections, filter sizes). If an RL agent tries to predict the entire structure of a 50-layer network, the search space is too vast to explore effectively, and evaluating each candidate on ImageNet takes weeks.
+
+**2. The Cell-Based Solution**:
+NASNet constrains the search space heavily. Instead of predicting the whole network, the RNN Controller only predicts the structure of two microscopic building blocks:
+*   **Normal Cell**: A block that processes an input and outputs a tensor of the *same spatial dimensions*.
+*   **Reduction Cell**: A block that processes an input and outputs a tensor where the *spatial dimensions are halved* (stride 2).
+
+**3. The Proxy Task Transferability**:
+The search is conducted entirely on CIFAR-10 (a tiny $32 \times 32$ image dataset). The RL agent rapidly proposes Normal and Reduction cells, trains them on CIFAR-10, and gets a reward. Once the search concludes, the absolute best Normal and Reduction cells are taken. To build a massive ImageNet model, human engineers simply stack these two cells in a predefined pattern (e.g., $N$ Normal Cells followed by 1 Reduction Cell, repeated). NASNet proved that architectural principles learned on a small proxy dataset transfer perfectly to massive datasets.
+
+## 4. Architecture Diagram Data
+```text
+[ NASNet Macro-Architecture (Human Defined) ]
+
+Input Image (331 x 331 x 3)
+  v
+[ Conv 3x3, stride 2, 32 filters ] (Stem)
+  v
+[ Normal Cell ] x N (e.g., N=4 or 6)
+  - Maintains spatial resolution
+  v
+[ Reduction Cell ]
+  - Halves spatial resolution, doubles channels
+  v
+[ Normal Cell ] x N
+  - Maintains spatial resolution
+  v
+[ Reduction Cell ]
+  - Halves spatial resolution, doubles channels
+  v
+[ Normal Cell ] x N
+  - Maintains spatial resolution
+  v
+[ Global Average Pooling ]
+  v
+[ Fully Connected (Classifier) ]
+
+=========================================
+
+[ NASNet-A Normal Cell Micro-Architecture (Machine Discovered) ]
+(Inputs: Hidden state from previous layer h_{i-1}, and two layers back h_{i-2})
+
+  +-- [ SepConv 5x5 ] <-- h_{i-1}
+  |
+  +-- [ SepConv 3x3 ] <-- h_{i-2}
+  |=> Add
+
+  +-- [ SepConv 5x5 ] <-- h_{i-2}
+  |
+  +-- [ SepConv 3x3 ] <-- h_{i-2}
+  |=> Add
+
+  +-- [ AvgPool 3x3 ] <-- h_{i-1}
+  |
+  +-- [ Identity ] <----- h_{i-1}
+  |=> Add
+
+  +-- [ AvgPool 3x3 ] <-- h_{i-2}
+  |
+  +-- [ AvgPool 3x3 ] <-- h_{i-2}
+  |=> Add
+
+  +-- [ SepConv 3x3 ] <-- h_{i-1}
+  |
+  +-- [ Identity ] <----- (Output of first Add block)
+  |=> Add
+
+[ Final Output: Concatenate all block outputs ]
+```
+*(Notice the high complexity and lack of human aesthetic in the discovered cell).*
+
+## 5. Layer-by-Layer Breakdown
+To understand NASNet, one must understand how the Controller RNN builds a Cell. A Cell takes two inputs (the outputs of the two previous cells) and generates one output.
+
+1.  **The Controller's Predictions**: The RNN makes 5 distinct predictions to create a single "block" inside a cell:
+    *   **Input 1**: Which previous hidden state to use (e.g., $h_{i-1}$, $h_{i-2}$, or the output of another block in the cell).
+    *   **Input 2**: A second hidden state to use.
+    *   **Operation 1**: What mathematical operation to apply to Input 1 (e.g., $3 \times 3$ Depthwise Separable Conv, $3 \times 3$ Max Pool, Identity, $1 \times 7$ followed by $7 \times 1$ Conv).
+    *   **Operation 2**: What mathematical operation to apply to Input 2.
+    *   **Combination Method**: How to combine the two processed inputs (usually element-wise addition or concatenation).
+2.  **Cell Repetition**: The Controller repeats this 5-step prediction $B$ times (e.g., $B=5$). The outputs of these $B$ blocks are concatenated to form the final output of the Cell.
+3.  **The Discovered Architecture**: The resulting NASNet-A cell is a bizarre, highly branched structure. It relies heavily on Depthwise Separable Convolutions (proving Chollet's Xception hypothesis that they are strictly superior to standard convolutions) and identity skip connections (validating ResNet).
+
+## 6. Tensor Flow Walkthrough
+Let's walk through the macro-architecture using NASNet-A Large (Input $331 \times 331$), with $N=6$ Normal cells per stage. 
+
+*   **Input**: `(B, 3, 331, 331)`
+*   **Stem**: A standard $3 \times 3$ convolution, stride 2.
+    *   Output: `(B, 32, 166, 166)`
+    *   Further stem processing reduces it to `(B, 168, 166, 166)`
+*   **Normal Cell Block 1 (x6)**: Maintains $166 \times 166$ grid.
+    *   Output of 6th cell: `(B, 336, 166, 166)`
+*   **Reduction Cell 1**: Halves grid to $83 \times 83$, expands channels.
+    *   Output: `(B, 672, 83, 83)`
+*   **Normal Cell Block 2 (x6)**: Maintains $83 \times 83$ grid.
+    *   Output: `(B, 1008, 83, 83)`
+*   **Reduction Cell 2**: Halves grid to $42 \times 42$, expands channels.
+    *   Output: `(B, 2016, 42, 42)`
+*   **Normal Cell Block 3 (x6)**: Maintains $42 \times 42$ grid.
+    *   Output: `(B, 4032, 42, 42)`
+*   **Global Average Pooling**: Flattens the $42 \times 42$ grid.
+    *   Output: `(B, 4032, 1, 1)` $\rightarrow$ `(B, 4032)`
+*   **Classifier**: Linear projection.
+    *   Output: `(B, 1000)`
+
+*(Note: NASNet uses an unusually high final spatial resolution ($42 \times 42$) compared to ResNet's $7 \times 7$, relying on GAP to collapse a massive amount of spatial information).*
+
+## 7. Mathematical Foundations
+The primary mathematical framework of NASNet is the Reinforcement Learning setup used by the Controller.
+
+Let the Controller RNN generate an architecture $a$ with a probability $p(a; \theta)$, where $\theta$ represents the weights of the RNN.
+The architecture $a$ is instantiated as a child network, trained on CIFAR-10, and evaluated on a validation set to obtain an accuracy $R$ (the reward).
+
+The goal of the Controller is to maximize its expected reward:
+$$J(\theta) = E_{P(a_{1:T}; \theta)} [R]$$
+
+Because the reward signal is non-differentiable (you cannot backpropagate through the training and validation accuracy of a child network), the authors use the **REINFORCE policy gradient algorithm** to update the Controller's weights $\theta$:
+$$\nabla_\theta J(\theta) = \sum_{t=1}^T E_{P(a_{1:T}; \theta)} [\nabla_\theta \log P(a_t | a_{(t-1):1}; \theta) (R - b)]$$
+Where:
+*   $T$ is the number of tokens/predictions made by the RNN to define the cell.
+*   $a_t$ is the specific architectural choice at step $t$ (e.g., "Choose $3 \times 3$ Max Pool").
+*   $b$ is an exponential moving average of previous rewards, acting as a baseline to reduce the variance of the gradient estimate.
+
+If a generated architecture $a$ achieves a high reward $R$, the gradient update increases the probability of the RNN making those exact same architectural choices $a_t$ in the future.
+
+## 8. Training Procedure
+The training procedure of NASNet is divided into two distinct phases: Search and Evaluation.
+
+**1. Search Phase (The Expensive Part)**:
+*   **Dataset**: CIFAR-10.
+*   **Infrastructure**: 500 NVIDIA P100 GPUs.
+*   **Process**: The RNN Controller samples a Normal and Reduction cell. A small child network (using $N=4$ cells) is built, trained for 20 epochs on CIFAR-10, and validated. The accuracy is returned as the reward.
+*   **Duration**: This loop ran for 4 days, evaluating 20,000 distinct cell architectures.
+
+**2. Evaluation Phase (The Standard Part)**:
+*   **Dataset**: ImageNet.
+*   **Process**: The absolute best cells found during the Search Phase (dubbed NASNet-A, -B, and -C) were taken. A massive macro-architecture was constructed by repeating these cells (e.g., $N=6$).
+*   **Training Details**: Trained for 250 epochs using RMSProp (momentum 0.9), weight decay of $4 \times 10^{-5}$, and a heavy use of DropPath (ScheduledDropPath) to prevent the highly complex cells from overfitting.
+
+## 9. PyTorch Implementation
+Because the fully discovered NASNet-A cell is extremely verbose and hundreds of lines long (due to the bizarre connections), we will implement a simplified conceptual "Search Block" representing a single prediction step made by the RNN.
+
+```python
+import torch
+import torch.nn as nn
+
+class SeparableConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
+        super().__init__()
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size, stride, padding, groups=in_channels, bias=False)
+        self.pointwise = nn.Conv2d(in_channels, out_channels, 1, 1, 0, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        
+    def forward(self, x):
+        return self.bn(self.pointwise(self.depthwise(x)))
+
+class NASNetConceptualBlock(nn.Module):
+    # This represents one of the 5 "blocks" inside a NAS cell.
+    # The Controller predicted: 
+    # Input 1: h_prev1, Input 2: h_prev2
+    # Op 1: 5x5 SepConv, Op 2: 3x3 SepConv
+    # Combine: Element-wise Add
+    
+    def __init__(self, channels):
+        super().__init__()
+        self.op1 = SeparableConv2d(channels, channels, kernel_size=5, stride=1, padding=2)
+        self.op2 = SeparableConv2d(channels, channels, kernel_size=3, stride=1, padding=1)
+        self.relu = nn.ReLU(inplace=False)
+
+    def forward(self, h_prev1, h_prev2):
+        # Apply the chosen operations to the chosen inputs
+        out1 = self.relu(self.op1(h_prev1))
+        out2 = self.relu(self.op2(h_prev2))
+        
+        # Combine (as predicted by RNN)
+        return out1 + out2
+
+class NASNetConceptualCell(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        # A cell contains multiple blocks. Output is the concatenation of blocks.
+        self.block1 = NASNetConceptualBlock(channels)
+        self.block2 = NASNetConceptualBlock(channels)
+        
+    def forward(self, h_prev1, h_prev2):
+        # In a real NASNet cell, blocks can take outputs of other blocks as inputs
+        b1_out = self.block1(h_prev1, h_prev2)
+        b2_out = self.block2(b1_out, h_prev2) # Example of internal wiring
+        
+        # Final output is typically concatenated
+        return torch.cat([b1_out, b2_out], dim=1)
+
+# --- Shape Verification Test ---
+if __name__ == '__main__':
+    # Initialize a conceptual cell (Input channels: 64)
+    model = NASNetConceptualCell(channels=64)
+    
+    # Needs two previous hidden states
+    h_prev1 = torch.randn(2, 64, 28, 28)
+    h_prev2 = torch.randn(2, 64, 28, 28)
+    
+    output = model(h_prev1, h_prev2)
+    
+    print(f"Input shape:  {h_prev1.shape}")
+    print(f"Output shape: {output.shape}")
+    
+    # Output should be 64 * 2 = 128 channels due to concatenation
+    assert output.shape == (2, 128, 28, 28), "Output shape is incorrect!"
+    print("Shape verification passed.")
+```
+
+## 10. Strengths
+*   **State-of-the-Art Accuracy**: NASNet-A Large achieved an 82.7% top-1 accuracy on ImageNet, outperforming all hand-crafted models of its time (including Inception-ResNet-v2 and ResNeXt) with fewer parameters and FLOPs.
+*   **Transferability**: It definitively proved the hypothesis that architectural patterns optimized on tiny proxy datasets (CIFAR-10) transfer exceptionally well to massive, high-resolution datasets (ImageNet).
+*   **Elimination of Human Bias**: The discovered cells look bizarre and asymmetrical to humans. By letting algorithms design the connections, NAS discovered optimal routing patterns that human engineers, who favor symmetry and clean code, would never have conceived.
+
+## 11. Weaknesses
+*   **Monstrous Computational Cost**: Even with the cell-based proxy task, the search phase required 2000 GPU-days (4 days on 500 P100 GPUs). This made NAS utterly inaccessible to anyone outside of Google and a few tech giants.
+*   **Hardware Unfriendliness**: The NAS algorithm was optimizing for parameters and FLOPs. As ShuffleNet v2 proved, highly fragmented, multi-branch cells with varying kernel sizes (which NASNet is full of) have a massive Memory Access Cost (MAC). Consequently, NASNet is remarkably slow during inference on real GPUs compared to clean, sequential networks like ResNet.
+*   **Opaque Design**: Because the architecture was generated by a machine, it provides very little intuitive knowledge to human engineers. We know *what* it built, but we don't know *why* that specific arrangement of a $5 \times 5$ conv added to a $3 \times 3$ max pool is mathematically optimal.
+
+## 12. Research Evolution
+NASNet sparked an absolute explosion in Neural Architecture Search research. The immediate focus of the entire field became: *How do we make the search phase cheaper?*
+
+Researchers realized that training 20,000 independent child networks from scratch (RL-based NAS) was incredibly inefficient. This led directly to **Differentiable NAS (DARTS)** and ENAS (Efficient NAS), which proposed searching for architectures via gradient descent on a single "super-network" containing all possible paths. These methods reduced the search time from 2000 GPU-days down to a single GPU-day. 
+
+Furthermore, the realization that NASNet's fragmented cells were slow on actual hardware led to "Hardware-Aware NAS" (like MnasNet and MobileNetV3), where physical latency on a smartphone was directly used as the reward signal instead of theoretical FLOPs.
+
+## 13. Interview Questions
+
+**Q1: Why didn't the authors of NASNet use Reinforcement Learning to search for the architecture directly on ImageNet?**
+**A1:** The search space for an entire neural network is astronomically large. In RL-based NAS, the agent must propose an architecture, train it to convergence, and evaluate its accuracy to get a reward. Doing this on ImageNet (which takes days to train a single model) for tens of thousands of candidate architectures would take decades, even on a supercomputer.
+
+**Q2: What is the "Proxy Task" approach used in NASNet?**
+**A2:** To solve the computational cost problem, the authors defined a small search space consisting only of two micro-blocks: a Normal Cell and a Reduction Cell. They conducted the entire RL search process on CIFAR-10 (a tiny $32 \times 32$ image dataset) where models train in minutes. Once the best cells were found on CIFAR-10, they were simply stacked together in a larger quantity to construct a massive model for ImageNet, proving that micro-architectural principles transfer across dataset scales.
+
+**Q3: Describe the structural difference between a "Normal Cell" and a "Reduction Cell".**
+**A3:** A Normal Cell is designed to process an input tensor and output a feature map with the exact same spatial dimensions. A Reduction Cell is designed to downsample the spatial resolution by a factor of 2 (using stride 2 operations) while typically doubling the number of channels to maintain representational capacity.
+
+**Q4: In the NASNet RL setup, what serves as the "Reward" for the Controller RNN?**
+**A4:** The reward is the validation accuracy of the "child network" constructed using the architecture proposed by the RNN. The RNN generates a description of the cells, the child network is built and trained on CIFAR-10 for a few epochs, and its accuracy on a hold-out validation set serves as the scalar reward signal to update the RNN's policy via the REINFORCE algorithm.
+
+**Q5: Why is NASNet sometimes slower in real-world inference than older models like ResNet, despite having fewer FLOPs?**
+**A5:** NASNet optimizes for theoretical FLOPs and parameters. As a result, the RL agent built highly fragmented cells with many parallel branches, varying kernel sizes, and complex routing (concatenations and additions). As established by ShuffleNet v2, network fragmentation drastically increases the Memory Access Cost (MAC) and prevents GPUs from utilizing large, contiguous matrix multiplications. Therefore, NASNet is often bottlenecked by memory bandwidth rather than computation.
+
+## 14. Related Papers
+*   **Learning Transferable Architectures for Scalable Image Recognition** (Zoph et al., 2018) — The primary NASNet paper.
+*   **Neural Architecture Search with Reinforcement Learning** (Zoph & Le, 2016) — The original, highly expensive RL-based NAS paper.
+*   **DARTS: Differentiable Architecture Search** (Liu et al., 2018) — The direct successor that solved the 2000 GPU-day search cost by making NAS differentiable.
+
+## 15. Further Reading
+*   [Google AI Blog: AutoML for large scale image classification and object detection](https://blog.research.google/2017/11/automl-for-large-scale-image.html) — The official announcement of NASNet.
+*   [PyTorch Torchvision Source Code](https://github.com/pytorch/vision/blob/main/torchvision/models/nasnet.py) — (If available in legacy repositories) Look at how insanely verbose the hand-coded definitions for `NASNet-A` are due to the machine-generated routing.
