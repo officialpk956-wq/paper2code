@@ -12,9 +12,11 @@ REQUIRE_LOWERCASE = True
 REQUIRE_NUMBER = True
 REQUIRE_SPECIAL = True
 
-# Argon2id Configuration (Default parameters from argon2)
+# Argon2id tuned for small cloud instances (Render 512MB).
+# memory_cost=19456 (19MB) + time_cost=2 keeps verify < 150ms at idle.
+# The old 64MB/4-thread config caused 800ms–2s latency on shared CPU.
 argon2_hasher = PasswordHasher(
-    time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16
+    time_cost=2, memory_cost=19456, parallelism=1, hash_len=32, salt_len=16
 )
 
 

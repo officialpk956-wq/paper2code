@@ -329,27 +329,46 @@ async def firebase_verify(
 async def _fetch_userinfo(
     provider: str, cfg: dict, access_token: str, token_data: dict
 ) -> dict | None:
+    # Google: decode the id_token JWT locally — no extra HTTP call needed.
+    if provider == "google":
+        id_token = token_data.get("id_token", "")
+        if id_token:
+            try:
+                import base64
+                import json as _json
+
+                # JWT payload is the middle segment; decode without verification
+                # (Google already verified it during the code exchange above).
+                payload_b64 = id_token.split(".")[1]
+                # Add padding so base64 doesn't choke
+                payload_b64 += "=" * (-len(payload_b64) % 4)
+                claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                if claims.get("email"):
+                    return {
+                        "email": claims["email"],
+                        "name": claims.get("name") or claims["email"].split("@")[0],
+                        "picture": claims.get("picture"),
+                        "sub": claims.get("sub"),
+                    }
+            except Exception as e:
+                log.warning("id_token decode failed, falling back to userinfo endpoint: %s", e)
+
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=10.0) as client:
-        if provider == "google":
-            # Prefer id_token claims; fallback to userinfo endpoint
-            r = await client.get(cfg["userinfo_url"], headers=headers)
-        else:
-            r = await client.get(cfg["userinfo_url"], headers=headers)
+        r = await client.get(cfg["userinfo_url"], headers=headers)
     if r.status_code != 200:
         log.error("userinfo fetch failed: %s %s", r.status_code, r.text[:200])
         return None
     data = r.json()
-    if provider == "github":
+    if provider == "github" and not data.get("email"):
         # GitHub may not expose email in /user; try /user/emails
-        if not data.get("email"):
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                er = await client.get("https://api.github.com/user/emails", headers=headers)
-            if er.status_code == 200:
-                for e in er.json():
-                    if e.get("primary") and e.get("verified"):
-                        data["email"] = e["email"]
-                        break
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            er = await client.get("https://api.github.com/user/emails", headers=headers)
+        if er.status_code == 200:
+            for e in er.json():
+                if e.get("primary") and e.get("verified"):
+                    data["email"] = e["email"]
+                    break
     return data if data.get("email") else None
 
 

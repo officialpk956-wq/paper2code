@@ -139,22 +139,8 @@ def login(
     refresh_token = session_service.create_refresh_token(user)
     session_service.register_session(user, refresh_token, ip, ua)
 
-    from sqlalchemy import func
-
-    from backend.models import DojoSubmission
-
-    problems_solved = (
-        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
-        .filter(
-            DojoSubmission.user_id == user.id,
-            DojoSubmission.passed == True,
-            DojoSubmission.is_best == True,
-        )
-        .scalar()
-    ) or 0
-
+    # problems_solved omitted here — frontend calls /me after login which includes it
     user_resp = UserResponse.model_validate(user).model_dump()
-    user_resp["problems_solved"] = problems_solved
 
     return {
         "access_token": access_token,
@@ -191,22 +177,7 @@ def login_mfa(request: Request, body: LoginMFARequest, db: Session = Depends(get
     refresh_token = session_service.create_refresh_token(user)
     session_service.register_session(user, refresh_token, ip, ua)
 
-    from sqlalchemy import func
-
-    from backend.models import DojoSubmission
-
-    problems_solved = (
-        db.query(func.count(func.distinct(DojoSubmission.problem_id)))
-        .filter(
-            DojoSubmission.user_id == user.id,
-            DojoSubmission.passed == True,
-            DojoSubmission.is_best == True,
-        )
-        .scalar()
-    ) or 0
-
     user_resp = UserResponse.model_validate(user).model_dump()
-    user_resp["problems_solved"] = problems_solved
 
     return {
         "access_token": access_token,
