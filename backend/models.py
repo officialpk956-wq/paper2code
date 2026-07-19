@@ -80,6 +80,9 @@ class User(Base):
     submissions: list["DojoSubmission"] = relationship(
         "DojoSubmission", back_populates="user", cascade="all, delete-orphan"
     )
+    model_graphs: list["ModelGraph"] = relationship(
+        "ModelGraph", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} points={self.points}>"
@@ -634,6 +637,25 @@ class TutorSessionRecord(Base):
     messages = Column(JSON, nullable=True)  # [{role, content}]
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     last_active_at = Column(DateTime, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Model Viz: saved architecture graphs
+# ---------------------------------------------------------------------------
+
+
+class ModelGraph(Base):
+    __tablename__ = "model_graphs"
+    __table_args__ = (Index("ix_model_graphs_user_created", "user_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)        # original filename
+    format = Column(String(20), nullable=False)       # "onnx" | "pytorch"
+    graph_data = Column(JSON, nullable=False)         # {nodes, edges, meta}
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="model_graphs")
 
 
 # Register modular authentication models

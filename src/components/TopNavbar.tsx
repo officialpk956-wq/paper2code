@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { label: 'System Design', href: '/system-design' },
   { label: 'Extract Code',  href: '/extract-code' },
   { label: 'Labs',          href: '/labs' },
+  { label: 'Model Viz',     href: '/model-viz' },
   { label: 'Pricing',       href: '/pricing' },
 ] as const;
 

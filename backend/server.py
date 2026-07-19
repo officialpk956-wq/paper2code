@@ -59,6 +59,7 @@ from backend.routers import (
 from backend.routers.announcements import router as announcements_router
 from backend.routers.oauth import router as oauth_router
 from backend.routers.paper_challenges import router as paper_challenges_router
+from backend.routers.model_viz import router as model_viz_router
 
 # Configure JSON Logging
 handler = logging.StreamHandler()
@@ -158,6 +159,7 @@ app.include_router(announcements_router)
 app.include_router(paper_challenges_router)
 
 app.include_router(architectures.router)
+app.include_router(model_viz_router)
 
 # Prometheus metrics endpoint (restricted to internal IPs by Nginx in production)
 from fastapi import Request as _Req

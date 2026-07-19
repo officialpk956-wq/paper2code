@@ -8,6 +8,7 @@ import rehypePrettyCode from 'rehype-pretty-code';
 const nextConfig = {
   reactStrictMode: true,
   pageExtensions: ['ts', 'tsx', 'js', 'jsx', 'md', 'mdx'],
+  transpilePackages: ['@dagrejs/dagre', '@dagrejs/graphlib'],
   experimental: {
     optimizePackageImports: ['lucide-react'],
   },
