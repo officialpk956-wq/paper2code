@@ -57,9 +57,9 @@ from backend.routers import (
     user,
 )
 from backend.routers.announcements import router as announcements_router
+from backend.routers.model_viz import router as model_viz_router
 from backend.routers.oauth import router as oauth_router
 from backend.routers.paper_challenges import router as paper_challenges_router
-from backend.routers.model_viz import router as model_viz_router
 
 # Configure JSON Logging
 handler = logging.StreamHandler()

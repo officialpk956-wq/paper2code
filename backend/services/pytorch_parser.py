@@ -329,7 +329,7 @@ def parse_pytorch(file_bytes: bytes, input_shape: list[int]) -> dict:
 
         try:
             result = sb.commands.run(
-                f"python3 /home/user/parse.py",
+                "python3 /home/user/parse.py",
                 timeout=_PYTORCH_SANDBOX_TIMEOUT - 10,
             )
             stdout: str = result.stdout or ""
