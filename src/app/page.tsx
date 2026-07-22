@@ -13,6 +13,15 @@ import StaggerList from '@/components/StaggerList';
 import TiltCard from '@/components/TiltCard';
 import { NeuralField } from '@/components/hero/NeuralField';
 import { DataTermsField } from '@/components/hero/DataTermsField';
+import {
+  ScrollProgressBar,
+  WireframeSolid,
+  CyclingWord,
+  FormulaCodeMorph,
+  Marquee,
+  Reveal,
+  Tilt3D,
+} from '@/components/anim';
 
 const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-display' });
 const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], weight: ['300', '400', '500'], variable: '--font-mono' });
@@ -51,20 +60,35 @@ const DIFF_COLOR: Record<string, string> = {
   Hard:   'bg-[#F87171]/10 text-[#F87171] border-[#F87171]/20',
 };
 
+const MARQUEE_TOP = [
+  'Transformer', 'ResNet', 'BERT', 'GPT-4', 'Diffusion', 'CLIP', 'LoRA',
+  'Attention', 'VAE', 'GAN', 'MoE', 'Mamba', 'Whisper', 'AlphaFold',
+];
+const MARQUEE_BOT = [
+  'Adam', 'LayerNorm', 'RoPE', 'Flash Attn', 'Softmax', 'ReLU', 'GeLU',
+  'Dropout', 'BatchNorm', 'Cross-Entropy', 'Contrastive', 'RLHF',
+  'Chain-of-Thought', 'Tokenizer',
+];
+
 const FOOTER_COLS = [
   { title: 'Product', links: [{ label: 'Dojo', href: '/dojo' }, { label: 'Papers', href: '/papers' }, { label: 'Learn', href: '/learn' }, { label: 'Labs', href: '/labs' }] },
   { title: 'Company', links: [{ label: 'Pricing', href: '/pricing' }, { label: 'System Design', href: '/system-design' }, { label: 'Architectures', href: '/architectures' }, { label: 'Contact', href: `mailto:${LEGAL.contactEmail}` }] },
   { title: 'Legal',   links: [{ label: 'Privacy', href: '/privacy' }, { label: 'Terms', href: '/terms' }, { label: 'Security', href: '/security' }, { label: 'Cookies', href: '/cookies' }] },
 ];
 
-function SectionBadge({ children, color }: { children: React.ReactNode; color: string }) {
+/** Angled gradient divider between sections (cyan → violet glow). */
+function SectionDivider() {
   return (
-    <span
-      className="inline-block rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] [font-family:var(--font-display)]"
-      style={{ borderColor: `${color}33`, background: `${color}14`, color }}
-    >
-      {children}
-    </span>
+    <div aria-hidden className="relative h-16 overflow-hidden">
+      <div
+        className="absolute inset-x-0 top-1/2 h-px"
+        style={{ background: 'linear-gradient(90deg, transparent, rgba(0,229,255,0.5), rgba(124,92,255,0.35), transparent)' }}
+      />
+      <div
+        className="absolute inset-x-0 top-1/2 h-24 -translate-y-1/2"
+        style={{ background: 'radial-gradient(60% 100% at 50% 50%, rgba(0,229,255,0.14), transparent 70%)', filter: 'blur(20px)' }}
+      />
+    </div>
   );
 }
 
@@ -87,9 +111,20 @@ export default function HomePage() {
         <DataTermsField />
       </div>
 
+      <ScrollProgressBar />
+
       <div className="relative z-10">
       {/* HERO */}
-      <section className="relative flex min-h-screen items-center justify-center">
+      <section className="relative flex min-h-screen items-center justify-center overflow-hidden">
+        {/* 3D wireframe accents — additive, purely decorative */}
+        <div className="pointer-events-none absolute inset-0 z-0 hidden md:block" aria-hidden>
+          <div className="absolute left-[5%] top-[20%] opacity-70">
+            <WireframeSolid variant="ico" size={240} />
+          </div>
+          <div className="absolute bottom-[14%] right-[4%] opacity-70">
+            <WireframeSolid variant="sphere" size={230} />
+          </div>
+        </div>
         <div className="relative z-10 mx-auto flex max-w-5xl flex-col items-center gap-6 px-6 text-center">
           <Link
             href="/papers"
@@ -103,7 +138,11 @@ export default function HomePage() {
 
           <h1 className="text-[40px] font-bold leading-[1.1] tracking-tight text-white [font-family:var(--font-display)] sm:text-[52px] md:text-[64px] md:leading-[1.05]">
             From Research Papers<br />
-            to <span style={{ color: CYAN }}>Running Code</span>
+            to{' '}
+            <CyclingWord
+              words={['Running Code', 'Neural Nets', 'Transformers', 'Understanding', 'Production']}
+              className="align-baseline"
+            />
           </h1>
 
           <p className="mt-2 max-w-[540px] text-[15px] leading-[1.8] text-[#8FA3C4] [font-family:var(--font-mono)]">
@@ -148,11 +187,12 @@ export default function HomePage() {
 
       {/* PAPERS */}
       <section className="mx-auto max-w-7xl px-6 py-24">
-        <SectionBadge color={CYAN}>Research Hub</SectionBadge>
-        <h2 className="mt-3 text-[34px] font-bold text-white [font-family:var(--font-display)]">Upload. Extract. Understand.</h2>
-        <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
-          Turn dense PDFs into interactive knowledge, featuring graphs, diagrams, and code that runs.
-        </p>
+        <Reveal>
+          <h2 className="text-[34px] font-bold text-white [font-family:var(--font-display)]">Upload. Extract. Understand.</h2>
+          <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
+            Turn dense PDFs into interactive knowledge, featuring graphs, diagrams, and code that runs.
+          </p>
+        </Reveal>
         <StaggerList className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
           {PAPER_CARDS.map((c) => (
             <TiltCard key={c.title} className="relative">
@@ -171,14 +211,26 @@ export default function HomePage() {
         </StaggerList>
       </section>
 
+      <SectionDivider />
+
+      {/* PAPER → CODE SHOWCASE */}
+      <section className="mx-auto max-w-5xl px-6 pb-16">
+        <Reveal>
+          <Tilt3D max={5} lift={10} className="rounded-2xl">
+            <FormulaCodeMorph />
+          </Tilt3D>
+        </Reveal>
+      </section>
+
       {/* DOJO */}
       <section className="py-24" style={{ background: 'rgba(11,15,30,0.55)' }}>
         <div className="mx-auto max-w-7xl px-6">
-          <SectionBadge color={VIOLET}>Practice Dojo</SectionBadge>
-          <h2 className="mt-3 text-[34px] font-bold text-white [font-family:var(--font-display)]">Code ML from Scratch.</h2>
-          <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
-            Bite-sized problems that build intuition, covering everything from sigmoid to full transformers.
-          </p>
+          <Reveal>
+            <h2 className="text-[34px] font-bold text-white [font-family:var(--font-display)]">Code ML from Scratch.</h2>
+            <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
+              Bite-sized problems that build intuition, covering everything from sigmoid to full transformers.
+            </p>
+          </Reveal>
           <StaggerList className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
             {PROBLEMS.map((p) => (
               <TiltCard key={p.num} className="relative">
@@ -205,11 +257,12 @@ export default function HomePage() {
 
       {/* LEARN */}
       <section className="mx-auto max-w-7xl px-6 py-24">
-        <SectionBadge color={GREEN}>Learning Paths</SectionBadge>
-        <h2 className="mt-3 text-[34px] font-bold text-white [font-family:var(--font-display)]">Master ML from First Principles.</h2>
-        <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
-          Structured tracks that take you from the math to the model.
-        </p>
+        <Reveal>
+          <h2 className="text-[34px] font-bold text-white [font-family:var(--font-display)]">Master ML from First Principles.</h2>
+          <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-[#8FA3C4] [font-family:var(--font-mono)]">
+            Structured tracks that take you from the math to the model.
+          </p>
+        </Reveal>
         <StaggerList className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
           {topDomains.map((d) => (
             <TiltCard key={d.slug} className="relative">
@@ -231,6 +284,43 @@ export default function HomePage() {
             </TiltCard>
           ))}
         </StaggerList>
+      </section>
+
+      <SectionDivider />
+
+      {/* MARQUEE — two rows, opposite directions */}
+      <section className="border-y border-[#1A2744] py-16">
+        <Reveal className="mx-auto mb-8 max-w-7xl px-6 text-center">
+          <div className="text-[11px] uppercase tracking-[0.25em] text-[#5C6D8C] [font-family:var(--font-mono)]">
+            Covering the vocabulary of modern ML
+          </div>
+        </Reveal>
+        <div className="space-y-3">
+          <Marquee
+            speed={55}
+            direction="left"
+            items={MARQUEE_TOP.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center rounded-full border border-[#1A2744] bg-[#0B1122] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_6px_20px_-8px_rgba(0,0,0,0.8)] [font-family:var(--font-mono)]"
+              >
+                {t}
+              </span>
+            ))}
+          />
+          <Marquee
+            speed={65}
+            direction="right"
+            items={MARQUEE_BOT.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center rounded-full border border-[#7C5CFF]/25 bg-[#7C5CFF]/[0.06] px-4 py-2 text-[13px] font-medium text-[#B9A8FF] shadow-[0_6px_20px_-8px_rgba(124,92,255,0.4)] [font-family:var(--font-mono)]"
+              >
+                {t}
+              </span>
+            ))}
+          />
+        </div>
       </section>
 
       {/* FOOTER */}

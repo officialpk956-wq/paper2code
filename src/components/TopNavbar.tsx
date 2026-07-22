@@ -2,28 +2,53 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthModal } from './AuthModalContext';
 
-const NAV_LINKS = [
-  { label: 'Dojo',          href: '/dojo' },
-  { label: 'Papers',        href: '/papers' },
-  { label: 'Learn',         href: '/learn' },
-  { label: 'Architectures', href: '/architectures' },
-  { label: 'System Design', href: '/system-design' },
-  { label: 'Extract Code',  href: '/extract-code' },
-  { label: 'Labs',          href: '/labs' },
-  { label: 'Model Viz',     href: '/model-viz' },
-  { label: 'Pricing',       href: '/pricing' },
-] as const;
+type NavItem = { label: string; href: string; desc?: string };
+type NavEntry = { label: string; href?: string; items?: NavItem[] };
+
+const ACCENT = '#A78BFA';
+
+// Grouped navigation — only routes that exist in this app (nothing 404s).
+const NAV: NavEntry[] = [
+  { label: 'Papers', href: '/papers' },
+  { label: 'Dojo', href: '/dojo' },
+  {
+    label: 'Learn',
+    items: [
+      { label: 'Curriculum', href: '/learn', desc: 'Structured learning paths' },
+      { label: 'Architectures', href: '/architectures', desc: 'Model blueprints' },
+      { label: 'System Design', href: '/system-design', desc: 'ML case studies' },
+      { label: 'Labs', href: '/labs', desc: 'Interactive experiments' },
+    ],
+  },
+  {
+    label: 'Tools',
+    items: [
+      { label: 'Model Viz', href: '/model-viz', desc: 'Visualize architectures' },
+      { label: 'Extract Code', href: '/extract-code', desc: 'PDF → runnable code' },
+      { label: 'Compare Architectures', href: '/architectures/compare', desc: 'Side-by-side' },
+    ],
+  },
+  { label: 'Pricing', href: '/pricing' },
+];
 
 export function TopNavbar() {
-  const pathname         = usePathname();
-  const [open, setOpen]  = useState(false);
+  const pathname = usePathname();
+  const [open, setOpen] = useState(false);
   const { open: openAuth, user, signOut } = useAuthModal();
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+  const groupActive = (e: NavEntry) =>
+    e.href ? isActive(e.href) : !!e.items?.some((i) => isActive(i.href));
+
+  const triggerCls = (active: boolean) =>
+    'flex h-full items-center gap-1 px-4 text-[13px] transition-colors ' +
+    (active
+      ? 'text-[#A78BFA] border-b-2 border-[#A78BFA] bg-[#A78BFA]/[0.08]'
+      : 'text-[#A3A3A3] hover:text-white border-b-2 border-transparent');
 
   return (
     <header
@@ -33,27 +58,53 @@ export function TopNavbar() {
       <div className="mx-auto flex h-full items-center justify-between px-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
-          <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#A78BFA' }} />
+          <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: ACCENT }} />
           <span className="text-[15px] font-bold text-white">paper2code</span>
         </Link>
 
         {/* Desktop nav */}
         <nav className="hidden h-full items-center md:flex">
-          {NAV_LINKS.map(link => {
-            const active = isActive(link.href);
+          {NAV.map((entry) => {
+            const active = groupActive(entry);
+
+            if (!entry.items) {
+              return (
+                <Link key={entry.label} href={entry.href!} className={triggerCls(active)}>
+                  {entry.label}
+                </Link>
+              );
+            }
+
             return (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={
-                  'flex h-full items-center px-4 text-[13px] transition-colors ' +
-                  (active
-                    ? 'text-[#A78BFA] border-b-2 border-[#A78BFA] bg-[#A78BFA]/8'
-                    : 'text-[#A3A3A3] hover:text-white')
-                }
-              >
-                {link.label}
-              </Link>
+              <div key={entry.label} className="group relative h-full">
+                <button type="button" className={triggerCls(active) + ' outline-none'}>
+                  {entry.label}
+                  <ChevronDown size={12} className="opacity-60 transition-transform duration-200 group-hover:rotate-180" />
+                </button>
+                {/* Dropdown (pt-2 bridges the hover gap) */}
+                <div className="invisible absolute left-0 top-full z-50 min-w-[260px] pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+                  <div className="rounded-xl border border-[#262626] bg-[#0D0D0D] p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+                    {entry.items.map((item) => {
+                      const iActive = isActive(item.href);
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={
+                            'block rounded-lg px-3 py-2 transition-colors ' +
+                            (iActive ? 'bg-[#A78BFA]/10' : 'hover:bg-white/[0.06]')
+                          }
+                        >
+                          <div className={'text-[13px] font-medium ' + (iActive ? 'text-[#A78BFA]' : 'text-white')}>
+                            {item.label}
+                          </div>
+                          {item.desc && <div className="mt-0.5 text-[11px] text-[#525252]">{item.desc}</div>}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             );
           })}
         </nav>
@@ -98,11 +149,11 @@ export function TopNavbar() {
       {open && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col bg-[#111111] p-4"
+          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col overflow-y-auto bg-[#111111] p-4"
             style={{ borderRight: '1px solid #1A1A1A' }}>
             <div className="mb-6 flex items-center justify-between">
               <Link href="/" onClick={() => setOpen(false)} className="flex items-center gap-2">
-                <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: '#A78BFA' }} />
+                <span className="inline-block rounded-full" style={{ width: 10, height: 10, background: ACCENT }} />
                 <span className="text-[15px] font-bold text-white">paper2code</span>
               </Link>
               <button type="button" aria-label="Close menu" onClick={() => setOpen(false)}
@@ -110,15 +161,34 @@ export function TopNavbar() {
                 <X size={20} />
               </button>
             </div>
-            <nav className="flex flex-col">
-              {NAV_LINKS.map(link => {
-                const active = isActive(link.href);
+            <nav className="flex flex-col gap-1">
+              {NAV.map((entry) => {
+                if (!entry.items) {
+                  const active = isActive(entry.href!);
+                  return (
+                    <Link key={entry.label} href={entry.href!} onClick={() => setOpen(false)}
+                      className={'rounded-md px-3 py-2.5 text-sm transition-colors ' +
+                        (active ? 'bg-[#A78BFA]/10 text-[#A78BFA]' : 'text-[#A3A3A3] hover:bg-white/5 hover:text-white')}>
+                      {entry.label}
+                    </Link>
+                  );
+                }
                 return (
-                  <Link key={link.href} href={link.href} onClick={() => setOpen(false)}
-                    className={'rounded-md px-3 py-2.5 text-sm transition-colors ' +
-                      (active ? 'bg-[#A78BFA]/10 text-[#A78BFA]' : 'text-[#A3A3A3] hover:bg-white/5 hover:text-white')}>
-                    {link.label}
-                  </Link>
+                  <div key={entry.label} className="mt-2">
+                    <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#525252]">
+                      {entry.label}
+                    </div>
+                    {entry.items.map((item) => {
+                      const active = isActive(item.href);
+                      return (
+                        <Link key={item.href} href={item.href} onClick={() => setOpen(false)}
+                          className={'rounded-md px-3 py-2 text-sm transition-colors ' +
+                            (active ? 'bg-[#A78BFA]/10 text-[#A78BFA]' : 'text-[#A3A3A3] hover:bg-white/5 hover:text-white')}>
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </nav>
