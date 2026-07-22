@@ -3,6 +3,9 @@ import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { SD_SYSTEMS } from '@/data/content/systemDesign';
 import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
+import ArchDiagram from '@/components/arch/ArchDiagram';
+import { systemToFlowSlug } from '@/components/arch/archFlows';
+import { Reveal } from '@/components/anim';
 
 export default async function SystemDesignSlugPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -38,6 +41,12 @@ export default async function SystemDesignSlugPage({ params }: { params: Promise
 
       {/* CONTENT */}
       <div className="flex-1 max-w-4xl mx-auto w-full px-8 py-12">
+        <Reveal className="mb-10">
+          <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4">
+            System Architecture
+          </div>
+          <ArchDiagram slug={systemToFlowSlug(sys.slug + ' ' + sys.name)} />
+        </Reveal>
         {mdxContent ? (
           <MdxRenderer source={mdxContent} />
         ) : (

@@ -6,6 +6,7 @@ import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
 import ArchSidebar from '@/components/arch/ArchSidebar';
 import ArchDiagram from '@/components/arch/ArchDiagram';
+import { toDiagramSlug } from '@/components/arch/archFlows';
 import SectionGrid from '@/components/arch/SectionGrid';
 import ArchHeroBackground from '@/components/arch/ArchHeroBackground';
 
@@ -111,7 +112,7 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
   const mdxContent = getMdxContent('architectures', slug);
   const headings = mdxContent ? extractHeadings(mdxContent) : ARCH_SECTIONS;
 
-  const isFlagship = ['transformer', 'resnet', 'bert', 'vit', 'gpt', 'llama'].includes(slug);
+  const diagramSlug = toDiagramSlug(arch.slug) ?? toDiagramSlug(arch.name);
 
   return (
     <div className="flex h-[calc(100vh-56px)] bg-transparent text-white overflow-hidden">
@@ -143,11 +144,11 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
             </div>
           </div>
 
-          {/* FLAGSHIP ARCHITECTURE DIAGRAM */}
-          {isFlagship && (
+          {/* ARCHITECTURE DIAGRAM */}
+          {diagramSlug && (
             <div className="mb-12">
               <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4">Interactive Blueprint</div>
-              <ArchDiagram slug={slug} />
+              <ArchDiagram slug={diagramSlug} />
             </div>
           )}
 

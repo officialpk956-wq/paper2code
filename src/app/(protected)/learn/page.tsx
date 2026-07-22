@@ -5,15 +5,18 @@ import { CURRICULUM } from '@/data/content/curriculum';
 import StaggerList from '@/components/StaggerList';
 import TiltCard from '@/components/TiltCard';
 import { motion } from 'framer-motion';
+import { Reveal } from '@/components/anim';
 
 export default function LearnPage() {
   return (
     <div className="min-h-screen bg-transparent text-white p-8">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-[26px] font-bold text-white mb-2">Curriculum</h1>
-        <p className="text-[13px] text-[#A3A3A3] mb-8">
-          A structured path from basics to advanced research.
-        </p>
+        <Reveal className="mb-8">
+          <h1 className="text-[26px] font-bold text-white mb-2">Curriculum</h1>
+          <p className="text-[13px] text-[#A3A3A3]">
+            A structured path from basics to advanced research.
+          </p>
+        </Reveal>
         
         <StaggerList className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {CURRICULUM.map((domain) => {

@@ -7,6 +7,7 @@ import { ARCHITECTURES } from '@/data/content/architectures';
 
 import StaggerList from '@/components/StaggerList';
 import TiltCard from '@/components/TiltCard';
+import { Reveal } from '@/components/anim';
 
 export default function ArchitecturesPage() {
   const [active, setActive] = useState('All');
@@ -35,12 +36,12 @@ export default function ArchitecturesPage() {
       {/* HEADER */}
       <div className="border-b border-[#262626] bg-[#111111] px-8 py-6">
         <div className="flex justify-between items-center mb-4">
-          <div>
+          <Reveal>
             <h1 className="text-[26px] font-bold text-white">Architecture Library</h1>
             <p className="mt-1 text-[13px] text-[#A3A3A3]">
               {filtered.length} of 207 architectures
             </p>
-          </div>
+          </Reveal>
           <input
             type="text"
             placeholder="Search architectures..."

@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
 import { findArch } from '@/lib/crosslinks';
+import ArchDiagram from '@/components/arch/ArchDiagram';
+import { paperToArchSlug } from '@/components/arch/archFlows';
 import { FLAGSHIP_META, FLAGSHIP_GRAPH, FLAGSHIP_BLUEPRINT, FLAGSHIP_CODE } from '@/data/flagship-papers';
 import { loader } from '@monaco-editor/react';
 
@@ -305,6 +307,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   }
 
   const challenges = PAPER_CHALLENGES[id] ?? DEFAULT_CHALLENGES;
+  const archSlug = paperToArchSlug(id);
 
   return (
     <div className="flex flex-col bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
@@ -377,6 +380,12 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
 
         {tab === 'summary' && (
           <div className="max-w-2xl space-y-6">
+            {archSlug && (
+              <div>
+                <div className="text-[13px] font-semibold text-white mb-3">Architecture</div>
+                <ArchDiagram slug={archSlug} />
+              </div>
+            )}
             <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
               <div className="text-[13px] font-semibold text-white mb-3">Abstract</div>
               <p className="text-[13px] leading-relaxed text-[#A3A3A3]">{meta.abstract}</p>
