@@ -304,6 +304,49 @@ flowchart TD
 
 ---
 
+## 🔐 Authentication Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+
+    participant API as FastAPI
+    participant Auth as Auth Service
+    participant DB as PostgreSQL
+    participant JWT as JWT Engine
+
+    User->>API: POST /api/auth/register
+    API->>Auth: Validate Input
+    Auth->>Auth: Hash Password (Argon2id)
+    Auth->>DB: Store User
+    DB-->>Auth: Success
+    Auth-->>API: User Created
+    API-->>User: 201 Created
+
+    User->>API: POST /api/auth/login
+    API->>Auth: Verify Credentials
+    Auth->>DB: Load User
+    DB-->>Auth: User Data
+    Auth->>Auth: Verify Password
+
+    alt MFA Enabled
+        Auth->>User: Request TOTP Code
+        User->>Auth: Submit TOTP
+        Auth->>Auth: Verify TOTP
+    end
+
+    Auth->>JWT: Generate Access Token
+    JWT-->>Auth: Signed JWT
+
+    Auth-->>API: Authentication Success
+    API-->>User: 200 OK + JWT
+
+    User->>API: GET /api/protected
+    API->>JWT: Validate JWT
+    JWT-->>API: Token Valid
+    API-->>User: Protected Response
+```
+
 # ✨ Feature Matrix
 
 | Feature | Description | Status |
