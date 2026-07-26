@@ -254,6 +254,11 @@ class Problem(Base):
     version = Column(Integer, nullable=False, default=1, server_default="1")
     time_limit_ms = Column(Integer, nullable=True)  # None → use global 10 000 ms
     acceptance_rate = Column(Numeric(5, 4), nullable=True)  # 0.0000–1.0000
+    # Dojo v2: structured test cases (Problem.test_cases holds the v2 spec) —
+    # a reference solution used for seed-time validation, and a per-problem
+    # memory cap passed to the execution engine.
+    reference_solution = Column(Text, nullable=True)
+    memory_limit_mb = Column(Integer, nullable=True)  # None → engine default
 
     submissions: list["DojoSubmission"] = relationship(
         "DojoSubmission", back_populates="problem", cascade="all, delete-orphan"
@@ -291,6 +296,10 @@ class DojoSubmission(Base):
     # Sprint H: public sharing
     is_public = Column(Boolean, nullable=False, default=False, server_default="false")
     review_text = Column(Text, nullable=True)
+    # Dojo v2: per-case grading breakdown
+    cases_json = Column(JSON, nullable=True)
+    num_passed = Column(Integer, nullable=True)
+    num_total = Column(Integer, nullable=True)
 
     user: "User" = relationship("User", back_populates="submissions")
     problem: "Problem" = relationship("Problem", back_populates="submissions")

@@ -1,16 +1,11 @@
-import asyncio
-
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
 from backend.repositories.task_repository import TaskRepository
-from backend.services.dojo_execution_service import RUN_TIMEOUT_MS, execute_python
+from backend.services.dojo_execution_service import RUN_TIMEOUT_MS
 
 
 def _mark_best_submission(db, user_id: int, problem_id: str, submission_id: int, time_ms) -> None:
-    """
-    Mark `submission_id` as is_best=True when it improves the user's best time.
-    Also unmarks the previous best. Only applies to passing submissions.
-    """
+    """Mark `submission_id` as is_best=True when it improves the user's best time."""
     from backend.models import DojoSubmission
 
     prev_best = (
@@ -56,118 +51,86 @@ def _update_acceptance_rate(db, problem_id: str) -> None:
         db.commit()
 
 
-@celery_app.task(bind=True, max_retries=1, time_limit=60)
+def grade_and_record(db, user_id: int, problem, code: str) -> dict:
+    """
+    Grade `code` against `problem.test_cases` (v2 structured cases or legacy
+    harness), persist a DojoSubmission with the per-case breakdown, update
+    activity / XP / streak / is_best / acceptance rate / achievements, and
+    return the grading result dict.
+
+    Shared by the synchronous route and the Celery task so grading logic lives
+    in exactly one place.
+    """
+    from backend.models import DojoSubmission
+    from backend.services.dojo_grading import grade
+    from backend.services.progress_service import award_xp, update_user_activity
+
+    cpu_ms = problem.time_limit_ms or RUN_TIMEOUT_MS
+    mem_mb = problem.memory_limit_mb or 256
+    result = grade(problem.test_cases, code, cpu_time_ms=cpu_ms, memory_mb=mem_mb)
+
+    submission = DojoSubmission(
+        user_id=user_id,
+        problem_id=problem.id,
+        code=code,
+        passed=result.get("passed", False),
+        stdout=result.get("stdout"),
+        stderr=result.get("stderr"),
+        time_ms=result.get("time_ms"),
+        problem_version=problem.version or 1,
+        cases_json=result.get("cases"),
+        num_passed=result.get("num_passed"),
+        num_total=result.get("total"),
+    )
+    db.add(submission)
+    db.commit()
+    db.refresh(submission)
+
+    update_user_activity(db, user_id)
+    if submission.passed:
+        _mark_best_submission(db, user_id, problem.id, submission.id, submission.time_ms)
+        difficulty = problem.difficulty.lower() if problem.difficulty else "easy"
+        event = f"dojo.solved.{difficulty}"
+        award_xp(db, user_id, event, entity_id=problem.id)
+        try:
+            from backend.services.achievement_service import check_and_award
+
+            check_and_award(db, user_id, event, {"problem_id": problem.id})
+        except Exception:
+            pass
+    else:
+        award_xp(db, user_id, "dojo.attempt", entity_id=problem.id)
+
+    _update_acceptance_rate(db, problem.id)
+    result["submission_id"] = submission.id
+    return result
+
+
+@celery_app.task(bind=True, max_retries=1, time_limit=120)
 def run_dojo_submission_task(self, task_id: str, code: str, stdin: str = ""):
+    """Async grading path (used when DOJO_SYNC_GRADING is off). Delegates to
+    grade_and_record so behaviour matches the synchronous route exactly."""
     db = SessionLocal()
     try:
-        TaskRepository(db).set_running(task_id)
+        repo = TaskRepository(db)
+        repo.set_running(task_id)
+        task = repo.get(task_id)
+        if not task or not task.input_ref or not task.user_id:
+            repo.set_failed(task_id, "Task missing problem/user reference")
+            return
+        from backend.models import Problem
 
-        # Resolve per-problem timeout + judge harness
-        task = TaskRepository(db).get(task_id)
-        run_timeout_ms = RUN_TIMEOUT_MS
-        exec_code = code
-        if task and task.input_ref:
-            from backend.models import Problem
-
-            prob = db.query(Problem).filter_by(id=task.input_ref).first()
-            if prob and prob.time_limit_ms:
-                run_timeout_ms = prob.time_limit_ms
-            # Graded submissions run the user's code with the problem's assert
-            # harness appended — passed == harness asserts all hold (exit 0).
-            if prob and isinstance(prob.test_cases, list):
-                for tc in prob.test_cases:
-                    if isinstance(tc, dict) and tc.get("type") == "harness" and tc.get("code"):
-                        exec_code = code + "\n\n# ── judge harness ──\n" + tc["code"]
-                        break
-
-        # Run execute_python in a dedicated thread (avoids running event loop conflicts)
-        import threading
-
-        res = []
-        err = []
-
-        def target():
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                res.append(
-                    loop.run_until_complete(
-                        execute_python(exec_code, stdin, run_timeout_ms=run_timeout_ms)
-                    )
-                )
-            except Exception as ex:
-                err.append(ex)
-            finally:
-                loop.close()
-
-        t = threading.Thread(target=target, daemon=True)
-        t.start()
-        join_timeout = run_timeout_ms / 1000 + 30  # 30s grace beyond code run timeout
-        t.join(timeout=join_timeout)
-        if t.is_alive():
-            raise TimeoutError(
-                f"Execution thread did not finish within {join_timeout:.0f}s — "
-                "Piston may be unresponsive"
-            )
-        if err:
-            raise err[0]
-        result = res[0]
-        TaskRepository(db).set_complete(task_id, result)
-
-        # Save DojoSubmission and update XP / streak / acceptance rate / is_best
-        task = TaskRepository(db).get(task_id)
-        if task and task.user_id:
-            from backend.models import DojoSubmission, Problem
-            from backend.services.progress_service import award_xp, update_user_activity
-
-            problem = db.query(Problem).filter_by(id=task.input_ref).first()
-            prob_version = problem.version if problem else 1
-
-            submission = DojoSubmission(
-                user_id=task.user_id,
-                problem_id=task.input_ref,
-                code=code,
-                passed=result.get("passed", False),
-                stdout=result.get("stdout"),
-                stderr=result.get("stderr"),
-                time_ms=result.get("time_ms"),
-                problem_version=prob_version,
-            )
-            db.add(submission)
-            db.commit()
-            db.refresh(submission)
-
-            update_user_activity(db, task.user_id)
-            if submission.passed:
-                # Track best submission for this user+problem
-                _mark_best_submission(
-                    db, task.user_id, task.input_ref, submission.id, submission.time_ms
-                )
-
-                difficulty = (
-                    problem.difficulty.lower() if (problem and problem.difficulty) else "easy"
-                )
-                event = f"dojo.solved.{difficulty}"
-                award_xp(db, task.user_id, event, entity_id=task.input_ref)
-                try:
-                    from backend.services.achievement_service import check_and_award
-
-                    check_and_award(db, task.user_id, event, {"problem_id": task.input_ref})
-                except Exception:
-                    pass
-            else:
-                award_xp(db, task.user_id, "dojo.attempt", entity_id=task.input_ref)
-
-            # Update acceptance rate on every submission
-            _update_acceptance_rate(db, task.input_ref)
-
+        problem = db.query(Problem).filter_by(id=task.input_ref).first()
+        if not problem:
+            repo.set_failed(task_id, "Problem not found")
+            return
+        result = grade_and_record(db, task.user_id, problem, code)
+        repo.set_complete(task_id, result)
     except Exception as e:
-        if self.request.retries >= self.max_retries:
-            try:
-                TaskRepository(db).set_failed(task_id, str(e))
-                db.commit()
-            except Exception:
-                db.rollback()
+        try:
+            TaskRepository(db).set_failed(task_id, str(e))
+        except Exception:
+            db.rollback()
         raise self.retry(exc=e, countdown=3)
     finally:
         db.close()

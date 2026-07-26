@@ -118,13 +118,16 @@ class TestProblemDetailFix:
         data = r.json()
         assert isinstance(data, dict)
 
-    def test_02_includes_test_cases(self, client, db_session):
+    def test_02_exposes_tests_without_leaking_hidden(self, client, db_session):
         prob = _seed_problem(db_session, "detail02")
         r = client.get(f"/api/problems/{prob.id}")
         assert r.status_code == 200
         data = r.json()
-        assert "test_cases" in data
-        assert isinstance(data["test_cases"], list)
+        # Dojo v2 security: the raw test_cases (which may hold hidden expected
+        # values / harness / forward_ref) must NOT be sent to the client — only
+        # the sanitized public view under "tests".
+        assert "test_cases" not in data
+        assert "tests" in data and isinstance(data["tests"], dict)
 
     def test_03_includes_hints(self, client, db_session):
         prob = _seed_problem(db_session, "detail03")

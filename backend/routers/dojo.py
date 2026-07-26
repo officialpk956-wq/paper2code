@@ -10,6 +10,7 @@ from backend.database import get_db
 from backend.dependencies import get_current_user
 from backend.models import DojoSubmission, Problem, User
 from backend.server import limiter
+from backend.services.dojo_grading import public_test_view
 from core.dojo import get_exercise_list, get_public_exercise, get_solution
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,9 @@ def get_problem(problem_id: str, db: Session = Depends(get_db)):
         "learning_points": prob.learning_points,
         "visualization_url": prob.visualization_url,
         "python_template": prob.python_template,
-        "test_cases": prob.test_cases,
+        # Hidden test cases + expected values + harness/forward_ref are NEVER
+        # sent to the client — only the sample cases + statement/think-prompts.
+        "tests": public_test_view(prob.test_cases),
         "hints": prob.hints,
         "explanation": prob.explanation,
         "is_retired": prob.is_retired,
@@ -423,14 +426,13 @@ class DojoCodeSubmitRequest(BaseModel):
 # deprecated alias
 @router.post("/dojo/submit", deprecated=True)
 @limiter.limit("30/hour", key_func=_dojo_user_key)
-async def submit_dojo_code(
+def submit_dojo_code(
     req: DojoCodeSubmitRequest,
     request: Request,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from backend.repositories.task_repository import TaskRepository
-    from backend.tasks.dojo_tasks import run_dojo_submission_task
+    import os
 
     prob = db.query(Problem).filter_by(id=req.problem_id).first()
     if not prob:
@@ -439,18 +441,25 @@ async def submit_dojo_code(
     if len(req.code.encode("utf-8")) > 10000:
         raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10KB")
 
-    task = TaskRepository(db).create(
-        "dojo.execute",
-        current_user.id,
-        req.problem_id,
-    )
-    run_dojo_submission_task.delay(task.id, req.code, req.stdin or "")
+    # Synchronous grading is the default — Judge0/E2B/local execution is fully
+    # synchronous, so there's no need for a Celery worker. FastAPI runs this sync
+    # route in its threadpool, so blocking on execution never stalls the event loop.
+    # Grade on the request session (grade_and_record commits) — the same session the
+    # problem was loaded from, so it works in tests and prod alike.
+    if (os.getenv("DOJO_SYNC_GRADING") or "true").lower() != "false":
+        from backend.tasks.dojo_tasks import grade_and_record
 
-    return {
-        "task_id": task.id,
-        "status": "pending",
-        "poll_url": f"/api/tasks/{task.id}",
-    }
+        result = grade_and_record(db, current_user.id, prob, req.code)
+        result["status"] = "completed"
+        return result
+
+    # Async fallback (only when DOJO_SYNC_GRADING=false and a Celery worker exists).
+    from backend.repositories.task_repository import TaskRepository
+    from backend.tasks.dojo_tasks import run_dojo_submission_task
+
+    task = TaskRepository(db).create("dojo.execute", current_user.id, req.problem_id)
+    run_dojo_submission_task.delay(task.id, req.code, req.stdin or "")
+    return {"task_id": task.id, "status": "pending", "poll_url": f"/api/tasks/{task.id}"}
 
 
 # ---------------------------------------------------------------------------

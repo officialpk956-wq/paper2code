@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight,
+  ArrowLeft, ChevronLeft, ChevronRight, ChevronDown,
   Play, Send, RotateCcw, Copy, Clock,
   Lock, CheckCircle, XCircle, Loader2,
 } from 'lucide-react';
@@ -40,6 +40,80 @@ const SLUG_META: Record<string, SlugMeta> = {
 type LeftTab   = 'description' | 'submissions' | 'notes';
 type ConsoleTab = 'testcase' | 'result';
 type RunState  = 'idle' | 'running' | 'passed' | 'failed' | 'error';
+
+type CaseResult = {
+  name?: string; kind: 'sample' | 'hidden'; passed: boolean;
+  time_ms?: number; got?: string; expected?: string; explain?: string; feedback?: string;
+};
+type GradeResult = {
+  passed: boolean; total?: number; num_passed?: number; time_ms?: number;
+  cases?: CaseResult[]; stdout?: string; stderr?: string; compile_error?: string;
+  status?: string; error?: string; task_id?: string; result?: GradeResult;
+};
+
+/* ── Per-case results (LeetCode-style, sample expandable / hidden locked) ── */
+function CaseResults({ cases, numPassed, total }: { cases: CaseResult[]; numPassed: number; total: number }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const allPass = numPassed === total && total > 0;
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        {allPass ? <CheckCircle size={16} style={{ color: '#4ADE80' }} /> : <XCircle size={16} style={{ color: '#F87171' }} />}
+        <span style={{ fontSize: 13, fontWeight: 700, color: allPass ? '#4ADE80' : '#F87171' }}>
+          {numPassed} / {total} tests passed
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {cases.map((c, i) => {
+          const isSample = c.kind === 'sample';
+          const expandable = isSample && (c.got !== undefined || c.expected !== undefined);
+          const isOpen = open === i;
+          return (
+            <div key={i} style={{ background: '#111', border: '1px solid #1A1A1A', borderRadius: 8, overflow: 'hidden' }}>
+              <button
+                onClick={() => expandable && setOpen(isOpen ? null : i)}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                  background: 'none', border: 'none', textAlign: 'left', cursor: expandable ? 'pointer' : 'default',
+                }}
+              >
+                {c.passed
+                  ? <CheckCircle size={14} style={{ color: '#4ADE80', flexShrink: 0 }} />
+                  : <XCircle size={14} style={{ color: '#F87171', flexShrink: 0 }} />}
+                {!isSample && <Lock size={11} style={{ color: '#525252', flexShrink: 0 }} />}
+                <span style={{ fontSize: 12, color: '#D4D4D4' }}>
+                  {isSample ? (c.name || `Test ${i + 1}`) : `Hidden test ${i + 1}`}
+                </span>
+                <span style={{ fontSize: 11, color: c.passed ? '#4ADE80' : '#F87171', marginLeft: 'auto' }}>
+                  {c.passed ? 'Passed' : 'Failed'}{c.time_ms != null ? ` · ${c.time_ms}ms` : ''}
+                </span>
+                {expandable && (
+                  <ChevronDown size={13} style={{ color: '#525252', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+                )}
+              </button>
+              {!c.passed && c.feedback && (
+                <div style={{ padding: '0 10px 9px 32px', fontSize: 11.5, color: '#FBBF24', lineHeight: 1.5 }}>
+                  💡 {c.feedback}
+                </div>
+              )}
+              {isOpen && expandable && (
+                <div style={{ padding: '0 10px 10px 32px', fontSize: 11.5, fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.7 }}>
+                  {c.explain && <div style={{ color: '#525252', marginBottom: 5 }}># {c.explain}</div>}
+                  {c.expected !== undefined && (
+                    <div><span style={{ color: '#60A5FA' }}>expected&nbsp;</span><span style={{ color: '#A3A3A3' }}>{c.expected}</span></div>
+                  )}
+                  {c.got !== undefined && (
+                    <div><span style={{ color: c.passed ? '#4ADE80' : '#F87171' }}>got&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span style={{ color: '#A3A3A3' }}>{c.got}</span></div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function LoadingDots() {
   return (
@@ -99,6 +173,8 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
   const [stdout,     setStdout]     = useState('');
   const [notes,      setNotes]      = useState('');
   const [submissions, setSubmissions] = useState<{status:string; created_at:string}[]>([]);
+  const [cases, setCases] = useState<CaseResult[]>([]);
+  const [summary, setSummary] = useState<{ num_passed: number; total: number } | null>(null);
 
   type RelatedMeta = {
     arch_slug: string | null;
@@ -153,11 +229,11 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
        be polled from GET /api/tasks/{id}). Both require `stdin`, not
        `test_input` — the backend's Pydantic models don't have a
        `test_input` field, so sending that name silently drops it. ────── */
-  type ExecResult = { passed: boolean; stdout: string; stderr: string };
-
-  async function pollTask(taskId: string): Promise<{ status: string; result?: ExecResult; error?: string }> {
+  // Async fallback: only used if the backend runs graded submissions via Celery
+  // (DOJO_SYNC_GRADING=false). The default path returns the full result inline.
+  async function pollTask(taskId: string): Promise<GradeResult> {
     for (let i = 0; i < 40; i++) {
-      const task = await apiGet<{ status: string; result?: ExecResult; error?: string }>(`/api/tasks/${taskId}`);
+      const task = await apiGet<GradeResult>(`/api/tasks/${taskId}`);
       if (task.status === 'completed' || task.status === 'failed') return task;
       await new Promise(r => setTimeout(r, 1000));
     }
@@ -170,34 +246,31 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
     setLastAction(submit ? 'submit' : 'run');
     setConsoleTab('result');
     setStdout('');
+    setCases([]);
+    setSummary(null);
     try {
-      let result: ExecResult | undefined;
-
       if (submit) {
-        const { task_id } = await apiPost<{ task_id: string; status: string }>('/api/dojo/code-submissions', {
-          problem_id: slug,
-          code,
-          stdin: problem.test_input,
+        let res = await apiPost<GradeResult>('/api/dojo/code-submissions', {
+          problem_id: slug, code, stdin: problem.test_input,
         });
-        const task = await pollTask(task_id);
-        if (task.status === 'failed') {
-          setRunState('error');
-          setStdout(task.error ?? 'Execution failed');
-          return;
+        if (res.task_id) {                       // async fallback → poll
+          const task = await pollTask(res.task_id);
+          if (task.status === 'failed') { setRunState('error'); setStdout(task.error ?? 'Execution failed'); return; }
+          res = task.result ?? task;
         }
-        result = task.result;
+        if (res.compile_error) { setRunState('error'); setStdout(res.compile_error); return; }
+        setCases(res.cases ?? []);
+        setSummary({ num_passed: res.num_passed ?? 0, total: res.total ?? (res.cases?.length ?? 0) });
+        setRunState(res.passed ? 'passed' : 'failed');
+        if (res.passed) {
+          setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
+        }
       } else {
-        result = await apiPost<ExecResult>('/api/dojo/runs', {
-          problem_id: slug,
-          code,
-          stdin: testInput,
+        const result = await apiPost<GradeResult>('/api/dojo/runs', {
+          problem_id: slug, code, stdin: testInput,
         });
-      }
-
-      setRunState(result?.passed ? 'passed' : 'failed');
-      setStdout(result?.stdout || result?.stderr || '');
-      if (submit && result?.passed) {
-        setSubmissions(prev => [{ status: 'accepted', created_at: new Date().toLocaleString() }, ...prev]);
+        setRunState(result?.passed ? 'passed' : 'failed');
+        setStdout(result?.stdout || result?.stderr || '');
       }
     } catch (e: unknown) {
       setRunState('error');
@@ -669,12 +742,14 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
                         {runState === 'failed' && <><XCircle size={16} style={{ color: '#F87171' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>{lastAction === 'submit' ? 'Wrong Answer' : 'Ran with Errors'}</span></>}
                         {runState === 'error' && <><XCircle size={16} style={{ color: '#F59E0B' }} /><span style={{ fontSize: 13, fontWeight: 600, color: '#F59E0B' }}>Runtime Error</span></>}
                       </div>
-                      {stdout && (
+                      {lastAction === 'submit' && cases.length > 0 ? (
+                        <CaseResults cases={cases} numPassed={summary?.num_passed ?? 0} total={summary?.total ?? cases.length} />
+                      ) : stdout ? (
                         <div>
                           <p style={{ fontSize: 10, fontWeight: 600, color: '#525252', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Output</p>
                           <pre style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: runState === 'passed' ? '#4ADE80' : '#F87171', whiteSpace: 'pre-wrap' }}>{stdout}</pre>
                         </div>
-                      )}
+                      ) : null}
                         </motion.div>
                       </motion.div>
                     </div>

@@ -39,8 +39,11 @@ def test_dojo_submit_with_mock_piston(client, seeded_db):
         json={"problem_id": "test-problem-id", "code": "print(2+2)"})
     assert r.status_code in (200, 201, 404)
     if r.status_code in (200, 201):
-        assert "task_id" in r.json()
-        assert r.json()["status"] == "pending"
+        j = r.json()
+        # Sync grading (default) returns the graded result; the async fallback
+        # returns a task handle. Accept either contract.
+        assert j.get("status") in ("completed", "pending")
+        assert "task_id" in j or "cases" in j or "passed" in j
 
 def test_dojo_submit_blocks_malicious_code(client, seeded_db):
     token, _ = test_login_and_get_token(client)

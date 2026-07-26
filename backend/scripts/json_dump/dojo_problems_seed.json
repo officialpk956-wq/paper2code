@@ -106,19 +106,99 @@
     "category": "Activation Functions",
     "difficulty": "Medium",
     "estimated_time": 15,
-    "description": "Implement the numerically stable softmax function.",
+    "description": "Implement softmax(x). It must work for a 1-D vector AND a 2-D batch (softmax over the last axis).",
     "tags": [
       "Activation Functions",
       "NLP",
       "Transformers"
     ],
     "python_template": "import numpy as np\n\ndef softmax(x):\n    # TODO: implement numerically stable softmax\n    # Subtract max before exp to prevent overflow\n    pass\n",
-    "test_cases": [
-      {
-        "type": "harness",
-        "code": "import numpy as np\n_r = softmax(np.array([1.0, 2.0, 3.0]))\nassert np.allclose(_r, [0.09003057, 0.24472847, 0.66524096], atol=1e-4), 'wrong values for [1, 2, 3]'\nassert abs(float(np.sum(_r)) - 1.0) < 1e-9, 'output must sum to 1'\n_s = softmax(np.array([1000.0, 1000.0]))\nassert np.all(np.isfinite(_s)), 'must be numerically stable for large inputs'\nassert np.allclose(_s, [0.5, 0.5]), 'equal logits give equal probabilities'\nprint('ALL TESTS PASSED')"
-      }
-    ]
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "softmax",
+      "checker": "allclose",
+      "tolerance": 1e-06,
+      "depth": "L3",
+      "statement": {
+        "motivation": "You're turning a model's raw output logits into a probability distribution over classes. It must be a valid distribution (non-negative, sums to 1) and must not blow up on large logits.",
+        "task": "Implement softmax(x). It must work for a 1-D vector AND a 2-D batch (softmax over the last axis).",
+        "math": "\\sigma(z)_i = e^{z_i} / \\sum_j e^{z_j}",
+        "paper_ref": "attention-is-all-you-need"
+      },
+      "think_prompts": [
+        "What happens if every logit is huge and equal?",
+        "For a 2-D batch, which axis should sum to 1?"
+      ],
+      "cases": [
+        {
+          "name": "s-vector",
+          "kind": "sample",
+          "args": [
+            [
+              2.0,
+              1.0,
+              0.1
+            ]
+          ],
+          "expected": [
+            0.6590011388859679,
+            0.24243297070471392,
+            0.09856589040931818
+          ],
+          "explain": "1-D vector, must sum to 1"
+        },
+        {
+          "name": "h-batch",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1.0,
+                2.0,
+                3.0
+              ],
+              [
+                1.0,
+                1.0,
+                1.0
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              0.09003057317038046,
+              0.24472847105479764,
+              0.6652409557748218
+            ],
+            [
+              0.3333333333333333,
+              0.3333333333333333,
+              0.3333333333333333
+            ]
+          ],
+          "feedback": "For a 2-D batch, softmax must act on the LAST axis (each row sums to 1)."
+        },
+        {
+          "name": "h-overflow",
+          "kind": "hidden",
+          "args": [
+            [
+              1000.0,
+              1000.0,
+              1000.0
+            ]
+          ],
+          "expected": [
+            0.3333333333333333,
+            0.3333333333333333,
+            0.3333333333333333
+          ],
+          "feedback": "Numerical stability - subtract the row max before exp, or exp() overflows to nan."
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef softmax(x):\n    x = np.asarray(x, dtype=float)\n    x = x - x.max(axis=-1, keepdims=True)\n    e = np.exp(x)\n    return e / e.sum(axis=-1, keepdims=True)\n"
   },
   {
     "id": "ml-normalize",
@@ -127,18 +207,87 @@
     "category": "Preprocessing",
     "difficulty": "Medium",
     "estimated_time": 15,
-    "description": "Scale an array to [0, 1] using min-max normalization.",
+    "description": "Implement normalize(x) using min-max scaling. Handle the degenerate case where all inputs are equal.",
     "tags": [
       "Preprocessing",
       "NumPy"
     ],
     "python_template": "import numpy as np\n\ndef normalize(x):\n    # TODO: apply min-max normalization to range [0, 1]\n    pass\n",
-    "test_cases": [
-      {
-        "type": "harness",
-        "code": "import numpy as np\nassert np.allclose(normalize(np.array([0, 5, 10])), [0.0, 0.5, 1.0]), 'wrong values for [0, 5, 10]'\nassert np.allclose(normalize(np.array([2, 4, 6, 8])), [0.0, 1.0/3, 2.0/3, 1.0], atol=1e-6), 'wrong values for [2, 4, 6, 8]'\nassert np.allclose(normalize(np.array([7, 7, 7])), [0.0, 0.0, 0.0]), 'all-equal input must return zeros'\nprint('ALL TESTS PASSED')"
-      }
-    ]
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "normalize",
+      "checker": "allclose",
+      "tolerance": 1e-06,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Before training, features are scaled to a common range so no single feature dominates. Min-max normalization maps values into [0, 1].",
+        "task": "Implement normalize(x) using min-max scaling. Handle the degenerate case where all inputs are equal.",
+        "math": "x' = (x - \\min x) / (\\max x - \\min x)",
+        "paper_ref": null
+      },
+      "think_prompts": [
+        "What is max - min when every value is the same?",
+        "What should the output be then?"
+      ],
+      "cases": [
+        {
+          "name": "s-basic",
+          "kind": "sample",
+          "args": [
+            [
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              5.0
+            ]
+          ],
+          "expected": [
+            0.0,
+            0.25,
+            0.5,
+            0.75,
+            1.0
+          ],
+          "explain": "scale to [0,1]"
+        },
+        {
+          "name": "h-negatives",
+          "kind": "hidden",
+          "args": [
+            [
+              -2.0,
+              0.0,
+              2.0
+            ]
+          ],
+          "expected": [
+            0.0,
+            0.5,
+            1.0
+          ]
+        },
+        {
+          "name": "h-constant",
+          "kind": "hidden",
+          "args": [
+            [
+              5.0,
+              5.0,
+              5.0
+            ]
+          ],
+          "expected": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "feedback": "Constant input -> max==min -> divide-by-zero. Return zeros instead of NaN."
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef normalize(x):\n    x = np.asarray(x, dtype=float)\n    mn, mx = x.min(), x.max()\n    rng = mx - mn\n    if rng == 0:\n        return np.zeros_like(x)\n    return (x - mn) / rng\n"
   },
   {
     "id": "ml-cross-entropy",
@@ -754,18 +903,150 @@
     "category": "Deep Learning",
     "difficulty": "Hard",
     "estimated_time": 25,
-    "description": "Implement a naive 2D Convolution operation.\n\nGiven an input image and a 2D filter (kernel), slide the filter over the image and compute the element-wise multiplication and sum.\n\nAssume:\n- Stride is 1\n- No padding (valid convolution)\n- Single channel input and single channel filter\n\nOutput dimension: $(H - F + 1) \times (W - F + 1)$, where $F$ is the filter size.",
+    "description": "Implement conv2d(image, kernel): a 2-D 'valid' cross-correlation (no padding, stride 1). Return the output feature map.",
     "tags": [
       "Deep Learning",
       "Computer Vision"
     ],
     "python_template": "import numpy as np\n\ndef conv2d(image, kernel):\n    # TODO: perform 2D convolution\n    pass\n",
-    "test_cases": [
-      {
-        "type": "harness",
-        "code": "import numpy as np\nimg = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])\nkernel = np.array([[1, 0], [0, -1]])\nout = conv2d(img, kernel)\nassert out.shape == (2, 2), f'wrong output shape: {out.shape}'\nassert np.array_equal(out, [[-4, -4], [-4, -4]]), f'wrong conv output: {out}'\nprint('ALL TESTS PASSED')"
-      }
-    ]
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "conv2d",
+      "checker": "allclose",
+      "tolerance": 1e-05,
+      "depth": "L4",
+      "statement": {
+        "motivation": "The core operation of every CNN: slide a small kernel over an image and take weighted sums. Note DL 'convolution' is really cross-correlation (no kernel flip).",
+        "task": "Implement conv2d(image, kernel): a 2-D 'valid' cross-correlation (no padding, stride 1). Return the output feature map.",
+        "math": "(I * K)_{ij} = \\sum_{m,n} I_{i+m,\\,j+n} K_{m,n}",
+        "paper_ref": "resnet"
+      },
+      "think_prompts": [
+        "What are the output dimensions for an HxW image and a khxkw kernel?",
+        "Should you flip the kernel? (Hint: DL doesn't.)"
+      ],
+      "cases": [
+        {
+          "name": "s-3x3",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1.0,
+                2.0,
+                3.0
+              ],
+              [
+                4.0,
+                5.0,
+                6.0
+              ],
+              [
+                7.0,
+                8.0,
+                9.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              6.0,
+              8.0
+            ],
+            [
+              12.0,
+              14.0
+            ]
+          ],
+          "explain": "valid cross-correlation, 3x3 * 2x2 -> 2x2"
+        },
+        {
+          "name": "h-nonsquare",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1.0,
+                2.0,
+                3.0,
+                4.0
+              ],
+              [
+                5.0,
+                6.0,
+                7.0,
+                8.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                1.0
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              3.0,
+              5.0,
+              7.0
+            ],
+            [
+              11.0,
+              13.0,
+              15.0
+            ]
+          ]
+        },
+        {
+          "name": "h-asym-kernel",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1.0,
+                2.0,
+                3.0
+              ],
+              [
+                4.0,
+                5.0,
+                6.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                2.0
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              5.0,
+              8.0
+            ],
+            [
+              14.0,
+              17.0
+            ]
+          ],
+          "feedback": "Deep-learning 'conv' is cross-correlation - do NOT flip the kernel (that would be true convolution)."
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef conv2d(image, kernel):\n    image = np.asarray(image, dtype=float)\n    kernel = np.asarray(kernel, dtype=float)\n    kh, kw = kernel.shape\n    H, W = image.shape\n    oh, ow = H - kh + 1, W - kw + 1\n    out = np.zeros((oh, ow))\n    for i in range(oh):\n        for j in range(ow):\n            out[i, j] = (image[i:i+kh, j:j+kw] * kernel).sum()\n    return out\n"
   },
   {
     "id": "dl-max-pooling",
