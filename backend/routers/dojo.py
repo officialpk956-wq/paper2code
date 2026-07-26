@@ -167,12 +167,6 @@ def get_problem_related(
     }
 
 
-class DojoExerciseSubmitRequest(BaseModel):
-    exercise_id: str = Field(..., max_length=256)
-    passed: bool
-    attempts: int = 1
-
-
 @router.get("/dojo/exercises")
 def dojo_list_exercises():
     return {"exercises": get_exercise_list()}
@@ -211,71 +205,10 @@ def dojo_get_solution(
     return sol
 
 
-@router.post("/dojo/submissions")
-# deprecated alias
-@router.post("/dojo/submit_exercise", deprecated=True)
-def dojo_submit(
-    request: DojoExerciseSubmitRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if not get_solution(request.exercise_id):
-        raise HTTPException(status_code=404, detail=f"Exercise '{request.exercise_id}' not found")
-
-    from backend import metrics
-
-    metrics.increment("submissions_total")
-
-    try:
-        from backend.models import AssessmentAttempt
-
-        attempt = AssessmentAttempt(
-            learner_id=current_user.id,
-            assessment_type="code",
-            architecture=None,
-            difficulty=None,
-            question_text=f"dojo:{request.exercise_id}",
-            user_answer="passed" if request.passed else "failed",
-            correct_answer="passed",
-            explanation="",
-            score=1 if request.passed else 0,
-            attempt_count=request.attempts,
-            is_correct=bool(request.passed),
-        )
-        db.add(attempt)
-        db.commit()
-
-        # Award XP and update user activity
-        from backend.services.progress_service import award_xp, update_user_activity
-
-        user = current_user
-        if user:
-            update_user_activity(db, user.id)
-            if request.passed:
-                award_xp(db, user.id, "dojo.solved.easy")
-                try:
-                    from backend.services.achievement_service import check_and_award
-                    from backend.services.analytics_service import track
-
-                    track(user.id, "problem_solved", {"exercise_id": request.exercise_id})
-                    check_and_award(
-                        db, user.id, "dojo.solved.easy", {"exercise_id": request.exercise_id}
-                    )
-                except Exception:
-                    pass
-            else:
-                award_xp(db, user.id, "dojo.attempt")
-
-        return {
-            "status": "ok",
-            "recorded": True,
-            "exercise_id": request.exercise_id,
-            "passed": request.passed,
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception(f"Dojo submit error: {str(e)}")
-        return {"status": "ok", "recorded": False, "detail": str(e)}
+# NOTE: the old POST /dojo/submissions + /dojo/submit_exercise endpoints were
+# removed — they trusted a client-sent `passed` flag (no code to grade), letting
+# a user self-award XP/achievements. All real grading now goes through the
+# server-graded POST /dojo/code-submissions. (audit item #6)
 
 
 @router.get("/problems/{problem_id}/submissions")

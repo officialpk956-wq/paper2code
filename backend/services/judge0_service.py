@@ -16,12 +16,16 @@ backend see the expected answer — it only ships `args` in and reads the printe
 result back out.
 """
 
+import logging
 import os
 import subprocess
 import sys
 import tempfile
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
+_warned = {"judge0": False}
 
 
 def _engine() -> str:
@@ -36,8 +40,14 @@ def run_batch(
 ) -> list[dict[str, Any]]:
     """Run N (source, stdin) pairs and return N uniform result dicts."""
     engine = _engine()
-    if engine == "judge0" and os.getenv("JUDGE0_URL"):
-        return _run_judge0(sources, stdins, cpu_time_ms, memory_mb)
+    if engine == "judge0":
+        if os.getenv("JUDGE0_URL"):
+            return _run_judge0(sources, stdins, cpu_time_ms, memory_mb)
+        if not _warned["judge0"]:
+            # A deploy asked for Judge0 but didn't configure it — surface the
+            # misconfig once instead of silently grading on the e2b fallback.
+            logger.warning("DOJO_ENGINE=judge0 but JUDGE0_URL is unset — falling back to e2b")
+            _warned["judge0"] = True
     if engine == "local":
         return _run_local(sources, stdins, cpu_time_ms)
     return _run_e2b(sources, stdins, cpu_time_ms)

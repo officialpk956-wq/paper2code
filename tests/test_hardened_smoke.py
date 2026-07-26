@@ -207,35 +207,14 @@ class TestInputValidation:
         r = client.get("/api/problems/this-does-not-exist-at-all")
         assert r.status_code == 404
 
-    def test_dojo_submit_nonexistent_exercise(self, auth_client):
+    def test_dojo_client_trust_submit_endpoint_removed(self, auth_client):
+        """POST /dojo/submissions trusted a client-sent `passed` flag (no code to
+        grade) and was removed (audit #6). It must stay gone — real grading is
+        server-side via POST /dojo/code-submissions."""
         r = auth_client.post("/api/dojo/submissions", json={
-            "exercise_id": "this-exercise-doesnt-exist",
-            "passed": True,
-            "attempts": 1
+            "exercise_id": "relu", "passed": True, "attempts": 1
         })
-        assert r.status_code == 404
-
-    def test_dojo_submit_negative_attempts(self, auth_client, seeded_db):
-        """Negative attempt count — should be rejected or clamped."""
-        r = auth_client.post("/api/dojo/submissions", json={
-            "exercise_id": "ml-sigmoid",
-            "passed": True,
-            "attempts": -999
-        })
-        # Documenting behavior: the system should ideally reject this.
-        if r.status_code == 200:
-            body = r.json()
-            if body.get("recorded"):
-                pass  # Not ideal, but not a crash
-
-    def test_dojo_submit_massive_exercise_id(self, auth_client):
-        """exercise_id with max_length=256 — try 1000 chars."""
-        r = auth_client.post("/api/dojo/submissions", json={
-            "exercise_id": "x" * 1000,
-            "passed": True,
-            "attempts": 1
-        })
-        assert r.status_code == 422, f"1000-char exercise_id not rejected (got {r.status_code})"
+        assert r.status_code in (404, 405)
 
 
 # ---------------------------------------------------------------------------

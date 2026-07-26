@@ -148,3 +148,42 @@ def test_public_view_hides_hidden_and_forward_ref():
     assert view["num_hidden"] == 2 and len(view["sample_cases"]) == 1
     assert "forward_ref" not in view and "cases" not in view
     assert "expected" not in str({k: view[k] for k in view if k != "sample_cases"})
+
+
+# ── competitive I/O mode ────────────────────────────────────────────────────
+IO_SPEC = {
+    "version": 2, "entry_kind": "io",
+    "cases": [
+        {"name": "s", "kind": "sample", "stdin": "2 3\n", "expected_stdout": "5", "explain": "sum"},
+        {"name": "h", "kind": "hidden", "stdin": "10 20\n", "expected_stdout": "30",
+         "feedback": "read the two ints and print their sum"},
+    ],
+}
+IO_OK = "a, b = map(int, input().split())\nprint(a + b)\n"
+
+
+def test_io_correct_program_passes():
+    r = grade(IO_SPEC, IO_OK)
+    assert r["passed"] and r["num_passed"] == 2 and r["total"] == 2
+
+
+def test_io_wrong_program_fails():
+    assert not grade(IO_SPEC, "a, b = map(int, input().split())\nprint(a - b)\n")["passed"]
+
+
+def test_io_normalizes_trailing_whitespace_and_newlines():
+    # program emits extra trailing spaces + blank line; must still match "5"/"30"
+    prog = "a, b = map(int, input().split())\nprint(str(a + b) + '   ')\nprint()\n"
+    assert grade(IO_SPEC, prog)["passed"]
+
+
+def test_io_runtime_error_fails_gracefully():
+    r = grade(IO_SPEC, "raise SystemExit(1)\n")
+    assert not r["passed"] and len(r["cases"]) == 2
+
+
+def test_io_public_view_hides_hidden_expected_stdout():
+    view = public_test_view(IO_SPEC)
+    assert view["num_hidden"] == 1 and len(view["sample_cases"]) == 1
+    assert view["sample_cases"][0]["expected_stdout"] == "5"   # sample is public
+    assert "30" not in str(view)                                # hidden expected never leaks

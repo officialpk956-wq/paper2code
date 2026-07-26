@@ -37,7 +37,7 @@ _MISSING = object()
 
 _RUNNER = """
 
-# ── judge runner (appended by the grader) ──
+# ── judge runner (appended by the grader): runs ALL cases in ONE process ──
 import sys as _p2c_sys, json as _p2c_json
 
 
@@ -57,11 +57,18 @@ def _p2c_ser(o):
     return o
 
 
-_p2c_c = _p2c_json.loads(_p2c_sys.stdin.read())
-_p2c_args = _p2c_c.get("args", [])
-_p2c_kwargs = _p2c_c.get("kwargs", {})
-__CALL_BLOCK__
-_p2c_sys.stdout.write("__SENTINEL__" + _p2c_json.dumps(_p2c_result, default=_p2c_ser))
+_p2c_cases = _p2c_json.loads(_p2c_sys.stdin.read()).get("cases", [])
+_p2c_out = []
+for _p2c_case in _p2c_cases:
+    _p2c_args = _p2c_case.get("args", [])
+    _p2c_kwargs = _p2c_case.get("kwargs", {})
+    try:
+        __CALL_BLOCK__
+        # serialize inside the try so a non-serializable result fails ONLY this case
+        _p2c_out.append({"v": _p2c_json.loads(_p2c_json.dumps(_p2c_result, default=_p2c_ser))})
+    except Exception as _p2c_e:
+        _p2c_out.append({"e": type(_p2c_e).__name__ + ": " + str(_p2c_e)})
+_p2c_sys.stdout.write("__SENTINEL__" + _p2c_json.dumps(_p2c_out, default=_p2c_ser))
 """
 
 
@@ -70,12 +77,14 @@ def _build_runner(spec: dict) -> str:
     if spec.get("entry_kind") == "class":
         init = spec.get("init", {}) or {}
         call = spec.get("call") or "__call__"
-        call_block = (
-            f"_p2c_obj = {entry}(**{init!r})\n"
-            f"_p2c_result = getattr(_p2c_obj, {call!r})(*_p2c_args, **_p2c_kwargs)"
-        )
+        lines = [
+            f"_p2c_obj = {entry}(**{init!r})",
+            f"_p2c_result = getattr(_p2c_obj, {call!r})(*_p2c_args, **_p2c_kwargs)",
+        ]
     else:
-        call_block = f"_p2c_result = {entry}(*_p2c_args, **_p2c_kwargs)"
+        lines = [f"_p2c_result = {entry}(*_p2c_args, **_p2c_kwargs)"]
+    # 8-space indent so the (possibly multi-line) call sits inside the for/try body
+    call_block = "\n        ".join(lines)
     return _RUNNER.replace("__CALL_BLOCK__", call_block).replace("__SENTINEL__", SENTINEL)
 
 
@@ -89,17 +98,16 @@ def grade(test_spec: Any, code: str, cpu_time_ms: int = 10_000, memory_mb: int =
     if not isinstance(test_spec, dict):
         return _err("Problem has no test cases configured.")
 
-    entry = test_spec.get("entry")
     cases = test_spec.get("cases") or []
     checker = test_spec.get("checker", "allclose")
     tol = float(test_spec.get("tolerance", 1e-6))
     forward_ref = test_spec.get("forward_ref")
-    if not entry or not cases:
-        return _err("Problem has no entry point or cases.")
+    if not cases:
+        return _err("Problem has no cases.")
 
     # Catch syntax errors up front (compile doesn't execute) so the client gets a
     # clean compile_error banner instead of N identical runtime failures — and we
-    # skip spawning N subprocesses that would all fail the same way.
+    # skip spawning subprocesses that would all fail the same way.
     try:
         compile(code, "<submission>", "exec")
     except SyntaxError as e:
@@ -108,18 +116,43 @@ def grade(test_spec: Any, code: str, cpu_time_ms: int = 10_000, memory_mb: int =
         out["total"] = len(cases)
         return out
 
-    runner = _build_runner(test_spec)
-    sources = [code + runner for _ in cases]
-    stdins = [json.dumps({"args": c.get("args", []), "kwargs": c.get("kwargs", {})}) for c in cases]
+    # Competitive I/O mode: the whole program runs once per case with that case's
+    # stdin, and stdout is compared. (Each case needs a fresh process, so this
+    # path runs N executions — I/O problems are small.)
+    if test_spec.get("entry_kind") == "io":
+        return _grade_io(cases, code, cpu_time_ms, memory_mb)
 
-    results = run_batch(sources, stdins, cpu_time_ms, memory_mb)
+    entry = test_spec.get("entry")
+    if not entry:
+        return _err("Problem has no entry point.")
+
+    runner = _build_runner(test_spec)
+    n = len(cases)
+    # One execution for ALL cases: 1 sandbox / cold-start instead of N. The runner
+    # loops over the case list and prints one combined result behind the sentinel.
+    batch_src = code + runner
+    batch_stdin = json.dumps(
+        {"cases": [{"args": c.get("args", []), "kwargs": c.get("kwargs", {})} for c in cases]}
+    )
+    # Proportional CPU budget (N cases share one process), capped so a hang can't run away.
+    batch_cpu = min(cpu_time_ms * n, 60_000)
+    r = run_batch([batch_src], [batch_stdin], batch_cpu, memory_mb)[0]
+    items, batch_err = _extract_batch(r)
 
     out_cases: list[dict] = []
     num_passed = 0
-    total_time = 0
-    max_mem = 0
-    for c, r in zip(cases, results):
-        got, run_err = _extract_result(r)
+    for i, c in enumerate(cases):
+        got: Any = _MISSING
+        run_err = batch_err
+        if items is not None and i < len(items):
+            item = items[i]
+            if isinstance(item, dict) and "v" in item:
+                got, run_err = item["v"], None
+            elif isinstance(item, dict) and "e" in item:
+                run_err = item["e"]
+            else:
+                run_err = "malformed case result"
+
         passed = False
         if run_err is None and got is not _MISSING:
             if checker == "grad_check":
@@ -128,12 +161,7 @@ def grade(test_spec: Any, code: str, cpu_time_ms: int = 10_000, memory_mb: int =
                 passed = _run_checker(checker, got, c.get("expected"), tol)
 
         kind = c.get("kind", "hidden")
-        row: dict[str, Any] = {
-            "name": c.get("name"),
-            "kind": kind,
-            "passed": bool(passed),
-            "time_ms": r.get("time_ms"),
-        }
+        row: dict[str, Any] = {"name": c.get("name"), "kind": kind, "passed": bool(passed)}
         if kind == "sample":
             row["got"] = _short(got if got is not _MISSING else (run_err or r.get("stderr")))
             if checker != "grad_check":
@@ -146,18 +174,61 @@ def grade(test_spec: Any, code: str, cpu_time_ms: int = 10_000, memory_mb: int =
 
         if passed:
             num_passed += 1
-        total_time += r.get("time_ms") or 0
-        if r.get("memory_kb"):
-            max_mem = max(max_mem, r["memory_kb"])
         out_cases.append(row)
 
+    return {
+        "passed": num_passed == n and n > 0,
+        "total": n,
+        "num_passed": num_passed,
+        "time_ms": r.get("time_ms"),
+        "max_memory_kb": r.get("memory_kb"),
+        "compile_error": None,
+        "stdout": "",
+        "stderr": "",
+        "cases": out_cases,
+    }
+
+
+def _grade_io(cases: list, code: str, cpu_time_ms: int, memory_mb: int) -> dict:
+    """Grade competitive I/O problems: run the program once per case with that
+    case's stdin, compare normalized stdout to expected_stdout."""
     n = len(cases)
+    sources = [code for _ in cases]
+    stdins = [str(c.get("stdin", "")) for c in cases]
+    results = run_batch(sources, stdins, cpu_time_ms, memory_mb)
+
+    out_cases: list[dict] = []
+    num_passed = 0
+    total_time = 0
+    for c, r in zip(cases, results):
+        exp = _norm_out(c.get("expected_stdout", ""))
+        if r.get("exit_code", 1) != 0:
+            got, passed = None, False
+        else:
+            got = _norm_out(r.get("stdout", ""))
+            passed = got == exp
+
+        kind = c.get("kind", "hidden")
+        row: dict[str, Any] = {"name": c.get("name"), "kind": kind, "passed": bool(passed)}
+        if kind == "sample":
+            row["got"] = _short(got if got is not None else _last_err(r.get("stderr", "")))
+            row["expected"] = _short(exp)
+            if c.get("explain"):
+                row["explain"] = c["explain"]
+        elif not passed and c.get("feedback"):
+            row["feedback"] = c["feedback"]
+
+        if passed:
+            num_passed += 1
+        total_time += r.get("time_ms") or 0
+        out_cases.append(row)
+
     return {
         "passed": num_passed == n and n > 0,
         "total": n,
         "num_passed": num_passed,
         "time_ms": total_time,
-        "max_memory_kb": max_mem or None,
+        "max_memory_kb": None,
         "compile_error": None,
         "stdout": "",
         "stderr": "",
@@ -177,16 +248,19 @@ def public_test_view(test_spec: Any) -> dict:
         for k in ("entry_kind", "entry", "checker", "depth", "statement", "think_prompts")
         if k in test_spec
     }
-    samples = [
-        {
-            "name": c.get("name"),
-            "args": c.get("args"),
-            "expected": c.get("expected"),
-            "explain": c.get("explain"),
-        }
-        for c in test_spec.get("cases", [])
-        if c.get("kind") == "sample"
-    ]
+    samples = []
+    for c in test_spec.get("cases", []):
+        if c.get("kind") != "sample":
+            continue
+        # Samples are fully public — expose whichever contract fields are present.
+        s: dict[str, Any] = {"name": c.get("name"), "explain": c.get("explain")}
+        if test_spec.get("entry_kind") == "io":
+            s["stdin"] = c.get("stdin")
+            s["expected_stdout"] = c.get("expected_stdout")
+        else:
+            s["args"] = c.get("args")
+            s["expected"] = c.get("expected")
+        samples.append(s)
     view["sample_cases"] = samples
     view["num_hidden"] = sum(1 for c in test_spec.get("cases", []) if c.get("kind") != "sample")
     return view
@@ -303,23 +377,33 @@ def _grade_legacy(test_spec: list, code: str, cpu_time_ms: int) -> dict:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _extract_result(r: dict):
+def _extract_batch(r: dict):
+    """Parse one batched stdout into a list of per-case items ({"v":...}|{"e":...}).
+    Returns (items, err); err is set (and items None) if the whole run failed."""
     if r.get("exit_code", 1) != 0:
-        return _MISSING, _last_err(r.get("stderr", "") or "runtime error")
+        return None, _last_err(r.get("stderr", "") or "runtime error")
     stdout = r.get("stdout", "") or ""
     idx = stdout.rfind(SENTINEL)
     if idx == -1:
-        return _MISSING, _last_err(r.get("stderr", "") or "no result emitted")
+        return None, _last_err(r.get("stderr", "") or "no result emitted")
     payload = stdout[idx + len(SENTINEL) :].strip()
     try:
-        return json.loads(payload), None
+        data = json.loads(payload)
+        return (data, None) if isinstance(data, list) else (None, "malformed batch result")
     except Exception as e:
-        return _MISSING, f"could not parse result: {e}"
+        return None, f"could not parse result: {e}"
 
 
 def _last_err(stderr: str) -> str:
     lines = [ln for ln in (stderr or "").strip().splitlines() if ln.strip()]
     return lines[-1] if lines else "error"
+
+
+def _norm_out(s: str) -> str:
+    """Normalize program output for I/O comparison: strip trailing whitespace on
+    each line and drop trailing blank lines (so a stray final newline never fails)."""
+    text = (s or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.split("\n")).rstrip("\n")
 
 
 def _short(x: Any, limit: int = 240) -> str:
