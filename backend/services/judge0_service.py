@@ -75,8 +75,13 @@ def _run_local(sources: list[str], stdins: list[str], cpu_time_ms: int) -> list[
             )
         except subprocess.TimeoutExpired:
             out.append(
-                {"stdout": "", "stderr": "Time limit exceeded", "exit_code": 124,
-                 "time_ms": cpu_time_ms, "memory_kb": None}
+                {
+                    "stdout": "",
+                    "stderr": "Time limit exceeded",
+                    "exit_code": 124,
+                    "time_ms": cpu_time_ms,
+                    "memory_kb": None,
+                }
             )
         except Exception as e:  # pragma: no cover - defensive
             out.append(
@@ -118,7 +123,9 @@ def _run_e2b(sources: list[str], stdins: list[str], cpu_time_ms: int) -> list[di
 _JUDGE0_ACCEPTED = 3
 
 
-def _run_judge0(sources: list[str], stdins: list[str], cpu_time_ms: int, memory_mb: int) -> list[dict]:
+def _run_judge0(
+    sources: list[str], stdins: list[str], cpu_time_ms: int, memory_mb: int
+) -> list[dict]:
     import httpx
 
     base = os.getenv("JUDGE0_URL", "").rstrip("/")
@@ -158,7 +165,12 @@ def _run_judge0(sources: list[str], stdins: list[str], cpu_time_ms: int, memory_
                 )
             except Exception as e:
                 out.append(
-                    {"stdout": "", "stderr": f"judge0 error: {e}", "exit_code": 1,
-                     "time_ms": 0, "memory_kb": None}
+                    {
+                        "stdout": "",
+                        "stderr": f"judge0 error: {e}",
+                        "exit_code": 1,
+                        "time_ms": 0,
+                        "memory_kb": None,
+                    }
                 )
     return out

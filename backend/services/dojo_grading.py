@@ -35,7 +35,7 @@ from backend.services.judge0_service import run_batch
 SENTINEL = "__P2C_RESULT__"
 _MISSING = object()
 
-_RUNNER = '''
+_RUNNER = """
 
 # ── judge runner (appended by the grader) ──
 import sys as _p2c_sys, json as _p2c_json
@@ -62,7 +62,7 @@ _p2c_args = _p2c_c.get("args", [])
 _p2c_kwargs = _p2c_c.get("kwargs", {})
 __CALL_BLOCK__
 _p2c_sys.stdout.write("__SENTINEL__" + _p2c_json.dumps(_p2c_result, default=_p2c_ser))
-'''
+"""
 
 
 def _build_runner(spec: dict) -> str:
@@ -110,9 +110,7 @@ def grade(test_spec: Any, code: str, cpu_time_ms: int = 10_000, memory_mb: int =
 
     runner = _build_runner(test_spec)
     sources = [code + runner for _ in cases]
-    stdins = [
-        json.dumps({"args": c.get("args", []), "kwargs": c.get("kwargs", {})}) for c in cases
-    ]
+    stdins = [json.dumps({"args": c.get("args", []), "kwargs": c.get("kwargs", {})}) for c in cases]
 
     results = run_batch(sources, stdins, cpu_time_ms, memory_mb)
 
@@ -180,8 +178,12 @@ def public_test_view(test_spec: Any) -> dict:
         if k in test_spec
     }
     samples = [
-        {"name": c.get("name"), "args": c.get("args"), "expected": c.get("expected"),
-         "explain": c.get("explain")}
+        {
+            "name": c.get("name"),
+            "args": c.get("args"),
+            "expected": c.get("expected"),
+            "explain": c.get("explain"),
+        }
         for c in test_spec.get("cases", [])
         if c.get("kind") == "sample"
     ]
@@ -288,8 +290,12 @@ def _grade_legacy(test_spec: list, code: str, cpu_time_ms: int) -> dict:
         "stdout": r.get("stdout", ""),
         "stderr": r.get("stderr", ""),
         "cases": [
-            {"name": "tests", "kind": "sample", "passed": passed,
-             "got": _short(r.get("stdout") or r.get("stderr"))}
+            {
+                "name": "tests",
+                "kind": "sample",
+                "passed": passed,
+                "got": _short(r.get("stdout") or r.get("stderr")),
+            }
         ],
     }
 
@@ -304,7 +310,7 @@ def _extract_result(r: dict):
     idx = stdout.rfind(SENTINEL)
     if idx == -1:
         return _MISSING, _last_err(r.get("stderr", "") or "no result emitted")
-    payload = stdout[idx + len(SENTINEL):].strip()
+    payload = stdout[idx + len(SENTINEL) :].strip()
     try:
         return json.loads(payload), None
     except Exception as e:
