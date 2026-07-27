@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Share2, Check, Loader2 } from 'lucide-react';
-import { formatParams, saveGraph, fetchGraph } from '@/lib/model-viz-api';
+import { formatParams, formatFlops, saveGraph, fetchGraph } from '@/lib/model-viz-api';
 import type { ParsedGraph, ParsedNode } from '@/lib/model-viz-api';
 import UploadZone from '@/components/model-viz/UploadZone';
 import GraphCanvas from '@/components/model-viz/GraphCanvas';
@@ -167,6 +167,9 @@ function ModelVizContent() {
 
         <StatBadge label="Layers" value={graph.meta.total_nodes} />
         <StatBadge label="Params" value={formatParams(graph.meta.total_params)} />
+        {!!graph.meta.total_flops && graph.meta.total_flops > 0 && (
+          <StatBadge label="FLOPs" value={formatFlops(graph.meta.total_flops)} />
+        )}
         {graph.meta.opset_version > 0 && (
           <StatBadge label="Opset" value={`v${graph.meta.opset_version}`} />
         )}

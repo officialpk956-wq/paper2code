@@ -36,6 +36,32 @@ async def _read_upload(file: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
+# ── GET /api/model/health  (dependency availability) ──────────────────────────
+
+
+@router.get("/health")
+def model_viz_health():
+    """Report whether the heavy parsers' dependencies are importable on THIS
+    server — so you can confirm ONNX/PyTorch support in prod without uploading a
+    file (audit #1: onnx is a big package and a build may silently skip it)."""
+
+    def _check(mod: str) -> dict:
+        try:
+            m = __import__(mod)
+            return {"available": True, "version": getattr(m, "__version__", None)}
+        except Exception as e:  # ImportError or a broken native build
+            return {"available": False, "error": str(e)[:160]}
+
+    onnx = _check("onnx")
+    e2b = _check("e2b_code_interpreter")
+    return {
+        "onnx": onnx,  # required by POST /parse
+        "e2b": e2b,  # required by POST /parse-pytorch
+        "onnx_parse_ready": onnx["available"],
+        "pytorch_parse_ready": e2b["available"],
+    }
+
+
 # ── POST /api/model/parse  (ONNX) ─────────────────────────────────────────────
 
 

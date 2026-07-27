@@ -1,5 +1,7 @@
 // ── Types matching the backend onnx_parser / pytorch_parser response ───────────
 
+export type Severity = 'low' | 'medium' | 'high' | 'critical';
+
 export type ParsedNode = {
   id: string;
   op_type: string;
@@ -11,6 +13,11 @@ export type ParsedNode = {
   primary_out_shape: number[];
   params: number;
   attrs: Record<string, unknown>;
+  // per-node compute cost (added by the backend estimator; optional so older
+  // saved graphs without them still render)
+  flops?: number;
+  memory_mb?: number;
+  severity?: Severity;
 };
 
 export type ParsedEdge = {
@@ -24,6 +31,7 @@ export type ParsedEdge = {
 export type GraphMeta = {
   total_nodes: number;
   total_params: number;
+  total_flops?: number;
   total_edges: number;
   graph_inputs: Record<string, number[]>;
   graph_outputs: Record<string, number[]>;
@@ -110,6 +118,29 @@ const OP_COLOR_MAP: Record<string, string> = {
 
 export function getOpColor(opType: string): string {
   return OP_COLOR_MAP[opType] ?? '#64748b';
+}
+
+// ── Compute-cost helpers (FLOPs / memory / severity) ────────────────────────
+
+const SEVERITY_COLOR: Record<Severity, string> = {
+  low: '#525252',
+  medium: '#eab308',
+  high: '#f97316',
+  critical: '#ef4444',
+};
+
+export function severityColor(s?: Severity): string {
+  return SEVERITY_COLOR[s ?? 'low'];
+}
+
+/** Human-readable FLOPs (empty string for zero/undefined). */
+export function formatFlops(n?: number): string {
+  if (!n || n <= 0) return '';
+  if (n >= 1e12) return `${(n / 1e12).toFixed(1)} TFLOPs`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GFLOPs`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MFLOPs`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)} KFLOPs`;
+  return `${n} FLOPs`;
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────

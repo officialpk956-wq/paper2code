@@ -1,7 +1,7 @@
 'use client';
 
 import { X } from 'lucide-react';
-import { getOpColor } from '@/lib/model-viz-api';
+import { getOpColor, formatFlops, severityColor } from '@/lib/model-viz-api';
 import type { ParsedNode } from '@/lib/model-viz-api';
 
 type Props = {
@@ -106,6 +106,33 @@ export default function InspectPanel({ node, onClose }: Props) {
         {node.params > 0 && (
           <Section title="Parameters">
             <Mono>{node.params.toLocaleString()}</Mono>
+          </Section>
+        )}
+
+        {/* Compute cost — estimated FLOPs + activation memory */}
+        {(node.flops !== undefined || node.memory_mb !== undefined) && (
+          <Section title="Compute Cost (est.)">
+            {!!node.flops && node.flops > 0 && (
+              <Row>
+                <span style={{ fontSize: 11, color: '#737373' }}>FLOPs</span>
+                <Mono style={{ color: severityColor(node.severity) }}>{formatFlops(node.flops)}</Mono>
+              </Row>
+            )}
+            {node.memory_mb !== undefined && (
+              <Row>
+                <span style={{ fontSize: 11, color: '#737373' }}>Activation</span>
+                <Mono>{node.memory_mb.toFixed(3)} MB</Mono>
+              </Row>
+            )}
+            {node.severity && (
+              <Row>
+                <span style={{ fontSize: 11, color: '#737373' }}>Severity</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: severityColor(node.severity) }} />
+                  <Mono style={{ color: severityColor(node.severity) }}>{node.severity}</Mono>
+                </span>
+              </Row>
+            )}
           </Section>
         )}
 

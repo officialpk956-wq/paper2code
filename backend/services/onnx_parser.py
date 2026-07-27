@@ -2,6 +2,8 @@ import io
 import logging
 from typing import Any
 
+from backend.services.onnx_flops import estimate_node_cost
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +113,12 @@ def parse_onnx(file_bytes: bytes) -> dict:
                 primary_out_shape = shape_map[out]
                 break
 
+        # Per-node compute cost (FLOPs) + activation memory, from the shapes above.
+        weight_dims = [init_dims[inp] for inp in node.input if inp in init_dims]
+        cost = estimate_node_cost(
+            node.op_type, list(input_shapes.values()), primary_out_shape, weight_dims, attrs
+        )
+
         parsed_nodes.append(
             {
                 "id": node_id,
@@ -123,6 +131,9 @@ def parse_onnx(file_bytes: bytes) -> dict:
                 "primary_out_shape": primary_out_shape,
                 "params": total_params,
                 "attrs": attrs,
+                "flops": cost["flops"],
+                "memory_mb": cost["memory_mb"],
+                "severity": cost["severity"],
             }
         )
 
@@ -156,6 +167,7 @@ def parse_onnx(file_bytes: bytes) -> dict:
 
     # ── meta ──────────────────────────────────────────────────────────────────
     total_params = sum(n["params"] for n in parsed_nodes)
+    total_flops = sum(n["flops"] for n in parsed_nodes)
     graph_inputs = {
         inp.name: _shape_from_type_proto(inp.type)
         for inp in graph.input
@@ -171,6 +183,7 @@ def parse_onnx(file_bytes: bytes) -> dict:
         "meta": {
             "total_nodes": len(parsed_nodes),
             "total_params": total_params,
+            "total_flops": total_flops,
             "total_edges": len(edges),
             "graph_inputs": graph_inputs,
             "graph_outputs": graph_outputs,
