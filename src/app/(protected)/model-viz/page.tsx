@@ -19,6 +19,21 @@ function ModelVizContent() {
   const [modelName, setModelName] = useState('');
   const [modelFormat, setModelFormat] = useState<'onnx' | 'pytorch'>('onnx');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [grouping, setGrouping] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((id: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const toggleGrouping = useCallback(() => {
+    setGrouping((g) => !g);
+    setExpandedGroups(new Set()); // reset expansions when toggling the mode
+  }, []);
 
   // Save / share state
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -174,6 +189,26 @@ function ModelVizContent() {
           <StatBadge label="Opset" value={`v${graph.meta.opset_version}`} />
         )}
 
+        {/* Collapse repeated blocks — only offered when the graph has motifs */}
+        {!!graph.groups?.length && (
+          <button
+            onClick={toggleGrouping}
+            title={`${graph.meta.grouped_nodes ?? 0} nodes across ${graph.meta.motif_count ?? 0} repeated block type(s)`}
+            style={{
+              fontSize: 11,
+              color: grouping ? '#0a0a0a' : '#a3a3a3',
+              background: grouping ? '#A78BFA' : 'none',
+              border: `1px solid ${grouping ? '#A78BFA' : '#2a2a2a'}`,
+              padding: '4px 12px',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            {grouping ? 'Ungroup' : `Group blocks (${graph.groups.length})`}
+          </button>
+        )}
+
         <div style={{ flex: 1 }} />
 
         {/* Share / save button */}
@@ -204,6 +239,10 @@ function ModelVizContent() {
             edges={graph.edges}
             selectedNodeId={selectedNodeId}
             onNodeClick={setSelectedNodeId}
+            groups={graph.groups ?? []}
+            grouping={grouping}
+            expandedGroups={expandedGroups}
+            onToggleGroup={toggleGroup}
           />
         </div>
 

@@ -28,11 +28,28 @@ export type ParsedEdge = {
   tensor: string;
 };
 
+export type MotifGroup = {
+  id: string;
+  signature: string;
+  label: string;
+  node_ids: string[];
+  member_ops: string[];
+  repeat_index: number;
+  repeat_count: number;
+  flops: number;
+  params: number;
+  memory_mb: number;
+  severity: Severity;
+};
+
 export type GraphMeta = {
   total_nodes: number;
   total_params: number;
   total_flops?: number;
   total_edges: number;
+  motif_count?: number;
+  grouped_nodes?: number;
+  motifs?: { signature: string; count: number }[];
   graph_inputs: Record<string, number[]>;
   graph_outputs: Record<string, number[]>;
   ir_version: number;
@@ -43,6 +60,7 @@ export type GraphMeta = {
 export type ParsedGraph = {
   nodes: ParsedNode[];
   edges: ParsedEdge[];
+  groups?: MotifGroup[];
   meta: GraphMeta;
 };
 
@@ -141,6 +159,61 @@ export function formatFlops(n?: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MFLOPs`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(0)} KFLOPs`;
   return `${n} FLOPs`;
+}
+
+// ── Motif collapse (repeated-block super-nodes) ─────────────────────────────
+
+export type DisplayNode =
+  | { kind: 'node'; id: string; node: ParsedNode }
+  | { kind: 'group'; id: string; group: MotifGroup };
+
+export type DisplayEdge = { id: string; source: string; target: string };
+
+/**
+ * Collapse each repeated-block group (unless expanded) into a single super-node,
+ * remapping edges through it. Pure — the same inputs always give the same graph,
+ * so it is unit-testable and safe to memoize. Preserves node order (a group is
+ * emitted at the position of its first member).
+ */
+export function collapseGraph(
+  nodes: ParsedNode[],
+  edges: ParsedEdge[],
+  groups: MotifGroup[],
+  expandedGroupIds: Set<string>,
+): { nodes: DisplayNode[]; edges: DisplayEdge[] } {
+  const collapsed = groups.filter((g) => !expandedGroupIds.has(g.id));
+  const groupById = new Map(collapsed.map((g) => [g.id, g]));
+  const nodeToGroup = new Map<string, string>();
+  for (const g of collapsed) for (const nid of g.node_ids) nodeToGroup.set(nid, g.id);
+
+  const displayId = (nid: string) => nodeToGroup.get(nid) ?? nid;
+
+  const dNodes: DisplayNode[] = [];
+  const emitted = new Set<string>();
+  for (const n of nodes) {
+    const gid = nodeToGroup.get(n.id);
+    if (gid) {
+      if (!emitted.has(gid)) {
+        emitted.add(gid);
+        dNodes.push({ kind: 'group', id: gid, group: groupById.get(gid)! });
+      }
+    } else {
+      dNodes.push({ kind: 'node', id: n.id, node: n });
+    }
+  }
+
+  const seen = new Set<string>();
+  const dEdges: DisplayEdge[] = [];
+  for (const e of edges) {
+    const s = displayId(e.source);
+    const t = displayId(e.target);
+    if (s === t) continue; // edge internal to one collapsed group
+    const key = `${s}->${t}`;
+    if (seen.has(key)) continue; // many member edges fold into one super-edge
+    seen.add(key);
+    dEdges.push({ id: `de_${key}`, source: s, target: t });
+  }
+  return { nodes: dNodes, edges: dEdges };
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────

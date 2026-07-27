@@ -14,11 +14,12 @@ import '@xyflow/react/dist/style.css';
 import * as dagre from '@dagrejs/dagre';
 
 import NodeCard from './NodeCard';
-import { getOpColor } from '@/lib/model-viz-api';
-import type { ParsedNode, ParsedEdge } from '@/lib/model-viz-api';
+import GroupNode from './GroupNode';
+import { getOpColor, collapseGraph, severityColor } from '@/lib/model-viz-api';
+import type { ParsedNode, ParsedEdge, MotifGroup } from '@/lib/model-viz-api';
 
 // Stable reference — must be outside component or React Flow re-mounts on every render
-const NODE_TYPES = { modelNode: NodeCard };
+const NODE_TYPES = { modelNode: NodeCard, groupNode: GroupNode };
 
 const NODE_W = 200;
 const NODE_H = 72;
@@ -55,21 +56,42 @@ type Props = {
   edges: ParsedEdge[];
   selectedNodeId: string | null;
   onNodeClick: (nodeId: string) => void;
+  groups?: MotifGroup[];
+  grouping?: boolean;
+  expandedGroups?: Set<string>;
+  onToggleGroup?: (groupId: string) => void;
 };
 
-export default function GraphCanvas({ nodes, edges, selectedNodeId, onNodeClick }: Props) {
-  // Dagre layout — only recomputes when the graph topology changes, not on selection
+export default function GraphCanvas({
+  nodes,
+  edges,
+  selectedNodeId,
+  onNodeClick,
+  groups = [],
+  grouping = false,
+  expandedGroups,
+  onToggleGroup,
+}: Props) {
+  // Collapse repeated blocks into super-nodes when grouping is on (pure, memoized)
+  const display = useMemo(() => {
+    if (grouping && groups.length) {
+      return collapseGraph(nodes, edges, groups, expandedGroups ?? new Set());
+    }
+    return {
+      nodes: nodes.map((n) => ({ kind: 'node' as const, id: n.id, node: n })),
+      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    };
+  }, [nodes, edges, groups, grouping, expandedGroups]);
+
+  // Dagre layout — only recomputes when the (possibly collapsed) topology changes
   const laidOutNodes = useMemo<Node[]>(() => {
-    const raw: Node[] = nodes.map((n) => ({
-      id: n.id,
-      type: 'modelNode',
-      position: { x: 0, y: 0 },
-      data: n,
-      draggable: false,
-      selectable: true,
-    }));
-    return applyDagreLayout(raw, edges.map((e) => ({ id: e.id, source: e.source, target: e.target })));
-  }, [nodes, edges]);
+    const raw: Node[] = display.nodes.map((dn) =>
+      dn.kind === 'group'
+        ? { id: dn.id, type: 'groupNode', position: { x: 0, y: 0 }, data: { group: dn.group }, draggable: false, selectable: true }
+        : { id: dn.id, type: 'modelNode', position: { x: 0, y: 0 }, data: dn.node, draggable: false, selectable: true },
+    );
+    return applyDagreLayout(raw, display.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })));
+  }, [display]);
 
   // Selection is a cheap overlay — does not re-run layout
   const rfNodes = useMemo<Node[]>(
@@ -77,15 +99,18 @@ export default function GraphCanvas({ nodes, edges, selectedNodeId, onNodeClick 
     [laidOutNodes, selectedNodeId],
   );
 
-  // Convert ParsedEdge[] → React Flow Edge[] (style comes from defaultEdgeOptions)
   const rfEdges = useMemo<Edge[]>(
-    () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    [edges],
+    () => display.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    [display],
   );
 
   const handleNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => onNodeClick(node.id),
-    [onNodeClick],
+    (_: React.MouseEvent, node: Node) => {
+      // clicking a collapsed super-node expands it; clicking a real node selects it
+      if (node.type === 'groupNode') onToggleGroup?.(node.id);
+      else onNodeClick(node.id);
+    },
+    [onNodeClick, onToggleGroup],
   );
 
   return (
@@ -125,7 +150,10 @@ export default function GraphCanvas({ nodes, edges, selectedNodeId, onNodeClick 
             border: '1px solid #2a2a2a',
             borderRadius: 8,
           }}
-          nodeColor={(n) => getOpColor((n.data as ParsedNode)?.op_type ?? '')}
+          nodeColor={(n) => {
+            const d = n.data as { group?: MotifGroup } & Partial<ParsedNode>;
+            return d?.group ? severityColor(d.group.severity) : getOpColor(d?.op_type ?? '');
+          }}
           maskColor="rgba(0,0,0,0.65)"
           pannable
           zoomable

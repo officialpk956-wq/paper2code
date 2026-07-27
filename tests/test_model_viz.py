@@ -6,8 +6,20 @@ where the (heavy) onnx package isn't installed.
 import pytest
 
 from backend.services.onnx_flops import estimate_node_cost
+from backend.services.onnx_motifs import detect_motifs, motif_summary
 
 _MB = 1024 * 1024
+
+
+def _n(i, op, **kw):
+    return {
+        "id": f"node_{i}",
+        "op_type": op,
+        "flops": kw.get("flops", 0),
+        "params": kw.get("params", 0),
+        "memory_mb": kw.get("memory_mb", 0.0),
+        "severity": kw.get("severity", "low"),
+    }
 
 
 # ── pure FLOPs estimator ────────────────────────────────────────────────────
@@ -54,6 +66,33 @@ def test_severity_bands():
     assert big["severity"] in ("high", "critical")
 
 
+# ── motif (repeated-block) detection ────────────────────────────────────────
+def test_detect_motifs_groups_repeated_blocks():
+    ops = ["Gemm"] + ["Conv", "BatchNormalization", "Relu"] * 4 + ["Softmax"]
+    nodes = [_n(i, op, flops=10, params=5) for i, op in enumerate(ops)]
+    groups = detect_motifs(nodes)
+    assert len(groups) == 4  # 4 occurrences of the Conv→BN→Relu block
+    assert all(g["signature"] == "Conv → BatchNormalization → Relu" for g in groups)
+    assert [g["repeat_index"] for g in groups] == [0, 1, 2, 3]
+    assert groups[0]["node_ids"] == ["node_1", "node_2", "node_3"]
+    assert groups[0]["flops"] == 30 and groups[0]["params"] == 15
+    s = motif_summary(groups)
+    assert s["motif_count"] == 1 and s["grouped_nodes"] == 12
+    assert s["motifs"][0] == {"signature": "Conv → BatchNormalization → Relu", "count": 4}
+
+
+def test_detect_motifs_prefers_larger_coverage():
+    # [A,B] repeats 3x -> one motif of period 2, 3 groups
+    nodes = [_n(i, op) for i, op in enumerate(["A", "B", "A", "B", "A", "B"])]
+    groups = detect_motifs(nodes)
+    assert len(groups) == 3 and all(g["member_ops"] == ["A", "B"] for g in groups)
+
+
+def test_detect_motifs_no_false_positive_without_repeats():
+    nodes = [_n(i, op) for i, op in enumerate(["Conv", "Relu", "Gemm", "Softmax"])]
+    assert detect_motifs(nodes) == []
+
+
 # ── health endpoint ─────────────────────────────────────────────────────────
 def test_model_viz_health_reports_dependency_availability(client):
     r = client.get("/api/model/health")
@@ -89,3 +128,6 @@ def test_parse_onnx_attaches_cost_to_nodes():
     assert n["severity"] == "low"
     assert "memory_mb" in n
     assert res["meta"]["total_flops"] == n["flops"]
+    # groups key is always present (empty for a single-node graph)
+    assert res["groups"] == []
+    assert res["meta"]["motif_count"] == 0

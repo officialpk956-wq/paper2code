@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from backend.services.onnx_flops import estimate_node_cost
+from backend.services.onnx_motifs import detect_motifs, motif_summary
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +178,23 @@ def parse_onnx(file_bytes: bytes) -> dict:
 
     opset = model.opset_import[0].version if model.opset_import else 0
 
+    # Repeated-block motifs so the client can collapse a big model into a handful
+    # of expandable super-nodes.
+    groups = detect_motifs(parsed_nodes)
+    summary = motif_summary(groups)
+
     return {
         "nodes": parsed_nodes,
         "edges": edges,
+        "groups": groups,
         "meta": {
             "total_nodes": len(parsed_nodes),
             "total_params": total_params,
             "total_flops": total_flops,
             "total_edges": len(edges),
+            "motif_count": summary["motif_count"],
+            "grouped_nodes": summary["grouped_nodes"],
+            "motifs": summary["motifs"],
             "graph_inputs": graph_inputs,
             "graph_outputs": graph_outputs,
             "ir_version": model.ir_version,
