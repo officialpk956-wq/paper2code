@@ -51,17 +51,27 @@ def test_analytics_dashboard_no_crash(client, db_session):
         headers={**_auth(token), "X-Learner-ID": "1"})
     assert resp.status_code != 500
 
-def test_jwt_weak_key_raises_in_production(monkeypatch):
+def test_jwt_falls_back_to_secret_key_when_ring_missing_or_invalid(monkeypatch):
+    # A missing/malformed JWT_KEY_RING must NOT brick startup — it falls back to
+    # the strong SECRET_KEY so the service still boots.
     import backend.modules.security.jwt_rotation as mod
-    original = mod.JWT_KEY_RING_RAW
-    mod.JWT_KEY_RING_RAW = None
+
     monkeypatch.setenv("ENVIRONMENT", "production")
-    try:
-        with pytest.raises(RuntimeError, match="JWT_KEY_RING"):
-            mod.get_key_ring()
-    finally:
-        mod.JWT_KEY_RING_RAW = original
-        monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "s" * 64)
+    monkeypatch.setenv("JWT_KEY_RING", "not-valid-json")  # exactly the prod misconfig
+    assert mod.get_key_ring() == {mod.JWT_ACTIVE_KEY_ID: "s" * 64}
+    monkeypatch.delenv("JWT_KEY_RING", raising=False)
+    assert mod.get_key_ring() == {mod.JWT_ACTIVE_KEY_ID: "s" * 64}
+
+
+def test_jwt_raises_in_production_only_when_no_key_at_all(monkeypatch):
+    import backend.modules.security.jwt_rotation as mod
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("JWT_KEY_RING", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="No JWT signing key"):
+        mod.get_key_ring()
 
 def test_rate_limit_not_bypassed_by_pytest():
     import sys
