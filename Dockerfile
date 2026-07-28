@@ -1,6 +1,11 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements.txt .
+# Render has no GPU. Install the CPU-only PyTorch wheel (~190 MB) explicitly first;
+# the default CUDA build (~2 GB, pulled transitively by sentence-transformers) is
+# what breaks the build (BrokenPipe / OOM on `pip install`). torch is then already
+# satisfied for sentence-transformers, block-viz and labs.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN addgroup --system --gid 1001 appgroup && \
