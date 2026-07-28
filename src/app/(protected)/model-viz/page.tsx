@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useMemo, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Share2, Check, Loader2 } from 'lucide-react';
-import { formatParams, formatFlops, saveGraph, fetchGraph } from '@/lib/model-viz-api';
+import { Share2, Check, Loader2, Search } from 'lucide-react';
+import { formatParams, formatFlops, saveGraph, fetchGraph, matchNodes, dataPath } from '@/lib/model-viz-api';
 import type { ParsedGraph, ParsedNode } from '@/lib/model-viz-api';
 import UploadZone from '@/components/model-viz/UploadZone';
 import GraphCanvas from '@/components/model-viz/GraphCanvas';
@@ -21,6 +21,19 @@ function ModelVizContent() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+
+  // Highlight set: search matches take priority; else the selected node's data
+  // path (its ancestors + descendants); else null (nothing dimmed).
+  const searchMatches = useMemo(
+    () => (graph && search.trim() ? matchNodes(graph.nodes, search) : null),
+    [graph, search],
+  );
+  const highlightIds = useMemo<Set<string> | null>(() => {
+    if (searchMatches) return searchMatches;
+    if (selectedNodeId && graph) return dataPath(graph.edges, selectedNodeId);
+    return null;
+  }, [searchMatches, selectedNodeId, graph]);
 
   const toggleGroup = useCallback((id: string) => {
     setExpandedGroups((prev) => {
@@ -189,6 +202,22 @@ function ModelVizContent() {
           <StatBadge label="Opset" value={`v${graph.meta.opset_version}`} />
         )}
 
+        {/* Node search — highlights matches, dims the rest */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#111', border: '1px solid #2a2a2a', borderRadius: 6, padding: '3px 8px' }}>
+          <Search size={12} style={{ color: '#525252', flexShrink: 0 }} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search layers…"
+            style={{ background: 'none', border: 'none', outline: 'none', color: '#e5e5e5', fontSize: 11, width: 120 }}
+          />
+          {searchMatches && (
+            <span style={{ fontSize: 10, color: searchMatches.size ? '#A78BFA' : '#737373', flexShrink: 0 }}>
+              {searchMatches.size}
+            </span>
+          )}
+        </div>
+
         {/* Collapse repeated blocks — only offered when the graph has motifs */}
         {!!graph.groups?.length && (
           <button
@@ -243,6 +272,7 @@ function ModelVizContent() {
             grouping={grouping}
             expandedGroups={expandedGroups}
             onToggleGroup={toggleGroup}
+            highlightIds={highlightIds}
           />
         </div>
 

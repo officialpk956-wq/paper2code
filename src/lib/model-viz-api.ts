@@ -216,6 +216,49 @@ export function collapseGraph(
   return { nodes: dNodes, edges: dEdges };
 }
 
+// ── Search + data-path highlighting ─────────────────────────────────────────
+
+/** Node ids whose op_type or label contains `query` (case-insensitive). Empty
+ *  query → empty set (caller treats "no highlight" as "show everything"). */
+export function matchNodes(nodes: ParsedNode[], query: string): Set<string> {
+  const q = query.trim().toLowerCase();
+  if (!q) return new Set();
+  const hits = new Set<string>();
+  for (const n of nodes) {
+    if (n.op_type.toLowerCase().includes(q) || (n.label ?? '').toLowerCase().includes(q)) {
+      hits.add(n.id);
+    }
+  }
+  return hits;
+}
+
+/** The data path through `nodeId`: the node itself plus every ancestor (upstream)
+ *  and every descendant (downstream), via BFS over the directed edges. */
+export function dataPath(edges: { source: string; target: string }[], nodeId: string): Set<string> {
+  const succ = new Map<string, string[]>();
+  const pred = new Map<string, string[]>();
+  for (const e of edges) {
+    (succ.get(e.source) ?? succ.set(e.source, []).get(e.source)!).push(e.target);
+    (pred.get(e.target) ?? pred.set(e.target, []).get(e.target)!).push(e.source);
+  }
+  const path = new Set<string>([nodeId]);
+  const walk = (adj: Map<string, string[]>) => {
+    const stack = [nodeId];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const nxt of adj.get(cur) ?? []) {
+        if (!path.has(nxt)) {
+          path.add(nxt);
+          stack.push(nxt);
+        }
+      }
+    }
+  };
+  walk(succ); // descendants
+  walk(pred); // ancestors
+  return path;
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 const BASE =

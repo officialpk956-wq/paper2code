@@ -60,6 +60,8 @@ type Props = {
   grouping?: boolean;
   expandedGroups?: Set<string>;
   onToggleGroup?: (groupId: string) => void;
+  // when set, nodes NOT in this set (of ORIGINAL node ids) are dimmed; null = no dimming
+  highlightIds?: Set<string> | null;
 };
 
 export default function GraphCanvas({
@@ -71,6 +73,7 @@ export default function GraphCanvas({
   grouping = false,
   expandedGroups,
   onToggleGroup,
+  highlightIds = null,
 }: Props) {
   // Collapse repeated blocks into super-nodes when grouping is on (pure, memoized)
   const display = useMemo(() => {
@@ -93,15 +96,37 @@ export default function GraphCanvas({
     return applyDagreLayout(raw, display.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })));
   }, [display]);
 
-  // Selection is a cheap overlay — does not re-run layout
+  // Which DISPLAY ids are "active" (a group is active if any member is). null = all.
+  const activeIds = useMemo<Set<string> | null>(() => {
+    if (!highlightIds) return null;
+    const active = new Set<string>();
+    for (const dn of display.nodes) {
+      const on = dn.kind === 'group' ? dn.group.node_ids.some((id) => highlightIds.has(id)) : highlightIds.has(dn.id);
+      if (on) active.add(dn.id);
+    }
+    return active;
+  }, [display, highlightIds]);
+
+  // Selection + highlight dimming are cheap overlays — they do not re-run layout
   const rfNodes = useMemo<Node[]>(
-    () => laidOutNodes.map((n) => ({ ...n, selected: n.id === selectedNodeId })),
-    [laidOutNodes, selectedNodeId],
+    () =>
+      laidOutNodes.map((n) => ({
+        ...n,
+        selected: n.id === selectedNodeId,
+        style: { ...(n.style ?? {}), opacity: activeIds && !activeIds.has(n.id) ? 0.18 : 1 },
+      })),
+    [laidOutNodes, selectedNodeId, activeIds],
   );
 
   const rfEdges = useMemo<Edge[]>(
-    () => display.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    [display],
+    () =>
+      display.edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        style: activeIds && !(activeIds.has(e.source) && activeIds.has(e.target)) ? { opacity: 0.1 } : undefined,
+      })),
+    [display, activeIds],
   );
 
   const handleNodeClick = useCallback(
