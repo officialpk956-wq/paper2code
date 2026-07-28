@@ -75,6 +75,50 @@ validate_production_security_config()
 
 # create_all is idempotent — safe to run on every startup (no Alembic configured)
 Base.metadata.create_all(bind=engine)
+
+
+def _heal_missing_columns() -> None:
+    """create_all() creates missing TABLES but never ALTERs existing ones. With no
+    Alembic-on-deploy, a column added to an existing model never reaches an
+    already-provisioned DB → 'column does not exist' 500s at runtime. Heal it:
+    ADD COLUMN (nullable, idempotent, best-effort) any model column the live table
+    is missing. Never drops or alters existing columns."""
+    from sqlalchemy import inspect as _inspect
+    from sqlalchemy import text as _text
+
+    try:
+        insp = _inspect(engine)
+        existing = set(insp.get_table_names())
+    except Exception as e:  # DB unreachable — let the normal path surface it
+        logger.warning("schema heal skipped (inspect failed): %s", e)
+        return
+
+    prep = engine.dialect.identifier_preparer
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing:
+            continue  # create_all already made this brand-new table in full
+        try:
+            db_cols = {c["name"] for c in insp.get_columns(table.name)}
+        except Exception:
+            continue
+        for col in table.columns:
+            if col.name in db_cols:
+                continue
+            try:
+                ddl = col.type.compile(dialect=engine.dialect)
+                stmt = (
+                    f"ALTER TABLE {prep.quote(table.name)} "
+                    f"ADD COLUMN {prep.quote(col.name)} {ddl}"  # nullable — safe on populated tables
+                )
+                with engine.begin() as conn:
+                    conn.execute(_text(stmt))
+                logger.warning("schema heal: added missing column %s.%s (%s)", table.name, col.name, ddl)
+            except Exception as e:
+                logger.error("schema heal: could not add %s.%s: %s", table.name, col.name, e)
+
+
+_heal_missing_columns()
+
 # Seed achievement catalogue (idempotent)
 try:
     from backend.database import SessionLocal as _SL
