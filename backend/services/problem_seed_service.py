@@ -62,12 +62,20 @@ def seed_dojo_problems(db) -> int:
             db.add(row)
             changed += 1
         else:
+            # Backfill EVERY seed-owned field on existing rows — the update branch
+            # previously skipped slug/reference_solution, so rows first seeded
+            # before those existed kept stale values (broke /related lookups).
+            row.slug = e["slug"]
             row.title = e["title"]
             row.category = e.get("category")
             row.difficulty = e.get("difficulty")
+            row.estimated_time = e.get("estimated_time")
+            row.tags = e.get("tags", [])
             row.description = e.get("description", "")
             row.python_template = e.get("python_template", "")
             row.test_cases = e.get("test_cases", [])
+            row.reference_solution = e.get("reference_solution")
+            row.memory_limit_mb = e.get("memory_limit_mb")
     db.commit()
     logger.info("Dojo problems seeded (%d new, %d total in seed file)", changed, len(entries))
     return changed

@@ -117,12 +117,11 @@ TOPIC_DOMAIN = {
 def get_problem_related(
     slug: str,
     db: Session = Depends(get_db),
-    # Assuming get_optional_user is in backend.dependencies
 ):
-    from backend.dependencies import get_optional_user
-
-    current_user = get_optional_user
-    prob = db.query(Problem).filter_by(slug=slug).first()
+    # The path segment may be the problem id OR its slug — match either. Existing
+    # rows can carry a stale/empty slug (the seeder was insert-only for slug), and
+    # the frontend calls this with the id, so a slug-only lookup 404s in prod.
+    prob = db.query(Problem).filter(or_(Problem.slug == slug, Problem.id == slug)).first()
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found")
 

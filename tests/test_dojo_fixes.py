@@ -417,3 +417,29 @@ class TestMyDojoStats:
     def test_get_problem_related_404(self, client, db_session):
         r = client.get("/api/dojo/problems/nonexistent/related")
         assert r.status_code == 404
+
+    def test_get_problem_related_resolves_by_id_when_slug_is_stale(self, client, db_session):
+        # Prod bug: rows seeded before the slug column existed carry a stale slug,
+        # and the frontend calls /related with the problem ID — so the lookup must
+        # match id OR slug, not slug only.
+        prob = _seed_problem(db_session, "attn2")  # id == "fix-attn2"
+        prob.slug = "some-stale-old-slug"
+        prob.tags = ["attention"]
+        db_session.commit()
+
+        r = client.get("/api/dojo/problems/fix-attn2/related")  # by ID, slug is stale
+        assert r.status_code == 200
+        assert r.json()["arch_slug"] == "transformer"
+
+    def test_seeder_backfills_slug_on_existing_rows(self, db_session):
+        from backend.models import Problem
+        from backend.services.problem_seed_service import seed_dojo_problems
+
+        # a pre-existing row with a stale slug, exactly like prod
+        db_session.add(Problem(id="ml-attention", slug="STALE", title="old", test_cases=[]))
+        db_session.commit()
+
+        seed_dojo_problems(db_session)
+
+        row = db_session.query(Problem).filter_by(id="ml-attention").first()
+        assert row.slug == "ml-attention"  # backfilled from the seed file
