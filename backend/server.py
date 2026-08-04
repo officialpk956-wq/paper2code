@@ -112,7 +112,9 @@ def _heal_missing_columns() -> None:
                 )
                 with engine.begin() as conn:
                     conn.execute(_text(stmt))
-                logger.warning("schema heal: added missing column %s.%s (%s)", table.name, col.name, ddl)
+                logger.warning(
+                    "schema heal: added missing column %s.%s (%s)", table.name, col.name, ddl
+                )
             except Exception as e:
                 logger.error("schema heal: could not add %s.%s: %s", table.name, col.name, e)
 
