@@ -82,7 +82,11 @@ def get_leaderboard(
     solved_sq = _solved_count_subquery()
 
     points_field = User.weekly_points if period == "weekly" else User.points
-    order_fields = [desc(User.weekly_points), asc(User.id)] if period == "weekly" else [desc(User.points), asc(User.id)]
+    order_fields = (
+        [desc(User.weekly_points), asc(User.id)]
+        if period == "weekly"
+        else [desc(User.points), asc(User.id)]
+    )
 
     query = db.query(
         User.id,

@@ -56,7 +56,9 @@ def _fetch_adaptive_data(db: Session, learner_id: str):
     for p in progress_records:
         if getattr(p, "entity_type", "paper_module") in ("paper_module", "module"):
             try:
-                mod_id = int(p.entity_id) if hasattr(p, "entity_id") else getattr(p, "module_id", None)
+                mod_id = (
+                    int(p.entity_id) if hasattr(p, "entity_id") else getattr(p, "module_id", None)
+                )
                 if mod_id is not None:
                     progress_data.append({"module_id": mod_id, "status": p.status})
             except (ValueError, TypeError):
@@ -431,7 +433,11 @@ def get_analytics_dashboard(
             p = None
             if getattr(latest, "entity_type", "paper_module") in ("paper_module", "module"):
                 try:
-                    mod_id = int(latest.entity_id) if hasattr(latest, "entity_id") else getattr(latest, "module_id", None)
+                    mod_id = (
+                        int(latest.entity_id)
+                        if hasattr(latest, "entity_id")
+                        else getattr(latest, "module_id", None)
+                    )
                     if mod_id is not None:
                         m = db.query(PaperModule).filter(PaperModule.id == mod_id).first()
                         if m:

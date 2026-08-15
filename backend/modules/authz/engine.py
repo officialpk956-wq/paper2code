@@ -81,7 +81,11 @@ def authorize(
         if resource_type == "project" or resource_type == "paper":
             table_name = f"{resource_type}s"
 
-        owner_columns = ["uploaded_by", "owner_id", "user_id"] if resource_type == "paper" or table_name == "papers" else ["owner_id", "user_id", "uploaded_by"]
+        owner_columns = (
+            ["uploaded_by", "owner_id", "user_id"]
+            if resource_type == "paper" or table_name == "papers"
+            else ["owner_id", "user_id", "uploaded_by"]
+        )
         for owner_col in owner_columns:
             try:
                 sql = text(f"SELECT {owner_col} FROM {table_name} WHERE id = :id")
