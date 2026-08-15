@@ -1,20 +1,21 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { describe, test, expect, beforeEach, vi, type MockedFunction } from 'vitest';
 import WorkspacePaperClient from './WorkspacePaperClient';
 import { apiGet, apiPost } from '@/lib/api';
 
 // Mock the API calls
-jest.mock('@/lib/api', () => ({
-  apiGet: jest.fn(),
-  apiPost: jest.fn(),
+vi.mock('@/lib/api', () => ({
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
 }));
 
-const mockApiGet = apiGet as jest.MockedFunction<typeof apiGet>;
-const mockApiPost = apiPost as jest.MockedFunction<typeof apiPost>;
+const mockApiGet = apiGet as MockedFunction<typeof apiGet>;
+const mockApiPost = apiPost as MockedFunction<typeof apiPost>;
 
 describe('WorkspacePaperClient AI Tutor', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('tutor tab sends to /api/papers/{id}/ask for non-flagship paper', async () => {
@@ -28,7 +29,7 @@ describe('WorkspacePaperClient AI Tutor', () => {
       return null;
     });
 
-    mockApiPost.mockImplementation(async (url: string, body?: any) => {
+    mockApiPost.mockImplementation(async (url: string, _body?: unknown) => {
       if (url === '/api/papers/5/ask') {
         return { answer: 'Because...', referenced_papers: [] };
       }
@@ -70,7 +71,7 @@ describe('WorkspacePaperClient AI Tutor', () => {
       return null;
     });
 
-    mockApiPost.mockImplementation(async (url: string, body?: any) => {
+    mockApiPost.mockImplementation(async (url: string, _body?: unknown) => {
       if (url === '/api/tutor/ask') {
         return { answer: 'Fallback answer', session_id: '123' };
       }

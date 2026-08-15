@@ -166,6 +166,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
 
   const [leftTab,    setLeftTab]    = useState<LeftTab>('description');
   const [consoleTab, setConsoleTab] = useState<ConsoleTab>('testcase');
+  const [mobileTab,  setMobileTab]  = useState<'problem' | 'code' | 'console'>('problem');
   const [code,       setCode]       = useState('');
   const [testInput,  setTestInput]  = useState('');
   const [runState,   setRunState]   = useState<RunState>('idle');
@@ -303,7 +304,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
 
   /* ── Layout ───────────────────────────────────────────── */
   return (
-    <div className="flex flex-col" style={{ height: 'calc(100vh - 56px)', background: '#0A0A0A', color: '#fff' }}>
+    <div className="flex flex-col" style={{ height: 'calc(100dvh - 56px)', background: '#0A0A0A', color: '#fff' }}>
       {/* TOP BAR */}
       <div style={{
         height: 44, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -358,13 +359,37 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
         </div>
       </div>
 
+      {/* MOBILE TAB SWITCHER (<768px) */}
+      <div className="md:hidden flex border-b border-[#1A1A1A] bg-[#0A0A0A] shrink-0" data-testid="mobile-tab-switcher">
+        {(
+          [
+            { id: 'problem', label: 'Problem' },
+            { id: 'code', label: 'Code' },
+            { id: 'console', label: 'Console' },
+          ] as const
+        ).map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setMobileTab(tab.id)}
+            className="flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer"
+            style={{
+              color: mobileTab === tab.id ? '#A78BFA' : '#525252',
+              borderBottom: mobileTab === tab.id ? '2px solid #A78BFA' : '2px solid transparent',
+              background: 'none',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* MAIN PANELS */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
         {/* LEFT PANEL — problem description */}
-        <div style={{
-          width: '38%', minWidth: 300, borderRight: '1px solid #1A1A1A',
-          display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        }}>
+        <div
+          className={`w-full md:w-[38%] md:min-w-[300px] ${mobileTab === 'problem' ? 'flex' : 'hidden'} md:flex flex-col overflow-hidden`}
+          style={{ borderRight: '1px solid #1A1A1A' }}
+        >
           {/* tabs */}
           <div style={{
             display: 'flex', borderBottom: '1px solid #1A1A1A',
@@ -611,54 +636,60 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
         </div>
 
         {/* RIGHT PANEL — editor + console */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Editor toolbar */}
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '0 12px', height: 36, borderBottom: '1px solid #1A1A1A', flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 11, color: '#525252', fontFamily: 'monospace' }}>Python 3</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => { if (problem) setCode(problem.starter_code); }}
-                style={{ background: 'none', border: 'none', color: '#525252', cursor: 'pointer', padding: '2px 6px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-                title="Reset to starter"
-              >
-                <RotateCcw size={12} /> Reset
-              </button>
-              <button
-                onClick={() => navigator.clipboard.writeText(code)}
-                style={{ background: 'none', border: 'none', color: '#525252', cursor: 'pointer', padding: '2px 6px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-                title="Copy code"
-              >
-                <Copy size={12} /> Copy
-              </button>
+        <div className={`flex-1 ${mobileTab === 'problem' ? 'hidden' : 'flex'} md:flex flex-col overflow-hidden`}>
+          {/* Editor sub-block (Toolbar + Monaco) */}
+          <div className={`flex-1 ${mobileTab === 'code' ? 'flex' : 'hidden'} md:flex flex-col overflow-hidden`}>
+            {/* Editor toolbar */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '0 12px', height: 36, borderBottom: '1px solid #1A1A1A', flexShrink: 0,
+            }}>
+              <span style={{ fontSize: 11, color: '#525252', fontFamily: 'monospace' }}>Python 3</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { if (problem) setCode(problem.starter_code); }}
+                  style={{ background: 'none', border: 'none', color: '#525252', cursor: 'pointer', padding: '2px 6px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                  title="Reset to starter"
+                >
+                  <RotateCcw size={12} /> Reset
+                </button>
+                <button
+                  onClick={() => navigator.clipboard.writeText(code)}
+                  style={{ background: 'none', border: 'none', color: '#525252', cursor: 'pointer', padding: '2px 6px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                  title="Copy code"
+                >
+                  <Copy size={12} /> Copy
+                </button>
+              </div>
+            </div>
+
+            {/* Monaco editor */}
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <MonacoEditor
+                language="python"
+                theme="vs-dark"
+                value={code}
+                onChange={v => setCode(v ?? '')}
+                options={{
+                  fontSize: 13,
+                  fontFamily: 'JetBrains Mono, monospace',
+                  minimap: { enabled: false },
+                  scrollBeyondLastLine: false,
+                  lineNumbers: 'on',
+                  tabSize: 4,
+                  wordWrap: 'on',
+                  automaticLayout: true,
+                }}
+                onMount={handleEditorMount}
+              />
             </div>
           </div>
 
-          {/* Monaco editor */}
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            <MonacoEditor
-              language="python"
-              theme="vs-dark"
-              value={code}
-              onChange={v => setCode(v ?? '')}
-              options={{
-                fontSize: 13,
-                fontFamily: 'JetBrains Mono, monospace',
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                lineNumbers: 'on',
-                tabSize: 4,
-                wordWrap: 'on',
-                automaticLayout: true,
-              }}
-              onMount={handleEditorMount}
-            />
-          </div>
-
           {/* Console panel */}
-          <div style={{ height: 220, borderTop: '1px solid #1A1A1A', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          <div
+            className={`h-full md:h-[220px] ${mobileTab === 'console' ? 'flex' : 'hidden'} md:flex flex-col shrink-0`}
+            style={{ borderTop: '1px solid #1A1A1A' }}
+          >
             {/* Console tabs */}
             <div style={{ display: 'flex', borderBottom: '1px solid #1A1A1A', padding: '0 12px', flexShrink: 0 }}>
               {(['testcase', 'result'] as ConsoleTab[]).map(t => (

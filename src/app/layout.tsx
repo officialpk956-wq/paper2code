@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { TopNavbar } from '@/components/TopNavbar';
@@ -9,6 +9,12 @@ import 'katex/dist/katex.min.css';
 import PageTransition from '@/components/PageTransition';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#0A0A0A',
+};
 
 export const metadata: Metadata = {
   title: 'paper2code — From Papers to Code',

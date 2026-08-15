@@ -135,7 +135,7 @@ export default function DojoPage() {
   }), [problems, topic, search, status, difficulty]);
 
   return (
-    <div className="flex overflow-hidden bg-transparent text-white" style={{ height: 'calc(100vh - 56px)' }}>
+    <div className="flex overflow-hidden bg-transparent text-white" style={{ height: 'calc(100dvh - 56px)' }}>
       {/* LEFT SIDEBAR */}
       <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1A1A1A] bg-[#0A0A0A] p-4">
         {/* POTD */}

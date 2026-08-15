@@ -2,6 +2,50 @@ const BASE =
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
   'http://127.0.0.1:8000';
 
+const REQUEST_TIMEOUT_MS = 15000;
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  if (typeof window === 'undefined') return null;
+
+  const storedRefresh = localStorage.getItem('refresh_token');
+  if (!storedRefresh) return null;
+
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: storedRefresh }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+
+      if (!res.ok) {
+        clearTokens();
+        return null;
+      }
+
+      const data = await res.json().catch(() => null);
+      if (data?.access_token) {
+        setTokens(data);
+        return data.access_token as string;
+      }
+
+      clearTokens();
+      return null;
+    } catch {
+      clearTokens();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -31,6 +75,7 @@ export function setTokens(tokens: { access_token: string; refresh_token?: string
     if (tokens.refresh_token) {
       localStorage.setItem('refresh_token', tokens.refresh_token);
     }
+    window.dispatchEvent(new Event('auth-changed'));
   }
 }
 
@@ -50,44 +95,92 @@ export function isLoggedIn(): boolean {
   return false;
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'GET',
-    headers: authHeaders(),
-  });
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  if (!init.signal) {
+    init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  }
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new Error('Request timed out — check your connection and try again');
+    }
+    throw err;
+  }
+}
+
+async function requestWithRetry<T>(
+  buildRequest: () => { url: string; init: RequestInit }
+): Promise<T> {
+  const { url, init } = buildRequest();
+  let res = await fetchWithTimeout(url, init);
+
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      const retryReq = buildRequest();
+      res = await fetchWithTimeout(retryReq.url, retryReq.init);
+    }
+  }
+
   return handle<T>(res);
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  return requestWithRetry<T>(() => ({
+    url: `${BASE}${path}`,
+    init: {
+      method: 'GET',
+      headers: authHeaders(),
+    },
+  }));
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(),
-      'Content-Type': 'application/json',
+  return requestWithRetry<T>(() => ({
+    url: `${BASE}${path}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
-  return handle<T>(res);
+  }));
 }
 
-export async function apiPostForm<T>(path: string, form: FormData | URLSearchParams | string, contentType?: string): Promise<T> {
-  const headers: Record<string, string> = authHeaders();
-  if (contentType) {
-    headers['Content-Type'] = contentType;
-  }
-  
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: headers,
-    body: form,
+export async function apiPostForm<T>(
+  path: string,
+  form: FormData | URLSearchParams | string,
+  contentType?: string
+): Promise<T> {
+  return requestWithRetry<T>(() => {
+    const headers: Record<string, string> = authHeaders();
+    if (contentType) {
+      headers['Content-Type'] = contentType;
+    }
+    return {
+      url: `${BASE}${path}`,
+      init: {
+        method: 'POST',
+        headers,
+        body: form,
+      },
+    };
   });
-  return handle<T>(res);
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  });
-  return handle<T>(res);
+  return requestWithRetry<T>(() => ({
+    url: `${BASE}${path}`,
+    init: {
+      method: 'DELETE',
+      headers: authHeaders(),
+    },
+  }));
 }

@@ -72,10 +72,7 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
       if (!isLoggedIn()) {
         setUser(null);
       } else {
-        setUser(prev => {
-           if (!prev) hydrate();
-           return prev;
-        });
+        hydrate();
       }
     };
     
