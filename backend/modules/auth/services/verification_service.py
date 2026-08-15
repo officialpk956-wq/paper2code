@@ -47,6 +47,8 @@ class VerificationService:
         # Verify user
         user = vt.user
         user.is_verified = True
+        user.is_email_verified = True
+        user.email_verified_at = datetime.datetime.utcnow()
         self.db.commit()
 
         # Log event

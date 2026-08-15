@@ -9,7 +9,7 @@ import datetime
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -81,11 +81,14 @@ def get_leaderboard(
     since = _period_start(period)
     solved_sq = _solved_count_subquery()
 
+    points_field = User.weekly_points if period == "weekly" else User.points
+    order_fields = [desc(User.weekly_points), asc(User.id)] if period == "weekly" else [desc(User.points), asc(User.id)]
+
     query = db.query(
         User.id,
         User.name,
         User.avatar_url,
-        User.points,
+        points_field.label("points"),
         User.streak,
         solved_sq.label("problems_solved"),
     )
@@ -96,7 +99,7 @@ def get_leaderboard(
             User.last_active >= since,
         )
 
-    if category:
+    if category and isinstance(category, str):
         cat_user_ids = _category_user_ids(db, category)
         if not cat_user_ids:
             return {
@@ -108,7 +111,7 @@ def get_leaderboard(
             }
         query = query.filter(User.id.in_(cat_user_ids))
 
-    rows = query.filter(User.points > 0).order_by(desc(User.points)).limit(limit).all()
+    rows = query.filter(points_field > 0).order_by(*order_fields).limit(limit).all()
 
     leaders = [
         {

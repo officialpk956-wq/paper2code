@@ -77,15 +77,16 @@ def authorize(
         if resource_type == "project" or resource_type == "paper":
             table_name = f"{resource_type}s"
 
-        try:
-            # Look up resource owner via raw SQL parameters to be generic across any dynamic model
-            sql = text(f"SELECT owner_id FROM {table_name} WHERE id = :id")
-            res = db.execute(sql, {"id": resource_id}).scalar_one_or_none()
-            if res is not None and res == user.id:
-                # User is the owner of the resource
-                return True
-        except Exception:
-            pass
+        owner_columns = ["uploaded_by", "owner_id", "user_id"] if resource_type == "paper" or table_name == "papers" else ["owner_id", "user_id", "uploaded_by"]
+        for owner_col in owner_columns:
+            try:
+                sql = text(f"SELECT {owner_col} FROM {table_name} WHERE id = :id")
+                res = db.execute(sql, {"id": resource_id}).scalar_one_or_none()
+                if res is not None and res == user.id:
+                    # User is the owner of the resource
+                    return True
+            except Exception:
+                continue
 
         # Check explicit resource sharing rules
         # First, query all shares for this resource

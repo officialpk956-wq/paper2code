@@ -90,16 +90,6 @@ async def register(
         email=body.email, name=body.name, password=body.password, ip_address=ip, user_agent=ua
     )
 
-    # Create email verification token via TokenRepository
-    from backend.repositories.token_repository import TokenRepository
-    from backend.services.email_service import send_verification_email_sync
-
-    token_repo = TokenRepository(db)
-    token = token_repo.create_email_verification(user.id)
-
-    # Fire-and-forget send_verification_email_sync
-    background_tasks.add_task(send_verification_email_sync, user.email, token)
-
     # PostHog + early-adopter achievement (non-blocking)
     try:
         from backend.services.analytics_service import track

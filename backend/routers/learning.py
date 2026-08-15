@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import cast, func, Integer
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -52,7 +52,15 @@ def _fetch_adaptive_data(db: Session, learner_id: str):
         }
         for a in attempts
     ]
-    progress_data = [{"module_id": p.module_id, "status": p.status} for p in progress_records]
+    progress_data = []
+    for p in progress_records:
+        if getattr(p, "entity_type", "paper_module") in ("paper_module", "module"):
+            try:
+                mod_id = int(p.entity_id) if hasattr(p, "entity_id") else getattr(p, "module_id", None)
+                if mod_id is not None:
+                    progress_data.append({"module_id": mod_id, "status": p.status})
+            except (ValueError, TypeError):
+                continue
     tutor_data = [
         {
             "module": t.module,
@@ -324,7 +332,7 @@ def get_analytics_dashboard(
 
             learner_progress = (
                 db.query(PaperModule.paper_id, LearnerProgress.status)
-                .join(PaperModule, PaperModule.id == LearnerProgress.entity_id)
+                .join(PaperModule, PaperModule.id == cast(LearnerProgress.entity_id, Integer))
                 .filter(
                     LearnerProgress.learner_id == x_learner_id,
                     LearnerProgress.entity_type == "paper_module",
@@ -419,8 +427,17 @@ def get_analytics_dashboard(
         first_paper = db.query(Paper).order_by(Paper.id.asc()).first()
         if active_sorted:
             latest = active_sorted[0]
-            m = db.query(PaperModule).filter(PaperModule.id == latest.module_id).first()
-            p = db.query(Paper).filter(Paper.id == latest.paper_id).first()
+            m = None
+            p = None
+            if getattr(latest, "entity_type", "paper_module") in ("paper_module", "module"):
+                try:
+                    mod_id = int(latest.entity_id) if hasattr(latest, "entity_id") else getattr(latest, "module_id", None)
+                    if mod_id is not None:
+                        m = db.query(PaperModule).filter(PaperModule.id == mod_id).first()
+                        if m:
+                            p = db.query(Paper).filter(Paper.id == m.paper_id).first()
+                except (ValueError, TypeError):
+                    pass
             if m and p:
                 current_position = f"{p.title} - {m.layer_name}"
                 next_mod = (

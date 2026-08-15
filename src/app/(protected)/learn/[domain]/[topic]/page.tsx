@@ -94,7 +94,7 @@ export default function TopicPage() {
           <h1 className="text-[40px] font-bold text-white mb-6 leading-tight">{topic.title}</h1>
           
           <div className="flex items-center gap-3 mb-8">
-            <span className="px-3 py-1 rounded-md text-[12px] font-bold uppercase tracking-wider" 
+            <span className="px-3 py-1 rounded-md text-[12px] font-bold uppercase tracking-wider"
               style={{ backgroundColor: `${getDifficultyColor(topic.level)}15`, color: getDifficultyColor(topic.level) }}>
               {topic.level}
             </span>
@@ -104,6 +104,13 @@ export default function TopicPage() {
               </span>
             )}
           </div>
+
+          {topic.why && topic.why.trim() && (
+            <div className="border-l-2 border-[#60A5FA] bg-[#60A5FA]/5 rounded-r-lg px-5 py-4 mb-8">
+              <div className="text-[11px] font-bold text-[#60A5FA] uppercase tracking-wider mb-2">Why this matters</div>
+              <p className="text-[15px] text-[#D4D4D4] leading-relaxed">{topic.why.trim()}</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="bg-[#0A0A0A] border border-[#262626] rounded-xl p-5">
