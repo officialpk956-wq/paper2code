@@ -114,10 +114,12 @@ def generate_presigned_upload_url(
     filename: str,
     content_type: str = "application/pdf",
     expires_in: int = 900,
+    user_id: int | str | None = None,
 ) -> dict:
     """
     Generate a presigned S3 PUT URL for direct client → R2 upload.
     The API server never touches the bytes; only the key is queued to Celery.
+    If user_id is provided, records upload intent in Redis (if available).
     Returns {url, key, expires_in} or raises RuntimeError if R2 not configured.
     """
     if not R2_AVAILABLE:
@@ -133,7 +135,23 @@ def generate_presigned_upload_url(
         },
         ExpiresIn=expires_in,
     )
-    log.info("Generated presigned upload URL for key: %s", key)
+    if user_id is not None:
+        try:
+            from backend.redis_config import cache_redis
+
+            if cache_redis:
+                cache_redis.set(f"upload_intent:{key}", str(user_id), ex=expires_in)
+            else:
+                log.warning(
+                    "DEGRADED SECURITY: Redis unavailable during presigned URL generation for user %s, key %s. "
+                    "Upload intent binding disabled; falling back to DB-level checks.",
+                    user_id,
+                    key,
+                )
+        except Exception as exc:
+            log.warning("Failed to store upload intent in Redis for key %s: %s", key, exc)
+
+    log.info("Generated presigned upload URL for key: %s (user: %s)", key, user_id)
     return {"url": url, "key": key, "expires_in": expires_in}
 
 

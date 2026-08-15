@@ -147,7 +147,13 @@ class TestConfirmUpload:
     def test_05_confirm_upload_creates_task(self, client, db_session):
         user = _seed_user(db_session, email="cu05@si.com")
         token = _login(client, user.email)
-        with patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task:
+        with (
+            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task,
+            patch(
+                "backend.services.storage_service.get_object_size",
+                return_value=1024 * 1024,
+            ),
+        ):
             mock_task.delay = MagicMock()
             r = client.post(
                 "/api/papers/confirm-upload",
@@ -199,7 +205,13 @@ class TestConfirmUpload:
         initial_bytes = user.storage_bytes_used
         token = _login(client, user.email)
         file_size = 2 * 1024 * 1024  # 2 MB
-        with patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task:
+        with (
+            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task") as mock_task,
+            patch(
+                "backend.services.storage_service.get_object_size",
+                return_value=file_size,
+            ),
+        ):
             mock_task.delay = MagicMock()
             client.post(
                 "/api/papers/confirm-upload",
@@ -310,7 +322,13 @@ class TestStorageQuota:
         user = _seed_user(db_session, email="sq16@si.com",
                           storage_bytes_used=490 * 1024 * 1024)
         token = _login(client, user.email)
-        with patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024):
+        with (
+            patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024),
+            patch(
+                "backend.services.storage_service.get_object_size",
+                return_value=20 * 1024 * 1024,
+            ),
+        ):
             r = client.post(
                 "/api/papers/confirm-upload",
                 json={

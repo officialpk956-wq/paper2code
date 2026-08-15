@@ -52,7 +52,7 @@ def test_llm_complete_async_delegates_to_litellm():
             from core.llm_client import llm_complete_async
             return await llm_complete_async("async prompt")
 
-    result = asyncio.get_event_loop().run_until_complete(_run())
+    result = asyncio.run(_run())
     assert result == "async ok"
 
 

@@ -21,11 +21,12 @@ def extract_with_pdfplumber(path):
 def extract_with_fitz(path):
     try:
         import fitz  # PyMuPDF
-        doc = fitz.open(path)
-        text = []
-        for page in doc:
-            text.append(page.get_text())
-        return "\n".join(text)
+
+        with fitz.open(path) as doc:
+            text = []
+            for page in doc:
+                text.append(page.get_text())
+            return "\n".join(text)
     except Exception:
         return None
 

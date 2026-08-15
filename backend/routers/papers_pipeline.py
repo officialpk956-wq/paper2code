@@ -14,6 +14,9 @@ from backend.database import get_db
 from backend.dependencies import get_current_user, get_optional_user
 from backend.models import Paper, Task
 from backend.repositories.task_repository import TaskRepository
+
+router = APIRouter(prefix="/api", tags=["Papers Pipeline"])
+
 from backend.server import limiter
 from backend.tasks.paper_tasks import generate_code_from_pdf_task
 from core.codegen import _node_to_layer
@@ -73,8 +76,6 @@ def _check_storage_quota(db: Session, user_id: int, additional_bytes: int = 0) -
             detail=f"Storage quota exceeded ({limit_mb} MB limit). Delete papers to free space.",
         )
 
-
-router = APIRouter(prefix="/api", tags=["Papers Pipeline"])
 
 pipeline = Paper2CodePipeline()
 extractor = ConfigExtractor()
@@ -298,7 +299,9 @@ async def get_upload_url(
             detail="Direct upload not available — R2 not configured. Use /api/papers/upload instead.",
         )
 
-    return generate_presigned_upload_url(filename, content_type)
+    return generate_presigned_upload_url(
+        filename, content_type, expires_in=900, user_id=current_user.id
+    )
 
 
 @router.get("/papers/{paper_id}/modules")
@@ -511,9 +514,59 @@ async def confirm_upload(
     if not body.key.startswith("papers/"):
         raise HTTPException(status_code=400, detail="Invalid R2 key.")
 
+    # 1. Verify that the object actually exists in R2 and get its real byte size
+    from backend.services.storage_service import get_object_size
+
+    verified_file_size = get_object_size(body.key)
+    if verified_file_size <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload not found in storage — ensure the PUT to the presigned URL completed before confirming.",
+        )
+
+    # 2. Validate upload intent in Redis
+    from backend.redis_config import cache_redis
+
+    if cache_redis:
+        try:
+            intent_key = f"upload_intent:{body.key}"
+            stored_user_id = cache_redis.get(intent_key)
+            if stored_user_id is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Upload URL expired or invalid — request a new one.",
+                )
+            if isinstance(stored_user_id, bytes):
+                stored_user_id = stored_user_id.decode("utf-8")
+
+            if str(stored_user_id) != str(current_user.id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This upload was not issued to your account.",
+                )
+
+            # Consume intent key immediately for one-time use (replay protection)
+            cache_redis.delete(intent_key)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "DEGRADED SECURITY: Redis error during confirm_upload intent check for user %s, key %s: %s",
+                current_user.id,
+                body.key,
+                exc,
+            )
+    else:
+        logger.warning(
+            "DEGRADED SECURITY: Redis unavailable during confirm_upload for user %s, key %s. "
+            "Upload intent check skipped; relying on Paper row ownership check.",
+            current_user.id,
+            body.key,
+        )
+
     _check_paper_quota(db, current_user.id)
 
-    _check_storage_quota(db, current_user.id, additional_bytes=body.file_size_bytes)
+    _check_storage_quota(db, current_user.id, additional_bytes=verified_file_size)
 
     from backend.models import Paper
 
@@ -535,15 +588,14 @@ async def confirm_upload(
         body.terms_accepted,
     )
 
-    # Increment user storage quota counter
-
-    if body.file_size_bytes > 0:
+    # Increment user storage quota counter using verified R2 size
+    if verified_file_size > 0:
         from backend.models import User
 
         user = db.query(User).filter_by(id=current_user.id).first()
 
         if user:
-            user.storage_bytes_used = (user.storage_bytes_used or 0) + body.file_size_bytes
+            user.storage_bytes_used = (user.storage_bytes_used or 0) + verified_file_size
 
             db.commit()
 

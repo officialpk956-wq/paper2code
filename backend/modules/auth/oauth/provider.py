@@ -1,4 +1,5 @@
 import logging
+import os
 
 import httpx
 
@@ -39,6 +40,29 @@ class GoogleProvider(OAuthProvider):
                 )
                 if not email_verified:
                     logger.error("Google account email is not verified")
+                    return None
+
+                # Check audience (aud) claim to prevent cross-app token replay
+                expected_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+                if not expected_client_id:
+                    logger.error(
+                        "GOOGLE_CLIENT_ID environment variable is not configured; rejecting token"
+                    )
+                    return None
+
+                token_aud = data.get("aud")
+                if token_aud != expected_client_id:
+                    logger.warning(
+                        "Google token audience mismatch: expected '%s', got '%s'",
+                        expected_client_id,
+                        token_aud,
+                    )
+                    return None
+
+                # Check issuer (iss) claim for defense-in-depth
+                token_iss = data.get("iss")
+                if token_iss not in ("accounts.google.com", "https://accounts.google.com"):
+                    logger.warning("Google token invalid issuer: '%s'", token_iss)
                     return None
 
                 return OAuthUserInfo(

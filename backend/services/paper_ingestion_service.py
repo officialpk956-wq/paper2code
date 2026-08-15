@@ -70,10 +70,10 @@ def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
     try:
         import fitz  # PyMuPDF
 
-        document = fitz.open(stream=pdf_bytes, filetype="pdf")
-        page_count = min(len(document), 30)
-        pages = [document[index].get_text("text") or "" for index in range(page_count)]
-        return pages, "pymupdf"
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            page_count = min(len(document), 30)
+            pages = [document[index].get_text("text") or "" for index in range(page_count)]
+            return pages, "pymupdf"
     except Exception as exc:
         raise ValueError(f"Failed to extract text from PDF: {exc}") from exc
 
@@ -93,48 +93,51 @@ def extract_figures(pdf_bytes: bytes, page_texts: list[str]) -> list[dict[str, A
     except Exception:
         return []
 
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    figures: list[dict[str, Any]] = []
-    seen_xrefs: set[int] = set()
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            figures: list[dict[str, Any]] = []
+            seen_xrefs: set[int] = set()
 
-    page_count = min(len(document), 30)
+            page_count = min(len(document), 30)
 
-    for page_offset in range(page_count):
-        page_index = page_offset + 1
-        page = document[page_offset]
-        page_text = page_texts[page_index - 1] if page_index - 1 < len(page_texts) else ""
-        caption_match = None
-        for match in re.finditer(
-            r"(?:Figure|Fig\.)\s*\d+[\s:\-–.]*([^\n]{0,200})", page_text, re.IGNORECASE
-        ):
-            caption_match = match
-            break
+            for page_offset in range(page_count):
+                page_index = page_offset + 1
+                page = document[page_offset]
+                page_text = page_texts[page_index - 1] if page_index - 1 < len(page_texts) else ""
+                caption_match = None
+                for match in re.finditer(
+                    r"(?:Figure|Fig\.)\s*\d+[\s:\-–.]*([^\n]{0,200})", page_text, re.IGNORECASE
+                ):
+                    caption_match = match
+                    break
 
-        for image_index, image_info in enumerate(page.get_images(full=True), start=1):
-            xref = image_info[0]
-            if xref in seen_xrefs:
-                continue
-            seen_xrefs.add(xref)
+                for image_index, image_info in enumerate(page.get_images(full=True), start=1):
+                    xref = image_info[0]
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
 
-            try:
-                extracted = document.extract_image(xref)
-            except Exception:
-                extracted = {}
+                    try:
+                        extracted = document.extract_image(xref)
+                    except Exception:
+                        extracted = {}
 
-            figures.append(
-                {
-                    "id": f"p{page_index}-img{image_index}",
-                    "page": page_index,
-                    "xref": xref,
-                    "width": extracted.get("width"),
-                    "height": extracted.get("height"),
-                    "ext": extracted.get("ext"),
-                    "caption": caption_match.group(1).strip() if caption_match else None,
-                    "has_binary": bool(extracted.get("image")),
-                }
-            )
+                    figures.append(
+                        {
+                            "id": f"p{page_index}-img{image_index}",
+                            "page": page_index,
+                            "xref": xref,
+                            "width": extracted.get("width"),
+                            "height": extracted.get("height"),
+                            "ext": extracted.get("ext"),
+                            "caption": caption_match.group(1).strip() if caption_match else None,
+                            "has_binary": bool(extracted.get("image")),
+                        }
+                    )
 
-    return figures
+            return figures
+    except Exception:
+        return []
 
 
 def extract_equations(page_texts: list[str]) -> list[dict[str, Any]]:

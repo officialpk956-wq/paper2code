@@ -208,3 +208,101 @@ def test_extract_sections_appendix_level_2():
     appendix_sections = [s for s in sections if s['title'] == 'Appendix']
     if appendix_sections:
         assert appendix_sections[0]['level'] == 2
+
+
+# ---------------------------------------------------------------------------
+# PyMuPDF Resource Cleanup & Context Management
+# ---------------------------------------------------------------------------
+
+import pytest
+from unittest.mock import MagicMock, patch
+from backend.services.paper_ingestion_service import extract_pdf_pages, extract_figures
+
+
+def test_extract_pdf_pages_pymupdf_closes_on_success():
+    """Verify document.close() is called on successful extraction via PyMuPDF fallback."""
+    fake_page = MagicMock()
+    fake_page.get_text.return_value = "Page content from PyMuPDF"
+
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = 2
+    mock_doc.__getitem__.return_value = fake_page
+    mock_doc.__enter__.return_value = mock_doc
+    mock_doc.__exit__.return_value = None
+
+    with patch("pdfplumber.open", side_effect=Exception("pdfplumber failed")), \
+         patch("fitz.open", return_value=mock_doc) as mock_fitz_open:
+
+        pages, method = extract_pdf_pages(b"%PDF-1.4 test")
+        assert method == "pymupdf"
+        assert len(pages) == 2
+        assert pages[0] == "Page content from PyMuPDF"
+
+        # Verify context manager entered and exited (which calls close)
+        mock_doc.__enter__.assert_called_once()
+        mock_doc.__exit__.assert_called_once()
+
+
+def test_extract_pdf_pages_pymupdf_closes_on_exception():
+    """Verify document.close() is guaranteed to execute even if get_text() raises mid-processing."""
+    mock_page_1 = MagicMock()
+    mock_page_1.get_text.return_value = "Page 1 content"
+
+    mock_page_2 = MagicMock()
+    mock_page_2.get_text.side_effect = RuntimeError("Memory read error on page 2")
+
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = 2
+    mock_doc.__getitem__.side_effect = [mock_page_1, mock_page_2]
+    mock_doc.__enter__.return_value = mock_doc
+    mock_doc.__exit__.return_value = None
+
+    with patch("pdfplumber.open", side_effect=Exception("pdfplumber failed")), \
+         patch("fitz.open", return_value=mock_doc):
+
+        with pytest.raises(ValueError) as exc_info:
+            extract_pdf_pages(b"%PDF-1.4 test")
+
+        assert "Failed to extract text from PDF" in str(exc_info.value)
+        # Context manager __exit__ must have been called despite exception
+        mock_doc.__exit__.assert_called_once()
+
+
+def test_extract_figures_pymupdf_closes_on_success():
+    """Verify extract_figures closes document on success."""
+    mock_page = MagicMock()
+    mock_page.get_images.return_value = [(100, 0, 0, 0, 0, 0, 0, 0, 0)]
+
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = 1
+    mock_doc.__getitem__.return_value = mock_page
+    mock_doc.extract_image.return_value = {"width": 800, "height": 600, "ext": "png", "image": b"PNG..."}
+    mock_doc.__enter__.return_value = mock_doc
+    mock_doc.__exit__.return_value = None
+
+    with patch("fitz.open", return_value=mock_doc):
+        figures = extract_figures(b"%PDF-1.4 test", ["Figure 1: Architecture diagram"])
+        assert len(figures) == 1
+        assert figures[0]["xref"] == 100
+        assert figures[0]["caption"] == "Architecture diagram"
+
+        mock_doc.__enter__.assert_called_once()
+        mock_doc.__exit__.assert_called_once()
+
+
+def test_extract_figures_pymupdf_closes_on_exception():
+    """Verify extract_figures closes document when exception occurs during figure parsing."""
+    mock_page = MagicMock()
+    mock_page.get_images.side_effect = RuntimeError("Corrupt image table")
+
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = 1
+    mock_doc.__getitem__.return_value = mock_page
+    mock_doc.__enter__.return_value = mock_doc
+    mock_doc.__exit__.return_value = None
+
+    with patch("fitz.open", return_value=mock_doc):
+        figures = extract_figures(b"%PDF-1.4 test", ["Figure 1: Diagram"])
+        assert figures == []
+        mock_doc.__exit__.assert_called_once()
+

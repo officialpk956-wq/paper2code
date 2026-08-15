@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import uuid
 
 import redis
 from fastapi import HTTPException, Request, status
@@ -30,7 +31,7 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     Returns True if the request is within limits, False otherwise.
     Uses sliding window log / counter via Redis or fallback memory.
     """
-    now = int(time.time())
+    now = time.time()
 
     if _redis_client is not None:
         try:
@@ -38,15 +39,16 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
             pipe = _redis_client.pipeline()
             # Clear old entries in sorted set
             pipe.zremrangebyscore(key, 0, now - window_seconds)
-            # Count remaining entries
+            # Add current entry with unique member to avoid sub-second collision
+            member = f"{now}:{uuid.uuid4().hex}"
+            pipe.zadd(key, {member: now})
+            # Count entries in current window
             pipe.zcard(key)
-            # Add current entry
-            pipe.zadd(key, {str(now): now})
             # Set TTL on key
             pipe.expire(key, window_seconds)
 
             # Execute
-            _, current_count, _, _ = pipe.execute()
+            _, _, current_count, _ = pipe.execute()
 
             return current_count <= limit
         except Exception as e:

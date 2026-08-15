@@ -45,4 +45,21 @@ def validate_production_security_config() -> None:
         except Exception as e:
             raise ValueError(f"STARTUP FAILURE: Redis is required but unavailable at {url}: {e}")
 
+    # 5. Database Configuration (Production requires PostgreSQL)
+    if env == "production":
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url or not db_url.strip():
+            raise ValueError(
+                "SECURITY FAILURE: DATABASE_URL environment variable is missing in production environment"
+            )
+        db_url_clean = db_url.strip().lower()
+        if not (
+            db_url_clean.startswith("postgresql://")
+            or db_url_clean.startswith("postgres://")
+            or db_url_clean.startswith("postgresql+")
+        ):
+            raise ValueError(
+                f"SECURITY FAILURE: Production database must be PostgreSQL (found '{db_url.split('://')[0] if '://' in db_url else db_url}'). SQLite is forbidden in production."
+            )
+
     print("Security configuration validation passed successfully.")
