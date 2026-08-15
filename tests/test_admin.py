@@ -1,4 +1,5 @@
 """Tests for /api/admin/* endpoints."""
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -7,8 +8,8 @@ from backend.models import User
 from backend.modules.auth.security.hashing import hash_password
 
 ADMIN_EMAIL = "admin_test@example.com"
-USER_EMAIL  = "plain_user_test@example.com"
-TEST_PASS   = "SecurePass123!"
+USER_EMAIL = "plain_user_test@example.com"
+TEST_PASS = "SecurePass123!"
 
 
 def _create_user(db: Session, email: str, is_admin: bool = False) -> User:
@@ -38,6 +39,7 @@ def _login(client: TestClient, email: str) -> str:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_admin_stats_requires_auth(client: TestClient):
     r = client.get("/api/admin/stats")
@@ -100,7 +102,9 @@ def test_admin_users_search(client: TestClient, db_session: Session):
     _create_user(db_session, USER_EMAIL, is_admin=False)
     token = _login(client, ADMIN_EMAIL)
 
-    r = client.get(f"/api/admin/users?q=plain_user_test", headers={"Authorization": f"Bearer {token}"})
+    r = client.get(
+        "/api/admin/users?q=plain_user_test", headers={"Authorization": f"Bearer {token}"}
+    )
     assert r.status_code == 200
     users = r.json()["users"]
     assert all("plain_user_test" in u["email"] for u in users)
@@ -159,3 +163,52 @@ def test_admin_update_nonexistent_user(client: TestClient, db_session: Session):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/users/{user_id}
+# ---------------------------------------------------------------------------
+
+
+def test_admin_delete_user_requires_auth(client: TestClient):
+    r = client.delete("/api/admin/users/1")
+    assert r.status_code == 401
+
+
+def test_admin_delete_user_requires_admin_role(client: TestClient, db_session: Session):
+    _create_user(db_session, USER_EMAIL, is_admin=False)
+    target = _create_user(db_session, "delete_target_noauth@example.com")
+    token = _login(client, USER_EMAIL)
+    r = client.delete(f"/api/admin/users/{target.id}", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
+def test_admin_cannot_delete_own_account(client: TestClient, db_session: Session):
+    admin = _create_user(db_session, ADMIN_EMAIL, is_admin=True)
+    token = _login(client, ADMIN_EMAIL)
+    r = client.delete(f"/api/admin/users/{admin.id}", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 400
+
+
+def test_admin_delete_nonexistent_user(client: TestClient, db_session: Session):
+    _create_user(db_session, ADMIN_EMAIL, is_admin=True)
+    token = _login(client, ADMIN_EMAIL)
+    r = client.delete("/api/admin/users/999999", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 404
+
+
+def test_admin_delete_user_succeeds_and_removes_row(client: TestClient, db_session: Session):
+    _create_user(db_session, ADMIN_EMAIL, is_admin=True)
+    target = _create_user(db_session, "delete_target_ok@example.com")
+    target_id = target.id
+    token = _login(client, ADMIN_EMAIL)
+    r = client.delete(f"/api/admin/users/{target_id}", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True, "user_id": target_id}
+
+    # Row is actually gone, and deleting again 404s (idempotent-safe, not double-counted)
+    assert db_session.query(User).filter_by(id=target_id).first() is None
+    r2 = client.delete(
+        f"/api/admin/users/{target_id}", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r2.status_code == 404
