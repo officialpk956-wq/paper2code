@@ -45,6 +45,10 @@ def authorize(
     Centralized authorization engine.
     Checks permissions, resource ownership, team/org membership, sharing levels, and Super Admin bypass.
     """
+    # 0. Global platform admin bypass (User.is_admin), independent of org context
+    if getattr(user, "is_admin", False):
+        return True
+
     # 1. Super Admin bypass
     # First check if the user is a global Super Admin (e.g. org membership or role check)
     if org_id:

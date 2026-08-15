@@ -50,10 +50,15 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 def _seed_user(db: Session, email: str, points: int = 0, is_admin: bool = False,
-               last_active: datetime.datetime = None) -> User:
+               last_active: datetime.datetime = None, weekly_points: int = None) -> User:
+    # weekly_points defaults to points so existing callers (which only cared
+    # about lifetime points) keep working against the period-aware leaderboard.
+    if weekly_points is None:
+        weekly_points = points
     existing = db.query(User).filter_by(email=email).first()
     if existing:
         existing.points = points
+        existing.weekly_points = weekly_points
         existing.is_admin = is_admin
         if last_active:
             existing.last_active = last_active
@@ -63,7 +68,7 @@ def _seed_user(db: Session, email: str, points: int = 0, is_admin: bool = False,
         email=email, name=email.split("@")[0],
         hashed_password=hash_password(_PASS),
         is_verified=True, is_email_verified=True,
-        is_admin=is_admin, points=points,
+        is_admin=is_admin, points=points, weekly_points=weekly_points,
         last_active=last_active,
     )
     db.add(u)

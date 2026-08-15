@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from backend.database import Base
 from backend.models import User
 from backend.modules.auth.models import VerificationToken, AuditLog
+from backend.modules.auth.repositories.verification_repository import hash_token
 from backend.modules.auth.services.auth_service import AuthService
 from backend.modules.auth.services.verification_service import VerificationService
 
@@ -60,8 +61,8 @@ def test_registration_single_token_and_email(db_session):
         # Verify exactly ONE token was created in DB
         tokens = db_session.query(VerificationToken).filter_by(user_id=user.id).all()
         assert len(tokens) == 1
-        assert tokens[0].token == call_token
-        assert tokens[0].is_used is False
+        assert tokens[0].token_hash == hash_token(call_token)
+        assert tokens[0].used is False
 
 
 def test_verification_updates_both_flags(db_session):
@@ -144,7 +145,7 @@ def test_expired_token_rejected(db_session):
         token = mock_email.call_args[0][1]
 
         # Manually expire token
-        vt = db_session.query(VerificationToken).filter_by(token=token).first()
+        vt = db_session.query(VerificationToken).filter_by(token_hash=hash_token(token)).first()
         vt.expires_at = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
         db_session.commit()
 

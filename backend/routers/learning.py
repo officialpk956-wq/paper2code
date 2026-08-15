@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, func, Integer
+from sqlalchemy import Integer, cast, func
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
