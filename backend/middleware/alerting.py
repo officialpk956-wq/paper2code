@@ -71,6 +71,30 @@ def alert_5xx(method: str, path: str, status_code: int, request_id: str = "") ->
     threading.Thread(target=_send_slack, args=(payload,), daemon=True).start()
 
 
+def alert_backup_status(outcome: str, detail: str = "") -> None:
+    """Non-blocking backup status alert. Fire-and-forget via daemon thread."""
+    if not SLACK_WEBHOOK_URL:
+        return
+    emoji = ":x:" if "fail" in outcome.lower() else ":warning:"
+    payload = {
+        "text": f"{emoji} *Paper2Code Backup* — {outcome}",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"{emoji} *Database Backup Alert*\n"
+                        f"*Outcome:* `{outcome}`\n"
+                        f"*Detail:* {detail or 'n/a'}"
+                    ),
+                },
+            }
+        ],
+    }
+    threading.Thread(target=_send_slack, args=(payload,), daemon=True).start()
+
+
 class SlackAlertingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)

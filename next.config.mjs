@@ -4,6 +4,17 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypePrettyCode from 'rehype-pretty-code';
 
+// Build connect-src dynamically to allow local dev backend
+const PRODUCTION_API = 'https://paper2code-1-81y5.onrender.com';
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+const connectSrcOrigins = new Set([
+  "'self'",
+  PRODUCTION_API,
+  'https://observablehq.com',
+  'https://us.i.posthog.com',
+]);
+if (apiUrl) connectSrcOrigins.add(apiUrl);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -55,7 +66,7 @@ const nextConfig = {
               "img-src 'self' data: blob: https://assets.lottiefiles.com https://assets9.lottiefiles.com",
               "font-src 'self' https://cdn.jsdelivr.net",
               // API calls to backend + Observable + PostHog
-              "connect-src 'self' https://paper2code-1-81y5.onrender.com https://observablehq.com https://us.i.posthog.com",
+              `connect-src ${Array.from(connectSrcOrigins).join(' ')}`,
               // YouTube and Observable iframe embeds
               "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://observablehq.com",
               // This page must not be framed (XFO already set above)

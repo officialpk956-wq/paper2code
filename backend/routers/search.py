@@ -107,7 +107,7 @@ def search(
                     "title": p.title or "",
                     "snippet": (p.description or "")[:200],
                     "tags": [p.difficulty or "", p.category or ""],
-                    "url": f"/dojo/{p.id}",
+                    "url": f"/dojo/{p.slug or p.id}",
                 }
             )
 

@@ -66,14 +66,24 @@ def cleanup_zombie_tasks():
 
 def _do_daily_db_backup() -> dict:
     """Business logic for DB backup — separated for testability."""
+    from backend.middleware.alerting import alert_backup_status
+
     if not DATABASE_URL.startswith("postgresql"):
         log.info("daily_db_backup: not PostgreSQL — skipping")
+        if os.getenv("ENVIRONMENT", "development").lower() == "production":
+            alert_backup_status(
+                "Skipped — not PostgreSQL",
+                "DATABASE_URL does not start with 'postgresql' in production",
+            )
         return {"skipped": True, "reason": "not_postgres"}
 
     from backend.services.storage_service import R2_AVAILABLE
 
     if not R2_AVAILABLE:
         log.info("daily_db_backup: R2 not configured — skipping")
+        alert_backup_status(
+            "Skipped — R2 not configured", "R2_AVAILABLE is False; check R2 credentials"
+        )
         return {"skipped": True, "reason": "r2_not_configured"}
 
     stamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -113,6 +123,7 @@ def _do_daily_db_backup() -> dict:
         return {"success": True, "ref": ref, "size_bytes": len(dump_bytes), "stamp": stamp}
     except Exception as exc:
         log.error("daily_db_backup failed: %s", exc)
+        alert_backup_status("Failed", str(exc))
         return {"success": False, "error": str(exc)}
 
 

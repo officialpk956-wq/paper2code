@@ -10,7 +10,7 @@ E2B_API_KEY = os.getenv("E2B_API_KEY", "")
 # numpy) with ModuleNotFoundError. Only set E2B_SANDBOX_TEMPLATE if you have
 # a specific custom template you actually want.
 SANDBOX_TEMPLATE = os.getenv("E2B_SANDBOX_TEMPLATE") or None
-EXECUTION_TIMEOUT = 20  # seconds
+OUTPUT_LIMIT_BYTES = 65_536
 
 
 def run_code_in_sandbox(
@@ -40,6 +40,7 @@ def run_code_in_sandbox(
         import time
 
         from e2b import CommandExitException
+        from e2b.exceptions import TimeoutException
         from e2b_code_interpreter import Sandbox
 
         start = time.monotonic()
@@ -53,15 +54,29 @@ def run_code_in_sandbox(
 
             try:
                 result = sandbox.commands.run(
-                    "bash -c 'python3 /home/user/solution.py < /home/user/stdin.txt'"
+                    "bash -c 'python3 /home/user/solution.py < /home/user/stdin.txt'",
+                    timeout=run_timeout_ms / 1000.0,
                 )
                 stdout = result.stdout or ""
                 stderr = result.stderr or ""
                 exit_code = result.exit_code
+            except TimeoutException:
+                return {
+                    "passed": False,
+                    "stdout": "",
+                    "stderr": "Time limit exceeded",
+                    "time_ms": run_timeout_ms,
+                    "exit_code": -1,
+                }
             except CommandExitException as e:
                 stdout = getattr(e, "stdout", "") or ""
                 stderr = getattr(e, "stderr", "") or ""
                 exit_code = getattr(e, "exit_code", 1) or 1
+
+        if len(stdout) > OUTPUT_LIMIT_BYTES:
+            stdout = stdout[:OUTPUT_LIMIT_BYTES] + "\n... [output truncated at 64KB]"
+        if len(stderr) > OUTPUT_LIMIT_BYTES:
+            stderr = stderr[:OUTPUT_LIMIT_BYTES] + "\n... [output truncated at 64KB]"
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         passed = exit_code == 0
