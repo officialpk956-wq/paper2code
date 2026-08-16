@@ -79,6 +79,8 @@ const nextConfig = {
   },
 };
 
+import { withSentryConfig } from '@sentry/nextjs';
+
 const withMDX = createMDX({
   extension: /\.mdx?$/,
   options: {
@@ -90,4 +92,10 @@ const withMDX = createMDX({
   },
 });
 
-export default withMDX(nextConfig);
+export default withSentryConfig(withMDX(nextConfig), {
+  silent: true,
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  widenClientFileUpload: true,
+  hideSourceMaps: true,
+});

@@ -4,14 +4,22 @@ import { render, screen, act } from '@testing-library/react';
 import { AuthModalProvider, useAuthModal } from './AuthModalContext';
 import { setTokens, clearTokens } from '@/lib/api';
 
+vi.mock('@sentry/nextjs', () => ({
+  setUser: vi.fn(),
+}));
+import * as Sentry from '@sentry/nextjs';
+
 function TestConsumer() {
-  const { user, hydrated, signOut } = useAuthModal();
+  const { user, hydrated, signOut, signIn } = useAuthModal();
   return (
     <div>
       <div data-testid="hydrated">{hydrated ? 'yes' : 'no'}</div>
       <div data-testid="user">{user ? JSON.stringify(user) : 'null'}</div>
       <button data-testid="signout-btn" onClick={signOut}>
         Sign Out
+      </button>
+      <button data-testid="signin-btn" onClick={() => signIn({ id: 50, name: 'Alice', email: 'alice@example.com' })}>
+        Sign In
       </button>
     </div>
   );
@@ -101,5 +109,62 @@ describe('AuthModalContext & Cross-Tab Auth Synchronization', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     window.removeEventListener('auth-changed', handler);
+  });
+
+  it('Scenario 5: Call signIn(user) -> assert Sentry.setUser was called with {id, email}', () => {
+    render(
+      <AuthModalProvider>
+        <TestConsumer />
+      </AuthModalProvider>
+    );
+    act(() => {
+      screen.getByTestId('signin-btn').click();
+    });
+    expect(Sentry.setUser).toHaveBeenCalledWith({ id: '50', email: 'alice@example.com' });
+  });
+
+  it('Scenario 6: Call signOut() -> assert Sentry.setUser was called with null', () => {
+    render(
+      <AuthModalProvider>
+        <TestConsumer />
+      </AuthModalProvider>
+    );
+    act(() => {
+      screen.getByTestId('signout-btn').click();
+    });
+    expect(Sentry.setUser).toHaveBeenCalledWith(null);
+  });
+
+  it('Scenario 7b: Cross-tab logout (storage/auth-changed with no token) clears Sentry user, not just React state', () => {
+    localStorage.setItem('access_token', 'valid_token');
+    localStorage.setItem('user_profile', JSON.stringify({ id: 7, name: 'Grace', email: 'grace@example.com' }));
+    render(
+      <AuthModalProvider>
+        <TestConsumer />
+      </AuthModalProvider>
+    );
+    expect(screen.getByTestId('user').textContent).toContain('Grace');
+    (Sentry.setUser as ReturnType<typeof vi.fn>).mockClear();
+
+    // Simulate a DIFFERENT tab clearing tokens, then this tab's storage listener firing
+    act(() => {
+      localStorage.removeItem('access_token');
+      window.dispatchEvent(new Event('storage'));
+    });
+
+    expect(screen.getByTestId('user').textContent).toBe('null');
+    expect(Sentry.setUser).toHaveBeenCalledWith(null);
+  });
+
+  it('Scenario 7: Hydrate with valid session -> assert Sentry.setUser gets called once hydration resolves', () => {
+    localStorage.setItem('access_token', 'valid_token');
+    localStorage.setItem('user_profile', JSON.stringify({ id: 44, name: 'Bob', email: 'bob@example.com' }));
+    render(
+      <AuthModalProvider>
+        <TestConsumer />
+      </AuthModalProvider>
+    );
+    expect(screen.getByTestId('user').textContent).toContain('Bob');
+    expect(Sentry.setUser).toHaveBeenCalledWith({ id: '44', email: 'bob@example.com' });
   });
 });

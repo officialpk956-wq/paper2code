@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { clearTokens, isLoggedIn } from '@/lib/api';
+import * as Sentry from '@sentry/nextjs';
 
 type Tab = 'signin' | 'signup';
 // Matches the backend register response's user object: { id, name, email }.
@@ -40,6 +41,7 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
   const hydrate = useCallback(() => {
     if (!isLoggedIn()) {
       setUser(null);
+      Sentry.setUser(null);
       setHydrated(true);
       return;
     }
@@ -56,9 +58,14 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
           name: p.name || String(p.email).split('@')[0],
           email: p.email ?? '',
         });
+        Sentry.setUser({
+          id: typeof p.id === 'number' ? String(p.id) : undefined,
+          email: p.email,
+        });
       }
     } catch {
       setUser(null);
+      Sentry.setUser(null);
     }
     setHydrated(true);
   }, []);
@@ -71,6 +78,7 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
     const handleStorage = () => {
       if (!isLoggedIn()) {
         setUser(null);
+        Sentry.setUser(null);
       } else {
         hydrate();
       }
@@ -89,10 +97,12 @@ export function AuthModalProvider({ children }: { children: ReactNode }) {
   const signIn  = useCallback((u: User) => { 
     localStorage.setItem('user_profile', JSON.stringify(u)); 
     setUser(u); 
+    Sentry.setUser({ id: u.id ? String(u.id) : undefined, email: u.email });
     setIsOpen(false); 
   }, []);
   const signOut = useCallback(() => {
     clearTokens();
+    Sentry.setUser(null);
   }, []);
 
   const value = useMemo(
