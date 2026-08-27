@@ -12,7 +12,7 @@ if (apiUrl) connectSrcOrigins.add(apiUrl);
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  distDir: '.next-build',
+  distDir: '.next',
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
   transpilePackages: ['@dagrejs/dagre', '@dagrejs/graphlib'],
   eslint: {
