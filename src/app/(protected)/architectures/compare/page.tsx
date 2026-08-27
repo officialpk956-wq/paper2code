@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { ARCHITECTURES } from '@/data/content/architectures';
@@ -21,7 +21,93 @@ type CompareData = {
   };
 };
 
+type ArchitectureComboboxProps = {
+  id: string;
+  label: string;
+  selectedSlug: string;
+  onSelect: (slug: string) => void;
+  excludeSlug?: string;
+};
+
+function ArchitectureCombobox({ id, label, selectedSlug, onSelect, excludeSlug }: ArchitectureComboboxProps) {
+  const selected = ARCHITECTURES.find((architecture) => architecture.slug === selectedSlug);
+  const [query, setQuery] = useState(selected ? `${selected.name} (${selected.year})` : '');
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const architecture = ARCHITECTURES.find((entry) => entry.slug === selectedSlug);
+    setQuery(architecture ? `${architecture.name} (${architecture.year})` : '');
+  }, [selectedSlug]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const options = ARCHITECTURES.filter((architecture) => {
+    if (architecture.slug === excludeSlug) return false;
+    if (!normalizedQuery || selectedSlug) return true;
+    return `${architecture.name} ${architecture.slug} ${architecture.year}`
+      .toLowerCase()
+      .includes(normalizedQuery);
+  }).slice(0, 12);
+
+  return (
+    <div className="relative">
+      <label htmlFor={id} className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-[#A3A3A3]">
+        {label}
+      </label>
+      <input
+        id={id}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls={`${id}-options`}
+        aria-expanded={open}
+        autoComplete="off"
+        value={query}
+        placeholder="Search by name, slug, or year"
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          onSelect('');
+          setOpen(true);
+        }}
+        className="w-full rounded-lg border border-[#333333] bg-[#0A0A0A] px-3 py-2.5 text-sm text-white outline-none placeholder:text-[#525252] focus:border-[#A78BFA]"
+      />
+      {open && (
+        <div
+          id={`${id}-options`}
+          role="listbox"
+          className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-[#333333] bg-[#111111] p-1.5 shadow-2xl"
+        >
+          {options.length > 0 ? options.map((architecture) => (
+            <button
+              key={architecture.slug}
+              type="button"
+              role="option"
+              aria-selected={architecture.slug === selectedSlug}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onSelect(architecture.slug);
+                setQuery(`${architecture.name} (${architecture.year})`);
+                setOpen(false);
+              }}
+              className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-white/[0.06]"
+            >
+              <span>
+                <span className="block text-sm font-medium text-white">{architecture.name}</span>
+                <span className="block text-[11px] text-[#525252]">{architecture.slug}</span>
+              </span>
+              <span className="text-xs text-[#A3A3A3]">{architecture.year}</span>
+            </button>
+          )) : (
+            <div className="px-3 py-4 text-center text-xs text-[#737373]">No architectures found.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CompareContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const a = searchParams.get('a');
   const b = searchParams.get('b');
@@ -29,8 +115,10 @@ function CompareContent() {
   const bName = searchParams.get('bName');
 
   const [data, setData] = useState<CompareData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(aName && bName));
   const [error, setError] = useState('');
+  const [selectedA, setSelectedA] = useState(aName ?? '');
+  const [selectedB, setSelectedB] = useState(bName ?? '');
 
   const archA = ARCHITECTURES.find(x => x.slug === aName);
   const archB = ARCHITECTURES.find(x => x.slug === bName);
@@ -38,7 +126,8 @@ function CompareContent() {
   useEffect(() => {
     if (!aName || !bName) {
       setLoading(false);
-      setError("Missing architecture slugs in URL");
+      setData(null);
+      setError('');
       return;
     }
     
@@ -48,23 +137,71 @@ function CompareContent() {
     }
 
     setLoading(true);
+    setError('');
+    setData(null);
     apiGet<CompareData>(url)
       .then(setData)
       .catch(e => setError(e.message || "Failed to load comparison data"))
       .finally(() => setLoading(false));
   }, [a, b, aName, bName]);
 
+  const compareSelected = () => {
+    if (!selectedA || !selectedB || selectedA === selectedB) return;
+    router.push(
+      `/architectures/compare?aName=${encodeURIComponent(selectedA)}&bName=${encodeURIComponent(selectedB)}`,
+    );
+  };
+
+  const hasComparison = Boolean(aName && bName);
+  const canCompare = Boolean(selectedA && selectedB && selectedA !== selectedB);
+
   return (
     <div className="flex flex-col h-full bg-[#050505] text-white overflow-y-auto">
       <div className="p-6 border-b border-[#1A1A1A]">
-        <Link href={`/architectures/${aName || ''}`} className="text-[12px] text-[#A3A3A3] hover:text-white flex items-center gap-1.5 mb-4 w-fit">
+        <Link href={aName ? `/architectures/${aName}` : '/architectures'} className="text-[12px] text-[#A3A3A3] hover:text-white flex items-center gap-1.5 mb-4 w-fit">
           <ArrowLeft size={14} /> Back
         </Link>
         <h1 className="text-2xl font-bold">Compare Architectures</h1>
         <p className="text-[#A3A3A3] text-sm mt-1">Analyzing structural differences and metric deltas</p>
       </div>
 
-      <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8 max-w-6xl w-full">
+      <div className="w-full max-w-6xl p-6">
+        <div className="rounded-xl border border-[#262626] bg-[#111111] p-6">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <ArchitectureCombobox
+              id="architecture-a"
+              label="Architecture A"
+              selectedSlug={selectedA}
+              onSelect={setSelectedA}
+              excludeSlug={selectedB}
+            />
+            <ArchitectureCombobox
+              id="architecture-b"
+              label="Architecture B"
+              selectedSlug={selectedB}
+              onSelect={setSelectedB}
+              excludeSlug={selectedA}
+            />
+          </div>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-[#737373]">
+              {selectedA && selectedB && selectedA === selectedB
+                ? 'Choose two different architectures.'
+                : 'Pick two architectures to compare'}
+            </p>
+            <button
+              type="button"
+              disabled={!canCompare}
+              onClick={compareSelected}
+              className="rounded-lg bg-[#A78BFA] px-4 py-2 text-sm font-semibold text-black transition hover:bg-[#C4B5FD] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Compare selected
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {hasComparison && <div className="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-8 max-w-6xl w-full">
         {/* Arch A Info */}
         <div className="bg-[#111111] border border-[#262626] rounded-xl p-6">
           <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-2">Architecture A</div>
@@ -80,10 +217,10 @@ function CompareContent() {
           <div className="text-sm text-[#525252] mt-1">{archB?.year} · {archB?.difficulty}</div>
           {data?.paper_b && <div className="mt-4 text-[11px] text-[#525252]">Source: {data.paper_b.title}</div>}
         </div>
-      </div>
+      </div>}
 
       <div className="px-6 pb-12 max-w-6xl w-full space-y-6">
-        <h2 className="text-lg font-semibold border-b border-[#262626] pb-2">Differences</h2>
+        {hasComparison && <h2 className="text-lg font-semibold border-b border-[#262626] pb-2">Differences</h2>}
         
         {loading && (
           <div className="animate-pulse space-y-4">
@@ -95,6 +232,12 @@ function CompareContent() {
         {error && (
           <div className="text-red-400 bg-red-400/10 border border-red-400/20 p-4 rounded-xl text-sm">
             {error}
+          </div>
+        )}
+
+        {!hasComparison && (
+          <div className="rounded-xl border border-dashed border-[#333333] bg-[#0A0A0A] p-8 text-center text-sm text-[#737373]">
+            Pick two architectures to compare
           </div>
         )}
 

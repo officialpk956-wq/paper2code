@@ -26,11 +26,74 @@ const TAB_LIST: { id: Tab; label: string }[] = [
 ];
 
 type PaperMeta = {
-  title: string; authors: string; year: number; abstract: string; color: string;
+  title: string; authors: string; year: number | string | null; abstract: string; color: string;
   archSlug?: string; archName?: string;
   contributions: string[];
   status?: string;
 };
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeAuthors(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const authors = value.filter((author): author is string => typeof author === 'string' && Boolean(author.trim()));
+    if (authors.length > 0) return authors.join(', ');
+  }
+  return 'Authors unavailable';
+}
+
+function normalizeContributions(root: UnknownRecord, metadata: UnknownRecord): string[] {
+  const direct = root.contributions ?? metadata.contributions;
+  if (Array.isArray(direct)) {
+    return direct.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()));
+  }
+
+  if (!Array.isArray(root.module_summary)) return [];
+  return root.module_summary.flatMap((module) => {
+    if (!isRecord(module)) return [];
+    const contribution = optionalString(module.explanation) ?? optionalString(module.layer_name);
+    return contribution ? [contribution] : [];
+  });
+}
+
+/**
+ * The paper endpoint originally returned a flat PaperMeta object. It now returns
+ * `{ metadata, module_summary, ... }`. Normalize both contracts at the network
+ * boundary so rendering never depends on nullable or shifted backend fields.
+ */
+function normalizePaperMeta(payload: unknown): PaperMeta | null {
+  if (!isRecord(payload)) return null;
+
+  const metadata = isRecord(payload.metadata) ? payload.metadata : payload;
+  const title = optionalString(metadata.title) ?? optionalString(metadata.full_title);
+  if (!title) return null;
+
+  const rawYear = metadata.year;
+  const year = typeof rawYear === 'number' && Number.isFinite(rawYear)
+    ? rawYear
+    : optionalString(rawYear);
+
+  return {
+    title,
+    authors: normalizeAuthors(metadata.authors),
+    year: year ?? null,
+    abstract: optionalString(metadata.abstract) ?? 'No abstract is available for this paper yet.',
+    color: optionalString(metadata.color) ?? '#A78BFA',
+    archSlug: optionalString(metadata.archSlug) ?? optionalString(metadata.arch_slug),
+    archName: optionalString(metadata.archName) ?? optionalString(metadata.arch_name),
+    contributions: normalizeContributions(payload, metadata),
+    status: optionalString(metadata.status),
+  };
+}
 
 type Challenge = { num: string; title: string; difficulty: 'Easy' | 'Medium' | 'Hard'; href: string };
 
@@ -145,12 +208,17 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   }, [tab, id]);
 
   const fetchSummary = async () => {
+    setLoading(true);
+    setError('');
+    setMeta(null);
+
     if (FLAGSHIP_META[id]) {
       setMeta({ ...FLAGSHIP_META[id] });
       setLoading(false);
-      apiGet<{ papers: {id: number, title: string}[] }>('/api/papers')
+      apiGet<{ papers?: {id: number, title: string}[] } | null>('/api/papers')
         .then(data => {
-          const found = data.papers?.find(p => p.id.toString() === id || 
+          const papers = Array.isArray(data?.papers) ? data.papers : [];
+          const found = papers.find(p => p.id.toString() === id ||
             p.title.toLowerCase().includes(FLAGSHIP_TITLE_WORDS[id] ?? ''));
           if (found) setNumericId(found.id);
         })
@@ -158,9 +226,12 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       return;
     }
     try {
-      const data = await apiGet<PaperMeta>(`/api/papers/${id}`);
-      setMeta({ ...data, color: data.color || '#A78BFA' });
-      setNumericId(parseInt(id, 10));
+      const data = await apiGet<unknown>(`/api/papers/${id}`);
+      const normalizedMeta = normalizePaperMeta(data);
+      setMeta(normalizedMeta);
+
+      const parsedId = Number.parseInt(id, 10);
+      setNumericId(Number.isFinite(parsedId) ? parsedId : null);
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load summary');
     } finally {
@@ -300,8 +371,16 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
 
   if (!meta) {
     return (
-      <div className="flex flex-col bg-transparent text-white p-8" style={{ height: 'calc(100vh - 56px)' }}>
-        <div className="text-[#A3A3A3]">Paper not found.</div>
+      <div className="flex flex-col items-center justify-center gap-3 bg-transparent p-8 text-center text-white" style={{ height: 'calc(100vh - 56px)' }}>
+        <h1 className="text-lg font-semibold">Paper workspace unavailable</h1>
+        <p className="max-w-lg text-sm leading-relaxed text-[#A3A3A3]">
+          {error
+            ? `We couldn't load this paper workspace: ${error}`
+            : 'No paper data is available for this workspace yet.'}
+        </p>
+        <Link href="/papers" className="mt-2 rounded-lg border border-[#262626] px-4 py-2 text-sm text-[#A3A3A3] hover:text-white">
+          Back to papers
+        </Link>
       </div>
     );
   }
@@ -323,7 +402,9 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
           <div>
             <div className="h-0.5 w-8 rounded-full mb-2" style={{ backgroundColor: meta.color }} />
             <h1 className="text-[18px] font-bold text-white leading-tight max-w-2xl">{meta.title}</h1>
-            <div className="text-[12px] text-[#525252] mt-1">{meta.authors} · {meta.year}</div>
+            <div className="text-[12px] text-[#525252] mt-1">
+              {meta.authors}{meta.year ? ` · ${meta.year}` : ''}
+            </div>
             {(() => {
               const archNameMap: Record<string, string> = {
                 'attention-is-all-you-need': 'Transformer',

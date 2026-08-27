@@ -17,7 +17,6 @@ const FOOTER_COLS = [
     title: 'Company', 
     links: [
       { label: 'About', href: '/about' },
-      { label: 'Pricing', href: '/pricing' }, 
       { label: 'System Design', href: '/system-design' }, 
       { label: 'Architectures', href: '/architectures' }, 
       { label: 'Contact', href: `mailto:${LEGAL.contactEmail}` }

@@ -107,4 +107,39 @@ describe('WorkspacePaperClient AI Tutor', () => {
       expect(screen.getByText('Fallback answer')).toBeInTheDocument();
     });
   });
+
+  test('renders an empty state when the paper API returns null', async () => {
+    mockApiGet.mockResolvedValue(null as never);
+
+    render(<WorkspacePaperClient id="999" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Paper workspace unavailable')).toBeInTheDocument();
+      expect(screen.getByText('No paper data is available for this workspace yet.')).toBeInTheDocument();
+    });
+  });
+
+  test('normalizes the current nested paper-details response', async () => {
+    mockApiGet.mockResolvedValue({
+      metadata: {
+        id: 7,
+        title: 'Nested Response Paper',
+        authors: 'Ada Lovelace',
+        abstract: 'A paper returned using the current API contract.',
+        status: 'Ready',
+      },
+      module_summary: [
+        { id: 1, layer_name: 'Attention', explanation: 'Introduces a sparse attention module.' },
+      ],
+      architecture_statistics: { depth: 1, node_count: 1, edge_count: 0 },
+    } as never);
+
+    render(<WorkspacePaperClient id="7" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Nested Response Paper')).toBeInTheDocument();
+      expect(screen.getByText('A paper returned using the current API contract.')).toBeInTheDocument();
+      expect(screen.getByText('Introduces a sparse attention module.')).toBeInTheDocument();
+    });
+  });
 });

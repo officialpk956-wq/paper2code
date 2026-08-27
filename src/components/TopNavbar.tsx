@@ -32,7 +32,6 @@ const NAV: NavEntry[] = [
       { label: 'Compare Architectures', href: '/architectures/compare', desc: 'Side-by-side' },
     ],
   },
-  { label: 'Pricing', href: '/pricing' },
 ];
 
 export function TopNavbar() {

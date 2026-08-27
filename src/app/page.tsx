@@ -72,7 +72,7 @@ const MARQUEE_BOT = [
 
 const FOOTER_COLS = [
   { title: 'Product', links: [{ label: 'Dojo', href: '/dojo' }, { label: 'Papers', href: '/papers' }, { label: 'Learn', href: '/learn' }, { label: 'Labs', href: '/labs' }] },
-  { title: 'Company', links: [{ label: 'Pricing', href: '/pricing' }, { label: 'System Design', href: '/system-design' }, { label: 'Architectures', href: '/architectures' }, { label: 'Contact', href: `mailto:${LEGAL.contactEmail}` }] },
+  { title: 'Company', links: [{ label: 'System Design', href: '/system-design' }, { label: 'Architectures', href: '/architectures' }, { label: 'Contact', href: `mailto:${LEGAL.contactEmail}` }] },
   { title: 'Legal',   links: [{ label: 'Privacy', href: '/privacy' }, { label: 'Terms', href: '/terms' }, { label: 'Security', href: '/security' }, { label: 'Cookies', href: '/cookies' }] },
 ];
 
