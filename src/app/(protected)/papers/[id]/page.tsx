@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
 import WorkspacePaperClient from './WorkspacePaperClient';
-import ArchDiagram from '@/components/arch/ArchDiagram';
+import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { paperToArchSlug } from '@/components/arch/archFlows';
 import { Reveal } from '@/components/anim';
 import { PAPER_ROUTE_ALIASES } from '@/data/content/routeAliases';
@@ -29,7 +29,7 @@ export default async function PaperWorkspacePage({ params }: { params: Promise<{
               <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4">
                 Architecture
               </div>
-              <ArchDiagram slug={archSlug} />
+              <ArchDiagramView slug={archSlug} />
             </Reveal>
           )}
           <MdxRenderer source={mdxContent} />

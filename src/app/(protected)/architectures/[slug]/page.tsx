@@ -6,7 +6,7 @@ import { findTopic, dojoSlugFor, papersForArch, LIBRARY_TO_WORKSPACE_ID } from '
 import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
 import ArchSidebar from '@/components/arch/ArchSidebar';
-import ArchDiagram from '@/components/arch/ArchDiagram';
+import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { toDiagramSlug } from '@/components/arch/archFlows';
 import SectionGrid from '@/components/arch/SectionGrid';
 import ArchHeroBackground from '@/components/arch/ArchHeroBackground';
@@ -153,7 +153,7 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
           {diagramSlug && (
             <div className="mb-12">
               <div className="text-[11px] font-bold text-[#A3A3A3] uppercase tracking-wider mb-4">Interactive Blueprint</div>
-              <ArchDiagram slug={diagramSlug} />
+              <ArchDiagramView slug={diagramSlug} />
             </div>
           )}
 

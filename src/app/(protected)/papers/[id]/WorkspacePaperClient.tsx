@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { apiGet, apiPost } from '@/lib/api';
 import { findArch } from '@/lib/crosslinks';
-import ArchDiagram from '@/components/arch/ArchDiagram';
+import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { paperToArchSlug } from '@/components/arch/archFlows';
 import { FLAGSHIP_META, FLAGSHIP_GRAPH, FLAGSHIP_BLUEPRINT, FLAGSHIP_CODE } from '@/data/flagship-papers';
 import { loader } from '@monaco-editor/react';
@@ -464,7 +464,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
             {archSlug && (
               <div>
                 <div className="text-[13px] font-semibold text-white mb-3">Architecture</div>
-                <ArchDiagram slug={archSlug} />
+                <ArchDiagramView slug={archSlug} />
               </div>
             )}
             <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
