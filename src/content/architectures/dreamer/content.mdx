@@ -1,0 +1,226 @@
+# Dreamer
+
+## 1. Overview
+Dreamer (specifically **DreamerV1 / DreamerV2 / DreamerV3**), introduced in 2019 by Danijel Hafner, Timothy Lillicrap, Jimmy Ba, and Mohammad Norouzi (Google Brain & University of Toronto), established world-model RL by demonstrating that an agent can learn complex control behaviors **entirely inside an imagined latent environment**. Classical model-based RL methods learned world models but still relied on short-horizon planning or struggled to backpropagate gradients through deep world models. Dreamer introduced the **Recurrent State-Space Model (RSSM)**—a world model that decouples memory into a deterministic **recurrent state** (capturing long-term temporal context) and a **stochastic state** (capturing stochastic environment transitions). By unrolling imagined trajectories $H=15$ steps forward in RSSM latent space, Dreamer trains an Actor-Critic policy using analytic gradients backpropagated through imagined trajectories, eliminating the need to interact with real physical environments during policy optimization.
+
+:::note
+Dreamer's paradigm: "Learn an RSSM world model in latent space (recurrent + stochastic states), unroll imagined rollouts, and train Actor-Critic policies using analytic gradients backpropagated through imagined trajectories."
+:::
+
+## 2. Historical Context
+In 2019, model-free RL (PPO, SAC) required tens of millions of environment steps to learn tasks, making deployment on real physical robots impractical due to mechanical wear and time limits. Model-based methods (like World Models by Ha & Schmidhuber, 2018) learned VAE/RNN models, but struggled with policy optimization over long horizons.
+
+Danijel Hafner et al. developed Dreamer to prove that policy optimization inside a learned world model could equal or surpass model-free algorithms in sample efficiency and final performance. DreamerV3 later became the first general algorithm to collect diamonds in Minecraft from scratch without human demonstrations.
+
+## 3. Problem It Solves
+Dreamer resolves three fundamental limitations of reinforcement learning:
+1. **Extreme Sample Inefficiency of Model-Free RL:** Reduces physical environment interaction steps by $10\times$ to $100\times$ by performing millions of policy gradient updates in imagined latent rollouts.
+2. **Deterministic RNN Vanishing Gradients vs. Stochastic Collapse:** Pure deterministic RNNs struggle with stochastic environment transitions, while pure stochastic VAEs lack long-term memory. **RSSM** combines deterministic recurrent states $h_t$ and stochastic latent states $z_t$.
+3. **Non-Differentiable Environment Steps:** Real physical environments cannot be backpropagated through. Dreamer's RSSM world model is fully differentiable, allowing analytic policy gradient backpropagation ($\nabla_\theta \text{Reward}$).
+
+## 4. Architecture Diagram Data
+Below is the RSSM World Model architecture showing the Recurrent State ($h_t$), Stochastic State ($z_t$), and Imagined Trajectory Policy Optimization.
+
+```text
+       RECURRENT STATE-SPACE MODEL (RSSM) WORLD MODEL
+
+       [ Image Observation x_t ]           [ Action a_{t-1} ]
+                   |                              |
+                   v                              v
+       +===================================================+
+       | Deterministic Recurrent State h_t (GRU / ConvGRU) | <---+ Recurrent Loop
+       | h_t = GRU(h_{t-1}, z_{t-1}, a_{t-1})              | ----+
+       +===================================================+
+                   |                              |
+                   v                              v
+       +=======================+      +=======================+
+       | Posterior Net q(z_t)  |      | Prior Net p(z_t)      |
+       | (Given Observation)   |      | (Imagined - No Obs!)  |
+       +=======================+      +=======================+
+                   |                              |
+                   +--------------+---------------+
+                                  |
+                                  v
+                [ Stochastic Latent State z_t ]
+                                  |
+         +------------------------+------------------------+
+         |                        |                        |
+         v                        v                        v
+  [ Decoder Image x_t ]   [ Reward Predictor r_t ]  [ Discount Predictor gamma_t ]
+
+       ========================================================================
+
+       POLICY OPTIMIZATION IN IMAGINED LATENT ROLLOUTS (H=15 Steps)
+
+       [ Latent State (h_tau, z_tau) ] ---> [ Actor Net pi(a | h, z) ]
+                                                   |
+                                                   v
+       [ Imagined Step in RSSM: (h_{tau+1}, z_{tau+1}) = RSSM(h_tau, z_tau, a) ]
+                                                   |
+                                                   v
+       [ Value Net V(h, z) ] <--- [ Compute Imagined Lambda-Returns ] ---> [ Update Actor ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. RSSM World Model Components:**
+- **Deterministic Recurrent State ($h_t \in \mathbb{R}^{512}$):** Updated via a GRU cell: $h_t = \text{GRU}(h_{t-1}, z_{t-1}, a_{t-1})$.
+- **Stochastic State ($z_t \in \mathbb{R}^{32 \times 32}$):** Modeled as a categorical distribution (DreamerV2/V3) or Gaussian distribution (DreamerV1).
+- **Posterior Network $q(z_t \mid h_t, x_t)$:** Predicts $z_t$ using current image observation $x_t$ during training.
+- **Prior Network $p(z_t \mid h_t)$:** Predicts $z_t$ without image observation during imagined rollouts.
+
+**2. Image Decoder & Reward Heads:**
+- **Image Decoder:** Transposed ConvNet reconstructing $64 \times 64 \times 3$ image observations from latent state $(h_t, z_t)$.
+- **Reward Predictor:** MLP predicting scalar reward $\hat{r}_t$.
+- **Continue Predictor:** MLP predicting episode continuation probability $\hat{\gamma}_t \in [0, 1]$.
+
+**3. Actor-Critic Networks (Imagined Space):**
+- **Actor Network $\pi_\psi(a \mid h_t, z_t)$:** MLP mapping latent state to action parameters.
+- **Value Network $v_\xi(h_t, z_t)$:** MLP mapping latent state to expected value.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Dreamer's RSSM for batch size $B=16$, sequence length $T=50$, image resolution $64 \times 64 \times 3$.
+
+1. **Observation Encoding:**
+   - Image Sequence $x_{1:T}$: `(16, 50, 3, 64, 64)` $\xrightarrow{\text{Conv Encoder}} e_{1:T}$: `(16, 50, 1024)`
+2. **RSSM Recurrent Execution ($t=1 \dots 50$):**
+   - Recurrent State $h_t$: `(16, 512)`
+   - Stochastic Posterior $z_t \sim q(z_t \mid h_t, e_t) \to$ `(16, 32, 32)`
+3. **Imagined Latent Rollouts (Horizon $H=15$ steps):**
+   - Initial Latent $(h_0, z_0)$: `(16*50, 512)`, `(16*50, 32, 32)` $= \text{`(800, 512)`}$
+   - Unroll $H=15$ steps using Actor $\pi_\psi(a \mid h_\tau, z_\tau)$ and Prior $p(z_{\tau+1} \mid h_{\tau+1})$:
+     - Imagined Sequence: `(15, 800, 512)`
+     - Predicted Rewards $\hat{r}_{1:15}$: `(15, 800, 1)`
+     - Predicted Values $\hat{v}_{1:15}$: `(15, 800, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. RSSM Variational Loss Objective (ELBO)
+The RSSM world model is trained by maximizing the Evidence Lower Bound (ELBO), combining image reconstruction, reward prediction, and KL divergence between posterior and prior:
+
+$$\mathcal{L}_{\text{world}}(\theta) = \sum_{t=1}^T \left( \underbrace{-\log p_\theta(x_t \mid h_t, z_t)}_{\text{Image Reconstruction}} \underbrace{-\log p_\theta(r_t \mid h_t, z_t)}_{\text{Reward Loss}} + \beta \underbrace{D_{\text{KL}}\left( q_\theta(z_t \mid h_t, x_t) \;\middle\|\; p_\theta(z_t \mid h_t) \right)}_{\text{KL Balancing / Dynamics Loss}} \right)$$
+
+### 2. Imagined $\lambda$-Returns for Actor-Critic Update
+Inside imagined rollouts $\tau = t \dots t+H$, Dreamer computes target $\lambda$-returns $R_\tau^\lambda$:
+
+$$R_\tau^\lambda = \hat{r}_\tau + \gamma_\tau \left( (1 - \lambda) \hat{v}(s_{\tau+1}) + \lambda R_{\tau+1}^\lambda \right)$$
+
+The Actor maximizes $R_\tau^\lambda$ via analytic backpropagation through the world model or REINFORCE.
+
+## 8. Training Procedure
+- **Data Collection:** Collect real environment trajectories using Actor $\pi_\psi$ and store in replay buffer.
+- **World Model Training:** Sample sequence batches $(x_{1:T}, a_{1:T}, r_{1:T})$, update RSSM using ELBO loss $\mathcal{L}_{\text{world}}$.
+- **Behavior Learning (Imagination):** Sample initial states $(h_0, z_0)$ from replay sequences. Unroll $H=15$ steps forward using RSSM Prior $p(z)$ and Actor $\pi_\psi$. Compute $\lambda$-returns $R_\tau^\lambda$. Update Actor and Value networks using analytic gradients.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **RSSM Core Cell**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RSSMCell(nn.Module):
+    """ Dreamer Recurrent State-Space Model (RSSM) Core Cell """
+    def __init__(self, action_dim=6, stoch_dim=32, stoch_classes=32, deter_dim=512):
+        super().__init__()
+        self.stoch_dim = stoch_dim
+        self.stoch_classes = stoch_classes
+        self.deter_dim = deter_dim
+        
+        # Flattened stochastic state dimension
+        self.stoch_flat = stoch_dim * stoch_classes
+        
+        # Recurrent GRU Cell: h_t = GRU(h_{t-1}, z_{t-1}, a_{t-1})
+        self.fc_in = nn.Linear(self.stoch_flat + action_dim, deter_dim)
+        self.gru = nn.GRUCell(deter_dim, deter_dim)
+        
+        # Prior Network p(z_t | h_t) (No Image)
+        self.prior_net = nn.Linear(deter_dim, self.stoch_flat)
+        # Posterior Network q(z_t | h_t, e_t) (With Image Features e_t)
+        self.posterior_net = nn.Linear(deter_dim + 1024, self.stoch_flat)
+
+    def forward(self, prev_h, prev_z, prev_action, embed=None):
+        """
+        prev_h: (B, deter_dim)
+        prev_z: (B, stoch_dim, stoch_classes)
+        prev_action: (B, action_dim)
+        embed: (B, 1024) - Encoded image observation (None during imagination)
+        """
+        B = prev_h.shape[0]
+        prev_z_flat = prev_z.view(B, -1)
+        
+        # 1. Deterministic Recurrent State Update
+        x = F.elu(self.fc_in(torch.cat([prev_z_flat, prev_action], dim=-1)))
+        h = self.gru(x, prev_h) # (B, deter_dim)
+        
+        # 2. Compute Prior logits
+        prior_logits = self.prior_net(h).view(B, self.stoch_dim, self.stoch_classes)
+        
+        if embed is not None:
+            # 3. Compute Posterior logits using Observation Embedding
+            post_logits = self.posterior_net(torch.cat([h, embed], dim=-1)).view(B, self.stoch_dim, self.stoch_classes)
+            logits = post_logits
+        else:
+            logits = prior_logits
+            
+        # Sample Categorical Stochastic State
+        probs = F.softmax(logits, dim=-1)
+        # Straight-through / Softmax sampling
+        z = probs + (torch.gumbel_softmax(logits, hard=True) - probs).detach()
+        
+        return h, z, prior_logits, logits
+
+if __name__ == "__main__":
+    B = 4
+    rssm = RSSMCell(action_dim=6, stoch_dim=32, stoch_classes=32, deter_dim=512)
+    
+    prev_h = torch.zeros(B, 512)
+    prev_z = torch.zeros(B, 32, 32)
+    prev_act = torch.zeros(B, 6)
+    embed = torch.randn(B, 1024)
+    
+    h_next, z_next, prior_l, post_l = rssm(prev_h, prev_z, prev_act, embed)
+    
+    print(f"Recurrent State h_t Shape:  {h_next.shape}")
+    print(f"Stochastic State z_t Shape: {z_next.shape}")
+    assert h_next.shape == (B, 512)
+    assert z_next.shape == (B, 32, 32)
+    print("Dreamer RSSM Cell verification successful!")
+```
+
+## 10. Strengths
+- **100% Imagined Policy Learning:** Trains Actor-Critic policies completely inside dreamed latent rollouts without physical environment interactions.
+- **Extreme Sample Efficiency:** Learns complex continuous robotics control in $10\times$ fewer steps than PPO/SAC.
+- **Differentiable World Model:** Enables analytic policy gradient backpropagation through latent world transitions.
+
+## 11. Weaknesses
+- **Model Exploitation:** If the RSSM world model makes inaccurate predictions, the Actor can exploit model bugs during imagined rollouts.
+
+## 12. Research Evolution
+Dreamer established world-model RL, leading directly to **DreamerV2** (Discrete Categoricals), **DreamerV3** (Minecraft diamond collection), and **DayDreamer** (physical robot learning).
+
+## 13. Interview Questions
+
+**Q1: What is the Recurrent State-Space Model (RSSM) in Dreamer?**
+**A1:** RSSM is a world model that decouples latent memory into a deterministic recurrent state $h_t$ (capturing long-term temporal context via GRU) and a stochastic latent state $z_t$ (capturing stochastic environment transitions via categorical/Gaussian distributions).
+
+**Q2: How does Dreamer train its Actor-Critic policy without interacting with the real environment during policy updates?**
+**A2:** Dreamer initializes latent states from past replay sequences, unrolls imagined trajectories $H=15$ steps forward inside RSSM latent space using the Actor $\pi_\psi$, and computes gradients backpropagating through the differentiable RSSM world model.
+
+**Q3: What is the difference between the RSSM Prior network and Posterior network?**
+**A3:** The Posterior network $q(z_t \mid h_t, x_t)$ predicts stochastic state $z_t$ using image observation $x_t$ during training. The Prior network $p(z_t \mid h_t)$ predicts $z_t$ without image observations during imagined rollouts.
+
+**Q4: Why did DreamerV2 replace Gaussian stochastic states with Categorical distributions?**
+**A4:** Categorical distributions prevent mode collapse, better model discrete environment transitions, and eliminate KL divergence explosion issues common in continuous Gaussian latent spaces.
+
+**Q5: Write out the Dreamer RSSM ELBO loss formula.**
+**A5:** $\mathcal{L}_{\text{world}} = \sum_{t=1}^T \left( -\log p(x_t \mid h_t, z_t) - \log p(r_t \mid h_t, z_t) + \beta D_{\text{KL}}(q(z_t \mid h_t, x_t) \parallel p(z_t \mid h_t)) \right)$.
+
+## 14. Related Papers
+- **DreamerV1 Paper:** *Dream to Control: Learning Behaviors by Latent Imagination* (Hafner et al., ICLR 2020)
+- **DreamerV2 Paper:** *Mastering Atari with Discrete World Models* (Hafner et al., ICLR 2021)
+- **DreamerV3 Paper:** *Mastering Diverse Domains through World Models* (Hafner et al., arXiv 2023)
+
+## 15. Further Reading
+- Danijel Hafner's Official Dreamer PyTorch GitHub Repository

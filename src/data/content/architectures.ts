@@ -2493,5 +2493,28 @@ export const ARCHITECTURES: ArchEntry[] = [
     "derivedInto": "CogVLM2",
     "keyInnovation": "Visual expert — dedicated trainable parameters per transformer layer",
     "industryUsage": "Deep visual understanding"
+  },
+  {
+    "slug": "ae",
+    "name": "Autoencoder",
+    "year": 1987,
+    "authors": "Bourlard & Kamp; Hinton & Salakhutdinov",
+    "difficulty": "Beginner",
+    "category": "Generative Architectures",
+    "derivedInto": "Variational Autoencoder, Denoising Autoencoder",
+    "keyInnovation": "Learn a compact latent representation by reconstructing the input through an encoder-decoder bottleneck",
+    "industryUsage": "Dimensionality reduction, anomaly detection, denoising, representation learning"
+  },
+  {
+    "slug": "vae",
+    "name": "Variational Autoencoder",
+    "year": 2013,
+    "authors": "Kingma & Welling",
+    "difficulty": "Intermediate",
+    "category": "Generative Architectures",
+    "parent": "Autoencoder",
+    "derivedInto": "VQ-VAE, Latent Diffusion Models",
+    "keyInnovation": "Probabilistic latent-variable learning with a reparameterized encoder and an ELBO objective",
+    "industryUsage": "Generative modeling, representation learning, anomaly detection, latent diffusion"
   }
 ];

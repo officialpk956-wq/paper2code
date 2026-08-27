@@ -1,0 +1,232 @@
+# WGAN
+
+## 1. Overview
+Wasserstein GAN (WGAN), introduced in 2017 by Martin Arjovsky, Soumith Chintala, and Léon Bottou (Courant Institute & Facebook AI Research), introduced a fundamental theoretical breakthrough that stabilized GAN training mathematically. Prior GAN formulations optimized Jensen-Shannon (JS) divergence or Kullback-Leibler (KL) divergence between real and generated distributions. Arjovsky et al. proved that when real and generated distributions lie on lower-dimensional manifolds in high-dimensional space (which is almost universally true for real images), JS divergence is **discontinuous**, causing vanishing gradients in the Generator when the Discriminator is trained to optimality. WGAN replaced JS divergence with the **Wasserstein-1 Distance (Earth Mover's Distance)**, which is continuous and differentiable everywhere. By replacing the traditional Discriminator with a **Critic** (bounded by a 1-Lipschitz constraint via weight clipping $[-c, c]$), WGAN provided a meaningful, smooth loss metric that correlates directly with visual image quality and completely eliminates mode collapse.
+
+:::note
+WGAN's mathematical breakthrough: "Replace JS divergence with Earth Mover's (Wasserstein-1) distance. The Critic loss correlates directly with generated image quality, providing smooth gradients everywhere."
+:::
+
+## 2. Historical Context
+From 2014 to 2017, GAN training was considered an unpredictable "black art." Practitioners suffered from constant mode collapse, vanishing gradients, and hyperparameter sensitivity. If the Discriminator learned too fast, its Sigmoid outputs saturated at 0 or 1, providing zero usable gradients back to the Generator.
+
+Martin Arjovsky and Léon Bottou investigated the underlying cause. They published a theoretical analysis proving that standard GAN objectives (JS divergence) suffer from fundamental mathematical flaws: when two probability distributions $P_r$ and $P_g$ have disjoint supports (they do not overlap in high-dimensional space), JS divergence evaluates to a constant $\log 2$, producing zero gradient $\nabla_\theta \text{JS}(P_r \parallel P_g) = \mathbf{0}$.
+
+WGAN introduced Earth Mover's distance to generative modeling, solving vanishing gradients mathematically and making GAN training stable across diverse model capacities.
+
+## 3. Problem It Solves
+WGAN resolves three core theoretical failure modes of classic GANs:
+1. **Vanishing Gradients when Discriminator is Optimal:** Standard JS divergence produces zero gradients when $D$ is near-optimal. WGAN's Wasserstein Critic produces linear continuous gradients everywhere, enabling $D$ to be trained to convergence without starving $G$.
+2. **Loss Metric Does Not Correlate with Quality:** In original GANs, loss curves are chaotic and non-interpretable. WGAN's Critic loss acts as a smooth, monotonic proxy for visual sample quality.
+3. **Mode Collapse:** Wasserstein distance provides continuous gradients across the entire space, forcing the Generator to cover all modes of the data distribution.
+
+## 4. Architecture Diagram Data
+Below is the architecture of WGAN showing the Critic network with Weight Clipping $[-c, c]$ and linear output (no Sigmoid).
+
+```text
+       [ Real Image x ~ P_r ]                     [ Latent Vector z ~ N(0, I) ]
+                 |                                              |
+                 |                                              v
+                 |                            +===================================+
+                 |                            | Generator Network G_theta         |
+                 |                            +===================================+
+                 |                                              |
+                 v                                              v
+       [ Real Image x: (B, 3, H, W) ]              [ Fake Image G(z): (B, 3, H, W) ]
+                 |                                              |
+                 +-----------------------+----------------------+
+                                         |
+                                         v
+                         +======================================+
+                         | WASSERSTEIN CRITIC f_w               |
+                         | - Linear Output (NO SIGMOID!)        |
+                         | - Weights clipped to [-c, +c]        |
+                         |   after every gradient update        |
+                         |   to enforce 1-Lipschitz constraint |
+                         +======================================+
+                                         |
+                                         v
+                         [ Real Critic Score f(x) ]
+                         [ Fake Critic Score f(G(z)) ]
+                                         |
+                                         v
+                         +======================================+
+                         | Wasserstein Distance Metric:         |
+                         | E[f(x)] - E[f(G(z))]                 |
+                         +======================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Generator Network ($G_\theta$):**
+- Standard convolutional generator (e.g., DCGAN architecture).
+- Maps latent noise $z \sim \mathcal{N}(0, \mathbf{I})$ to fake image $G(z) \in [-1, 1]^{C \times H \times W}$.
+
+**2. Wasserstein Critic Network ($f_w$):**
+- Replaces the traditional Discriminator.
+- **NO SIGMOID ACTIVATION:** Output is an unbounded scalar score $f_w(x) \in \mathbb{R}$ (higher score = more real).
+- **Weight Clipping:** After every optimizer update, weights $w$ are clamped to a fixed box constraint $w \in [-c, c]$ (e.g., $c = 0.01$) to enforce the 1-Lipschitz continuity requirement.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through WGAN for batch size $B=4$, noise $z \in \mathbb{R}^{100}$, image resolution $64 \times 64 \times 3$.
+
+1. **Generator Pass:**
+   - Noise $z$: `(4, 100)` $\to G(z)$: `(4, 3, 64, 64)`
+2. **Critic Pass:**
+   - Real Images $x$: `(4, 3, 64, 64)` $\to f_w(x)$: `(4, 1)` unconstrained real scores.
+   - Fake Images $G(z)$: `(4, 3, 64, 64)` $\to f_w(G(z))$: `(4, 1)` unconstrained fake scores.
+3. **Wasserstein Metric Estimate:**
+   - $\text{Wasserstein Distance} \approx \frac{1}{B} \sum f_w(x) - \frac{1}{B} \sum f_w(G(z))$.
+4. **Weight Clipping Execution:**
+   - For parameter $p$ in Critic: $p = \text{clamp}(p, -0.01, +0.01)$.
+
+## 7. Mathematical Foundations
+
+### 1. Why JS Divergence Fails vs. Why Earth Mover's Distance Succeeds
+Consider two probability distributions $P_1$ and $P_2$ on $\mathbb{R}^2$:
+Let $P_1$ be concentrated on the line segment $(0, y)$ with $y \sim \text{Uniform}(0, 1)$.
+Let $P_2$ be concentrated on the line segment $(\theta, y)$ with $y \sim \text{Uniform}(0, 1)$, where $\theta \in \mathbb{R}$ is a spatial offset parameter.
+
+```text
+  y-axis ^
+         |   P1 (x=0)         P2 (x=theta)
+     1.0 |   |                |
+         |   |                |
+         |   |                |  <--- Disjoint Supports when theta != 0!
+     0.0 +---+----------------+------> x-axis
+             0              theta
+```
+
+#### Evaluating JS Divergence:
+When $\theta \neq 0$, the supports of $P_1$ and $P_2$ do NOT overlap: $\text{Supp}(P_1) \cap \text{Supp}(P_2) = \emptyset$.
+The Jensen-Shannon (JS) divergence is:
+
+$$\text{JS}(P_1 \parallel P_2) = \frac{1}{2} D_{\text{KL}}\left(P_1 \parallel \frac{P_1 + P_2}{2}\right) + \frac{1}{2} D_{\text{KL}}\left(P_2 \parallel \frac{P_1 + P_2}{2}\right) = \begin{cases} 0 & \text{if } \theta = 0 \\ \mathbf{\log 2} & \text{if } \theta \neq 0 \end{cases}$$
+
+Notice that as long as $\theta \neq 0$, the JS divergence is a constant ($\log 2$). Taking the gradient with respect to $\theta$ yields:
+
+$$\frac{\partial \text{JS}(P_1 \parallel P_2)}{\partial \theta} = \mathbf{0} \quad \forall \theta \neq 0$$
+
+**Conclusion:** JS divergence is **discontinuous** at $\theta = 0$. The gradient is ZERO everywhere except at $\theta=0$, providing ZERO signal to update the Generator!
+
+#### Evaluating Earth Mover's (Wasserstein-1) Distance:
+The Wasserstein-1 distance measures the minimum cost of transporting mass from $P_1$ to $P_2$:
+
+$$W(P_1, P_2) = \inf_{\gamma \in \Pi(P_1, P_2)} \mathbb{E}_{(x,y) \sim \gamma} \left[ \|x - y\| \right] = |\theta|$$
+
+Notice that $W(P_1, P_2) = |\theta|$ is continuous and linear everywhere! Its derivative is:
+
+$$\frac{\partial W(P_1, P_2)}{\partial \theta} = \text{sign}(\theta) \neq 0$$
+
+**Conclusion:** Earth Mover's distance provides a smooth, non-zero gradient EVERYWHERE, enabling the Generator to learn even when distributions are completely disjoint!
+
+### 2. Kantorovich-Rubinstein Duality
+Computing the infimum over all joint distributions $\Pi(P_r, P_g)$ is intractable. Using **Kantorovich-Rubinstein Duality**, the Wasserstein distance is rewritten as:
+
+$$W(P_r, P_g) = \sup_{\|f\|_L \le 1} \mathbb{E}_{x \sim P_r}[f(x)] - \mathbb{E}_{\hat{x} \sim P_g}[f(\hat{x})]$$
+
+where the supremum is taken over all 1-Lipschitz functions $\|f\|_L \le 1$ satisfying $|f(x_1) - f(x_2)| \le \|x_1 - x_2\|$.
+
+### 3. WGAN Objective Function
+$$\min_G \max_{w \in \mathcal{W}} \mathbb{E}_{x \sim P_r}[f_w(x)] - \mathbb{E}_{z \sim p_z}[f_w(G(z))]$$
+
+where $\mathcal{W} = [-c, c]^K$ enforces the 1-Lipschitz constraint via weight clipping.
+
+## 8. Training Procedure
+For each training step:
+1. **Train Critic ($n_{\text{critic}} = 5$ steps):**
+   - Sample batch $x \sim P_r$, $z \sim p_z$.
+   - Compute Critic loss $\mathcal{L}_{\text{critic}} = -\mathbb{E}[f_w(x)] + \mathbb{E}[f_w(G(z))]$.
+   - Update $w$ via RMSprop ($\text{lr} = 0.00005$).
+   - **Clip weights:** $w = \text{clamp}(w, -c, +c)$ where $c = 0.01$.
+2. **Train Generator (1 step):**
+   - Sample $z \sim p_z$.
+   - Compute Generator loss $\mathcal{L}_{\text{gen}} = -\mathbb{E}[f_w(G(z))]$.
+   - Update $G$ via RMSprop.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **WGAN Loss and Weight Clipping Critic**.
+
+```python
+import torch
+import torch.nn as nn
+
+class WGANCritic(nn.Module):
+    def __init__(self, in_channels=3, ndf=64):
+        super().__init__()
+        # NO BATCHNORM, NO SIGMOID!
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, ndf, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 4, 1, 4, 1, 0) # Unbounded Linear Scalar Output!
+        )
+
+    def forward(self, x):
+        return self.net(x).view(-1, 1)
+
+    def clip_weights(self, clip_val=0.01):
+        for p in self.parameters():
+            p.data.clamp_(-clip_val, clip_val)
+
+if __name__ == "__main__":
+    B = 4
+    critic = WGANCritic(in_channels=3)
+    
+    real_x = torch.randn(B, 3, 64, 64)
+    fake_x = torch.randn(B, 3, 64, 64)
+    
+    real_scores = critic(real_x)
+    fake_scores = critic(fake_x)
+    
+    # Compute Wasserstein Loss
+    critic_loss = -torch.mean(real_scores) + torch.mean(fake_scores)
+    critic_loss.backward()
+    
+    # Apply Weight Clipping
+    critic.clip_weights(clip_val=0.01)
+    
+    max_weight = max(p.abs().max().item() for p in critic.parameters())
+    print(f"Wasserstein Loss: {critic_loss.item():.4f}")
+    print(f"Max Weight Value After Clipping: {max_weight:.4f}")
+    assert max_weight <= 0.010001
+    print("WGAN verification successful!")
+```
+
+## 10. Strengths
+- **Continuous Non-Zero Gradients:** Solves vanishing gradients when Critic is trained to convergence.
+- **Correlated Loss Metric:** Critic loss correlates directly with visual image quality.
+- **Eliminates Mode Collapse:** Stable convergence across diverse architectures.
+
+## 11. Weaknesses
+- **Weight Clipping Capacity Bottleneck:** Weight clipping $[-c, c]$ forces weights to extreme values $\pm c$, limiting model capacity (solved by WGAN-GP).
+
+## 12. Research Evolution
+WGAN revolutionized GAN theory, directly inspiring **WGAN-GP** (Gradient Penalty), **SNGAN** (Spectral Normalization), and **StyleGAN**.
+
+## 13. Interview Questions
+
+**Q1: Why does JS divergence produce vanishing gradients when the Discriminator is optimal?**
+**A1:** When real and generated distributions $P_r, P_g$ have disjoint supports, JS divergence evaluates to constant $\log 2$. Its derivative with respect to generator parameters $\nabla_\theta \text{JS}(P_r \parallel P_g) = \mathbf{0}$, providing zero gradient back to the Generator.
+
+**Q2: What is the 1-Lipschitz constraint in WGAN, and how does WGAN enforce it?**
+**A2:** The Kantorovich-Rubinstein duality requires the Critic function $f$ to satisfy $|f(x_1) - f(x_2)| \le \|x_1 - x_2\|$. WGAN enforces this by clipping Critic weights to a fixed box $[-c, c]$ after every gradient update.
+
+**Q3: What are the two major architectural differences between a standard GAN Discriminator and a WGAN Critic?**
+**A3:** (1) WGAN Critic removes the Sigmoid activation, outputting unbounded scalar scores $f(x) \in \mathbb{R}$; (2) WGAN Critic typically removes Batch Normalization to prevent sample correlation distortion.
+
+**Q4: Why does WGAN train the Critic $n_{\text{critic}} = 5$ steps for every 1 Generator step?**
+**A4:** Because Earth Mover's distance is continuous everywhere, the Critic can be trained to optimality without vanishing gradients. Training Critic to convergence provides exact Wasserstein estimates for $G$.
+
+**Q5: Write out the WGAN Critic loss objective.**
+**A5:** $\mathcal{L}_{\text{critic}} = -\mathbb{E}_{x \sim P_r}[f_w(x)] + \mathbb{E}_{z \sim p_z}[f_w(G(z))]$.
+
+## 14. Related Papers
+- **WGAN Paper:** *Wasserstein Generative Adversarial Networks* (Arjovsky, Chintala, Bottou, ICML 2017)
+- **WGAN-GP Paper:** *Improved Training of Wasserstein GANs* (Gulrajani et al., NeurIPS 2017)
+
+## 15. Further Reading
+- Martin Arjovsky's WGAN GitHub Repository

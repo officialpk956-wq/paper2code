@@ -1,0 +1,213 @@
+# MuZero
+
+## 1. Overview
+MuZero, introduced in 2019 by Julian Schrittwieser, Antonoglou, Hubert, Silver, and Hassabis (Google DeepMind), solved the grand challenge of **Model-Based Reinforcement Learning without Knowing Environment Rules**. Prior state-of-the-art tree search algorithms (AlphaGo, AlphaZero) required access to a simulator or a perfect mathematical rulebook to simulate future game states during Monte Carlo Tree Search (MCTS). In real-world domains (such as robotics, video games like Atari, or self-driving), perfect forward environment simulators do not exist. MuZero introduced a internal **Learned Latent Model** consisting of three core neural networks: a **Representation Network** $h(o)$, a **Dynamics Network** $g(s, a)$, and a **Prediction Network** $f(s)$. By planning inside a learned abstract latent state space, MuZero achieved superhuman performance across Atari 57, Chess, Shogi, and Go using the exact same algorithm.
+
+:::tip
+MuZero's breakthrough idea: "Do NOT predict full future pixels or environment rules. Learn a compact latent model (Representation $h$, Dynamics $g$, Prediction $f$) that predicts ONLY what is necessary for planning: rewards, values, and policies."
+:::
+
+## 2. Historical Context
+For decades, Model-Based RL attempted to learn a world model by predicting future sensory observations (e.g., predicting future $84 \times 84$ Atari pixel frames). However, predicting visual pixels is extremely difficult—networks waste parameter capacity modeling irrelevant background details (like cloud motion) rather than task-relevant mechanics (like ball velocity).
+
+Schrittwieser et al. realized that MCTS tree search does NOT require predicting future visual pixels. It only requires predicting three quantities: **Policy probabilities $\mathbf{p}$**, **Value functions $v$**, and **Intermediate rewards $r$**. By restricting the learned latent world model to predict only these three quantities, MuZero achieved model-based planning in visual environments for the first time.
+
+## 3. Problem It Solves
+MuZero resolves two fundamental limitations of model-based RL:
+1. **Dependency on Environment Simulators:** AlphaZero requires knowing exact legal move rules and game transitions. MuZero learns its own internal latent transition model, enabling MCTS in environments with zero access to rules (Atari).
+2. **The Pixel-Prediction Bottleneck:** Predicting raw high-dimensional pixels wastes compute on irrelevant visual noise. MuZero plans in an abstract, compact latent space $s \in \mathbb{R}^D$ focused strictly on rewards and values.
+3. **Generalization Across Visual & Board Games:** Unifies model-based planning across discrete board games (Chess/Go) and continuous visual video games (Atari).
+
+## 4. Architecture Diagram Data
+Below is the full architecture of MuZero showing the Representation Network ($h$), Dynamics Network ($g$), and Prediction Network ($f$) integrated into MCTS latent rollouts.
+
+```text
+       UNROLLED LATENT MODEL TRAJECTORY DURING MCTS SIMULATION
+
+       [ Real Observation Sequence o_1...o_t ]
+                           |
+                           v
+              +=========================+
+              | Representation Net h    |
+              | s_0 = h(o_1...o_t)      |
+              +=========================+
+                           |
+                           v
+                 [ Latent State s_0 ]
+                           |
+            +--------------+--------------+
+            |                             |
+            v                             v
+  +====================+        +====================+
+  | Dynamics Net g     |        | Prediction Net f   |
+  | (s_1, r_1) = g(s_0, a_0)    | (p_0, v_0) = f(s_0)|
+  +====================+        +====================+
+            |                             |
+            v                             v
+  [ Latent State s_1 ]          [ Policy p_0, Value v_0 ]
+  [ Immediate Reward r_1 ]
+            |
+            v (Unroll K steps recursively inside MCTS)
+  (s_k, r_k) = g(s_{k-1}, a_k)  --->  (p_k, v_k) = f(s_k)
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Representation Network ($s_0 = h(o_1 \dots o_t)$):**
+- Encodes a sequence of past observations into an initial latent state $s_0 \in \mathbb{R}^{C \times H \times W}$. Uses a 20-block ResNet.
+
+**2. Dynamics Network ($(s_k, r_k) = g(s_{k-1}, a_k)$):**
+- Takes previous latent state $s_{k-1}$ and action $a_k$ (encoded as a spatial plane) and predicts:
+  - Next latent state $s_k \in \mathbb{R}^{C \times H \times W}$.
+  - Immediate reward $r_k$ (categorical distribution over 601 scalar atoms).
+
+**3. Prediction Network ($(p_k, v_k) = f(s_k)$):**
+- Takes latent state $s_k$ and outputs:
+  - Policy probabilities $p_k = \pi(a \mid s_k)$ over all valid actions.
+  - Value estimate $v_k = V(s_k)$ (categorical distribution over 601 scalar atoms).
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through MuZero for mini-batch $B=4$, unroll length $K=5$, observation $o \in \mathbb{R}^{32 \times 96 \times 96}$ (stacked frames), action dim 18 (Atari).
+
+1. **Representation Pass ($k=0$):**
+   - Observation History $o$: `(4, 32, 96, 96)` $\xrightarrow{\text{Representation Net } h} s_0$: `(4, 256, 6, 6)`
+2. **Prediction Pass ($k=0$):**
+   - Latent State $s_0$: `(4, 256, 6, 6)` $\xrightarrow{\text{Prediction Net } f} p_0$: `(4, 18)`, $v_0$: `(4, 601)`
+3. **Dynamics Unroll Pass ($k=1 \dots 5$):**
+   - Action Plane $a_1$: `(4, 1, 6, 6)`
+   - Concat $[s_0, a_1] \to \text{Dynamics Net } g \to s_1$: `(4, 256, 6, 6)` and $r_1$: `(4, 601)`
+   - Predict $(p_1, v_1) = f(s_1) \to p_1$: `(4, 18)`, $v_1$: `(4, 601)`.
+
+## 7. Mathematical Foundations
+
+### 1. MuZero Joint Loss Function
+MuZero unrolls the learned latent model $K$ steps ($K=5$) and minimizes the combined loss over all steps $k=0 \dots K$:
+
+$$\mathcal{L}(\theta) = \sum_{k=0}^K \left( \mathcal{L}_v(u_{t+k}, v_t^k) + \mathcal{L}_r(r_{t+k}, r_t^k) + \mathcal{L}_p(\pi_{t+k}, p_t^k) \right) + c \|\theta\|_2^2$$
+
+where:
+- $\mathcal{L}_v$ is Cross-Entropy loss matching predicted value $v_t^k$ to target return $u_{t+k}$.
+- $\mathcal{L}_r$ is Cross-Entropy loss matching predicted reward $r_t^k$ to target reward $r_{t+k}$.
+- $\mathcal{L}_p$ is Cross-Entropy loss matching predicted policy $p_t^k$ to MCTS visit policy $\pi_{t+k}$.
+
+### 2. Categorical Distribution for Rewards and Values
+To handle large target variances, rewards and values are transformed into discrete 601-atom categorical distributions mapping values from $[-300, +300]$ via non-linear scaling $h(x) = \text{sign}(x) (\sqrt{|x| + 1} - 1) + \epsilon x$.
+
+## 8. Training Procedure
+- **Self-Play Workers:** Sample trajectories $(o_1 \dots o_t, a_t, r_t, \pi_t)$ using MCTS with learned model.
+- **Replay Buffer:** Store trajectories up to 125,000 games.
+- **Training Step:** Sample mini-batch of 256 trajectories. Unroll latent model $K=5$ steps using recorded actions $a_{t+1} \dots a_{t+K}$. Backpropagate gradients through representation, dynamics, and prediction networks simultaneously using BPTT (Backpropagation Through Time).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **MuZero Representation, Dynamics, and Prediction Networks**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MuZeroModel(nn.Module):
+    def __init__(self, in_channels=32, num_actions=18, latent_dim=256):
+        super().__init__()
+        self.num_actions = num_actions
+        self.latent_dim = latent_dim
+        
+        # 1. Representation Net h: o -> s_0
+        self.representation = nn.Sequential(
+            nn.Conv2d(in_channels, 128, kernel_size=3, stride=2, padding=1), # 48x48
+            nn.ReLU(),
+            nn.Conv2d(128, latent_dim, kernel_size=3, stride=2, padding=1), # 24x24
+            nn.ReLU()
+        )
+        # 2. Dynamics Net g: (s_{k-1}, a_k) -> (s_k, r_k)
+        self.dynamics_state = nn.Sequential(
+            nn.Conv2d(latent_dim + 1, latent_dim, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.dynamics_reward = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(latent_dim * 24 * 24, 601) # Categorical 601 atoms
+        )
+        # 3. Prediction Net f: s_k -> (p_k, v_k)
+        self.prediction_policy = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(latent_dim * 24 * 24, num_actions)
+        )
+        self.prediction_value = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(latent_dim * 24 * 24, 601)
+        )
+
+    def h(self, obs):
+        return self.representation(obs)
+
+    def g(self, s, action):
+        # Action encoded as spatial plane (B, 1, H, W)
+        a_plane = action.view(-1, 1, 1, 1).repeat(1, 1, s.shape[2], s.shape[3])
+        sa = torch.cat([s, a_plane], dim=1)
+        next_s = self.dynamics_state(sa)
+        reward_logits = self.dynamics_reward(next_s)
+        return next_s, reward_logits
+
+    def f(self, s):
+        policy_logits = self.prediction_policy(s)
+        value_logits = self.prediction_value(s)
+        return policy_logits, value_logits
+
+if __name__ == "__main__":
+    B, C, H, W = 4, 32, 96, 96
+    model = MuZeroModel(in_channels=C, num_actions=18)
+    
+    obs = torch.randn(B, C, H, W)
+    
+    # 1. Representation Step
+    s0 = model.h(obs)
+    p0, v0 = model.f(s0)
+    
+    # 2. Dynamics Step
+    action = torch.randint(0, 18, (B,)).float()
+    s1, r1 = model.g(s0, action)
+    p1, v1 = model.f(s1)
+    
+    print(f"Latent State s0 Shape:   {s0.shape}")
+    print(f"Policy Logits p0 Shape:  {p0.shape}")
+    print(f"Next Latent State s1:    {s1.shape}")
+    assert s0.shape == (B, 256, 24, 24)
+    assert p0.shape == (B, 18)
+    print("MuZero verification successful!")
+```
+
+## 10. Strengths
+- **No Environment Simulator Needed:** Learns internal latent model dynamics directly from environment interactions.
+- **Compact Latent Planning:** Plans in abstract latent space without wasting compute on raw pixel prediction.
+- **Universal Generalization:** Single algorithm mastered Atari 57, Chess, Shogi, and Go.
+
+## 11. Weaknesses
+- **Computationally Intensive:** Unrolling latent models $K$ steps per MCTS node requires heavy TPU/GPU infrastructure.
+
+## 12. Research Evolution
+MuZero set the state of the art in model-based RL, directly inspiring **EfficientZero**, **Sampled MuZero**, and **Stochastic MuZero**.
+
+## 13. Interview Questions
+
+**Q1: What are the three core neural networks in MuZero?**
+**A1:** (1) **Representation Network $h(o)$:** Encodes past observations into initial latent state $s_0$; (2) **Dynamics Network $g(s_{k-1}, a_k)$:** Predicts next latent state $s_k$ and intermediate reward $r_k$; (3) **Prediction Network $f(s_k)$:** Predicts policy probabilities $p_k$ and value $v_k$.
+
+**Q2: How does MuZero differ from AlphaZero?**
+**A2:** AlphaZero requires a simulator that knows exact game rules to simulate future states during MCTS. MuZero learns an internal latent world model ($g$), allowing MCTS tree search in complex visual environments (Atari) with zero access to environment rules.
+
+**Q3: Why does MuZero NOT predict future raw pixels?**
+**A3:** Predicting high-dimensional visual pixels wastes parameter capacity on task-irrelevant visual details (like background animations). MuZero plans in an abstract latent space, predicting ONLY what is necessary for planning: rewards $r$, values $v$, and policies $p$.
+
+**Q4: How does MuZero train its latent world model without explicit latent state supervision?**
+**A4:** By unrolling the model $K=5$ steps and backpropagating gradients through time (BPTT) from target rewards, MCTS policies, and environment return values using a joint loss function.
+
+**Q5: Write out the MuZero joint loss objective.**
+**A5:** $\mathcal{L}(\theta) = \sum_{k=0}^K \left[ \mathcal{L}_v(u_{t+k}, v_t^k) + \mathcal{L}_r(r_{t+k}, r_t^k) + \mathcal{L}_p(\pi_{t+k}, p_t^k) \right] + c \|\theta\|_2^2$.
+
+## 14. Related Papers
+- **MuZero Paper:** *Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model* (Schrittwieser et al., Nature 2020)
+- **AlphaZero Paper:** *A general reinforcement learning algorithm that masters chess, shogi, and Go* (Silver et al., Science 2018)
+
+## 15. Further Reading
+- DeepMind MuZero Official Open-Source Pseudo-code Repository

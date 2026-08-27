@@ -1,0 +1,221 @@
+# BLIP
+
+## 1. Overview
+BLIP (Bootstrapping Language-Image Pre-training), introduced in 2022 by Junnan Li, Dongxu Li, Caiming Xiong, and Steven Hoi (Salesforce Research), introduced a unified Vision-Language architecture capable of excelling at both **Multimodal Understanding** (e.g., image-text retrieval) and **Multimodal Generation** (e.g., image captioning). Prior to BLIP, vision-language models were fragmented into specialized architectures: encoder-only models (like CLIP) excelled at understanding but could not generate text, while encoder-decoder models (like SimVLM) excelled at text generation but underperformed on retrieval tasks. Furthermore, web-collected image-caption datasets (like Conceptual Captions) contain heavy noise, degrading model performance. BLIP solved this dual challenge by introducing (1) a **Multimodal Mixture of Encoder-Decoder (MED)** framework trained on three joint objectives (ITC, ITM, LM), and (2) a dataset cleaning strategy called **CapFilt (Captioner and Filter)** that uses BLIP modules to bootstrap synthetic captions and filter out noisy web text.
+
+:::tip
+BLIP core innovation: "Multimodal Mixture of Encoder-Decoder (MED) trained jointly on ITC, ITM, and LM losses, combined with CapFilt dataset bootstrapping to clean web image-text pairs."
+:::
+
+## 2. Historical Context
+In 2022, training datasets like LAION and Conceptual Captions relied on web-crawled HTML alt-text. These web captions frequently contained irrelevant text, typos, or nonsensical strings (e.g., "IMG_202105.JPG 100% Cotton").
+
+Salesforce researchers recognized that noisy text bottlenecked vision-language performance. They created BLIP with a dual mission: build a unified architecture (MED) that handles understanding and generation simultaneously, and use the model itself to clean and bootstrap higher-quality synthetic captions from web data (CapFilt).
+
+## 3. Problem It Solves
+BLIP resolves three core limitations in vision-language learning:
+1. **Understanding vs. Generation Architecture Divide:** Unifies encoder-only (retrieval) and encoder-decoder (generation) models into a single flexible Multimodal Mixture of Encoder-Decoder (MED).
+2. **Noisy Web Image-Caption Training Data:** Introduces **CapFilt**, generating high-quality synthetic captions (Captioner) and filtering out noisy alt-text (Filter).
+3. **Task Specialization Overhead:** Enables joint multi-task training across Image-Text Contrastive learning (ITC), Image-Text Matching (ITM), and Language Modeling (LM).
+
+## 4. Architecture Diagram Data
+Below is the BLIP Multimodal Mixture of Encoder-Decoder (MED) architecture and CapFilt dataset cleaning pipeline.
+
+```text
+       ========================================================================
+       BLIP MULTIMODAL MIXTURE OF ENCODER-DECODER (MED) ARCHITECTURE
+       ========================================================================
+
+       [ Input Image ] ---> [ ViT Encoder ] ---> Visual Features (V_feat)
+                                  |
+         +------------------------+------------------------+
+         |                        |                        |
+         v                        v                        v
+  +==============+         +==============+         +==============+
+  | UNIMODAL     |         | MULTIMODAL   |         | MULTIMODAL   |
+  | TEXT ENCODER |         | ENCODER      |         | DECODER      |
+  | (ITC Loss)   |         | (ITM Loss)   |         | (LM Loss)    |
+  |              |         |              |         |              |
+  | Self-Attn    |         | Self-Attn +  |         | Causal-Attn +|
+  | Only         |         | Cross-Attn   |         | Cross-Attn   |
+  +==============+         +==============+         +==============+
+
+       ========================================================================
+
+       CAPFILT DATASET BOOTSTRAPPING PIPELINE
+
+       [ Noisy Web Image-Text Pair (I, T_web) ]
+                        |
+                        +----------------------+
+                        |                      |
+                        v                      v
+             +====================+  +====================+
+             | CAPTIONER (MED-LM) |  | FILTER (MED-ITM)   |
+             | Generates synthetic|  | Filters out noisy  |
+             | caption T_synth    |  | web & synth text   |
+             +====================+  +====================+
+                        |                      |
+                        v                      v
+             [ High-Quality Cleaned Dataset D_clean = (I, T_web_clean) U (I, T_synth) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Vision Transformer (ViT) Encoder:**
+- Encodes image $I$ into a sequence of patch embeddings $V = \{v_1, \dots, v_N\} \in \mathbb{R}^{N \times d}$.
+
+**2. Multimodal Mixture of Encoder-Decoder (MED) Text Branches:**
+- **Unimodal Text Encoder (ITC Objective):** Standard BERT-style Transformer encoder. Computes unimodal text embedding $T_{\text{cls}}$ for contrastive alignment with image embedding $I_{\text{cls}}$.
+- **Multimodal Text Encoder (ITM Objective):** Inserts Cross-Attention layers after Self-Attention. Takes joint text and visual features to predict binary matching score (Match vs. Non-Match).
+- **Multimodal Text Decoder (LM Objective):** Replaces bidirectional self-attention with **Causal Masked Self-Attention** and Cross-Attention to generate captions autoregressively.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through BLIP for batch size $B=16$, $N=196$ visual patches, text length $L=30$, embedding dim $d=768$.
+
+1. **Vision Encoding:**
+   - Image $I$: `(16, 3, 224, 224)` $\xrightarrow{\text{ViT}} V_{\text{feat}}$: `(16, 197, 768)`
+2. **Unimodal Text Branch (ITC):**
+   - Text Tokens: `(16, 30)` $\xrightarrow{\text{Text Enc}} T_{\text{feat}}$: `(16, 30, 768)`
+   - Cosine Similarity matrix over $B \times B$ pairs $\to \mathcal{L}_{\text{ITC}}$
+3. **Multimodal Text Branch (ITM):**
+   - Text + Cross-Attention($Q=T, K=V_{\text{feat}}, V=V_{\text{feat}}$) $\to$ Match Logits: `(16, 2)`
+4. **Multimodal Decoder Branch (LM):**
+   - Causal Masked Text + Cross-Attention $\to$ Next-Token Logits: `(16, 30, 30522)`.
+
+## 7. Mathematical Foundations
+
+### 1. The Three BLIP Pre-Training Objectives
+
+#### 1. Image-Text Contrastive Loss ($\mathcal{L}_{\text{ITC}}$):
+Aligns feature spaces of unimodal Image Encoder and unimodal Text Encoder using Softmax normalized similarity scores $p_{i,j}^v$ and $p_{i,j}^t$:
+
+$$\mathcal{L}_{\text{ITC}} = -\frac{1}{2} \sum_{i=1}^B \left( \log \frac{\exp(s(I_i, T_i)/\tau)}{\sum_j \exp(s(I_i, T_j)/\tau)} + \log \frac{\exp(s(T_i, I_i)/\tau)}{\sum_j \exp(s(T_i, I_j)/\tau)} \right)$$
+
+#### 2. Image-Text Matching Loss ($\mathcal{L}_{\text{ITM}}$):
+Binary Cross-Entropy loss predicting whether image $I$ and text $T$ match ($y \in \{0, 1\}$) using Hard Negative Mining:
+
+$$\mathcal{L}_{\text{ITM}} = -\mathbb{E}_{(I, T) \sim D} \left[ y \log p(y=1 \mid I, T) + (1-y) \log p(y=0 \mid I, T) \right]$$
+
+#### 3. Language Modeling Loss ($\mathcal{L}_{\text{LM}}$):
+Autoregressive Cross-Entropy loss for caption generation:
+
+$$\mathcal{L}_{\text{LM}} = -\sum_{i=1}^L \log P\left( t_i \;\middle|\; t_{<i}, \; I \right)$$
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{ITC}} + \mathcal{L}_{\text{ITM}} + \mathcal{L}_{\text{LM}}$$
+
+## 8. Training Procedure
+- **Pre-Training Phase 1:** Jointly optimize MED framework on 14M web images using $\mathcal{L}_{\text{ITC}} + \mathcal{L}_{\text{ITM}} + \mathcal{L}_{\text{LM}}$.
+- **CapFilt Dataset Bootstrapping Phase:**
+  - **Captioner:** Fine-tune MED-LM decoder on COCO to generate synthetic captions $T_s$ for web images.
+  - **Filter:** Fine-tune MED-ITM module to discard noisy web alt-text $T_w$ and noisy synthetic text $T_s$.
+- **Pre-Training Phase 2:** Re-train BLIP on bootstrapped clean dataset (14M $\to$ 129M synthetic cleaned pairs).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **BLIP Multimodal Mixture of Encoder-Decoder (MED) Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class BLIP_MED(nn.Module):
+    """ BLIP Multimodal Mixture of Encoder-Decoder (MED) """
+    def __init__(self, vocab_size=30522, embed_dim=768):
+        super().__init__()
+        # Simulated Vision Encoder
+        self.vis_encoder = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=16, stride=16),
+            nn.Flatten(2)
+        )
+        self.vis_proj = nn.Linear(64, embed_dim)
+        
+        # Text Token Embeddings
+        self.text_embed = nn.Embedding(vocab_size, embed_dim)
+        
+        # Shared Self-Attention Layer
+        self.self_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=8, batch_first=True)
+        # Multimodal Cross-Attention Layer
+        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=8, batch_first=True)
+        
+        # Objective Heads
+        self.itc_head = nn.Linear(embed_dim, 256)
+        self.itm_head = nn.Linear(embed_dim, 2)
+        self.lm_head = nn.Linear(embed_dim, vocab_size)
+
+    def forward(self, image, text_tokens):
+        """
+        image:       (B, 3, 224, 224)
+        text_tokens: (B, L)
+        """
+        B, L = text_tokens.shape
+        
+        # 1. Encode Vision Features
+        v_feat = self.vis_encoder(image).transpose(1, 2) # (B, 196, 64)
+        v_feat = self.vis_proj(v_feat)                   # (B, 196, 768)
+        
+        # 2. Text Features
+        t_feat = self.text_embed(text_tokens)            # (B, L, 768)
+        
+        # 3. Unimodal Pass (ITC)
+        h_unimodal, _ = self.self_attn(t_feat, t_feat, t_feat)
+        itc_logits = self.itc_head(h_unimodal[:, 0, :])   # (B, 256)
+        
+        # 4. Multimodal Pass with Cross-Attention (ITM & LM)
+        h_cross, _ = self.cross_attn(h_unimodal, v_feat, v_feat) # (B, L, 768)
+        itm_logits = self.itm_head(h_cross[:, 0, :])             # (B, 2)
+        lm_logits = self.lm_head(h_cross)                        # (B, L, vocab_size)
+        
+        return itc_logits, itm_logits, lm_logits
+
+if __name__ == "__main__":
+    B, L, vocab_size = 4, 30, 30522
+    blip = BLIP_MED(vocab_size=vocab_size)
+    
+    img = torch.randn(B, 3, 224, 224)
+    text = torch.randint(0, vocab_size, (B, L))
+    
+    itc, itm, lm = blip(img, text)
+    
+    print(f"ITC Logits Shape: {itc.shape}")
+    print(f"ITM Logits Shape: {itm.shape}")
+    print(f"LM Logits Shape:  {lm.shape}")
+    assert itc.shape == (B, 256)
+    assert itm.shape == (B, 2)
+    assert lm.shape == (B, L, vocab_size)
+    print("BLIP verification successful!")
+```
+
+## 10. Strengths
+- **Unified Multimodal Architecture:** Excels at both visual understanding (retrieval) and text generation (captioning).
+- **CapFilt Web Data Bootstrapping:** Cleans noisy web image-text datasets, setting state-of-the-art results on COCO and NoCaps.
+- **Efficient Parameter Sharing:** Shares lower Transformer self-attention layers across all 3 objectives.
+
+## 11. Weaknesses
+- **Computationally Heavy Pre-Training:** Running CapFilt captioning and filtering over 100M+ web images requires significant GPU compute.
+
+## 12. Research Evolution
+BLIP created the MED and CapFilt paradigm, directly leading to **BLIP-2**, **InstructBLIP**, and **X-VLM**.
+
+## 13. Interview Questions
+
+**Q1: What are the three pre-training objectives used in BLIP?**
+**A1:** (1) **Image-Text Contrastive ($\mathcal{L}_{\text{ITC}}$):** Aligns unimodal image and text feature spaces; (2) **Image-Text Matching ($\mathcal{L}_{\text{ITM}}$):** Binary classification predicting whether image and text match; (3) **Language Modeling ($\mathcal{L}_{\text{LM}}$):** Autoregressive caption generation.
+
+**Q2: What is CapFilt in BLIP, and how does it work?**
+**A2:** CapFilt (Captioner and Filter) is a dataset bootstrapping method. A **Captioner** (MED-LM) generates synthetic captions for web images. A **Filter** (MED-ITM) removes noisy original web text and low-quality synthetic text, creating a clean training dataset.
+
+**Q3: How does BLIP's Multimodal Mixture of Encoder-Decoder (MED) share parameters?**
+**A3:** MED shares the Vision Encoder and lower text self-attention layers across all three branches, while introducing Cross-Attention layers only for the multimodal ITM and LM tasks.
+
+**Q4: Compare BLIP with CLIP.**
+**A4:** CLIP is an **encoder-only** dual-stream model trained solely on contrastive loss ($\mathcal{L}_{\text{ITC}}$), capable of visual understanding but unable to generate text. BLIP is an **encoder-decoder** model trained on ITC, ITM, and LM, supporting both understanding and text generation.
+
+**Q5: What datasets were used to validate BLIP's CapFilt bootstrapping?**
+**A5:** COCO Captioning, NoCaps, Flickr30k, and Flickr30k Retrieval benchmarks.
+
+## 14. Related Papers
+- **BLIP Paper:** *BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation* (Li et al., ICML 2022)
+- **CLIP Paper:** *Learning Transferable Visual Models From Natural Language Supervision* (Radford et al., ICML 2021)
+
+## 15. Further Reading
+- Salesforce Research Official BLIP Repository

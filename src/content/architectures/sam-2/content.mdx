@@ -1,0 +1,265 @@
+# SAM 2
+
+## 1. Overview
+Segment Anything Model 2 (SAM 2), introduced in 2024 by Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, Ronghang Hu, Chaitanya Ryali, Tengyu Ma, Haitham Khedr, Roman Rombach, Chenwei Yang, Alexandre Alahi, Ali Thabet, and Christoph Feichtenhofer (Meta AI), extends promptable segmentation seamlessly from static 2D images to real-time 2D/3D **Video Streams**. SAM 2 unifies image and video segmentation under a single streaming memory-augmented Transformer framework. To power SAM 2, Meta AI created **SA-V (Segment Anything Video)**, a dataset containing over 35.5k videos and 50.9k high-quality mask trajectories (yielding $53\times$ more mask annotations than prior video datasets). SAM 2 accepts interactive prompts (clicks, boxes, masks) on any video frame and propagates precise object mask trajectories forward and backward across time in real time (>44 FPS).
+
+:::tip
+SAM 2 treats static images as a special case of video—specifically a 1-frame video stream. This unified design allows SAM 2 to outperform original SAM on static image benchmarks while running significantly faster.
+:::
+
+## 2. Historical Context
+### Why Video Segmentation is Fundamentally Harder than Image Segmentation
+
+Video object segmentation (VOS) introduces severe temporal challenges that do not exist in static image segmentation:
+1. **Severe Occlusions & Disappearances:** Objects in videos frequently pass behind obstacles (e.g., a person walking behind a tree or car entering a tunnel). A video segmenter must track the object, recognize when it has disappeared, maintain an inactive memory state, and accurately re-identify the exact instance when it reappears frames later.
+2. **Drastic Appearance Transformations:** Objects change orientation, lighting, deformation, and scale dynamically over time (e.g., a gymnast flipping in mid-air). Static image features quickly become stale.
+3. **Motion Blur & Camera Jitter:** Rapid camera movements introduce severe motion blur, destroying sharp edge contrast that static segmenters rely on.
+4. **Temporal Accumulation of Error (Drift):** In static images, errors are localized to one frame. In video, a 1-pixel boundary mistake in frame 1 can compound recursively across 1,000 frames, causing the predicted mask to completely drift away from the target object.
+5. **Strict Streaming Latency Limits:** Videos contain 30 to 60 frames per second. Batch-processing entire video sequences non-causally requires gigabytes of VRAM. A practical video model must run causally in a **streaming memory regime** (processing frame-by-frame while maintaining a compact memory bank).
+
+Prior VOS models (like Space-Time Memory Networks / STM) suffered from catastrophic memory explosion as video length grew, or were too slow for interactive prompt refinement. SAM 2 solved these temporal obstacles by introducing a streaming **Memory Bank + Memory Attention** mechanism.
+
+## 3. Problem It Solves
+SAM 2 solves four core limitations in video object processing:
+1. **Memory Explosion Over Long Videos:** Storing raw feature maps for thousands of video frames exhausts GPU VRAM. SAM 2 uses a **Memory Encoder** that compresses past frame features into a fixed-capacity FIFO memory bank of $N_{\text{recent}}$ recent frames and $N_{\text{prompts}}$ prompted frames.
+2. **Object Disappearance & False Positive Propagation:** When an object leaves the frame, standard trackers continue predicting low-confidence phantom masks. SAM 2 adds an explicit **Occlusion Head** (Object Pointer head) that predicts whether the object is currently visible or occluded, halting mask propagation when occluded.
+3. **Interactive Temporal Correction:** If SAM 2 drifts on frame 150, a user can pause the video, click on frame 150, and SAM 2 will instantly update its memory bank and propagate corrected masks both **forward and backward in time**.
+4. **Unified Image-Video Pipeline:** Replaces separate static image segmenters and video object trackers with a single model.
+
+## 4. Architecture Diagram Data
+Below is the full streaming memory architecture of SAM 2 operating on a video frame sequence.
+
+```text
+       [ Current Video Frame t: (B, 3, H, W) ]
+                         |
+                         v
+        +==================================+
+        |  1. Image Encoder (Hiera ViT)   |
+        |  - Hierarchical Multi-scale      |  <-- Outputs Current Un-conditioned
+        |    Feature Pyramids              |      Features: F_t (B, C, H/16, W/16)
+        +==================================+
+                         |
+                         v
+        +==================================+
+        |  2. Memory Attention Module      | <=== [ MEMORY BANK ]
+        |  - Cross-Attention:              |      - Spatial Memories (Past Frames)
+        |    Current F_t attends to        |      - Object Pointers (Past Summary)
+        |    Past Spatial & Pointer        |      - Prompted Frame Memories
+        |    Memories in Memory Bank       |
+        +==================================+
+                         |
+                         v
+          [ Conditioned Frame Features: F_t' ]
+                         |
+      +------------------+------------------+
+      |                                     |
+      v                                     v
+  [ User Prompts on Frame t ]     [ Unprompted Video Frame ]
+  (Points / Boxes / Masks)        (Pure Memory Propagation)
+      |                                     |
+      +------------------+------------------+
+                         |
+                         v
+        +==================================+
+        |  3. Prompt Encoder & Mask Decoder|
+        |  - Lightweight Two-Way Transformer|
+        |  - Predicts 3 Hierarchical Masks |
+        |  - Predicts Mask IoU Quality     |
+        |  - Predicts Occlusion Score      |  --> Is Object Visible on Frame t?
+        +==================================+
+                         |
+      +------------------+------------------+
+      |                                     |
+      v                                     v
+  [ Output Mask for Frame t ]    [ 4. Memory Encoder ]
+                                 - Downsamples Mask + F_t'
+                                 - Encodes Spatial Memory M_t
+                                 - Extracts Object Pointer P_t
+                                            |
+                                            v
+                                 [ Push to Memory Bank ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+### 1. Hierarchical Image Encoder (Hiera)
+Unlike SAM's plain ViT, SAM 2 uses **Hiera**—a hierarchical Vision Transformer that processes multi-scale features ($1/4, 1/8, 1/16$ scales). Hiera is significantly faster than ViT-H and yields higher-resolution feature maps ($1/4$ scale) essential for crisp boundary tracking across video frames.
+
+### 2. Memory Bank & Memory Attention
+- **Memory Bank:** Consists of three components:
+  1. *Spatial Memories:* A FIFO queue of $N_{\text{recent}}$ (typically 6) past frame feature representations.
+  2. *Promoted Memories:* Up to $N_{\text{prompts}}$ spatial memories from frames where the user explicitly provided prompts.
+  3. *Object Pointers:* Compact 1D vectors summarizing object identity and occlusion state across time.
+- **Memory Attention:** Uses L stacked Transformer layers where current frame feature map $F_t$ performs cross-attention over all spatial memories and object pointers stored in the Memory Bank.
+
+### 3. Prompt Encoder & Mask Decoder
+- Identical in spirit to SAM's lightweight prompt encoder and mask decoder.
+- Accepts interactive point/box/mask prompts on frame $t$.
+- Predicts multi-scale masks, IoU scores, and an **Occlusion Score** (logit indicating if the target object is visible in frame $t$).
+
+### 4. Memory Encoder
+Converts frame $t$'s prediction into a memory representation to be pushed into the Memory Bank:
+- Fuses current frame feature $F_t'$ with the predicted output mask via a lightweight convolutional network.
+- Generates spatial memory $M_t \in \mathbb{R}^{C \times H/16 \times W/16}$ and updates the 1D object pointer vector $P_t \in \mathbb{R}^{C}$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through SAM 2 processing frame $t$ in a streaming video sequence with $B=1$, feature dim $C=256$, and spatial dims $64 \times 64$ ($1024 \times 1024$ image input).
+
+1. **Current Frame Image Encoding:**
+   - Input Frame $I_t$: `(1, 3, 1024, 1024)`
+   - Hiera Backbone $\rightarrow$ Unconditioned Features $F_t$: `(1, 256, 64, 64)`
+
+2. **Memory Attention (Cross-Attention against Memory Bank):**
+   - Memory Bank holds $M_{\text{past}}$: 7 frames of spatial memories `(1, 7, 4096, 256)` ($64 \times 64 = 4096$).
+   - Memory Bank holds $P_{\text{past}}$: 7 object pointer vectors `(1, 7, 256)`.
+   - Cross-Attention($F_t$, $M_{\text{past}}$, $P_{\text{past}}$) $\rightarrow$ Conditioned Feature map $F_t'$: `(1, 256, 64, 64)`.
+
+3. **Mask Decoding & Occlusion Prediction:**
+   - Decode Conditioned Feature $F_t'$ + Prompt Tokens $\rightarrow$
+     - Masks: `(1, 3, 256, 256)` ($1/4$ resolution upsampled to $256 \times 256$)
+     - IoU Scores: `(1, 3)`
+     - Occlusion Score (Object Pointer Head): `(1, 1)` scalar logit.
+
+4. **Memory Encoding & Storage:**
+   - Input to Memory Encoder: Selected Mask `(1, 1, 256, 256)` + $F_t'$ `(1, 256, 64, 64)`.
+   - Conv Downsample $\rightarrow$ New Spatial Memory $M_t$: `(1, 256, 64, 64)`.
+   - Push $M_t$ to FIFO Memory Bank (eclipsing oldest unprompted frame if full).
+
+## 7. Mathematical Foundations
+
+### 1. Memory Cross-Attention Formulation
+Let $f_t(i) \in \mathbb{R}^C$ be the feature vector at spatial location $i$ in frame $t$.
+Let $\{m_\tau(j)\}_{\tau \in T_{\text{mem}}, j \in S}$ be spatial memory vectors from past frames $\tau \in T_{\text{mem}}$, and $\{p_\tau\}_{\tau \in T_{\text{mem}}}$ be object pointers.
+
+The memory-conditioned feature $\hat{f}_t(i)$ is computed via Multi-Head Cross-Attention:
+
+$$\hat{f}_t(i) = \text{Softmax}\left( \frac{q(f_t(i)) \cdot K(M_{\text{past}})^T}{\sqrt{d_k}} \right) V(M_{\text{past}}) + f_t(i)$$
+
+where $M_{\text{past}} = \text{Concat}\left( \{m_\tau(j) + PE(j)\}, \{p_\tau + PE(\tau)\} \right)$, combining spatial position encodings $PE(j)$ and temporal position encodings $PE(\tau)$.
+
+### 2. Occlusion-Aware Loss Function
+SAM 2 incorporates an explicit occlusion loss to handle object disappearance. Let $o_t \in \{0, 1\}$ be the ground-truth occlusion label ($1$ if visible, $0$ if occluded/absent):
+
+$$\mathcal{L}_{\text{occlusion}} = - \left[ o_t \log \sigma(\hat{o}_t) + (1 - o_t) \log (1 - \sigma(\hat{o}_t)) \right]$$
+
+When $\sigma(\hat{o}_t) < 0.5$ (object predicted occluded), the spatial memory $M_t$ is suppressed from polluting future frame representations.
+
+## 8. Training Procedure
+- **SA-V Dataset:** 35.5k videos, 50.9k mask trajectories, 640k manual points.
+- **Simulated Interactive Video Training:** Training simulates interactive video sessions. A 8-frame video clip is sampled. Frame 0 is prompted; the model predicts forward; frames with low predicted IoU are selected for simulated "corrective clicks", backpropagating gradients temporally across both forward and backward passes.
+- **Optimizer:** AdamW, learning rate $1 \times 10^{-4}$, trained on 128 GPUs.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **SAM 2 Memory Attention Module**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SAM2MemoryAttention(nn.Module):
+    def __init__(self, d_model=256, num_heads=8):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        
+        # Self-Attention on current frame features
+        self.self_attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        # Cross-Attention over past spatial memories
+        self.cross_attn_memory = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
+            nn.ReLU(),
+            nn.Linear(d_model * 4, d_model)
+        )
+
+    def forward(self, current_feats, memory_bank_spatial):
+        """
+        current_feats: (B, C, H, W) - unconditioned features of current frame t
+        memory_bank_spatial: (B, N_mem_frames, H, W, C) - past spatial memories
+        """
+        B, C, H, W = current_feats.shape
+        N_mem = memory_bank_spatial.shape[1]
+        
+        # Flatten current features to sequence: (B, H*W, C)
+        curr_seq = current_feats.flatten(2).permute(0, 2, 1)
+        
+        # Flatten memory bank to sequence: (B, N_mem * H * W, C)
+        mem_seq = memory_bank_spatial.reshape(B, N_mem * H * W, C)
+        
+        # 1. Self-Attention on current frame features
+        sa_out, _ = self.self_attn(curr_seq, curr_seq, curr_seq)
+        curr_seq = self.norm1(curr_seq + sa_out)
+        
+        # 2. Cross-Attention over Past Memory Bank
+        ca_out, _ = self.cross_attn_memory(query=curr_seq, key=mem_seq, value=mem_seq)
+        curr_seq = self.norm2(curr_seq + ca_out)
+        
+        # 3. MLP FFN
+        mlp_out = self.mlp(curr_seq)
+        curr_seq = self.norm3(curr_seq + mlp_out)
+        
+        # Reshape back to 4D image feature map: (B, C, H, W)
+        conditioned_feats = curr_seq.permute(0, 2, 1).view(B, C, H, W)
+        return conditioned_feats
+
+if __name__ == "__main__":
+    B, C, H, W = 2, 256, 32, 32
+    N_mem_frames = 6 # 6 past frames in memory bank
+    
+    mem_attn = SAM2MemoryAttention(d_model=C, num_heads=8)
+    
+    current_feats = torch.randn(B, C, H, W)
+    memory_bank = torch.randn(B, N_mem_frames, H, W, C)
+    
+    out_feats = mem_attn(current_feats, memory_bank)
+    
+    print(f"Current Frame Feats Shape:  {current_feats.shape}")
+    print(f"Memory Bank Shape:          {memory_bank.shape}")
+    print(f"Conditioned Output Shape:   {out_feats.shape}")
+    assert out_feats.shape == (B, C, H, W), f"Expected shape ({B}, {C}, {H}, {W}), got {out_feats.shape}"
+    print("SAM 2 Memory Attention verification successful!")
+```
+
+## 10. Strengths
+- **Streaming Real-Time VOS (>44 FPS):** Processes video causally frame-by-frame using a compact memory bank without storing full video sequences.
+- **Bi-Directional Interactive Correction:** Users can pause at any frame, provide a click prompt, and SAM 2 updates mask trajectories forward and backward across the entire video.
+- **Occlusion Robustness:** Predicts explicit occlusion logits to prevent error drift when objects disappear behind obstacles.
+
+## 11. Weaknesses
+- **Fast Object Tracking Drift:** Ultra-fast maneuvering objects with heavy motion blur can outpace the spatial memory bank.
+- **Multi-Object Memory Overhead:** Tracking dozens of instances simultaneously scales memory bank storage linearly ($N_{\text{objects}} \times N_{\text{frames}}$).
+
+## 12. Research Evolution
+SAM 2 represents the frontier in promptable video segmentation. It bridged 2D image foundation models with temporal streaming processing, setting the baseline for video editing, robotics, and autonomous spatial AI.
+
+## 13. Interview Questions
+
+**Q1: Why is video object segmentation (VOS) fundamentally harder than static image segmentation?**
+**A1:** Video segmentation introduces five severe temporal challenges: (1) Object occlusions and disappearances; (2) Dynamic appearance/orientation transformations; (3) Motion blur; (4) Temporal accumulation of boundary error (drift); and (5) Strict real-time streaming memory constraints.
+
+**Q2: What are the three components of SAM 2's Memory Bank?**
+**A2:** (1) **Spatial Memories:** A FIFO queue of features from $N_{\text{recent}}$ recent past frames; (2) **Promoted Memories:** Features from frames where the user provided explicit interactive prompts; (3) **Object Pointers:** Compact 1D vectors summarizing object identity and occlusion state across time.
+
+**Q3: How does SAM 2 handle an object disappearing behind an obstacle?**
+**A3:** SAM 2 includes an **Occlusion Head** (Object Pointer Head) that outputs a logit predicting whether the target object is visible in frame $t$. When predicted occluded ($\sigma(\hat{o}_t) < 0.5$), the spatial memory generated for frame $t$ is suppressed from polluting future frame representations.
+
+**Q4: How does SAM 2 perform bi-directional propagation when a user prompts frame 50 of a 100-frame video?**
+**A4:** SAM 2 executes two sequential passes: first, it processes frames 50 $\rightarrow$ 100 causally using its forward memory bank. Then, it reverses the frame sequence (50 $\rightarrow$ 1) to propagate corrected memory representations backward in time.
+
+**Q5: How does SAM 2 treat static 2D images?**
+**A5:** SAM 2 treats static images as a 1-frame video. The memory bank remains empty, and the memory attention layer acts as an identity shortcut, allowing SAM 2 to execute faster and more accurately than original SAM on static image benchmarks.
+
+## 14. Related Papers
+- **SAM 2 Paper:** *SAM 2: Segment Anything in Images and Videos* (Ravi et al., arXiv 2024)
+- **SAM Paper:** *Segment Anything* (Kirillov et al., ICCV 2023)
+- **Hiera Backbone:** *Hiera: A Hierarchical Vision Transformer Without the Bells-and-Whistles* (Ryali et al., ICML 2023)
+
+## 15. Further Reading
+- Meta AI SAM 2 Official GitHub & Video Playground Demo
+- Segment Anything in Videos (SA-V) Dataset Download & API Guide

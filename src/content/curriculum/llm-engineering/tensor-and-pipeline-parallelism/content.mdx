@@ -1,0 +1,140 @@
+# Tensor and Pipeline Parallelism
+
+## 1. Overview
+
+Training or serving a trillion-parameter model requires distributing computation across dozens or hundreds of GPUs — a single GPU cannot hold a trillion parameters, and even if it could, the compute would never finish. Tensor parallelism and pipeline parallelism are the two foundational distribution strategies. **Tensor parallelism** splits individual tensors and layers across multiple GPUs, so every forward/backward pass requires cross-GPU communication. **Pipeline parallelism** divides the model vertically (layer groups on different GPUs), so a single example flows through the layers sequentially across GPUs with less per-layer communication overhead but idle time waiting for pipeline stages. Real systems use both: tensor parallelism within a node (GPUs connected by fast NVLink), pipeline parallelism across nodes (slower inter-node network), and often add data parallelism (different examples on different nodes) on top.
+
+## 2. Prerequisites in Context
+
+**Distributed Training Basics** is the foundation — you need to know what data parallelism is (different batches on different GPUs, synchronized gradients) before understanding why tensor and pipeline parallelism exist as alternatives. **Gradient Computation and Backpropagation** matters because the communication patterns and synchronization points in tensor and pipeline parallelism are determined by where gradients flow. **Communication Patterns** (all-reduce, reduce-scatter, broadcast) are the actual bottleneck — understanding the communication volume and synchronization needs is more important than GPU-level details.
+
+## 3. Core Concept
+
+**Tensor Parallelism** splits a weight matrix across GPUs. For a linear layer $Y = XW^T$ where $W \in \mathbb{R}^{d_{\text{out}} \times d_{\text{in}}}$, one strategy splits $W$ row-wise across $N$ GPUs: GPU $i$ holds rows $\lfloor d_{\text{out}} / N \rfloor$ to $\lceil (i+1) d_{\text{out}} / N \rceil$. During forward pass, each GPU needs the full input $X$, computes its row partition of the output, and then results are concatenated. Backward pass requires a reverse communication pattern (all-gather to reconstruct $X$ for gradient computation). The communication volume is proportional to the data (batch size, hidden dimensions) and scales with the number of GPUs — each additional GPU adds communication overhead, so tensor parallelism is efficient only within a node (NVLink bandwidth permits it) and becomes a bottleneck across slower inter-node networks.
+
+**Pipeline Parallelism** stacks layers on different GPUs in sequence. GPU 0 runs layers 0-k, GPU 1 runs layers k+1-2k, etc. A single input sequence flows through GPU 0, whose output becomes GPU 1's input, and so on. With naive pipeline execution (process one sample to completion before accepting the next), GPUs other than GPU 0 sit idle while GPU 0 processes the first sample, a massive inefficiency. **Microbatching** solves this: split a batch into smaller microbatches, pipeline them through the layers so that GPU 0 processes microbatch 1, then GPU 1 starts processing microbatch 1's output while GPU 0 processes microbatch 2 — overlapping computation and filling the pipeline. However, this creates a **backward-pass bubble** during gradient computation: the backward pass through GPU 0 can't start until GPU 1's backward pass produces gradients for GPU 0's outputs, so there's inherent idle time even with microbatching, an inefficiency addressed by techniques like **gradient checkpointing** (recompute activations in the backward pass rather than storing them, trading memory for computation) and **interleaving** (GPU 0 and GPU 1 process different layers' forward passes in a carefully orchestrated sequence to reduce bubbles).
+
+## 4. Theoretical Foundations
+
+**Communication cost analysis** for tensor parallelism: splitting a linear layer $W$ across $N$ GPUs reduces per-GPU memory from $O(d_{\text{in}} \cdot d_{\text{out}})$ to $O(d_{\text{in}} \cdot d_{\text{out}} / N)$, but requires each GPU to receive the full input and communicate partial results, totaling $O(batch \cdot d)$ data moved per layer. With $L$ layers, total tensor-parallelism communication is $O(L \cdot batch \cdot d)$. **Pipeline parallelism cost analysis**: if the pipeline has depth $p$ (number of GPUs), and each GPU processes a microbatch in time $t$, then naive sequential processing takes $p \cdot t$ time. With perfect microbatch pipelining, the steady state achieves throughput of one microbatch per time $t$ after a startup phase, reducing total time toward $(1 + \text{num\_microbatches} / p) \cdot t$. However, the backward pass introduces a bubble — the last microbatch's backward pass can't overlap with others, causing idle time proportional to $p$, a fundamental constraint called the **pipeline bubble**, typically 10-20% efficiency loss.
+
+## 5. Worked Example
+
+**Tensor Parallelism Example**: Splitting an attention layer (head dimension 64, 8 heads, 4 GPUs):
+- GPU 0 handles heads 0-1, GPU 1 handles heads 2-3, GPU 2 handles heads 4-5, GPU 3 handles heads 6-7.
+- Forward: each GPU needs the full query/key/value inputs (size $N \times 512$), produces its head partition's output (size $N \times 128$), then outputs are concatenated.
+- Communication: each GPU broadcasts/receives the full input ($N \times 512$ floats), scales with batch size, less efficient for very large batches.
+
+**Pipeline Parallelism Example**: 48-layer model across 4 GPUs (12 layers each):
+- Microbatch 1 starts on GPU 0 (layer 0-11), completes in ~1 second, output transferred to GPU 1.
+- Microbatch 2 starts on GPU 0 immediately while GPU 1 processes microbatch 1.
+- Steady state: one microbatch progressing through one GPU each second, throughput of one microbatch per second total.
+- Backward pass: once forward pass completes all 4 GPUs start backward pass, but GPU 3 finishes its backward pass first and must wait for GPU 2's gradients (stalled 1-2 seconds), efficiency loss of ~20%.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+
+class TensorParallelLinear(nn.Module):
+    """Row-wise tensor parallelism for a linear layer."""
+    def __init__(self, in_features, out_features, rank, world_size):
+        super().__init__()
+        self.rank = rank
+        self.world_size = world_size
+        
+        # Each GPU holds a partition of rows of W
+        self.out_features_per_gpu = out_features // world_size
+        self.weight = nn.Parameter(
+            torch.randn(self.out_features_per_gpu, in_features) / (in_features ** 0.5)
+        )
+    
+    def forward(self, x):
+        # x: (batch, in_features)
+        # Each GPU computes its row partition
+        local_out = torch.matmul(x, self.weight.t())  # (batch, out_features_per_gpu)
+        
+        # Concatenate across GPUs
+        if self.world_size > 1:
+            outputs = [torch.zeros_like(local_out) for _ in range(self.world_size)]
+            dist.all_gather(outputs, local_out)
+            return torch.cat(outputs, dim=-1)
+        return local_out
+
+class PipelineParallel(nn.Module):
+    """Simplified pipeline parallelism: model split into stages."""
+    def __init__(self, layers, rank, world_size, microbatch_size=4):
+        super().__init__()
+        self.layers = layers
+        self.rank = rank
+        self.world_size = world_size
+        self.microbatch_size = microbatch_size
+        self.layer_idx_start = (rank * len(layers)) // world_size
+        self.layer_idx_end = ((rank + 1) * len(layers)) // world_size
+    
+    def forward(self, x):
+        # Execute only this GPU's layers
+        for i in range(self.layer_idx_start, self.layer_idx_end):
+            x = self.layers[i](x)
+        return x
+
+if __name__ == "__main__":
+    # Tensor parallelism example (pseudo-code, requires actual distributed setup)
+    in_f, out_f, rank, world_size = 512, 2048, 0, 4
+    linear = TensorParallelLinear(in_f, out_f, rank, world_size)
+    x = torch.randn(32, in_f)
+    # y = linear(x)  # requires dist.init_process_group() to work
+    print("Tensor Parallelism: each GPU holds 1/4 of the weight matrix rows")
+    
+    # Pipeline parallelism example
+    layers = [nn.Linear(512, 512) for _ in range(48)]
+    pipeline = PipelineParallel(layers, rank=0, world_size=4)
+    x = torch.randn(1, 512)
+    y = pipeline(x)
+    print("Pipeline Parallelism: GPU 0 executes layers 0-11, output sent to GPU 1")
+```
+
+## 7. Real-World Applications
+
+**Tensor parallelism** is used within a node in Megatron-LM (NVIDIA's distributed training framework) — splitting transformer layers across multiple GPUs connected by NVLink. **Pipeline parallelism** spans across nodes in systems like GPT-3 training — 8 nodes with 8 GPUs each, pipeline stages assigned to different nodes. **DeepSpeed** and **FSDP** (Fully Sharded Data Parallel) combine both with data parallelism: tensor parallelism within nodes, pipeline parallelism across nodes, and data parallelism through gradient synchronization. Production systems handling trillion-parameter models (e.g., GPT-4, PaLM) use all three: data parallelism for batch throughput, tensor parallelism for within-node efficiency, pipeline parallelism for cross-node distribution.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that more GPUs always means faster training — communication overhead and pipeline bubbles mean that adding GPUs beyond the sweet spot (determined by batch size, model depth, and network bandwidth) can actually slow training. Another pitfall is ignoring the backward-pass bubble in pipeline parallelism — naive microbatching implementations achieve 80-85% efficiency due to this inherent loss, and only sophisticated techniques (gradient checkpointing, interleaving, 1F1B schedules) recover efficiency toward 90-95%. A third pitfall is conflating tensor parallelism with data parallelism — they're orthogonal: data parallelism synchronizes gradients across GPUs that all process the full model, while tensor parallelism splits the model itself.
+
+## 9. How This Connects
+
+This topic requires **Distributed Training Basics** and **Gradient Computation** as prerequisites. It directly connects to **Quantization** and **Model Compression** (reducing per-GPU memory needs), **Inference Optimization** (serving large models efficiently), **Memory Management** (how to allocate limited GPU memory across tensor shards and activations), and **Scalability** (understanding which scaling factors (batch size, sequence length, model size) affect communication efficiency).
+
+## 10. Check Your Understanding
+
+**Q1: What is the fundamental difference between tensor parallelism and pipeline parallelism?**
+Tensor parallelism splits individual layers/tensors across GPUs (high per-layer communication), while pipeline parallelism assigns layer groups to GPUs (low per-layer communication but sequential processing and backward-pass bubbles).
+
+**Q2: Why does naive pipeline parallelism (processing one sample to completion before accepting the next) lead to GPU underutilization?**
+Because GPUs other than the first sit idle waiting for the previous GPU to complete, achieving near-zero throughput. Only the first GPU is active while others wait.
+
+**Q3: How does microbatching improve pipeline parallelism efficiency?**
+By pipelining multiple small batches through the stages in parallel: GPU 0 processes microbatch 1 while GPU 1 processes microbatch 0, overlapping computation across the pipeline and reducing idle time.
+
+**Q4: What is the pipeline bubble, and why is it inevitable even with perfect microbatching?**
+The backward pass creates a stall where the last GPU to complete backward gradients must wait for input gradients from the next GPU, causing idle time proportional to pipeline depth. This is a fundamental inefficiency of sequential layer processing.
+
+**Q5: Which is better: tensor parallelism or pipeline parallelism?**
+Neither is universally better — they have different tradeoffs. Tensor parallelism has high per-layer communication but no backward-pass bubbles; pipeline parallelism has low per-layer communication but inherent pipeline bubbles. Real systems use both: tensor parallelism within nodes (fast NVLink), pipeline parallelism across nodes (slower inter-node network).
+
+## 11. Further Reading
+
+- Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (NVIDIA, 2019)
+- Huang et al., "GPipe: Efficient Training of Giant Models on Multiple GPUs" (Google, 2018) — foundational pipeline parallelism
+- Rasley et al., "DeepSpeed: System Optimizations Enable Training Deep Learning Models with Over 100 Billion Parameters" (2020)
+- Zhao et al., "Unified 1F1B Gradient Accumulation for Efficient Pipeline Parallel Training" (2023) — reduces pipeline bubble
+- See also: `distributed-training-basics` in this domain and `scaling-laws` in the ML curriculum
+
+## Related Platform Content
+
+- [LLM ENGINEERING curriculum overview](/learn/llm-engineering)
+- [Production system](/system-design/llm-serving)
+- [Browse all system designs](/system-design)

@@ -1,0 +1,102 @@
+# Optimal Transport
+
+## 1. Overview
+
+Optimal transport asks a deceptively simple question: if you have one pile of dirt shaped like distribution $P$ and want to reshape it into a pile shaped like distribution $Q$, what is the cheapest way to move the dirt, and how much work does it take? That "minimum work" quantity is the Wasserstein distance, and it turns out to be one of the most useful ways to compare two probability distributions in all of machine learning — better behaved than KL divergence in exactly the situations (non-overlapping supports, GAN training) where KL divergence breaks down. This topic is the mathematical backbone of Wasserstein GANs, flow matching, and much of modern generative model theory.
+
+## 2. Prerequisites in Context
+
+**Measure theory** is required because a "distribution" here isn't necessarily a nice smooth density — optimal transport needs to handle arbitrary probability measures, including ones supported on a thin manifold (like the set of realistic images sitting inside a huge pixel space), and only measure theory gives you the tools to define distance between such objects rigorously. **Convex optimization** matters because computing the actual optimal transport plan is a linear program (in the discrete case) or a convex optimization problem (in the continuous case via the Monge-Kantorovich formulation), and the duality theory that makes Wasserstein distance tractable to compute (the Kantorovich-Rubinstein duality used directly in WGAN) is a convex duality result.
+
+## 3. Core Concept
+
+The **Monge problem** asks for a deterministic map $T: \mathcal{X} \to \mathcal{Y}$ that pushes distribution $P$ forward to $Q$ (i.e., $T_\#P = Q$) while minimizing total transport cost $\int c(x, T(x))\, dP(x)$. This problem can be infeasible (no such map exists, e.g., when moving a point mass to a spread-out distribution) or hard to optimize directly. The **Kantorovich relaxation** fixes this by allowing "soft" transport plans: instead of moving each unit of mass to exactly one destination, a coupling $\gamma(x, y)$ specifies how much mass moves from $x$ to $y$, subject to the coupling's marginals matching $P$ and $Q$. The **Wasserstein-$p$ distance** is then
+$$W_p(P, Q) = \left(\inf_{\gamma \in \Pi(P,Q)} \int \|x - y\|^p \, d\gamma(x,y)\right)^{1/p}$$
+where $\Pi(P,Q)$ is the set of all valid couplings. Unlike KL divergence, $W_p$ remains finite and meaningfully gradient-informative even when $P$ and $Q$ have disjoint supports — exactly the regime a generator distribution and a real-data distribution start in at the beginning of GAN training.
+
+## 4. Theoretical Foundations
+
+The **Kantorovich-Rubinstein duality** rewrites the $W_1$ (earth mover's) distance as a supremum over 1-Lipschitz functions:
+$$W_1(P, Q) = \sup_{\|f\|_L \leq 1} \left(\mathbb{E}_{x \sim P}[f(x)] - \mathbb{E}_{y \sim Q}[f(y)]\right)$$
+This is the equation that makes WGAN possible: the "critic" network $f_\theta$ is trained to approximate this supremum (subject to a Lipschitz constraint enforced via weight clipping or a gradient penalty), and the generator is trained to minimize the resulting estimate of $W_1(P_{\text{data}}, P_{\text{generator}})$. The duality holds because the primal (coupling) problem and this dual (Lipschitz function) problem are linear programs that are strong duals of each other — no duality gap, so optimizing either side gives the same answer. This is why Wasserstein distance can be *estimated* via a neural network in the dual form, even though the primal coupling itself lives in an intractably large space.
+
+## 5. Worked Example
+
+Take two 1D distributions: $P$ is a point mass at $0$, $Q$ is a point mass at $5$. KL divergence $D_{KL}(P \| Q)$ is undefined (infinite) since $Q$ assigns zero probability to the point where $P$ has all its mass. But $W_1(P, Q) = 5$ — exactly the distance you'd intuitively move the mass, and it varies smoothly: if $Q$ were at $5 + \epsilon$, $W_1$ changes by exactly $\epsilon$. This smoothness is precisely why early GAN training (where the generator's output distribution barely overlaps the real data distribution) produces a *useful, non-zero gradient signal* under the Wasserstein formulation, while a KL/JS-divergence-based discriminator saturates to a constant (zero gradient) the moment the two distributions stop overlapping — the original GAN training-instability problem that WGAN was designed to solve.
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+from scipy.optimize import linprog
+
+def wasserstein_1d_discrete(p_locs, p_mass, q_locs, q_mass):
+    """
+    Compute W_1 between two discrete 1D distributions via the LP formulation
+    of the Kantorovich problem. p_locs/q_locs: support points. p_mass/q_mass:
+    probability mass at each point (must sum to 1).
+    """
+    n, m = len(p_locs), len(q_locs)
+    cost = np.abs(p_locs[:, None] - q_locs[None, :]).flatten()
+
+    # Equality constraints: row sums = p_mass, column sums = q_mass
+    A_eq = np.zeros((n + m, n * m))
+    for i in range(n):
+        A_eq[i, i*m:(i+1)*m] = 1
+    for j in range(m):
+        A_eq[n + j, j::m] = 1
+    b_eq = np.concatenate([p_mass, q_mass])
+
+    res = linprog(cost, A_eq=A_eq, b_eq=b_eq, bounds=(0, None), method="highs")
+    return res.fun
+
+if __name__ == "__main__":
+    p_locs, p_mass = np.array([0.0]), np.array([1.0])
+    q_locs, q_mass = np.array([5.0]), np.array([1.0])
+    w1 = wasserstein_1d_discrete(p_locs, p_mass, q_locs, q_mass)
+    assert abs(w1 - 5.0) < 1e-6, f"expected W_1 = 5.0, got {w1}"
+    print(f"W_1(point mass @ 0, point mass @ 5) = {w1:.3f}")
+```
+
+## 7. Real-World Applications
+
+WGAN and WGAN-GP (both documented on this platform under `wgan` and `wgan-gp`) use exactly the dual formulation above to stabilize GAN training — this is the single most direct real-world use of optimal transport in deep learning. Beyond GANs, flow matching (the training objective behind many modern diffusion and continuous normalizing flow models) is explicitly derived from optimal transport paths between a noise distribution and a data distribution — the "straight-line" flow matching objective is the optimal transport map under the quadratic cost in the simplest case. Sinkhorn distances (an entropy-regularized, fast-to-compute approximation of Wasserstein distance) are also used directly in domain adaptation and dataset distillation pipelines.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common error is assuming Wasserstein distance is trivially cheap to compute — the exact discrete LP formulation scales cubically in the number of support points, which is why practical systems almost always use an entropy-regularized approximation (Sinkhorn's algorithm) instead of the exact LP shown above. Another misconception is thinking WGAN's weight clipping (the original Lipschitz-enforcement trick) is the "correct" or only way to enforce the 1-Lipschitz constraint — it's a crude approximation known to cause capacity underuse and training pathologies, which is exactly why WGAN-GP replaced it with a gradient penalty. Finally, don't conflate $W_1$ and $W_2$: they behave differently (e.g., in barycenter computations and in their relationship to Gaussian distributions, where $W_2$ has an elegant closed form) and are not interchangeable in derivations.
+
+## 9. How This Connects
+
+This topic requires **Measure Theory** and **Convex Optimization** as prerequisites — without them, the coupling formulation and the duality argument are unmotivated formalism rather than a derivable result. Once grounded here, it directly unlocks **Wasserstein GANs** (the direct architectural application of the dual formulation), **Flow Matching** (which reframes generative modeling as learning an optimal-transport-like velocity field between noise and data), and **Diffusion Theory** (where the forward/reverse SDE view of diffusion models can itself be understood as a dynamic, time-indexed optimal transport problem — a connection made explicit in the Schrödinger bridge literature).
+
+## 10. Check Your Understanding
+
+**Q1: Why does Wasserstein distance stay finite and useful when KL divergence becomes infinite?**
+KL divergence requires the two distributions to share support (or one to be absolutely continuous with respect to the other) — otherwise it's undefined or infinite. Wasserstein distance only requires a notion of distance between points in the underlying space; it measures the geometric cost of moving mass from one distribution to the other regardless of whether their supports overlap, which is why it stays finite and smoothly varying even for point masses in different locations.
+
+**Q2: What problem does the Kantorovich relaxation solve that the original Monge formulation could not?**
+The Monge formulation requires a deterministic map from source to target and can be infeasible (e.g., splitting a point mass across multiple destinations isn't expressible as a function). The Kantorovich relaxation allows probabilistic "soft" couplings that can split mass, making the problem always feasible and turning it into a linear program that's far more tractable to analyze and optimize.
+
+**Q3: What does the Kantorovich-Rubinstein duality let WGAN do that a standard GAN discriminator cannot?**
+It lets the discriminator ("critic") directly approximate the Wasserstein distance itself as a smooth, meaningful training signal, rather than approximating a classification probability that saturates once the generator and real distributions stop overlapping — this avoids the vanishing-gradient problem that plagues early-stage standard GAN training.
+
+**Q4: Why is exact Wasserstein distance computation rarely used in production ML systems?**
+The exact linear-programming solution scales cubically (or worse) with the number of points, which is prohibitive for the batch sizes and dimensionalities used in deep learning. Entropy-regularized approximations like the Sinkhorn algorithm reduce this to near-linear iterative matrix scaling, trading a small, controllable approximation error for tractable compute.
+
+**Q5: How does WGAN-GP improve on the original WGAN's weight clipping?**
+Weight clipping enforces the Lipschitz constraint crudely by capping every weight to a fixed range, which tends to push the critic toward simple, low-capacity functions and can cause vanishing or exploding gradients. WGAN-GP instead adds a soft penalty term that pushes the gradient norm of the critic toward 1 along interpolated points between real and fake samples — directly targeting the actual Lipschitz property instead of a crude proxy for it.
+
+## 11. Further Reading
+
+- Villani, "Optimal Transport: Old and New" (the standard rigorous reference)
+- Arjovsky et al., "Wasserstein GAN" (2017)
+- Gulrajani et al., "Improved Training of Wasserstein GANs" (WGAN-GP, 2017)
+- Cuturi, "Sinkhorn Distances: Lightspeed Computation of Optimal Transport" (2013)
+- See also: `wgan`, `wgan-gp`, and `ddpm` on this platform for the direct architectural applications
+
+## Related Platform Content
+
+- [MATHEMATICS curriculum overview](/learn/mathematics)
+- [Diffusion application](/architectures/ddpm)
+- [Browse all system designs](/system-design)

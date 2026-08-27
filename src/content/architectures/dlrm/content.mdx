@@ -1,0 +1,236 @@
+# DLRM
+
+## 1. Overview
+Deep Learning Recommendation Model (DLRM), introduced in 2019 by Maxim Naumov, Dheevatsa Mudigere, Misha Smelyanskiy et al. (Facebook / Meta AI), is Meta's production architecture for **personalized news feed ranking and ad click-through-rate (CTR) prediction**. Modern recommendation datasets consist of two fundamentally different feature types: (1) **High-cardinality sparse categorical features** (e.g., user IDs, search history, ad IDs) and (2) **Continuous numerical dense features** (e.g., user age, account tenure, historical CTR metrics). DLRM introduced an architectural design tailored specifically to model hardware efficiency: dense numerical features are processed through a **Bottom MLP**, sparse categorical features are mapped to dense embeddings via **Embedding Tables**, 2nd-order feature interactions are computed explicitly via **Dot Products**, and the combined representations are passed to a **Top MLP** for prediction. DLRM established the industry standard benchmark (MLPerf Recommendation) for AI hardware acceleration.
+
+:::tip
+DLRM concept: "Process dense features via Bottom MLP + sparse features via Embedding Tables $\to$ compute explicit 2nd-order pairwise Dot Product interactions $\to$ pass to Top MLP for CTR prediction."
+:::
+
+## 2. Historical Context
+In 2019, Meta operated some of the world's largest AI infrastructure workloads. Unlike computer vision (CNNs) or NLP (Transformers) which are compute-bound (dense matrix multiplications), recommendation models are **memory-capacity and memory-bandwidth bound** due to embedding tables containing hundreds of gigabytes of sparse parameters.
+
+Maxim Naumov et al. designed DLRM to optimize both algorithmic accuracy and hardware efficiency. By separating sparse embedding lookups (which require model parallelism across multiple GPUs) from dense MLP matrix multiplies (which scale via data parallelism), DLRM provided a blueprint for scaling recommendation models across distributed GPU cluster hardware.
+
+## 3. Problem It Solves
+DLRM addresses three core architectural and system challenges in industrial recommendation systems:
+1. **Bimodal Feature Heterogeneity:** Naturally handles both continuous numerical features (processed via Bottom MLP) and high-cardinality categorical IDs (processed via Embedding Tables).
+2. **Explicit Pairwise Feature Interaction:** Computes explicit dot products between all feature pairs (both dense and sparse), enforcing 2nd-order non-linear interaction modeling without manual cross-product engineering.
+3. **Distributed System Scaling Bottlenecks:** Enables hybrid model-parallelism (distributing giant embedding tables across GPU VRAM) and data-parallelism (replicating MLPs across GPUs).
+
+## 4. Architecture Diagram Data
+Below is the structural architecture of Meta's DLRM showing the Bottom MLP, Embedding Tables, Pairwise Dot-Product Interaction layer, and Top MLP.
+
+```text
+       SPARSE CATEGORICAL FEATURES              DENSE NUMERICAL FEATURES
+       (e.g., User ID, Ad ID, Page ID)          (e.g., Age, Device CTR, Time)
+                      |                                    |
+                      v                                    v
+       +==============================+     +==============================+
+       | SPARSE EMBEDDING TABLES      |     | BOTTOM MLP                   |
+       | Table 1, Table 2, ... Table S|     | Linear -> ReLU -> Linear     |
+       | Output Vectors: e_1 ... e_S  |     | Output Vector: e_0           |
+       | (Dim k per vector)           |     | (Dim k)                      |
+       +==============================+     +==============================+
+                      |                                    |
+                      +------------------+-----------------+
+                                         |
+                                         v
+       +==================================================================+
+       | EXPLICIT PAIRWISE DOT-PRODUCT INTERACTION LAYER                  |
+       | Gather Vectors: E = [e_0, e_1, e_2, ... e_S] (Dim: (S+1) x k)     |
+       | Compute Pairwise Interactions: I = E * E^T (Upper Triangular)     |
+       +==================================================================+
+                                         |
+                                         v
+       +==================================================================+
+       | TOP MLP (Concatenate Dense e_0 + Pairwise Interaction Vector I)   |
+       | Concat [e_0, Triu(I)] -> FC -> ReLU -> FC -> Sigmoid              |
+       +==================================================================+
+                                         |
+                                         v
+                    [ Click / Conversion Probability Output ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Dense Bottom MLP Stream:**
+- Input: Continuous numerical vector $x_{\text{dense}} \in \mathbb{R}^{D_{\text{dense}}}$.
+- Architecture: 2 to 3 Fully Connected layers mapping $x_{\text{dense}} \to e_0 \in \mathbb{R}^k$ (matching the embedding dimension $k$ of the sparse tables).
+
+**2. Sparse Embedding Table Stream:**
+- Input: $S$ sparse categorical IDs $(i_1, i_2, \dots, i_S)$.
+- Look up embedding vectors $e_1, e_2, \dots, e_S \in \mathbb{R}^k$ from $S$ separate embedding tables.
+
+**3. Pairwise Interaction Layer:**
+- Concatenates dense output $e_0$ with sparse embeddings to form matrix $E = [e_0, e_1, \dots, e_S] \in \mathbb{R}^{(S+1) \times k}$.
+- Computes matrix multiplication $M = E E^T \in \mathbb{R}^{(S+1) \times (S+1)}$.
+- Extracts the lower/upper triangular entries of $M$ into a 1D interaction vector $v_{\text{inter}} \in \mathbb{R}^{\frac{(S+1)S}{2}}$.
+
+**4. Top MLP Stream:**
+- Concatenates original dense representation $e_0$ with interaction vector: $a^{(0)} = [e_0, v_{\text{inter}}]$.
+- Passes through 3 Fully Connected layers ($512 \to 256 \to 1$) with Sigmoid output mapping to click probability.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DLRM for mini-batch $B=512$, $S=8$ sparse features, embedding dimension $k=64$, 5 continuous dense features.
+
+1. **Bottom MLP Pass:**
+   - Dense Features $x_{\text{dense}}$: `(512, 5)` $\xrightarrow{\text{Bottom MLP}} e_0$: `(512, 64)`
+2. **Sparse Embedding Lookup:**
+   - 8 Categorical IDs $\xrightarrow{\text{Embedding Lookup}} 8 \times (512, 64) \to e_1 \dots e_8$: `(512, 8, 64)`
+3. **Stack All Vectors:**
+   - Stack $[e_0, e_1, \dots, e_8] \to E$: `(512, 9, 64)`
+4. **Pairwise Dot Product Interaction:**
+   - Batch Matrix Multiplication $E \cdot E^T \to M$: `(512, 9, 9)`
+   - Extract Upper Triangular Elements (excluding diagonal) $\to v_{\text{inter}}$: `(512, 36)` (where $\frac{9 \times 8}{2} = 36$)
+5. **Top MLP Pass:**
+   - Concat $[e_0, v_{\text{inter}}] \to$ Top Input: `(512, 64 + 36) = (512, 100)`
+   - Top MLP $\to (512, 1) \xrightarrow{\text{Sigmoid}} P(\text{Click})$: `(512, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Pairwise Interaction Formula
+Let $E = [e_0, e_1, \dots, e_S]^T \in \mathbb{R}^{(S+1) \times k}$ be the matrix of combined embedding vectors, where $e_0 = \text{MLP}_{\text{bottom}}(x_{\text{dense}})$.
+The interaction matrix $M$ is defined as:
+
+$$M = E E^T \in \mathbb{R}^{(S+1) \times (S+1)}, \quad M_{i,j} = \langle e_i, e_j \rangle = e_i^T e_j$$
+
+The vector of explicit 2nd-order interactions $v_{\text{inter}}$ contains the upper triangular entries $M_{i,j}$ for $i < j$:
+
+$$v_{\text{inter}} = \left[ e_0^T e_1, \; e_0^T e_2, \; \dots, \; e_{S-1}^T e_S \right]^T \in \mathbb{R}^{\frac{S(S+1)}{2}}$$
+
+### 2. DLRM Overall Prediction Equation
+$$\hat{y} = \sigma \left( \text{MLP}_{\text{top}} \left( \left[ \text{MLP}_{\text{bottom}}(x_{\text{dense}}), \; \text{vech}\left( E E^T \right) \right] \right) \right)$$
+
+where $\text{vech}(\cdot)$ denotes the vectorization of the strict upper triangular matrix.
+
+## 8. Training Procedure
+- **Hybrid Parallelism setup:**
+  - **Model Parallelism:** Distribute large embedding tables across multiple GPU devices.
+  - **Data Parallelism:** Replicate Bottom MLP, Interaction Layer, and Top MLP across GPUs.
+- Execute forward pass, compute Binary Cross-Entropy loss $\mathcal{L}_{\text{BCE}}(y, \hat{y})$.
+- All-to-All communication primitives exchange embedding vectors across GPU nodes.
+- Update weights using SGD or Adam optimizer.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Facebook DLRM Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+
+class DLRM(nn.Module):
+    """ Deep Learning Recommendation Model (DLRM) """
+    def __init__(self, num_dense_features, vocab_sizes, embed_dim=64, bottom_mlp_dims=[512, 256, 64], top_mlp_dims=[512, 256, 1]):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_sparse = len(vocab_sizes)
+        
+        # 1. SPARSE EMBEDDING TABLES
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(vocab_size, embed_dim) for vocab_size in vocab_sizes
+        ])
+        
+        # 2. BOTTOM MLP FOR DENSE FEATURES
+        bottom_layers = []
+        in_dim = num_dense_features
+        for h_dim in bottom_mlp_dims:
+            bottom_layers.append(nn.Linear(in_dim, h_dim))
+            bottom_layers.append(nn.ReLU())
+            in_dim = h_dim
+        self.bottom_mlp = nn.Sequential(*bottom_layers)
+        
+        # 3. TOP MLP FOR PAIRWISE INTERACTIONS + DENSE EMBEDDING
+        # Number of pairwise interactions: S*(S+1)/2 where S = num_sparse
+        num_interactions = ((self.num_sparse + 1) * self.num_sparse) // 2
+        top_in_dim = embed_dim + num_interactions
+        
+        top_layers = []
+        in_dim = top_in_dim
+        for i, h_dim in enumerate(top_mlp_dims):
+            top_layers.append(nn.Linear(in_dim, h_dim))
+            if i < len(top_mlp_dims) - 1:
+                top_layers.append(nn.ReLU())
+            in_dim = h_dim
+        self.top_mlp = nn.Sequential(*top_layers)
+
+    def forward(self, dense_x, sparse_x):
+        """
+        dense_x:  (B, num_dense_features)
+        sparse_x: (B, num_sparse_features)
+        """
+        B = dense_x.shape[0]
+        
+        # 1. Process Dense Features through Bottom MLP
+        e0 = self.bottom_mlp(dense_x).unsqueeze(1) # (B, 1, k)
+        
+        # 2. Process Sparse Features through Embedding Tables
+        sparse_embeds = [self.embeddings[i](sparse_x[:, i]).unsqueeze(1) for i in range(self.num_sparse)] # S x (B, 1, k)
+        
+        # Concatenate all vectors: E = [e0, e1, ... eS]
+        E = torch.cat([e0] + sparse_embeds, dim=1) # (B, S+1, k)
+        
+        # 3. Pairwise Dot Product Interaction: E * E^T
+        interaction_matrix = torch.bmm(E, E.transpose(1, 2)) # (B, S+1, S+1)
+        
+        # Extract Upper Triangular Elements (excluding diagonal)
+        tril_indices = torch.triu_indices(self.num_sparse + 1, self.num_sparse + 1, offset=1)
+        interactions = interaction_matrix[:, tril_indices[0], tril_indices[1]] # (B, (S+1)S/2)
+        
+        # 4. Top MLP Pass
+        top_in = torch.cat([e0.squeeze(1), interactions], dim=-1) # (B, k + (S+1)S/2)
+        logits = self.top_mlp(top_in)
+        probs = torch.sigmoid(logits)
+        return probs
+
+if __name__ == "__main__":
+    B = 512
+    num_dense = 5
+    vocab_sizes = [1000, 5000, 200, 50, 1200, 300, 800, 400] # 8 sparse tables
+    
+    dlrm = DLRM(num_dense_features=num_dense, vocab_sizes=vocab_sizes, embed_dim=64)
+    
+    dense_x = torch.randn(B, num_dense)
+    sparse_x = torch.cat([torch.randint(0, v, (B, 1)) for v in vocab_sizes], dim=1)
+    
+    probs = dlrm(dense_x, sparse_x)
+    
+    print(f"DLRM Click Probability Output Shape: {probs.shape}")
+    assert probs.shape == (B, 1)
+    print("DLRM verification successful!")
+```
+
+## 10. Strengths
+- **Production Proven:** Powers Meta's news feed ranking and ad recommendation systems at scale.
+- **Hardware Efficient Design:** Separates memory-bound embedding lookups from compute-bound MLP operations.
+- **Explicit 2nd-Order Interactions:** Computes exact pairwise feature dot products without manual cross-feature rules.
+
+## 11. Weaknesses
+- **High Memory Footprint:** Embedding tables require hundreds of gigabytes of GPU VRAM across clusters.
+
+## 12. Research Evolution
+DLRM established the MLPerf Recommendation benchmark, inspiring **DLRM v2**, **DCNv2**, and **DHEN**.
+
+## 13. Interview Questions
+
+**Q1: How does DLRM handle the difference between continuous numerical and sparse categorical features?**
+**A1:** Continuous numerical features are passed through a **Bottom MLP** to project them into a $k$-dimensional vector $e_0$. Sparse categorical IDs are looked up in **Embedding Tables** to produce $k$-dimensional vectors $e_1 \dots e_S$. Both modalities are brought to the exact same dimension $k$ before computing pairwise interactions.
+
+**Q2: How are feature interactions computed in DLRM?**
+**A2:** By stacking dense representation $e_0$ and sparse embeddings $e_1 \dots e_S$ into matrix $E \in \mathbb{R}^{(S+1) \times k}$ and computing batch matrix multiplication $M = E E^T$. The upper triangular entries of $M$ form an explicit vector of 2nd-order pairwise dot products.
+
+**Q3: What is the Hybrid Parallelism strategy used to train DLRM across GPU clusters?**
+**A3:** **Model Parallelism** is used for memory-bound sparse embedding tables (distributing different tables across different GPUs). **Data Parallelism** is used for compute-bound MLPs (replicating MLPs across GPUs with mini-batch splitting). All-to-All collective communication syncs embeddings between stages.
+
+**Q4: Write out the dimension of the interaction vector fed into DLRM's Top MLP.**
+**A4:** The vector dimension is $k + \frac{S(S+1)}{2}$, where $k$ is embedding dimension and $S$ is the number of sparse feature tables.
+
+**Q5: Why is DLRM memory-bandwidth bound rather than compute-bound?**
+**A5:** Embedding table lookups perform gather operations over huge sparse tables in GPU VRAM, requiring high memory capacity and bandwidth with low arithmetic intensity ($O(1)$ operations per byte transferred).
+
+## 14. Related Papers
+- **DLRM Paper:** *Deep Learning Recommendation Model for Personalization and Recommendation Systems* (Naumov et al., Meta / arXiv 2019)
+- **DCNv2 Paper:** *DCN V2: Improved Deep & Cross Network for Feature Crosses in Large-Scale Recommendation Systems* (Wang et al., KDD 2021)
+
+## 15. Further Reading
+- Meta Open Source DLRM PyTorch Implementation

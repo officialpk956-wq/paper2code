@@ -1,0 +1,242 @@
+# DDIM
+
+## 1. Overview
+Denoising Diffusion Implicit Models (DDIM), introduced in 2020 by Jiaming Song, Chenlin Meng, and Stefano Ermon (Stanford University), solved the single largest operational bottleneck of DDPM: **prohibitively slow inference speed**. While DDPM required $T=1000$ sequential reverse Markov steps to generate a single image, DDIM demonstrated that the forward noise addition process does NOT need to be Markovian. By constructing a family of **Non-Markovian Forward Processes** that share the exact same marginal probability distributions $q(x_t \mid x_0)$ and objective function $\mathcal{L}_{\text{simple}}$ as DDPM, DDIM enables deterministic sampling. This allows DDIM to skip steps during inference, sampling high-quality images in just **10 to 50 steps ($10\times$ to $50\times$ faster)** without retraining the underlying U-Net model. Furthermore, DDIM's deterministic ODE formulation enables **consistent latent space interpolation** and image inversion.
+
+:::tip
+DDIM's core breakthrough: "DDPM's trained U-Net can be sampled deterministically using a non-Markovian ODE formulation, allowing models to generate samples in 20 steps instead of 1000 steps without retraining."
+:::
+
+## 2. Historical Context
+In 2020, DDPM demonstrated that diffusion models could equal or surpass GANs in sample quality. However, DDPM's reverse sampling process was strictly Markovian: generating $x_{t-1}$ required $x_t$, forcing users to run 1,000 sequential U-Net forward passes per image. This made real-time generation, interactive editing, and large-scale deployment impossible.
+
+Jiaming Song et al. made a profound theoretical observation: DDPM's training objective $\mathcal{L}_{\text{simple}} = \|\epsilon - \epsilon_\theta(x_t, t)\|^2$ depends ONLY on the marginal distributions $q(x_t \mid x_0)$, NOT on the joint distribution $q(x_1, \dots, x_T \mid x_0)$. As long as a new forward process maintains the same marginals $q(x_t \mid x_0) = \mathcal{N}(\sqrt{\bar{\alpha}_t} x_0, (1 - \bar{\alpha}_t) \mathbf{I})$, ANY trained DDPM model can be sampled using a non-Markovian reverse process. By setting the stochastic noise parameter $\sigma_t = 0$, the reverse process becomes completely deterministic, transforming diffusion into a Neural Ordinary Differential Equation (ODE).
+
+## 3. Problem It Solves
+DDIM addresses three major challenges of standard diffusion models:
+1. **$1000$-Step Inference Latency:** Reduces sampling iterations from 1000 steps down to 20–50 steps, accelerating inference speed by $20\times$ to $50\times$.
+2. **Stochastic Sampling Variance:** In DDPM, passing the exact same noise vector through two different runs produces completely different images due to random Gaussian noise added at each step. DDIM's deterministic trajectories ensure that a fixed initial noise $x_T$ maps deterministically to a unique final image $x_0$.
+3. **Semantically Meaningful Latent Interpolation:** Enables smooth semantic interpolation between two real images by inverting images into initial noise representations via the forward ODE trajectory.
+
+## 4. Architecture Diagram Data
+Below is the comparison between DDPM's Stochastic Markovian Sampling and DDIM's Accelerated Deterministic ODE Sampling.
+
+```text
+       DDPM: MARKOVIAN SAMPLING (T = 1000 Steps, Stochastic)
+       x_T ---> x_{T-1} ---> ... ---> x_t ---> x_{t-1} ---> ... ---> x_0
+        |         ^                   ^         ^
+        |         |                   |         |
+        +-- Add Random Noise z_t -----+---------+  (Must execute ALL 1000 steps!)
+
+       ========================================================================
+
+       DDIM: DETERMINISTIC ODE SAMPLING (Sub-sampled S Steps, e.g., S = 20)
+       x_T -------------------------> x_{t_i} -------------------------> x_0
+        |                               |                                |
+        v                               v                                v
+     [ No Stochastic Noise: sigma_t = 0 (Deterministic ODE Trajectory) ]
+     [ Skips intermediate timesteps: e.g. t = [1000, 950, 900, ..., 0] ]
+
+       ========================================================================
+
+       DDIM STEP DERIVATION AT TIMESTEP t -> t_prev:
+
+                  [ Noisy Image x_t ]      [ Timestep t ]
+                           |                     |
+                           v                     v
+               +=====================================+
+               | Trained DDPM U-Net (epsilon_theta)  |
+               +=====================================+
+                                  |
+                                  v
+                      [ Predicted Noise: eps_hat ]
+                                  |
+               +------------------+------------------+
+               |                                     |
+               v                                     v
+       [ Estimate Clean x_0 ]               [ Direction to x_t ]
+       x0_pred = (x_t - sqrt(1-alpha_bar_t)*eps_hat) / sqrt(alpha_bar_t)
+               |                                     |
+               +------------------+------------------+
+                                  |
+                                  v
+       +===================================================================+
+       | Deterministic Update Rule (sigma_t = 0):                          |
+       | x_{t_prev} = sqrt(alpha_bar_prev) * x0_pred                       |
+       |            + sqrt(1 - alpha_bar_prev) * eps_hat                 |
+       +===================================================================+
+                                  |
+                                  v
+                      [ Sampled Image x_{t_prev} ]
+```
+
+## 5. Layer-by-Layer Breakdown
+DDIM uses the exact same U-Net architecture as DDPM without any structural changes or retraining:
+
+**1. Time-Conditioned U-Net (Pre-Trained DDPM):**
+- Takes input noisy image $x_t \in \mathbb{R}^{B \times 3 \times H \times W}$ and timestep $t \in [1, T]$.
+- Outputs predicted noise tensor $\hat{\epsilon} = \epsilon_\theta(x_t, t) \in \mathbb{R}^{B \times 3 \times H \times W}$.
+
+**2. Deterministic DDIM Sampler Module:**
+- **Sub-sampled Timestep Sequence:** Defines a shortened trajectory $\tau = [\tau_1, \tau_2, \dots, \tau_S]$ of length $S \ll T$ (e.g., $S=20$ steps out of $T=1000$).
+- **Clean Image Estimation:** Computes estimated clean image $\hat{x}_0(x_t)$ at each step.
+- **Directional Gradient Update:** Computes the deterministic update vector pointing toward $x_{\tau_{i-1}}$ without adding random Gaussian noise.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DDIM deterministic sampling for a sub-sampled trajectory $S=20$ steps and batch size $B=2$.
+
+1. **Initialize Initial Noise:**
+   - Sample $x_{\tau_S} = x_{1000} \sim \mathcal{N}(0, \mathbf{I})$: `(2, 3, 64, 64)`
+2. **Loop over Sub-sampled Timesteps $\tau = [1000, 950, 900, \dots, 50, 0]$:**
+   - For step $i = S$ down to $1$ ($t = \tau_i, t_{\text{prev}} = \tau_{i-1}$):
+     - Predict Noise: $\hat{\epsilon} = \epsilon_\theta(x_t, t) \rightarrow$ `(2, 3, 64, 64)`
+     - Estimate Clean Image $\hat{x}_0 = \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \hat{\epsilon}}{\sqrt{\bar{\alpha}_t}} \rightarrow$ `(2, 3, 64, 64)`
+     - Compute Deterministic $x_{t_{\text{prev}}}$:
+       $$x_{t_{\text{prev}}} = \sqrt{\bar{\alpha}_{t_{\text{prev}}}} \hat{x}_0 + \sqrt{1 - \bar{\alpha}_{t_{\text{prev}}}} \hat{\epsilon} \rightarrow \text{`(2, 3, 64, 64)`}$$
+3. **Final Output:**
+   - Output Image $x_0$: `(2, 3, 64, 64)` produced in 20 steps!
+
+## 7. Mathematical Foundations
+
+### 1. Non-Markovian Forward Process
+DDIM defines a family of forward processes $q_\sigma(x_{1:T} \mid x_0)$ parameterized by $\sigma$:
+
+$$q_\sigma(x_{t-1} \mid x_t, x_0) = \mathcal{N}\left(x_{t-1}; \; \sqrt{\bar{\alpha}_{t-1}} x_0 + \sqrt{1 - \bar{\alpha}_{t-1} - \sigma_t^2} \cdot \frac{x_t - \sqrt{\bar{\alpha}_t} x_0}{\sqrt{1 - \bar{\alpha}_t}}, \; \sigma_t^2 \mathbf{I}\right)$$
+
+When $\sigma_t^2 = \frac{1 - \bar{\alpha}_{t-1}}{1 - \bar{\alpha}_t} (1 - \frac{\bar{\alpha}_t}{\bar{\alpha}_{t-1}})$, the process becomes standard Markovian DDPM.
+
+### 2. DDIM Deterministic Sampling Update Rule ($\sigma_t = 0$)
+When $\sigma_t = 0$ for all $t$, the random noise term is eliminated, yielding a **fully deterministic** reverse process:
+
+First, estimate the clean image $\hat{x}_0$ from $x_t$ and predicted noise $\epsilon_\theta(x_t, t)$:
+
+$$\hat{x}_0(x_t) = \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \epsilon_\theta(x_t, t)}{\sqrt{\bar{\alpha}_t}}$$
+
+Next, compute $x_{t_{\text{prev}}}$ for any prior timestep $t_{\text{prev}} < t$:
+
+$$x_{t_{\text{prev}}} = \sqrt{\bar{\alpha}_{t_{\text{prev}}}} \cdot \underbrace{\hat{x}_0(x_t)}_{\text{"Predicted } x_0\text{"}} + \underbrace{\sqrt{1 - \bar{\alpha}_{t_{\text{prev}}} - \sigma_t^2} \cdot \epsilon_\theta(x_t, t)}_{\text{"Direction pointing to } x_t\text{"}} + \underbrace{\sigma_t \epsilon_t}_{\text{"Random Noise"}}$$
+
+Setting $\sigma_t = 0$ yields the **DDIM Deterministic Update Rule**:
+
+$$x_{t_{\text{prev}}} = \sqrt{\bar{\alpha}_{t_{\text{prev}}}} \left( \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \epsilon_\theta(x_t, t)}{\sqrt{\bar{\alpha}_t}} \right) + \sqrt{1 - \bar{\alpha}_{t_{\text{prev}}}} \cdot \epsilon_\theta(x_t, t)$$
+
+This rule allows skipping timesteps arbitrarily (e.g., $t=1000 \rightarrow t_{\text{prev}}=950$).
+
+## 8. Training Procedure
+- **Zero Retraining Required:** DDIM requires **NO retraining**. It directly consumes any model trained using DDPM's standard $\mathcal{L}_{\text{simple}}$ objective.
+- **Inference Time Schedule:** At inference, select a sub-sampled schedule of $S$ steps out of $T$ total steps (e.g., uniform stride $T/S$).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **DDIM Deterministic Sampler**.
+
+```python
+import torch
+import torch.nn as nn
+
+class DDIMSampler(nn.Module):
+    def __init__(self, model, timesteps=1000, beta_start=1e-4, beta_end=0.02):
+        super().__init__()
+        self.model = model
+        self.timesteps = timesteps
+        
+        # Pre-calculate Alphas
+        betas = torch.linspace(beta_start, beta_end, timesteps)
+        alphas = 1.0 - betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        
+        self.register_buffer('alphas_cumprod', alphas_cumprod)
+
+    @torch.no_grad()
+    def ddim_sample(self, shape, num_ddim_steps=20, eta=0.0):
+        """
+        eta = 0.0 -> Deterministic DDIM
+        eta = 1.0 -> Stochastic DDPM
+        """
+        device = self.alphas_cumprod.device
+        B = shape[0]
+        
+        # Define sub-sampled timestep sequence (e.g., 20 steps out of 1000)
+        c = self.timesteps // num_ddim_steps
+        ddim_timesteps = torch.arange(0, self.timesteps, c, device=device)
+        ddim_timesteps = torch.flip(ddim_timesteps, dims=[0]) # [950, 900, ..., 0]
+        
+        # Start from pure Gaussian noise x_T
+        img = torch.randn(shape, device=device)
+        
+        for i in range(len(ddim_timesteps)):
+            t = ddim_timesteps[i]
+            prev_t = ddim_timesteps[i + 1] if i < len(ddim_timesteps) - 1 else torch.tensor(-1, device=device)
+            
+            t_batch = torch.full((B,), t, device=device, dtype=torch.long)
+            
+            # Predict noise
+            eps_pred = self.model(img, t_batch)
+            
+            # Extract alpha values
+            alpha_bar_t = self.alphas_cumprod[t]
+            alpha_bar_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else torch.tensor(1.0, device=device)
+            
+            # 1. Estimate clean x0
+            pred_x0 = (img - torch.sqrt(1.0 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
+            
+            # 2. Compute sigma_t (eta = 0 for deterministic)
+            sigma_t = eta * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar_t) * (1 - alpha_bar_t / alpha_bar_prev))
+            
+            # 3. Compute direction to x_t
+            dir_xt = torch.sqrt(1.0 - alpha_bar_prev - sigma_t**2) * eps_pred
+            
+            # 4. Compute x_{t_prev}
+            noise = torch.randn_like(img) if eta > 0 else 0.0
+            img = torch.sqrt(alpha_bar_prev) * pred_x0 + dir_xt + sigma_t * noise
+            
+        return img
+
+if __name__ == "__main__":
+    from ddpm import MiniUNet # Reusing MiniUNet from DDPM
+    
+    unet = MiniUNet(in_channels=3, time_dim=128)
+    sampler = DDIMSampler(model=unet, timesteps=1000)
+    
+    # Generate 2 images in 20 steps
+    sampled_imgs = sampler.ddim_sample(shape=(2, 3, 32, 32), num_ddim_steps=20, eta=0.0)
+    
+    print(f"Generated DDIM Images Shape: {sampled_imgs.shape}")
+    assert sampled_imgs.shape == (2, 3, 32, 32)
+    print("DDIM Sampler verification successful!")
+```
+
+## 10. Strengths
+- **Fast Sampling ($10\times$ to $50\times$ Speedup):** Generates high-quality images in 20–50 steps vs. 1000 steps in DDPM.
+- **Zero Retraining Required:** Direct plug-and-play sampler for any pre-trained DDPM checkpoint.
+- **Deterministic & Invertible:** Identical initial noise vector yields the exact same image; enables ODE-based image inversion and latent interpolation.
+
+## 11. Weaknesses
+- **Slight Quality Drop at Ultra-Low Steps ($<10$ steps):** Quality degrades if step count drops below 10 steps (later solved by Consistency Models and Rectified Flow).
+
+## 12. Research Evolution
+DDIM established deterministic ODE diffusion sampling, enabling latent editing and inversion. It directly inspired **PLMS**, **DPM-Solver**, and latent space text-to-image models (Stable Diffusion).
+
+## 13. Interview Questions
+
+**Q1: Why does DDIM NOT require retraining the DDPM U-Net model?**
+**A1:** DDPM's training objective $\mathcal{L}_{\text{simple}} = \|\epsilon - \epsilon_\theta(x_t, t)\|^2$ depends ONLY on the marginal distributions $q(x_t \mid x_0)$, not on the joint distribution. DDIM defines a non-Markovian forward process that shares the exact same marginals $q(x_t \mid x_0)$ as DDPM, allowing any pre-trained DDPM U-Net to be sampled using DDIM rules.
+
+**Q2: What parameter controls the trade-off between deterministic DDIM sampling and stochastic DDPM sampling?**
+**A2:** The parameter $\eta \ge 0$. When $\eta = 0$, the process is fully deterministic DDIM ($\sigma_t = 0$). When $\eta = 1$, the process recovers standard stochastic Markovian DDPM.
+
+**Q3: How does DDIM enable smooth latent space interpolation between two real images?**
+**A3:** Because DDIM's reverse process is a deterministic ODE ($\eta=0$), it is fully invertible. A real image $x_0$ can be inverted back to its exact initial noise vector $x_T$ via forward ODE integration. Spherical linear interpolation (SLERP) between two inverted noise vectors $x_T^{(1)}$ and $x_T^{(2)}$ yields smooth, realistic image interpolations.
+
+**Q4: Write out the predicted clean image $\hat{x}_0$ equation used in DDIM.**
+**A4:** $\hat{x}_0(x_t) = \frac{x_t - \sqrt{1 - \bar{\alpha}_t} \epsilon_\theta(x_t, t)}{\sqrt{\bar{\alpha}_t}}$.
+
+**Q5: Compare DDPM and DDIM regarding sampling speed.**
+**A5:** DDPM requires evaluating all $T=1000$ sequential steps. DDIM can sub-sample the trajectory to $S=20$ or $50$ steps, speeding up inference by $20\times$ to $50\times$ with negligible quality loss.
+
+## 14. Related Papers
+- **DDIM Paper:** *Denoising Diffusion Implicit Models* (Song, Meng, Ermon, ICLR 2021)
+- **DDPM Paper:** *Denoising Diffusion Probabilistic Models* (Ho et al., NeurIPS 2020)
+
+## 15. Further Reading
+- OpenAI `guided-diffusion` Sampler Codebase
+- Hugging Face Diffusers `DDIMScheduler` Documentation

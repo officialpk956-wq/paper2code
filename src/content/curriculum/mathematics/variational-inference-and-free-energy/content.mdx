@@ -1,0 +1,109 @@
+# Variational Inference & Free Energy
+
+## 1. Overview
+
+Variational inference solves a problem that shows up constantly in Bayesian machine learning: you want to compute a posterior distribution $p(z|x)$ — say, "what latent code likely generated this image" — but the true posterior is an intractable integral you can't evaluate directly. Variational inference sidesteps the intractable integral entirely by turning inference into optimization: pick a family of simple, tractable distributions $q(z)$, and find the member of that family closest to the true posterior. The quantity you actually optimize is called the ELBO (evidence lower bound), and it's the mathematical engine underneath VAEs, Bayesian neural networks, and — perhaps surprisingly — the training objective of diffusion models like DDPM.
+
+## 2. Prerequisites in Context
+
+**Information theory** is essential because the ELBO is built from KL divergence and entropy terms — you need to understand what KL divergence actually measures (an asymmetric "distance" between distributions, rooted in expected code-length differences) before the ELBO derivation makes sense as more than symbol pushing. **Probability theory** gives you Bayes' rule and the machinery of marginalization that defines the intractable posterior and evidence terms in the first place. **Convex optimization** matters because Jensen's inequality — the single-line trick that produces the ELBO from the log-evidence — is a direct consequence of the concavity (a convexity-adjacent property) of the log function, and the actual optimization of the ELBO over variational parameters is itself a (typically non-convex, but optimization-theory-informed) numerical procedure.
+
+## 3. Core Concept
+
+Start from the quantity you actually want: $\log p(x)$, the log-likelihood of your data, often called the "evidence." This equals $\log \int p(x, z)\, dz$, an integral over all possible latent variables $z$ that is almost always intractable for interesting models. Introduce any tractable distribution $q(z)$ over the latents, and use Jensen's inequality to derive a lower bound:
+$$\log p(x) \geq \mathbb{E}_{q(z)}[\log p(x, z) - \log q(z)] \equiv \text{ELBO}(q)$$
+This is exactly equal to $\log p(x) - D_{KL}(q(z) \| p(z|x))$, so maximizing the ELBO over $q$ is *equivalent* to minimizing the KL divergence between your tractable approximation $q$ and the true (intractable) posterior $p(z|x)$ — without ever needing to compute the posterior directly. The "free energy" terminology comes from statistical physics, where this same expression (up to a sign) is the variational free energy, and minimizing it is analogous to a physical system settling into its lowest-energy configuration. In deep learning, $q(z)$ is usually parameterized by a neural network (the encoder), turning this abstract inference problem into something you can optimize with ordinary backpropagation.
+
+## 4. Theoretical Foundations
+
+Expanding the ELBO differently reveals its two-term structure used directly in VAE training:
+$$\text{ELBO}(q) = \underbrace{\mathbb{E}_{q(z)}[\log p(x|z)]}_{\text{reconstruction term}} - \underbrace{D_{KL}(q(z) \,\|\, p(z))}_{\text{regularization term}}$$
+The first term rewards $q(z)$ for putting mass on latents $z$ that make the observed data $x$ likely under the decoder $p(x|z)$ — this is the "reconstruction" loss in a VAE. The second term penalizes $q(z)$ for straying too far from a fixed prior $p(z)$ (typically a standard Gaussian) — this is the KL regularization term. In the diffusion model setting (DDPM), the same ELBO framework is applied to a *sequence* of latent variables (the noised versions of the data at each diffusion timestep), producing a sum of per-timestep KL terms that, after simplification, collapses into the now-famous noise-prediction loss $\mathbb{E}[\|\epsilon - \epsilon_\theta(x_t, t)\|^2]$ — the ELBO derivation is exactly what justifies that loss function as a valid (bound on the) log-likelihood objective, rather than an ad hoc heuristic.
+
+## 5. Worked Example
+
+Suppose the true posterior over a single latent variable $z$, given data $x$, is a mixture of two Gaussians (bimodal — the data is genuinely ambiguous about which of two explanations is correct). If your variational family $q(z)$ is restricted to single unimodal Gaussians (the standard VAE choice), the best $q$ can do is collapse onto one of the two modes (or awkwardly straddle both with inflated variance) — it can never represent the true bimodal structure. This is the well-known "mode collapse" limitation of mean-field variational inference: the ELBO will be maximized, but the gap $D_{KL}(q \| p(z|x))$ at that maximum will still be strictly positive, because the true posterior simply isn't in the family you searched over. This motivates richer variational families (normalizing flows, mixture-of-Gaussian posteriors) precisely to shrink this irreducible approximation gap.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+class SimpleVAE(nn.Module):
+    """Minimal VAE demonstrating the ELBO = reconstruction - KL structure directly."""
+    def __init__(self, data_dim=784, latent_dim=20):
+        super().__init__()
+        self.encoder = nn.Sequential(nn.Linear(data_dim, 256), nn.ReLU())
+        self.mu_head = nn.Linear(256, latent_dim)
+        self.logvar_head = nn.Linear(256, latent_dim)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 256), nn.ReLU(),
+            nn.Linear(256, data_dim), nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        h = self.encoder(x)
+        mu, logvar = self.mu_head(h), self.logvar_head(h)
+        std = torch.exp(0.5 * logvar)
+        z = mu + std * torch.randn_like(std)          # reparameterization trick
+        x_recon = self.decoder(z)
+        return x_recon, mu, logvar
+
+def elbo_loss(x, x_recon, mu, logvar):
+    recon = nn.functional.binary_cross_entropy(x_recon, x, reduction="sum")
+    # KL(q(z|x) || N(0, I)) has a closed form for two Gaussians:
+    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon + kl  # negative ELBO — this is what gets minimized
+
+if __name__ == "__main__":
+    model = SimpleVAE()
+    x = torch.rand(8, 784)
+    x_recon, mu, logvar = model(x)
+    loss = elbo_loss(x, x_recon, mu, logvar)
+    assert loss.item() > 0, "negative ELBO (loss) should be positive for random init"
+    print(f"Negative ELBO on random batch: {loss.item():.2f}")
+```
+
+## 7. Real-World Applications
+
+Every variational autoencoder in production use — from image compression to molecule generation in drug discovery pipelines — is directly trained by maximizing the ELBO derived above (see `vae` on this platform for the full architecture). DDPM and every diffusion model descended from it (see `ddpm`, `stable-diffusion`) use the identical ELBO machinery applied to a Markov chain of latents, which is why the diffusion loss function, despite looking like a simple denoising objective, is actually a rigorously derived (and simplified) variational bound. Bayesian neural networks — used in safety-critical settings like medical diagnosis and autonomous driving where uncertainty estimates matter — use variational inference to approximate the (intractable) posterior over network weights themselves, rather than over a small latent code.
+
+## 8. Common Pitfalls & Misconceptions
+
+A frequent error is treating "maximize the ELBO" and "maximize the true log-likelihood" as the same thing — they're not; the ELBO is always a *lower bound*, and how tight that bound is depends entirely on how expressive your variational family $q$ is (see the mode-collapse example above). Another pitfall is forgetting that the reparameterization trick (sampling $z = \mu + \sigma \odot \epsilon$ instead of directly sampling $z \sim q(z)$) is not just a coding convenience — it's what makes the ELBO differentiable with respect to the encoder's parameters at all, since you can't backpropagate through a discrete sampling operation. Finally, don't assume the KL regularization term in a VAE is purely a "nice to have" — setting its weight too low causes the latent space to become an unstructured lookup table (good reconstruction, useless for generation), while setting it too high causes posterior collapse (the encoder ignores the input entirely) — this weight ($\beta$ in $\beta$-VAE) is a genuine and consequential hyperparameter.
+
+## 9. How This Connects
+
+This topic requires **Information Theory**, **Probability Theory**, and **Convex Optimization** — without a working grasp of KL divergence, Bayes' rule, and Jensen's inequality, the ELBO derivation is an unmotivated algebraic trick rather than a principled bound. It directly unlocks **VAE** (the direct architectural embodiment of the ELBO objective), **Diffusion Models (Theory)** (which extend the same variational framework to a multi-step latent chain — the mathematically rigorous foundation underneath DDPM's denoising loss), and **Bayesian Neural Networks** (which apply variational inference to the weights of a network itself, rather than to a small latent code, to get calibrated uncertainty estimates).
+
+## 10. Check Your Understanding
+
+**Q1: Why is the "evidence" $\log p(x)$ intractable to compute directly for most interesting models?**
+Because it requires integrating (or summing) the joint distribution $p(x, z)$ over all possible values of the latent variable $z$, and for continuous, high-dimensional, or non-conjugate latent spaces (which describes essentially every deep generative model), that integral has no closed form and can't be evaluated exactly.
+
+**Q2: What is the exact relationship between the ELBO and the true log-likelihood?**
+$\log p(x) = \text{ELBO}(q) + D_{KL}(q(z) \| p(z|x))$. Since KL divergence is always non-negative, the ELBO is always a lower bound on the true log-likelihood, and the gap between them is exactly the KL divergence between your approximate posterior $q$ and the true (intractable) posterior — maximizing the ELBO simultaneously increases the log-likelihood bound and decreases this approximation gap.
+
+**Q3: Why does the reparameterization trick matter for training a VAE?**
+Sampling $z \sim q(z|x)$ directly is a stochastic operation with no well-defined gradient with respect to the distribution's parameters. Rewriting the sample as a deterministic, differentiable function of the parameters plus independent noise ($z = \mu + \sigma \odot \epsilon$) moves all the randomness into a fixed, parameter-independent source, allowing gradients to flow through $\mu$ and $\sigma$ via ordinary backpropagation.
+
+**Q4: What causes "posterior collapse" in a VAE, and why is it a problem?**
+It happens when the KL regularization term dominates training, pushing the encoder's output distribution $q(z|x)$ toward the prior $p(z)$ for every input $x$, regardless of what that input actually is — the encoder effectively stops encoding any information about the input. It's a problem because the resulting latent space becomes useless for generation or downstream tasks: the decoder learns to ignore $z$ and produce a generic average output.
+
+**Q5: How does the DDPM loss function relate back to the ELBO?**
+DDPM applies the ELBO framework to a chain of latent variables (the progressively noised versions of the data), producing a sum of KL divergence terms between the true and learned reverse-diffusion steps. After algebraic simplification (exploiting the Gaussian structure of the forward process), this sum reduces to a simple mean-squared-error loss between the true noise added and the network's predicted noise — the ELBO derivation is precisely what proves this simplified loss is a valid bound on the data log-likelihood, not just a convenient heuristic.
+
+## 11. Further Reading
+
+- Blei, Kucukelbir & McAuliffe, "Variational Inference: A Review for Statisticians" (2017)
+- Kingma & Welling, "Auto-Encoding Variational Bayes" (2013) — the original VAE paper
+- Ho, Jain & Abbeel, "Denoising Diffusion Probabilistic Models" (2020)
+- Higgins et al., "beta-VAE: Learning Basic Visual Concepts with a Constrained Variational Framework" (2017)
+- See also: `vae` and `ddpm` on this platform for the direct architectural applications
+
+## Related Platform Content
+
+- [MATHEMATICS curriculum overview](/learn/mathematics)
+- [VAE application](/architectures/stable-diffusion)
+- [Browse all system designs](/system-design)

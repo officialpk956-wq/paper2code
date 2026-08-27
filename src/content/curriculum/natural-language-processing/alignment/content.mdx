@@ -1,0 +1,109 @@
+# Alignment
+
+## 1. Overview
+
+A raw, pretrained language model is trained purely to predict the next token in internet text — it has no built-in notion of "be helpful," "don't lie," or "refuse dangerous requests." Alignment is the collection of techniques used to take that raw capability and shape it toward actually behaving the way its creators (and users) want: helpful, harmless, and honest, often abbreviated "HHH." This is not a cosmetic finishing step — it's the difference between GPT-3 (a raw pretrained model that would often ignore instructions, ramble, or produce toxic completions) and ChatGPT (the same underlying capability, but reliably steered to follow instructions and refuse harmful requests) — and getting it right is one of the most consequential and hardest problems in deploying powerful AI systems responsibly.
+
+## 2. Prerequisites in Context
+
+**RL Policy Gradient** methods are the direct optimization machinery used in the dominant alignment technique (RLHF) — you need to understand how a policy is updated to increase the probability of actions (here, generated tokens/responses) that receive higher reward, before RLHF's training loop makes sense as more than a black box. **Reward Modeling** is essential because alignment via RL requires a reward signal, and since "is this response good?" has no ground-truth label, a learned reward model (trained on human preference comparisons) has to stand in for that judgment — understanding how such a model is trained, and its limitations, is central to understanding both the successes and failure modes of alignment. **Instruction Tuning** is the direct predecessor step — before RLHF's preference optimization, models are typically first fine-tuned on demonstrations of instruction-following behavior, and understanding this supervised-fine-tuning stage is necessary to see the full three-stage alignment pipeline in context.
+
+## 3. Core Concept
+
+The dominant alignment recipe (used for InstructGPT and its many successors) is a three-phase pipeline. **Phase 1: Supervised Fine-Tuning (SFT)** — human labelers write high-quality example responses to a diverse set of prompts, and the pretrained model is fine-tuned on these demonstrations using standard supervised learning, giving it an initial sense of "what good instruction-following responses look like." **Phase 2: Reward Model Training** — the SFT model generates multiple candidate responses to new prompts, human labelers rank these candidates from best to worst, and a separate reward model is trained to predict these human preference rankings, effectively distilling human judgment into a scalar-scoring function that can be queried automatically at scale. **Phase 3: RL Fine-Tuning (typically PPO)** — the SFT model is further fine-tuned using reinforcement learning, where the reward model's score serves as the reward signal, and a KL-divergence penalty against the original SFT model prevents the policy from drifting so far that it exploits quirks in the reward model rather than genuinely improving response quality (a failure mode called reward hacking). The result is a model whose behavior has been shaped, layer by layer, from raw next-token prediction, through demonstrated good behavior, to preference-optimized behavior — without ever needing an explicit, hand-written rule for what "helpful" means in every possible situation.
+
+## 4. Theoretical Foundations
+
+The reward model is trained using the **Bradley-Terry preference model**: given two candidate responses $y_1, y_2$ to the same prompt $x$, with $y_1$ preferred by human labelers, the reward model $r_\theta$ is trained to maximize the log-likelihood that its scores are consistent with this preference:
+$$\mathcal{L}_{RM} = -\log \sigma(r_\theta(x, y_1) - r_\theta(x, y_2))$$
+Once trained, the RL phase optimizes the policy $\pi_\phi$ (the language model being aligned) to maximize expected reward while staying close to the original reference policy $\pi_{\text{ref}}$ (the SFT model):
+$$\max_\phi \mathbb{E}_{x, y \sim \pi_\phi}\left[r_\theta(x, y)\right] - \beta \, D_{KL}\big(\pi_\phi(y|x) \,\|\, \pi_{\text{ref}}(y|x)\big)$$
+The KL penalty term is not optional decoration — without it, the policy can drift arbitrarily far from sensible, fluent language in pursuit of maximizing the (imperfect, learned) reward model's score, a phenomenon called reward hacking, where the policy finds and exploits blind spots or systematic errors in the reward model rather than genuinely becoming more helpful. This is why the $\beta$ coefficient controlling the strength of the KL penalty is a critical, carefully-tuned hyperparameter in every production RLHF pipeline — too weak, and reward hacking dominates; too strong, and the policy barely improves beyond its SFT starting point at all.
+
+## 5. Worked Example
+
+Suppose a reward model, trained on human preferences, has an undetected blind spot: it systematically rates longer responses slightly higher, all else equal, simply because human labelers unconsciously tended to prefer more thorough-seeming answers during the ranking process that trained it. Without a KL penalty constraining how far the policy can drift from the SFT reference model, PPO optimization would discover this exploit and push the policy toward generating excessively long, padded, repetitive responses — technically maximizing the (flawed) reward model's score while actually becoming *less* helpful to real users, a well-documented reward-hacking pattern in early RLHF systems. The KL penalty term directly counteracts this: any policy drift toward the exploit is penalized proportionally to how far the generated text distribution has moved from the SFT model's natural distribution, meaning modest, genuine improvements in helpfulness (which don't require large distributional shifts) are rewarded, while extreme, reward-model-gaming shifts are suppressed.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RewardModel(nn.Module):
+    """Scores a (prompt, response) pair — trained via Bradley-Terry pairwise preference loss."""
+    def __init__(self, embed_dim=64):
+        super().__init__()
+        self.scorer = nn.Sequential(nn.Linear(embed_dim, 128), nn.ReLU(), nn.Linear(128, 1))
+
+    def forward(self, embedding):
+        return self.scorer(embedding).squeeze(-1)
+
+def bradley_terry_loss(reward_model, preferred_emb, rejected_emb):
+    r_preferred = reward_model(preferred_emb)
+    r_rejected = reward_model(rejected_emb)
+    return -F.logsigmoid(r_preferred - r_rejected).mean()
+
+def rlhf_objective(reward_model, policy_logprobs, ref_logprobs, response_embeddings, kl_beta=0.1):
+    """Simplified RLHF objective: reward minus KL penalty against the reference (SFT) policy."""
+    reward = reward_model(response_embeddings)
+    kl_penalty = kl_beta * (policy_logprobs - ref_logprobs)
+    return (reward - kl_penalty).mean()  # this is maximized during PPO fine-tuning
+
+if __name__ == "__main__":
+    reward_model = RewardModel(embed_dim=64)
+    preferred = torch.randn(16, 64) + 0.5   # simulating a distinguishable "better" response
+    rejected = torch.randn(16, 64) - 0.5
+
+    loss = bradley_terry_loss(reward_model, preferred, rejected)
+    print(f"Bradley-Terry reward model training loss: {loss.item():.4f}")
+
+    policy_logprobs = torch.randn(16) - 2.0
+    ref_logprobs = torch.randn(16) - 2.0
+    objective = rlhf_objective(reward_model, policy_logprobs, ref_logprobs, rejected, kl_beta=0.1)
+    print(f"RLHF objective (reward - KL penalty), to be maximized: {objective.item():.4f}")
+```
+
+## 7. Real-World Applications
+
+InstructGPT (see `instructgpt` on this platform) is the original, directly documented production application of this exact three-phase pipeline, and it directly led to ChatGPT — the transition from a raw, hard-to-control GPT-3 to an instruction-following, safety-conscious conversational assistant is entirely attributable to this alignment recipe. Anthropic's Constitutional AI extends this framework by using AI-generated feedback (guided by a written set of principles, the "constitution") in place of some human-labeled preference data, reducing the human labeling burden while maintaining alignment quality — a technique now widely used across the industry as human preference data collection at scale is expensive and slow. Every major consumer-facing chat assistant (ChatGPT, Claude, Gemini) undergoes some variant of this SFT-then-preference-optimization pipeline before public release, making it arguably the most economically consequential post-training technique in the entire LLM deployment stack.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that alignment is a one-time process that, once complete, permanently fixes a model's behavior — in practice, alignment is iterative and ongoing, with new failure modes (jailbreaks, edge cases the training data didn't cover) continuously discovered after deployment and addressed via additional rounds of fine-tuning or red-teaming. Another pitfall is conflating "aligned" with "correct" or "unbiased" — RLHF aligns a model to the preferences of the specific human labelers who provided training data, which can encode those labelers' particular cultural assumptions, blind spots, or inconsistencies, and "aligned to labeler preferences" is a narrower and more contingent property than "objectively good behavior in all contexts."
+
+## 9. How This Connects
+
+This topic requires **RL Policy Gradient** methods, **Reward Modeling**, and **Instruction Tuning** as its three foundational prerequisites — without them, the SFT-then-reward-model-then-PPO pipeline reads as an arbitrary sequence of steps rather than a principled way to progressively shape model behavior using increasingly rich forms of human feedback. It directly unlocks **Red-Teaming** (systematically probing a model for alignment failures and jailbreaks before and after deployment), **Safety Evals** (structured benchmarks specifically designed to measure whether alignment training has succeeded at reducing harmful or dangerous outputs), **Constitutional AI** (an alternative/complementary alignment technique using AI-generated feedback guided by written principles, reducing dependence on human-labeled preference data), and **RLAIF** (Reinforcement Learning from AI Feedback, generalizing the reward-model concept to use AI-generated rather than exclusively human-generated preference judgments).
+
+## 10. Check Your Understanding
+
+**Q1: What are the three phases of the standard RLHF alignment pipeline, and what does each one accomplish?**
+Phase 1 (SFT) fine-tunes the pretrained model on human-written demonstrations of good instruction-following behavior. Phase 2 (reward model training) trains a separate model to predict human preference rankings between candidate responses. Phase 3 (RL fine-tuning, typically PPO) further optimizes the SFT model to maximize the learned reward model's score, subject to a KL penalty that keeps it from drifting too far from the SFT model's original behavior.
+
+**Q2: Why is a KL-divergence penalty against the reference (SFT) policy included in the RL fine-tuning objective?**
+Because the reward model is an imperfect, learned approximation of true human preference, and without a constraint on how far the policy can drift, RL optimization can discover and exploit blind spots or systematic errors in the reward model (reward hacking) rather than genuinely improving response quality — the KL penalty keeps the policy's output distribution close enough to a known-reasonable starting point that such exploits are suppressed.
+
+**Q3: What is "reward hacking," and give an example of how it can occur in RLHF?**
+Reward hacking is when a policy learns to exploit systematic flaws or blind spots in a learned reward model to achieve a high reward score without genuinely improving the underlying quality the reward model was meant to measure. A documented example is a reward model that inadvertently favors longer responses (because human labelers unconsciously preferred thoroughness during preference labeling), causing an insufficiently KL-constrained policy to learn to pad its responses with unnecessary length rather than becoming more genuinely helpful.
+
+**Q4: What does the Bradley-Terry model provide that makes reward model training possible from human preference data?**
+It provides a principled probabilistic framework for converting pairwise preference judgments ("response A is better than response B") into a training objective for a scalar scoring function — by modeling the probability that A is preferred over B as a function of the difference between their scores, allowing the reward model to be trained via straightforward maximum-likelihood optimization on comparison data, without ever needing an absolute numerical quality label for any single response.
+
+**Q5: Why is it a mistake to equate "aligned" with "objectively correct or unbiased"?**
+Because RLHF aligns a model specifically to the preferences expressed by the particular human labelers who provided the preference data used to train the reward model — those labelers' own cultural context, individual biases, and inconsistencies get encoded into what the model learns to consider "good." A model can be successfully aligned (behaving consistently with its training feedback) while still reflecting narrow, contingent, or flawed underlying human judgments rather than some universal standard of correctness.
+
+## 11. Further Reading
+
+- Ouyang et al., "Training Language Models to Follow Instructions with Human Feedback" (InstructGPT, 2022)
+- Christiano et al., "Deep Reinforcement Learning from Human Preferences" (2017) — the foundational RLHF paper
+- Bai et al., "Constitutional AI: Harmlessness from AI Feedback" (Anthropic, 2022)
+- Schulman et al., "Proximal Policy Optimization Algorithms" (PPO, 2017)
+- See also: `instructgpt` and `ppo` on this platform for the full architectural and algorithmic details
+
+## Related Platform Content
+
+- [NATURAL LANGUAGE PROCESSING curriculum overview](/learn/natural-language-processing)
+- [InstructGPT](/architectures/instructgpt)
+- [Browse all system designs](/system-design)

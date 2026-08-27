@@ -1,4 +1,4 @@
-// Total topics: 82
+// Total topics: 94
 export type CurriculumTopic = {
   slug: string; title: string;
   level: 'Beginner'|'Intermediate'|'Advanced'|'Expert';
@@ -360,6 +360,70 @@ export const CURRICULUM: CurriculumDomain[] = [
     "name": "LLM ENGINEERING",
     "topics": [
       {
+        "slug": "continued-pre-training",
+        "title": "Continued Pre-Training",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Transformer language modeling",
+          "Tokenization",
+          "Pre-training objectives"
+        ],
+        "studyTime": "12h",
+        "why": "Update a pretrained model with fresh or domain-specific knowledge without restarting training from zero.",
+        "unlocks": [
+          "Domain adaptation at scale",
+          "Knowledge refresh pipelines"
+        ]
+      },
+      {
+        "slug": "flash-attention",
+        "title": "Flash Attention",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Scaled dot-product attention",
+          "GPU memory hierarchy",
+          "Numerical stability"
+        ],
+        "studyTime": "12h",
+        "why": "Understand how exact tiled attention removes the memory-I/O bottleneck behind long-context training and inference.",
+        "unlocks": [
+          "Memory-efficient attention",
+          "Custom attention kernels"
+        ]
+      },
+      {
+        "slug": "tensor-and-pipeline-parallelism",
+        "title": "Tensor and Pipeline Parallelism",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Distributed training basics",
+          "Transformer blocks",
+          "GPU interconnects"
+        ],
+        "studyTime": "14h",
+        "why": "Split models that cannot fit on one accelerator while controlling communication and pipeline idle time.",
+        "unlocks": [
+          "Hybrid parallel training",
+          "Large-model serving"
+        ]
+      },
+      {
+        "slug": "continual-learning",
+        "title": "Continual Learning",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Fine-tuning",
+          "Optimization",
+          "Model evaluation"
+        ],
+        "studyTime": "12h",
+        "why": "Keep deployed models current while preventing new updates from erasing previously learned capabilities.",
+        "unlocks": [
+          "Catastrophic-forgetting mitigation",
+          "Lifelong model adaptation"
+        ]
+      },
+      {
         "slug": "continued-pre-training-and-domain-adaptation-at-scale",
         "title": "Continued Pre-training & Domain Adaptation at Scale",
         "level": "Advanced",
@@ -446,6 +510,87 @@ export const CURRICULUM: CurriculumDomain[] = [
     "number": 6,
     "name": "RAG SYSTEMS",
     "topics": [
+      {
+        "slug": "retrieval-fundamentals",
+        "title": "Retrieval Fundamentals",
+        "level": "Beginner",
+        "prerequisites": [
+          "Basic information retrieval",
+          "Text preprocessing"
+        ],
+        "studyTime": "10h",
+        "why": "Build the recall-first retrieval layer that grounds a generation system in external knowledge.",
+        "unlocks": [
+          "Dense retrieval",
+          "Hybrid search",
+          "Production RAG"
+        ]
+      },
+      {
+        "slug": "dense-retrieval-and-embedding-similarity",
+        "title": "Dense Retrieval and Embedding Similarity",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Retrieval fundamentals",
+          "Vector embeddings",
+          "Cosine similarity"
+        ],
+        "studyTime": "12h",
+        "why": "Retrieve semantically related evidence even when queries and documents do not share exact keywords.",
+        "unlocks": [
+          "Vector databases",
+          "Bi-encoder training",
+          "Semantic search"
+        ]
+      },
+      {
+        "slug": "hybrid-search-strategies",
+        "title": "Hybrid Search Strategies",
+        "level": "Intermediate",
+        "prerequisites": [
+          "BM25",
+          "Dense retrieval",
+          "Ranking metrics"
+        ],
+        "studyTime": "12h",
+        "why": "Combine lexical precision and semantic recall instead of relying on one retrieval signal.",
+        "unlocks": [
+          "Rank fusion",
+          "Production search pipelines"
+        ]
+      },
+      {
+        "slug": "re-ranking-and-fusion",
+        "title": "Re-Ranking and Fusion",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Candidate retrieval",
+          "Cross-encoders",
+          "Ranking metrics"
+        ],
+        "studyTime": "12h",
+        "why": "Spend expensive relevance modeling only on a small candidate set and combine complementary rankings reliably.",
+        "unlocks": [
+          "Multi-stage retrieval",
+          "Retrieval quality optimization"
+        ]
+      },
+      {
+        "slug": "production-rag-at-scale",
+        "title": "Production RAG at Scale",
+        "level": "Intermediate",
+        "prerequisites": [
+          "RAG pipeline basics",
+          "Distributed systems",
+          "Observability"
+        ],
+        "studyTime": "16h",
+        "why": "Turn a working RAG prototype into a reliable, observable, cost-controlled production service.",
+        "unlocks": [
+          "Advanced production RAG architecture",
+          "RAG platform engineering"
+        ]
+      },
       {
         "slug": "raft",
         "title": "RAFT",
@@ -534,6 +679,56 @@ export const CURRICULUM: CurriculumDomain[] = [
     "number": 7,
     "name": "AI AGENTS",
     "topics": [
+      {
+        "slug": "agent-architecture-and-reasoning-loops",
+        "title": "Agent Architecture and Reasoning Loops",
+        "level": "Beginner",
+        "prerequisites": [
+          "LLM prompting",
+          "State machines",
+          "Basic APIs"
+        ],
+        "studyTime": "10h",
+        "why": "Understand the observe-reason-act loop, state, termination, and recovery mechanisms behind a useful AI agent.",
+        "unlocks": [
+          "Tool-using agents",
+          "Planning agents",
+          "Agent evaluation"
+        ]
+      },
+      {
+        "slug": "planning-and-search-strategies",
+        "title": "Planning and Search Strategies",
+        "level": "Intermediate",
+        "prerequisites": [
+          "Agent reasoning loops",
+          "Graph search",
+          "Heuristics"
+        ],
+        "studyTime": "12h",
+        "why": "Choose and evaluate action sequences instead of relying on a single unexamined model response.",
+        "unlocks": [
+          "Tree-of-thought search",
+          "Long-horizon agents"
+        ]
+      },
+      {
+        "slug": "tool-calling-and-function-use",
+        "title": "Tool Calling and Function Use",
+        "level": "Beginner",
+        "prerequisites": [
+          "LLM prompting",
+          "JSON schemas",
+          "API fundamentals"
+        ],
+        "studyTime": "10h",
+        "why": "Connect model decisions to validated external actions while keeping execution observable and safe.",
+        "unlocks": [
+          "Production agent systems",
+          "Workflow automation",
+          "Tool-use evaluation"
+        ]
+      },
       {
         "slug": "emergent-cooperation-in-multi-agent-systems",
         "title": "Emergent Cooperation in Multi-Agent Systems",

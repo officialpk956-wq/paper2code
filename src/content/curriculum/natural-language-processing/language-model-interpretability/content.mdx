@@ -1,0 +1,112 @@
+# Language Model Interpretability
+
+## 1. Overview
+
+This topic applies the general tools of mechanistic interpretability specifically to the questions that matter most for large language models: what does a model actually "know," where in the network is a specific fact stored, and can you find and precisely edit a stored fact without retraining the entire model? It's the difference between treating an LLM as an inscrutable black box you can only query behaviorally, and treating it as a system whose internal knowledge representations can be located, probed, and in some cases surgically modified — with real, demonstrated success stories like directly editing a factual association (e.g., changing what city a model believes is the capital of a given country) by modifying a small, specific set of weights.
+
+## 2. Prerequisites in Context
+
+**Mechanistic Interpretability** as a general field is the direct prerequisite — this topic applies its core techniques (activation patching, circuit analysis) to the specific, practically important case of factual knowledge storage and retrieval within language models, so you need the general causal-intervention toolkit before diving into LM-specific applications. **Probing** methods matter because a large body of language-model interpretability evidence comes from training linear or shallow classifiers on internal activations to test what information is represented at each layer — you need to understand exactly what a probe's success does and doesn't prove (correlational presence, not necessarily causal use) to interpret findings correctly. **Attention Analysis** is needed specifically because factual recall and retrieval in transformers has been shown to rely heavily on specific, identifiable attention patterns (particularly in mid-to-late layers), and recognizing these patterns is often the first empirical signal that leads researchers to a testable hypothesis about where and how a fact is stored.
+
+## 3. Core Concept
+
+The **ROME (Rank-One Model Editing)** line of work, and the broader research program it's part of, demonstrated something remarkable: factual associations in a transformer (like "the Eiffel Tower is located in Paris") are causally traceable to a specific, localized computation, primarily happening in the **feed-forward network (MLP) layers** at a specific mid-network layer, when processing the subject token ("Eiffel Tower"). Using causal tracing (a systematic form of activation patching across every layer and token position), researchers can identify precisely which layer's MLP output, at which token position, is most causally responsible for the model retrieving the correct fact — and having identified this location, they can then directly edit the MLP's weight matrix with a targeted, low-rank update that changes the stored association (e.g., making the model believe the Eiffel Tower is in Rome instead) while leaving the model's behavior on unrelated facts and general language ability essentially unchanged. This localizability is a genuinely nontrivial finding — it means factual knowledge in an LLM is not smeared uniformly and inextricably across all parameters, but is substantially concentrated in identifiable, targetable locations, at least for a meaningful class of simple, well-formed factual associations.
+
+## 4. Theoretical Foundations
+
+The **key-value memory** framing of transformer MLP layers is central to this research. An MLP layer's first linear transformation can be viewed as computing a set of "key" activations (measuring how strongly the current input matches various learned patterns), and the second linear transformation as retrieving corresponding "value" vectors weighted by those key activations — structurally analogous to an associative memory lookup, $\text{MLP}(x) = W_{\text{out}} \cdot \sigma(W_{\text{in}} \cdot x)$, where $W_{\text{in}}$ rows act as keys and $W_{\text{out}}$ columns act as values. ROME's editing procedure directly exploits this structure: given a target fact to insert (a specific new key-value association), it computes a closed-form, minimal (rank-one) update to $W_{\text{out}}$ that causes the MLP to produce the desired new value output when it encounters the target key (subject representation), while using a carefully constructed regularization term to minimize collateral changes to the MLP's behavior on other, unrelated keys — the editing problem is literally solved as a constrained optimization: find the smallest weight change that inserts the new association without disturbing existing ones.
+
+## 5. Worked Example
+
+Causal tracing on the prompt "The Space Needle is located in the city of ___" (correct completion: "Seattle") works by systematically corrupting the subject tokens ("The Space Needle") with noise, running the model, and then restoring ("patching in") the clean activation at one specific layer and token position at a time, observing at which specific patches the model's correct prediction of "Seattle" is restored. Empirically, this recovery is heavily concentrated at a specific range of mid-network layers, specifically at the *last* subject token's position, and specifically within that layer's MLP output — not spread diffusely across the whole network, and not concentrated in the attention mechanism at that layer. This precise, reproducible localization pattern (consistent across many different factual prompts) is the empirical foundation that made targeted weight editing (like ROME) a viable technique rather than a hopeful guess.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def rank_one_edit(W_out, key_vector, target_value, existing_keys, regularization=1e-4):
+    """
+    Simplified ROME-style rank-one weight update: modifies W_out (the MLP's
+    'value' matrix) so that the given key produces target_value, while
+    minimizing disruption to a set of other keys' existing outputs.
+    W_out: (d_out, d_hidden). key_vector: (d_hidden,). target_value: (d_out,).
+    existing_keys: (num_other_keys, d_hidden) — used to regularize the update.
+    """
+    current_value = W_out @ key_vector
+    delta_value = target_value - current_value          # what we need to change
+
+    # Covariance of existing keys — regularizes the update to avoid
+    # disturbing other stored associations (a simplified stand-in for
+    # ROME's actual closed-form covariance-regularized solution)
+    C = existing_keys.T @ existing_keys + regularization * torch.eye(key_vector.shape[0])
+    C_inv_key = torch.linalg.solve(C, key_vector)
+    normalizer = key_vector @ C_inv_key
+
+    rank_one_update = torch.outer(delta_value, C_inv_key) / normalizer
+    return W_out + rank_one_update
+
+if __name__ == "__main__":
+    d_hidden, d_out, num_other_facts = 32, 16, 50
+    W_out = torch.randn(d_out, d_hidden) * 0.1
+
+    subject_key = torch.randn(d_hidden)          # "Eiffel Tower" subject representation
+    old_value = W_out @ subject_key
+    new_target = torch.randn(d_out)               # a different city's representation
+
+    other_keys = torch.randn(num_other_facts, d_hidden)  # unrelated facts to preserve
+    W_out_edited = rank_one_edit(W_out, subject_key, new_target, other_keys)
+
+    new_output = W_out_edited @ subject_key
+    print(f"Distance to target value after edit: {(new_output - new_target).norm().item():.4f}")
+    print(f"Distance to OLD value (should have moved away): {(new_output - old_value).norm().item():.4f}")
+
+    # Check collateral effect on an unrelated key (should be small)
+    unrelated_key = other_keys[0]
+    collateral = ((W_out_edited - W_out) @ unrelated_key).norm().item()
+    print(f"Collateral disruption on an unrelated fact's key: {collateral:.4f}")
+```
+
+## 7. Real-World Applications
+
+Model editing techniques descended from this research are used for targeted bug fixes in deployed language models — correcting a specific, isolated factual error (e.g., an outdated fact about a change in company leadership) without the cost and risk of a full retraining or even a full fine-tuning pass, which could introduce unrelated regressions. Interpretability findings about factual storage locations directly inform machine unlearning research — techniques for removing specific sensitive or copyrighted information from a trained model's knowledge, which is legally and practically important for compliance with data deletion requests and copyright concerns, and benefits directly from knowing where such information is causally represented rather than searching blindly across the entire parameter space.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common overreach is assuming ROME-style editing generalizes cleanly to arbitrary, complex, or implicit knowledge — the clean localization results are strongest for simple, well-formed factual triples (subject-relation-object statements), and editing more diffuse capabilities (like a general reasoning tendency, or knowledge that's entangled across many related facts) does not localize nearly as cleanly, and naive large-scale editing has been shown to cause unexpected model degradation when many edits are applied in sequence (a phenomenon sometimes called "edit interference" or model collapse under repeated editing). Another pitfall is treating a successful causal trace on one specific prompt as proof that *all* instances of that fact type are stored identically across the model — the exact layer and token position of maximal causal effect can vary somewhat across different facts and different prompt phrasings, and robust editing techniques need to account for this variability rather than assuming a single universal "fact storage layer."
+
+## 9. How This Connects
+
+This topic requires **Mechanistic Interpretability** as its general foundation, **Probing** methods for understanding what evidence a linear classifier's success does and doesn't provide, and **Attention Analysis** for recognizing the retrieval-pattern signals that guide causal tracing investigations. This topic has no further curriculum unlocks listed downstream, but its findings connect directly to production concerns in model maintenance (targeted bug fixes without full retraining), machine unlearning and data deletion compliance, and the broader AI safety goal of being able to verify and control what a deployed model actually "believes," rather than relying solely on its stated (and potentially unreliable) outputs.
+
+## 10. Check Your Understanding
+
+**Q1: What did causal tracing experiments reveal about where factual associations are stored in a transformer?**
+They revealed that factual recall is causally concentrated in a specific, identifiable location: the MLP (feed-forward) layers at a particular mid-network depth, specifically when processing the last token of the subject entity — not diffusely spread across the entire network or concentrated in the attention mechanism, at least for simple, well-formed factual associations.
+
+**Q2: How does the "key-value memory" framing of MLP layers make targeted fact editing possible?**
+By viewing the MLP's first linear layer as computing "keys" (pattern-matching activations) and its second linear layer as retrieving "values" based on those keys, editing a specific fact becomes a well-posed optimization problem: find a minimal, targeted update to the value-producing weight matrix that changes the output for one specific key (the target fact's subject representation) while leaving the mapping for other keys (unrelated facts) as undisturbed as possible.
+
+**Q3: Why does ROME's editing procedure include a regularization term based on other, unrelated keys?**
+Because a naive update that only satisfies the target fact's new key-value mapping, without any constraint, could inadvertently and substantially disturb the MLP's outputs for many unrelated inputs that happen to be represented similarly in the same weight matrix. Regularizing against a sample of other existing keys keeps the edit targeted and minimizes this kind of unwanted collateral disruption to unrelated stored knowledge.
+
+**Q4: Why doesn't clean, ROME-style localization generalize well to complex or implicit knowledge?**
+Because the strong localization results depend on the fact being expressible as a clean, simple subject-relation-object association with a well-defined subject token position — more diffuse capabilities, like general reasoning skills or knowledge that's entangled across many interrelated facts, don't have this same clean, single-location structure, so the same targeted-editing approach doesn't isolate and modify them as cleanly or safely.
+
+**Q5: What real-world problem does model-editing research (informed by this interpretability work) directly address?**
+It addresses the need to fix specific, isolated errors (like an outdated fact) or remove specific sensitive information from an already-trained model without the cost, risk, and potential for unrelated regressions that a full retraining or broad fine-tuning pass would carry — allowing surgical, targeted corrections informed by precisely knowing where the relevant information is causally represented within the model.
+
+## 11. Further Reading
+
+- Meng et al., "Locating and Editing Factual Associations in GPT" (ROME, 2022)
+- Meng et al., "Mass-Editing Memory in a Transformer" (MEMIT, 2023) — scaling editing to many facts
+- Geva et al., "Transformer Feed-Forward Layers Are Key-Value Memories" (2021)
+- Hase et al., "Does Localization Inform Editing? Surprising Differences in Causality-Based Localization vs. Knowledge Editing in Language Models" (2023) — an important critique of the localization-editing link
+- See also: `mechanistic-interpretability` in the Deep Learning curriculum domain for the general interpretability toolkit
+
+## Related Platform Content
+
+- [NATURAL LANGUAGE PROCESSING curriculum overview](/learn/natural-language-processing)
+- [Architecture application](/architectures/bert)
+- [Browse all system designs](/system-design)

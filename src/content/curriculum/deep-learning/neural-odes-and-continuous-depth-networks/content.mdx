@@ -1,0 +1,115 @@
+# Neural ODEs & Continuous-Depth Networks
+
+## 1. Overview
+
+A standard ResNet updates its hidden state layer by layer with discrete steps: $h_{t+1} = h_t + f(h_t)$. Neural ODEs make a simple but far-reaching observation: this update rule is exactly a single Euler-integration step of a differential equation $\frac{dh}{dt} = f(h(t), t)$ — so why not skip the discretization entirely and treat depth as a continuous variable, using an actual ODE solver to compute the network's output? This reframing turns "how many layers" from a fixed architectural choice into an adaptive computation that a numerical solver decides on the fly, and it directly underlies the mathematical theory behind continuous normalizing flows and the probability-flow formulation of diffusion models.
+
+## 2. Prerequisites in Context
+
+**Differential Equations** are the direct mathematical language this entire topic is built in — you need to be comfortable with what an ODE's solution actually is (a function satisfying a given rate-of-change constraint) and with basic numerical solution methods (Euler's method, Runge-Kutta) to understand what a Neural ODE's forward pass is actually computing. **Residual Networks** matter because the connection between ResNets and ODEs is the entire motivating observation for this topic — you need to see a ResNet's layer-wise update rule clearly as a discretized differential equation before the "why not make it continuous" leap makes sense. **ODE Solvers** as a topic in their own right is needed because a Neural ODE's forward pass literally calls an adaptive-step ODE solver (like Dormand-Prince) as its core computational primitive, and understanding how such solvers adaptively choose step sizes explains why Neural ODEs can trade off compute for accuracy dynamically, unlike a fixed-depth network.
+
+## 3. Core Concept
+
+A Neural ODE replaces a discrete sequence of $L$ residual layers with a single continuous-time dynamics function $f_\theta(h(t), t)$, parameterized by a neural network, and defines the network's output as the solution to the initial value problem $\frac{dh(t)}{dt} = f_\theta(h(t), t)$, $h(0) = x$, evaluated at some final time $T$: $h(T) = h(0) + \int_0^T f_\theta(h(t), t)\, dt$. Instead of a fixed number of discrete layers, an off-the-shelf numerical ODE solver computes this integral, adaptively choosing how many evaluations of $f_\theta$ it needs based on the desired accuracy — a genuinely different computational model than a fixed-depth stack, where "how much computation to use" becomes a property of the solver's error tolerance rather than a hardcoded architecture choice. The most consequential practical innovation is how *training* such a model is made memory-efficient: instead of backpropagating through every intermediate step the solver took (which could be arbitrarily many, and would require storing all of them), the **adjoint sensitivity method** computes gradients by solving a second, augmented ODE *backward* in time, requiring only constant memory regardless of how many forward solver steps were taken.
+
+## 4. Theoretical Foundations
+
+The adjoint method defines an adjoint state $a(t) = \frac{\partial L}{\partial h(t)}$ (the gradient of the loss with respect to the hidden state at time $t$) and shows that this adjoint itself satisfies its own ODE, running backward in time from $T$ to $0$:
+$$\frac{da(t)}{dt} = -a(t)^T \frac{\partial f_\theta(h(t), t)}{\partial h(t)}$$
+Solving this backward ODE simultaneously with (and requiring only) the original forward trajectory's endpoints — not every intermediate step the forward solver used — gives the gradient of the loss with respect to the initial state $h(0)$ and, via an augmented version of the same backward ODE, the gradients with respect to the parameters $\theta$ as well. This is what makes Neural ODEs trainable with $O(1)$ memory with respect to the "depth" (number of solver evaluations) — dramatically different from a standard deep network, whose memory cost for backpropagation scales linearly with depth because every layer's activations must be stored for the backward pass.
+
+## 5. Worked Example
+
+Consider training a Neural ODE to model a simple 2D spiral trajectory — data points sampled along a spiral path over time. A standard discrete-depth network would need you to choose a fixed number of residual layers in advance, and its "depth" would be baked into the architecture regardless of the actual complexity of the trajectory being modeled. A Neural ODE instead learns a single continuous dynamics function $f_\theta$, and the same trained model can be evaluated with a coarse solver tolerance (fewer function evaluations, faster but less accurate) or a fine tolerance (many more evaluations, slower but more accurate) at *inference time*, without retraining — a genuinely different capability than a fixed-depth network, which has no equivalent knob to trade compute for accuracy after training is complete.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def euler_ode_solve(f, h0, t0, t1, num_steps=20):
+    """Simplified fixed-step Euler solver (real implementations use adaptive
+    Runge-Kutta / Dormand-Prince solvers, e.g. torchdiffeq's odeint)."""
+    dt = (t1 - t0) / num_steps
+    h = h0
+    t = t0
+    for _ in range(num_steps):
+        h = h + dt * f(h, t)
+        t = t + dt
+    return h
+
+class ODEFunc(nn.Module):
+    """The continuous-time dynamics f_theta(h, t) — this IS the "network,"
+    evaluated repeatedly by the solver rather than stacked into fixed layers."""
+    def __init__(self, dim):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(dim + 1, 64), nn.Tanh(), nn.Linear(64, dim))
+
+    def forward(self, h, t):
+        t_vec = torch.full((h.shape[0], 1), t, device=h.device)
+        return self.net(torch.cat([h, t_vec], dim=-1))
+
+class NeuralODE(nn.Module):
+    def __init__(self, dim, num_solver_steps=20):
+        super().__init__()
+        self.func = ODEFunc(dim)
+        self.num_solver_steps = num_solver_steps
+
+    def forward(self, x, t0=0.0, t1=1.0):
+        return euler_ode_solve(self.func, x, t0, t1, self.num_solver_steps)
+
+if __name__ == "__main__":
+    model = NeuralODE(dim=2, num_solver_steps=20)
+    x = torch.randn(8, 2)
+    out_coarse = model(x)
+    model.num_solver_steps = 100  # same trained weights, finer solver resolution
+    out_fine = model(x)
+    print(f"Coarse (20 steps) vs fine (100 steps) output difference: "
+          f"{(out_coarse - out_fine).abs().mean().item():.5f}")
+    print("Same weights, different accuracy/compute tradeoff at inference time —"
+          " impossible with a fixed-depth discrete network")
+```
+
+## 7. Real-World Applications
+
+Continuous normalizing flows — a generative modeling architecture built directly on Neural ODEs — use exactly this framework to compute exact log-likelihoods for continuous-time generative models, avoiding the architectural constraints (invertibility via specifically structured coupling layers) that discrete normalizing flows require. The theoretical connection between diffusion models and Neural ODEs is direct and important: the "probability flow ODE" formulation of diffusion sampling (an alternative to the standard stochastic sampling used in DDPM) is literally a Neural ODE, and understanding this connection is what lets researchers apply fast, adaptive ODE solvers to dramatically reduce the number of sampling steps needed for diffusion model inference, compared to the fixed many-step stochastic process DDPM originally used.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is thinking Neural ODEs are always more computationally efficient than discrete networks — the adaptive solver can end up taking *more* function evaluations than a comparable fixed-depth network would need, especially for stiff dynamics (where the solution changes very rapidly in some regions and slowly in others), and solver instability or excessive step counts is a genuine, well-documented practical failure mode. Another pitfall is assuming the adjoint method's constant-memory training is "free" — while memory usage doesn't scale with the number of solver steps, the backward adjoint ODE solve itself requires additional forward-backward solver calls and can be numerically less stable than standard backpropagation through explicitly stored activations, meaning the memory savings sometimes come at a real cost in training time or numerical precision.
+
+## 9. How This Connects
+
+This topic requires **Differential Equations**, **Residual Networks** (as the discrete-time analog that motivates the continuous generalization), and **ODE Solvers** as a numerical methods topic in their own right. It directly unlocks **Flow Matching** (a modern generative modeling framework whose training objective is derived from thinking about generation as learning a continuous-time velocity field — the same conceptual object as a Neural ODE's dynamics function), **Normalizing Flows** (particularly the continuous variant, which is a direct architectural application of this topic), and **Score-Based Models** (whose probability-flow ODE formulation for sampling is, mathematically, exactly a Neural ODE applied to the diffusion process).
+
+## 10. Check Your Understanding
+
+**Q1: What single observation motivates reframing a ResNet as a differential equation?**
+A ResNet's layer update $h_{t+1} = h_t + f(h_t)$ is structurally identical to a single Euler-integration step of the ODE $\frac{dh}{dt} = f(h(t), t)$ — the residual connection plus per-layer function is exactly a discretized derivative. This observation suggests that instead of choosing a fixed number of discrete Euler steps (layers), you could solve the underlying continuous ODE directly with a proper numerical solver.
+
+**Q2: What does the adjoint sensitivity method achieve that standard backpropagation through the solver's steps could not achieve as efficiently?**
+It computes gradients with respect to the initial state and parameters using constant memory, regardless of how many steps the forward ODE solver took — by solving a second, backward-in-time ODE for the adjoint state, rather than needing to store every intermediate activation the forward solver produced (which standard backpropagation through an unrolled computation graph would require, with memory scaling linearly in the number of solver steps).
+
+**Q3: What capability does a Neural ODE have at inference time that a standard fixed-depth network does not?**
+It can trade off computational cost against numerical accuracy after training, using the exact same trained weights, simply by adjusting the ODE solver's error tolerance (finer tolerance means more function evaluations and higher accuracy, coarser tolerance means fewer evaluations and lower accuracy) — a fixed-depth network has no equivalent mechanism, since its number of layers (and hence its compute cost) is baked in at training time.
+
+**Q4: How is the "probability flow ODE" used in diffusion models related to Neural ODEs?**
+It's a reformulation of the diffusion sampling process as a deterministic ODE (rather than the standard stochastic sampling process), and this ODE is, mathematically, exactly a Neural ODE — its dynamics function is derived from the diffusion model's learned score function. This connection is what allows fast, adaptive ODE solvers (rather than the fixed many-step stochastic process) to dramatically reduce the number of steps needed to sample from a trained diffusion model.
+
+**Q5: Why can a Neural ODE sometimes be less computationally efficient than a standard fixed-depth network, despite the appealing "adaptive depth" framing?**
+Because an adaptive ODE solver isn't guaranteed to be efficient for every dynamics function — for "stiff" dynamics where the solution changes very rapidly in certain regions, the solver may need to take many small steps to maintain accuracy, potentially requiring more total function evaluations than a comparably-sized fixed-depth network would need to achieve similar output quality, and such stiffness-related instability is a genuine, documented practical challenge.
+
+## 11. Further Reading
+
+- Chen et al., "Neural Ordinary Differential Equations" (2018) — the original Neural ODE and adjoint method paper
+- Grathwohl et al., "FFJORD: Free-form Continuous Dynamics for Scalable Reversible Generative Models" (2018)
+- Song et al., "Score-Based Generative Modeling through Stochastic Differential Equations" (2021) — the probability flow ODE connection
+- Dupont, Doucet & Teh, "Augmented Neural ODEs" (2019) — addressing expressivity limitations of the basic formulation
+- See also: `resnet` and `score-sde` on this platform for the discrete-time architectural precursor and the diffusion-theory connection
+
+## Related Platform Content
+
+- [DEEP LEARNING curriculum overview](/learn/deep-learning)
+- [Architecture application](/architectures/transformer)
+- [Browse all system designs](/system-design)

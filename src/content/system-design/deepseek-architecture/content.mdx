@@ -1,0 +1,743 @@
+# DeepSeek Architecture
+
+DeepSeek combines model architecture and systems co-design: sparse experts reduce active compute, latent attention compresses KV state, low-precision training improves throughput, and reasoning training changes how inference compute is used.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Know what a transformer is (attention + feedforward)**, **Basic scaling intuition: bigger model = more compute**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. DeepSeek combines model architecture and systems co-design: sparse experts reduce active compute, latent attention compresses KV state, low-precision training improves throughput, and reasoning training changes how inference compute is used. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain what makes DeepSeek architecturally novel vs GPT-4: MoE, MLA, DeepSeek-R1's reasoning approach
+
+MLA compresses key/value information into a lower-dimensional latent representation and reconstructs what attention needs, reducing KV-cache and bandwidth pressure. The comparison must include projection compute, quality, kernel support, and serving layout. The capability described by this objective is practical, not a definition to memorize. Begin at the **data/training pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the cost story: DeepSeek-V3 trained for $6M vs GPT-4's estimated $100M — what made this possible
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **MoE router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what Mixture of Experts is and why it enables larger models without proportional compute increase
+
+MoE keeps many expert parameter sets but routes each token to only a small top-k subset. This increases total capacity without activating every parameter, though expert communication, load balance, and memory placement remain system costs. The capability described by this objective is practical, not a definition to memorize. Begin at the **expert parallel workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe what Multi-Head Latent Attention (MLA) is at a conceptual level
+
+MLA compresses key/value information into a lower-dimensional latent representation and reconstructs what attention needs, reducing KV-cache and bandwidth pressure. The comparison must include projection compute, quality, kernel support, and serving layout. The capability described by this objective is practical, not a definition to memorize. Begin at the **MLA attention** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: MoE vs dense transformer: dense (all feedforward neurons active) vs MoE (top-K experts selected, others inactive) — FLOPs comparison
+
+```text
+DeepSeek Architecture: MoE vs dense transformer dense all feedforward neurons active vs MoE top K experts selected others inactive FLOPs comparison
+
+  [producer / request]
+           |
+           v
+      [data/training pipeline] ---- control, version, policy ----> [MoE router]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [expert parallel workers] ---- measured result + trace -----> [MLA attention]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MoE vs dense transformer: dense (all feedforward neurons active) vs MoE (top-K experts selected, others inactive) — FLOPs comparison** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 2: DeepSeek-V3 high-level architecture: transformer blocks with MoE feedforward layers + MLA attention
+
+```text
+DeepSeek Architecture: DeepSeek V3 high level architecture transformer blocks with MoE feedforward layers MLA attention
+
+  [producer / request]
+           |
+           v
+      [MoE router] ---- control, version, policy ----> [expert parallel workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [MLA attention] ---- measured result + trace -----> [reasoning training]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DeepSeek-V3 high-level architecture: transformer blocks with MoE feedforward layers + MLA attention** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 3: DeepSeek-R1 reasoning: base model → reasoning traces via RL → chain-of-thought before answering — the "think before you speak" architecture
+
+```text
+DeepSeek Architecture: DeepSeek R1 reasoning base model reasoning traces via RL chain of thought before answering the think before you speak architecture
+
+[base model]
+        |
+        v
+  [reasoning traces via RL]
+          |
+          v
+    [chain-of-thought before answering — the "think before you speak" archite]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DeepSeek-R1 reasoning: base model → reasoning traces via RL → chain-of-thought before answering — the "think before you speak" architecture** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 4: Cost breakdown: pretraining compute (GPU-hours) → hardware (H800 cluster) → total cost — DeepSeek vs estimated GPT-4
+
+```text
+DeepSeek Architecture: Cost breakdown pretraining compute GPU hours hardware H800 cluster total cost DeepSeek vs estimated GPT 4
+
+[pretraining compute (GPU-hours)]
+        |
+        v
+  [hardware (H800 cluster)]
+          |
+          v
+    [total cost — DeepSeek vs estimated GPT-4]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cost breakdown: pretraining compute (GPU-hours) → hardware (H800 cluster) → total cost — DeepSeek vs estimated GPT-4** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+### Case Studies
+
+#### DeepSeek's disruption moment (Jan 2025): how a Chinese lab trained a GPT-4-class model for 1/10th the cost — the Nvidia stock drop, the geopolitical implications, what the technical report revealed
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek's disruption moment (Jan 2025): how a Chinese lab trained a GPT-4-class model for 1/10th the cost — the Nvidia stock drop, the geopolitical implications, what the technical report revealed**—creates pressure at the **data/training pipeline** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DeepSeek MoE architecture: why they use 256 experts with top-8 selection — the routing algorithm and load balancing challenges
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek MoE architecture: why they use 256 experts with top-8 selection — the routing algorithm and load balancing challenges**—creates pressure at the **MoE router** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DeepSeek-R1: the first open-source model to approach o1-level reasoning — how pure reinforcement learning without supervised reasoning traces produced chain-of-thought behavior
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek-R1: the first open-source model to approach o1-level reasoning — how pure reinforcement learning without supervised reasoning traces produced chain-of-thought behavior**—creates pressure at the **expert parallel workers** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: What is Mixture of Experts? How does it allow a 671B parameter model to use only 37B active parameters?
+
+MoE keeps many expert parameter sets but routes each token to only a small top-k subset. This increases total capacity without activating every parameter, though expert communication, load balance, and memory placement remain system costs. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Why was DeepSeek-V3's training cost so much lower than GPT-4?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: What is DeepSeek-R1 and how is it different from DeepSeek-V3?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What is Multi-Head Latent Attention (MLA) and what problem does it solve?
+
+MLA compresses key/value information into a lower-dimensional latent representation and reconstructs what attention needs, reducing KV-cache and bandwidth pressure. The comparison must include projection compute, quality, kernel support, and serving layout. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **LLM Serving Intermediate**, **Reinforcement learning basics (policy gradient)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. DeepSeek combines model architecture and systems co-design: sparse experts reduce active compute, latent attention compresses KV state, low-precision training improves throughput, and reasoning training changes how inference compute is used. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a Mixture of Experts LLM from architecture choices to training recipe
+
+MoE keeps many expert parameter sets but routes each token to only a small top-k subset. This increases total capacity without activating every parameter, though expert communication, load balance, and memory placement remain system costs. The capability described by this objective is practical, not a definition to memorize. Begin at the **data/training pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand DeepSeek's MLA: how compressing the KV cache into a latent vector reduces memory 6× without quality loss
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **MoE router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Implement expert load balancing: why top-K routing without balancing collapses onto 2-3 popular experts
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **expert parallel workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about DeepSeek-R1's RL training: GRPO algorithm, reward function design, the cold-start problem in reasoning RL
+
+Cold start means interactions are insufficient for a new user or item. Use content features, onboarding preferences, contextual/popularity priors, and controlled exploration; then transition toward personalized signals as evidence accumulates. The capability described by this objective is practical, not a definition to memorize. Begin at the **MLA attention** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: MoE layer internals: token → router (softmax over expert logits) → top-K selection → dispatch to K expert feedforward networks → weighted combine → output
+
+```text
+DeepSeek Architecture: MoE layer internals token router softmax over expert logits top K selection dispatch to K expert feedforward networks weighted combine output
+
+[token]
+        |
+        v
+  [router (softmax over expert logits)]
+          |
+          v
+    [top-K selection]
+            |
+            v
+      [dispatch to K expert feedforward networks]
+              |
+              v
+        [weighted combine]
+                |
+                v
+          [output]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MoE layer internals: token → router (softmax over expert logits) → top-K selection → dispatch to K expert feedforward networks → weighted combine → output** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 2: Load balancing auxiliary loss: count tokens per expert → compute load imbalance metric → add auxiliary loss term to training objective → force equal expert utilization
+
+```text
+DeepSeek Architecture: Load balancing auxiliary loss count tokens per expert compute load imbalance metric add auxiliary loss term to training objective force equal expert utilization
+
+[count tokens per expert]
+        |
+        v
+  [compute load imbalance metric]
+          |
+          v
+    [add auxiliary loss term to training objective]
+            |
+            v
+      [force equal expert utilization]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Load balancing auxiliary loss: count tokens per expert → compute load imbalance metric → add auxiliary loss term to training objective → force equal expert utilization** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 3: MLA architecture: [Q, K, V] → compress (K, V) into low-rank latent vector cKV → store compressed KV cache → decompress during attention → 6× memory reduction
+
+```text
+DeepSeek Architecture: MLA architecture Q K V compress K V into low rank latent vector cKV store compressed KV cache decompress during attention 6 memory reduction
+
+[[Q, K, V]]
+        |
+        v
+  [compress (K, V) into low-rank latent vector cKV]
+          |
+          v
+    [store compressed KV cache]
+            |
+            v
+      [decompress during attention]
+              |
+              v
+        [6× memory reduction]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MLA architecture: [Q, K, V] → compress (K, V) into low-rank latent vector cKV → store compressed KV cache → decompress during attention → 6× memory reduction** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 4: DeepSeek-R1 training pipeline: base model → GRPO with math/code reward → reasoning model (no SFT) → alternatively: base model → cold-start SFT on reasoning traces → GRPO → rejection sampling → SFT → GRPO
+
+```text
+DeepSeek Architecture: DeepSeek R1 training pipeline base model GRPO with math code reward reasoning model no SFT alternatively base model cold start SFT on reasoning traces GRPO rejection sampling SFT GRPO
+
+[base model]
+        |
+        v
+  [GRPO with math/code reward]
+          |
+          v
+    [reasoning model (no SFT)]
+            |
+            v
+      [alternatively: base model]
+              |
+              v
+        [cold-start SFT on reasoning traces]
+                |
+                v
+          [GRPO]
+                  |
+                  v
+            [rejection sampling]
+                    |
+                    v
+              [SFT]
+                      |
+                      v
+                [GRPO]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DeepSeek-R1 training pipeline: base model → GRPO with math/code reward → reasoning model (no SFT) → alternatively: base model → cold-start SFT on reasoning traces → GRPO → rejection sampling → SFT → GRPO** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 5: GRPO algorithm: group of output samples → compute relative rewards → group-normalized advantage → policy gradient update
+
+```text
+DeepSeek Architecture: GRPO algorithm group of output samples compute relative rewards group normalized advantage policy gradient update
+
+[group of output samples]
+        |
+        v
+  [compute relative rewards]
+          |
+          v
+    [group-normalized advantage]
+            |
+            v
+      [policy gradient update]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **GRPO algorithm: group of output samples → compute relative rewards → group-normalized advantage → policy gradient update** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+### Case Studies
+
+#### DeepSeek MoE routing: the fine-grained expert design (256 experts vs 8 in Mixtral) — why more finer-grained experts with larger top-K works better — the token routing patterns observed in their paper
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek MoE routing: the fine-grained expert design (256 experts vs 8 in Mixtral) — why more finer-grained experts with larger top-K works better — the token routing patterns observed in their paper**—creates pressure at the **data/training pipeline** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DeepSeek's hardware-aware design for H800 (not H100): the A100/H800 has half the NVLink bandwidth of H100 — their communication-computation overlap strategy compensated for this
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek's hardware-aware design for H800 (not H100): the A100/H800 has half the NVLink bandwidth of H100 — their communication-computation overlap strategy compensated for this**—creates pressure at the **MoE router** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DeepSeek-R1-Zero: training only with RL (no SFT cold start) — the emergent behaviors they observed (self-correction, "aha moment" when switching strategies mid-solution)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek-R1-Zero: training only with RL (no SFT cold start) — the emergent behaviors they observed (self-correction, "aha moment" when switching strategies mid-solution)**—creates pressure at the **expert parallel workers** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Explain MoE routing. What happens if you don't use load balancing? How does the auxiliary loss fix this?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is Multi-Head Latent Attention? Draw the key and value computation with and without MLA.
+
+MLA compresses key/value information into a lower-dimensional latent representation and reconstructs what attention needs, reducing KV-cache and bandwidth pressure. The comparison must include projection compute, quality, kernel support, and serving layout. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk me through DeepSeek-R1's training procedure. Why does pure RL (without SFT) work for reasoning?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What is GRPO and how does it differ from PPO for LLM training?
+
+GRPO estimates relative advantage within a group of sampled responses, avoiding a separate learned value model used by PPO-style training. Its behavior depends on reward quality, group diversity, clipping or regularization, and stable reference-policy control. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: Why does DeepSeek achieve lower inference cost than a dense model of the same total parameter count?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **LLM Serving Advanced**, **Mixed precision training: FP16, BF16, FP8**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. DeepSeek combines model architecture and systems co-design: sparse experts reduce active compute, latent attention compresses KV state, low-precision training improves throughput, and reasoning training changes how inference compute is used. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design DeepSeek-V3's training infrastructure: FP8 mixed precision, DualPipe pipeline parallelism, all-to-all communication for MoE
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **data/training pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand DeepSeek's speculative decoding with MTP (Multi-Token Prediction): how they generate 2+ tokens per forward pass
+
+A draft mechanism proposes several tokens and the target model verifies them in parallel with an acceptance rule that preserves the target distribution. Speedup depends on acceptance rate, verification cost, draft cost, and workload; a poor draft can add overhead. The capability described by this objective is practical, not a definition to memorize. Begin at the **MoE router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design the serving infrastructure for a 671B MoE model: tensor parallelism, expert parallelism, KV cache management for MLA
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **expert parallel workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Analyze the cost structure: why $6M training cost was achievable — hardware utilization, precision, pipeline efficiency
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **MLA attention** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: FP8 mixed precision training: forward pass in FP8 → loss in BF16 → backward pass in FP8 → weight update in BF16 → FP8 quantization errors and how they accumulate
+
+```text
+DeepSeek Architecture: FP8 mixed precision training forward pass in FP8 loss in BF16 backward pass in FP8 weight update in BF16 FP8 quantization errors and how they accumulate
+
+[forward pass in FP8]
+        |
+        v
+  [loss in BF16]
+          |
+          v
+    [backward pass in FP8]
+            |
+            v
+      [weight update in BF16]
+              |
+              v
+        [FP8 quantization errors and how they accumulate]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **FP8 mixed precision training: forward pass in FP8 → loss in BF16 → backward pass in FP8 → weight update in BF16 → FP8 quantization errors and how they accumulate** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 2: DualPipe: two pipeline directions (forward on one micro-batch, backward on another) interleaved — computation-communication overlap — bubble reduction vs 1F1B
+
+```text
+DeepSeek Architecture: DualPipe two pipeline directions forward on one micro batch backward on another interleaved computation communication overlap bubble reduction vs 1F1B
+
+  [producer / request]
+           |
+           v
+      [MoE router] ---- control, version, policy ----> [expert parallel workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [MLA attention] ---- measured result + trace -----> [reasoning training]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DualPipe: two pipeline directions (forward on one micro-batch, backward on another) interleaved — computation-communication overlap — bubble reduction vs 1F1B** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 3: Expert parallelism for serving: 256 experts distributed across 32 GPUs → all-to-all dispatch (token routing across GPUs) → expert compute → all-to-all combine → next layer
+
+```text
+DeepSeek Architecture: Expert parallelism for serving 256 experts distributed across 32 GPUs all to all dispatch token routing across GPUs expert compute all to all combine next layer
+
+[256 experts distributed across 32 GPUs]
+        |
+        v
+  [all-to-all dispatch (token routing across GPUs)]
+          |
+          v
+    [expert compute]
+            |
+            v
+      [all-to-all combine]
+              |
+              v
+        [next layer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Expert parallelism for serving: 256 experts distributed across 32 GPUs → all-to-all dispatch (token routing across GPUs) → expert compute → all-to-all combine → next layer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 4: MTP (Multi-Token Prediction) for speculative decoding: main model outputs next token + draft head outputs next-2 token prediction → verify in single forward pass → 1.8× throughput
+
+```text
+DeepSeek Architecture: MTP Multi Token Prediction for speculative decoding main model outputs next token draft head outputs next 2 token prediction verify in single forward pass 1 8 throughput
+
+[main model outputs next token + draft head outputs next-2 token predicti]
+        |
+        v
+  [verify in single forward pass]
+          |
+          v
+    [1.8× throughput]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MTP (Multi-Token Prediction) for speculative decoding: main model outputs next token + draft head outputs next-2 token prediction → verify in single forward pass → 1.8× throughput** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 5: DeepSeek serving cost analysis: active parameters per forward pass (37B) × FP8 × H800 FLOPS → tokens/second/GPU → cost per million tokens
+
+```text
+DeepSeek Architecture: DeepSeek serving cost analysis active parameters per forward pass 37B FP8 H800 FLOPS tokens second GPU cost per million tokens
+
+[active parameters per forward pass (37B) × FP8 × H800 FLOPS]
+        |
+        v
+  [tokens/second/GPU]
+          |
+          v
+    [cost per million tokens]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DeepSeek serving cost analysis: active parameters per forward pass (37B) × FP8 × H800 FLOPS → tokens/second/GPU → cost per million tokens** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+### Case Studies
+
+#### DeepSeek's FP8 training stability: how they maintained stable training at FP8 precision — the tile-wise quantization approach, the gradient scaling strategy, where they fell back to BF16
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek's FP8 training stability: how they maintained stable training at FP8 precision — the tile-wise quantization approach, the gradient scaling strategy, where they fell back to BF16**—creates pressure at the **data/training pipeline** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DualPipe vs 1F1B pipeline: DeepSeek's custom pipeline schedule that reduced bubble rate to near-zero — the communication-computation overlap that made it work on H800 (limited NVLink)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DualPipe vs 1F1B pipeline: DeepSeek's custom pipeline schedule that reduced bubble rate to near-zero — the communication-computation overlap that made it work on H800 (limited NVLink)**—creates pressure at the **MoE router** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DeepSeek-V3 vs Llama 3.1 serving cost: at equal output quality, DeepSeek-V3 is 10-20× cheaper to serve — the breakdown of where the savings come from (MoE active parameters + MLA KV cache + MTP)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek-V3 vs Llama 3.1 serving cost: at equal output quality, DeepSeek-V3 is 10-20× cheaper to serve — the breakdown of where the savings come from (MoE active parameters + MLA KV cache + MTP)**—creates pressure at the **expert parallel workers** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Walk me through DeepSeek-V3's training stack: what's novel about the FP8 training, the pipeline schedule, and the MoE implementation?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How do you serve a 671B parameter MoE model with only 37B active parameters? What does the GPU layout look like?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Explain Multi-Token Prediction for speculative decoding. How is it different from a separate draft model?
+
+A draft mechanism proposes several tokens and the target model verifies them in parallel with an acceptance rule that preserves the target distribution. Speedup depends on acceptance rate, verification cost, draft cost, and workload; a poor draft can add overhead. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What is DualPipe and why does it matter more on H800 than H100?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: DeepSeek cost $6M to train vs GPT-4's $100M estimate. Walk through 5 specific engineering decisions that explain the gap.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. For **DeepSeek Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: DeepSeek-V3 Technical Report (2024), DeepSeek-R1 Technical Report (2025), MoE survey (2022), GRPO paper**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. DeepSeek combines model architecture and systems co-design: sparse experts reduce active compute, latent attention compresses KV state, low-precision training improves throughput, and reasoning training changes how inference compute is used. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze the fundamental research contributions of DeepSeek-R1: RL for reasoning without reasoning supervision
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **data/training pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design an experiment to understand why MoE scaling laws differ from dense scaling laws
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **MoE router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Propose a novel contribution to efficient LLM training or architecture
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **expert parallel workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Understand the geopolitical and competitive implications for AI research — and why open weights matter
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through data/training pipeline, MoE router, expert parallel workers, MLA attention. The governing quantitative model is: For $E$ total experts and top-$k$ routing, active expert compute scales with $k$ rather than $E$, but communication and imbalance remain. A simplified load term is $L_e=\sum_t\mathbf{1}[e\in\operatorname{TopK}(x_t)]$; capacity planning must bound $\max_e L_e$, not just the average. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a dense transformer with standard multi-head attention trained and served at the same active-compute budget; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **MLA attention** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In DeepSeek Architecture, that boundary interacts with expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a dense transformer with standard multi-head attention trained and served at the same active-compute budget), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: DeepSeek-R1 emergent reasoning analysis: distribution of response formats (thinking tokens vs direct answer) before vs after RL training — what the RL pressure produces
+
+```text
+DeepSeek Architecture: DeepSeek R1 emergent reasoning analysis distribution of response formats thinking tokens vs direct answer before vs after RL training what the RL pressure produces
+
+  [producer / request]
+           |
+           v
+      [data/training pipeline] ---- control, version, policy ----> [MoE router]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [expert parallel workers] ---- measured result + trace -----> [MLA attention]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DeepSeek-R1 emergent reasoning analysis: distribution of response formats (thinking tokens vs direct answer) before vs after RL training — what the RL pressure produces** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 2: MoE scaling laws: dense scaling (chinchilla) vs MoE scaling (evidence from DeepSeek, Mixtral, Switch Transformer) — do the exponents differ?
+
+```text
+DeepSeek Architecture: MoE scaling laws dense scaling chinchilla vs MoE scaling evidence from DeepSeek Mixtral Switch Transformer do the exponents differ
+
+  [producer / request]
+           |
+           v
+      [MoE router] ---- control, version, policy ----> [expert parallel workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [MLA attention] ---- measured result + trace -----> [reasoning training]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MoE scaling laws: dense scaling (chinchilla) vs MoE scaling (evidence from DeepSeek, Mixtral, Switch Transformer) — do the exponents differ?** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 3: Reasoning RL generalization: does RL training on math reasoning generalize to coding? Science? Commonsense? — transfer learning diagram
+
+```text
+DeepSeek Architecture: Reasoning RL generalization does RL training on math reasoning generalize to coding Science Commonsense transfer learning diagram
+
+  [producer / request]
+           |
+           v
+      [expert parallel workers] ---- control, version, policy ----> [MLA attention]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [reasoning training] ---- measured result + trace -----> [checkpoint store]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Reasoning RL generalization: does RL training on math reasoning generalize to coding? Science? Commonsense? — transfer learning diagram** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+#### Diagram 4: Open weights impact diagram: DeepSeek weights release → fine-tuning community → specialized models (medical, legal, code) → 6-month capability cascade
+
+```text
+DeepSeek Architecture: Open weights impact diagram DeepSeek weights release fine tuning community specialized models medical legal code 6 month capability cascade
+
+[DeepSeek weights release]
+        |
+        v
+  [fine-tuning community]
+          |
+          v
+    [specialized models (medical, legal, code)]
+            |
+            v
+      [6-month capability cascade]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Open weights impact diagram: DeepSeek weights release → fine-tuning community → specialized models (medical, legal, code) → 6-month capability cascade** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims.
+
+### Case Studies
+
+#### DeepSeek-R1 ablations: with cold start vs without, with rejection sampling vs without — the paper's own ablations that reveal which components are load-bearing
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DeepSeek-R1 ablations: with cold start vs without, with rejection sampling vs without — the paper's own ablations that reveal which components are load-bearing**—creates pressure at the **data/training pipeline** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### The distillation result: DeepSeek-R1 distilled into Qwen-7B and Llama-3-8B — that a 7B model trained on DeepSeek-R1 outputs beats o1-mini — the implications for scaling vs distillation as a capability vector
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**The distillation result: DeepSeek-R1 distilled into Qwen-7B and Llama-3-8B — that a 7B model trained on DeepSeek-R1 outputs beats o1-mini — the implications for scaling vs distillation as a capability vector**—creates pressure at the **MoE router** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Community response to DeepSeek-R1 release: the fine-tuning wave (medical reasoning, code reasoning, math tutoring models) — what open weights enable that closed weights don't
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Community response to DeepSeek-R1 release: the fine-tuning wave (medical reasoning, code reasoning, math tutoring models) — what open weights enable that closed weights don't**—creates pressure at the **expert parallel workers** layer of DeepSeek Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a dense transformer with standard multi-head attention trained and served at the same active-compute budget. Instrument it for expert balance, communication, numerical stability, KV memory, reasoning quality, throughput, and reproducibility of cost claims, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable DeepSeek Architecture slice.** Implement one request path using data/training pipeline, MoE router, expert parallel workers. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build a dense transformer with standard multi-head attention trained and served at the same active-compute budget, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable DeepSeek Architecture slice.** Implement one request path using data/training pipeline, MoE router, expert parallel workers. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build a dense transformer with standard multi-head attention trained and served at the same active-compute budget, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable DeepSeek Architecture slice.** Implement one request path using data/training pipeline, MoE router, expert parallel workers. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build a dense transformer with standard multi-head attention trained and served at the same active-compute budget, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project:** DeepSeek-R1 showed that RL alone (without supervised reasoning traces) can produce strong chain-of-thought reasoning. What is the theoretical explanation? Does this scale?
+- **Research project:** MoE models have 2× the parameters for the same FLOPs as a dense model. Does the extra capacity consistently help? What do the scaling law papers say about this?
+- **Research project:** If you were at a lab competing with DeepSeek, what architectural or training innovation would you pursue to reclaim the cost advantage?
+- **Research project:** What are the open research problems in MoE training stability? Why do experts sometimes collapse?
+- **Research project:** Propose a follow-up experiment to DeepSeek-R1's paper that could falsify or confirm their claims about RL-emergent reasoning.
+
+## Related Platform Content
+
+- [LLM Serving](/system-design/llm-serving)
+- [ChatGPT Architecture](/system-design/chatgpt-architecture)
+- [DeepSeek-V2](/architectures/deepseek-v2)
+- [Mixture of Experts curriculum](/learn/deep-learning/mixture-of-experts-moe)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- DeepSeek-V2 and DeepSeek-V3 technical reports
+- DeepSeek-R1 paper
+- DeepSeek architecture page at /architectures/deepseek-v2
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

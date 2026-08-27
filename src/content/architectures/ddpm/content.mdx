@@ -1,0 +1,273 @@
+# DDPM
+
+## 1. Overview
+Denoising Diffusion Probabilistic Models (DDPM), introduced in 2020 by Jonathan Ho, Ajay Jain, and Pieter Abbeel (UC Berkeley), established the foundational mathematical framework for modern deep generative diffusion models. Inspired by non-equilibrium thermodynamics, DDPM models data generation as the reverse of a gradual forward degradation process. The **Forward Process** iteratively adds small Gaussian noise to an image over $T$ discrete timesteps ($T=1000$) until the image degrades into pure isotropic Gaussian noise. The **Reverse Process** trains a neural network (typically a U-Net with time embeddings) to predict and remove the added noise step-by-step. By showing that optimizing a simplified $\ell_2$ loss on predicted noise $\epsilon_\theta(x_t, t)$ corresponds to maximizing a variational lower bound (ELBO) on data likelihood, DDPM produced image generation quality rivaling Generative Adversarial Networks (GANs) without suffering from mode collapse or training instability.
+
+:::note
+DDPM's central principle: "Instead of directly generating images from noise in one step, model image creation as a parameterized $T$-step reverse Markov chain that incrementally subtracts predicted Gaussian noise."
+:::
+
+## 2. Historical Context
+Prior to 2020, deep generative models were dominated by three paradigms:
+- **GANs (Goodfellow et al., 2014):** Highly realistic samples, but notoriously unstable to train, prone to mode collapse, and lacking exact likelihood evaluation.
+- **VAEs (Kingma & Welling, 2013):** Stable training via variational lower bounds, but produced blurry, low-fidelity images.
+- **Autoregressive Models (PixelCNN):** Exact likelihoods and high visual quality, but extremely slow sequential pixel-by-pixel sampling.
+
+Diffusion models were originally proposed by Sohl-Dickstein et al. in 2015, but were computationally inefficient and produced inferior images compared to GANs. Jonathan Ho et al. made a critical mathematical realization: by reparameterizing the noise prediction network and optimizing a simplified $\ell_2$ loss on the added noise $\epsilon$, DDPM established equivalence to score-based generative modeling (Song & Ermon) and produced state-of-the-art visual samples on CIFAR-10 and ImageNet $256 \times 256$.
+
+## 3. Problem It Solves
+DDPM resolves three fundamental trade-offs in generative modeling (the "Generative Learning Trilemma"):
+1. **GAN Training Instability & Mode Collapse:** Eliminates adversarial min-max games. DDPM optimizes a standard, stable regression loss ($\ell_2$), ensuring diverse mode coverage across the entire data distribution.
+2. **VAE Blurry Sample Generation:** VAEs suffer from over-simplified posterior assumptions. DDPM uses a multi-step reverse Markov chain ($T=1000$ steps), allowing the model to progressively refine fine high-frequency textures.
+3. **Complex Likelihood Tractability:** Exact marginal likelihood is intractable. DDPM provides a closed-form Gaussian formulation for any arbitrary timestep $t$, making forward noise addition $q(x_t \mid x_0)$ non-iterative during training.
+
+## 4. Architecture Diagram Data
+Below is the full architecture of DDPM showing the Forward Noise Addition Process, Reverse Denoising U-Net, and Noise Loss Computation.
+
+```text
+       FORWARD PROCESS (Markov Chain - No Parameters)
+       x_0 (Data) ---> x_1 ---> ... ---> x_{t-1} ---> x_t ---> ... ---> x_T ~ N(0, I)
+        |                                 |            |
+        +------- Closed-Form q(x_t|x_0) --+------------+
+                 x_t = sqrt(alpha_bar_t)*x_0 + sqrt(1 - alpha_bar_t)*epsilon
+
+       ========================================================================
+
+       REVERSE DENOISING PROCESS (Parameterized Neural Network)
+       x_T ~ N(0, I) ---> x_{t} ---> x_{t-1} ---> ... ---> x_0 (Generated Image)
+
+                        [ Sample Timestep t ~ Uniform(1, T) ]
+                        [ Sample Noise epsilon ~ N(0, I)   ]
+                                       |
+                                       v
+                        [ Latent Noisy Image x_t ]
+                        (B, 3, H, W)
+                                       |
+                                       +-----------------------+
+                                       |                       |
+                                       v                       v
+               +=======================================+  [ Sinusoidal Time ]
+               | Denoising U-Net (epsilon_theta)       |  [ Embedding t     ]
+               | - Encoder (ResBlocks + Downsample)    | -----> (B, 128)
+               | - Middle Block (Self-Attention)       |          |
+               | - Decoder (ResBlocks + Upsample)      | <--------+
+               | - Skip Connections (Encoder -> Dec)   |
+               +=======================================+
+                                       |
+                                       v
+                        [ Predicted Noise: epsilon_theta(x_t, t) ]
+                        (B, 3, H, W)
+                                       |
+                                       v
+               +=======================================+
+               | Simplified Loss L2                    |
+               | || epsilon - epsilon_theta(x_t, t) ||^2|
+               +=======================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+The DDPM noise estimation network $\epsilon_\theta(x_t, t)$ is structured as a time-conditioned U-Net:
+
+**1. Sinusoidal Timestep Encoder:**
+- Takes discrete timestep $t \in [1, T]$ and projects it into a Transformer-style sinusoidal positional embedding of dimension 128.
+- Passes through a 2-layer MLP (`Linear -> SiLU -> Linear`) to output a time embedding vector of shape $(B, 512)$.
+
+**2. U-Net Encoder Stages (Downsampling):**
+- **Convolutional Input:** $3 \times 3$ conv projecting $(B, 3, H, W)$ to $(B, 128, H, W)$.
+- **Downsampling Blocks:** 3 resolution stages ($H, H/2, H/4$). Each stage contains 2 Residual Blocks with time embedding injection (element-wise addition) and spatial self-attention modules at lower resolutions ($16 \times 16$).
+- Downsampling performed via strided convolutions or average pooling.
+
+**3. U-Net Middle Block:**
+- Contains a Residual Block, a Spatial Self-Attention module over flattened spatial tokens, and a second Residual Block.
+
+**4. U-Net Decoder Stages (Upsampling):**
+- Upsamples spatial feature maps via nearest-neighbor interpolation or Transposed Convolutions.
+- Concatenates skip connections from corresponding encoder stages along channels.
+- Passes concatenated features through Residual Blocks with time embedding injection.
+- Final output layer: $3 \times 3$ Convolution mapping back to input image shape $(B, 3, H, W)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DDPM's U-Net for a batch of images `(B, 3, 64, 64)` at timestep $t$.
+
+1. **Input Generation:**
+   - Ground-truth image $x_0$: `(B, 3, 64, 64)`
+   - Timestep $t$: `(B,)`
+   - Added Noise $\epsilon \sim \mathcal{N}(0, \mathbf{I})$: `(B, 3, 64, 64)`
+   - Sampled Noisy Image $x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon$: `(B, 3, 64, 64)`
+2. **Timestep Embedding:**
+   - Sinusoidal Embedding $\rightarrow$ MLP $\rightarrow t_{\text{emb}}$: `(B, 512)`
+3. **U-Net Encoder Flow:**
+   - Conv1: `(B, 128, 64, 64)`
+   - DownBlock 1 + Time Injection: `(B, 128, 32, 32)`
+   - DownBlock 2 + Self-Attention + Time Injection: `(B, 256, 16, 16)`
+4. **Middle Block:**
+   - ResBlock + Self-Attn + ResBlock $\rightarrow$ `(B, 256, 16, 16)`
+5. **U-Net Decoder Flow (with Skip Concatenation):**
+   - UpBlock 1 (Concat Skip 2): `(B, 128, 32, 32)`
+   - UpBlock 2 (Concat Skip 1): `(B, 128, 64, 64)`
+   - Final Conv: `(B, 3, 64, 64)` $\rightarrow$ Predicted Noise $\hat{\epsilon} = \epsilon_\theta(x_t, t)$
+
+## 7. Mathematical Foundations
+
+### 1. Forward Diffusion Process
+The forward process adds Gaussian noise according to a fixed variance schedule $\beta_1, \beta_2, \dots, \beta_T$:
+
+$$q(x_t \mid x_{t-1}) = \mathcal{N}\left(x_t; \sqrt{1 - \beta_t} x_{t-1}, \beta_t \mathbf{I}\right)$$
+
+Let $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$. Using the reparameterization trick, we can sample $x_t$ at any arbitrary timestep $t$ directly in **closed-form** without iterating through intermediate steps:
+
+$$q(x_t \mid x_0) = \mathcal{N}\left(x_t; \sqrt{\bar{\alpha}_t} x_0, (1 - \bar{\alpha}_t) \mathbf{I}\right)$$
+
+$$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon, \quad \text{where } \epsilon \sim \mathcal{N}(0, \mathbf{I})$$
+
+### 2. Reverse Denoising Process
+The reverse process is modeled as a parameterized Gaussian Markov chain:
+
+$$p_\theta(x_{t-1} \mid x_t) = \mathcal{N}\left(x_{t-1}; \mu_\theta(x_t, t), \Sigma_\theta(x_t, t)\right)$$
+
+where the predicted mean $\mu_\theta(x_t, t)$ is reparameterized in terms of the noise prediction network $\epsilon_\theta(x_t, t)$:
+
+$$\mu_\theta(x_t, t) = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{\beta_t}{\sqrt{1 - \bar{\alpha}_t}} \epsilon_\theta(x_t, t) \right)$$
+
+### 3. Simplified Variational Loss Function
+Maximizing the variational upper bound yields a simplified $\ell_2$ objective that predicts the added Gaussian noise $\epsilon$:
+
+$$\mathcal{L}_{\text{simple}}(\theta) = \mathbb{E}_{t, x_0, \epsilon} \left[ \left\| \epsilon - \epsilon_\theta\left(\sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon, \; t\right) \right\|^2 \right]$$
+
+where $t \sim \text{Uniform}(\{1, \dots, T\})$ and $\epsilon \sim \mathcal{N}(0, \mathbf{I})$.
+
+## 8. Training Procedure
+1. Sample clean image $x_0 \sim q(x_0)$.
+2. Sample timestep $t \sim \text{Uniform}(\{1, \dots, T\})$.
+3. Sample Gaussian noise $\epsilon \sim \mathcal{N}(0, \mathbf{I})$.
+4. Compute noisy image $x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon$.
+5. Predict noise $\hat{\epsilon} = \epsilon_\theta(x_t, t)$.
+6. Take gradient step on $\nabla_\theta \|\epsilon - \hat{\epsilon}\|^2$.
+7. Repeat until convergence. Optimizer: Adam ($\text{lr} = 2 \times 10^{-4}$).
+
+## 9. PyTorch Implementation
+Here is a complete, self-contained PyTorch implementation of DDPM training and noise prediction.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, time):
+        device = time.device
+        half_dim = self.dim // 2
+        embeddings = torch.log(torch.tensor(10000.0)) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
+
+class MiniUNet(nn.Module):
+    def __init__(self, in_channels=3, time_dim=128):
+        super().__init__()
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(time_dim),
+            nn.Linear(time_dim, time_dim),
+            nn.ReLU()
+        )
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)
+        self.time_proj = nn.Linear(time_dim, 64)
+        self.conv2 = nn.Conv2d(64, in_channels, kernel_size=3, padding=1)
+
+    def forward(self, x, t):
+        # x: (B, 3, H, W), t: (B,)
+        t_emb = self.time_mlp(t)                   # (B, 128)
+        h = F.relu(self.conv1(x))                   # (B, 64, H, W)
+        h = h + self.time_proj(t_emb)[:, :, None, None] # Inject time embedding
+        out = self.conv2(h)                        # (B, 3, H, W)
+        return out
+
+class DDPM(nn.Module):
+    def __init__(self, model, timesteps=1000, beta_start=1e-4, beta_end=0.02):
+        super().__init__()
+        self.model = model
+        self.timesteps = timesteps
+        
+        # Define Beta schedule & pre-calculate Alpha terms
+        betas = torch.linspace(beta_start, beta_end, timesteps)
+        alphas = 1.0 - betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        
+        self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - alphas_cumprod))
+
+    def q_sample(self, x_0, t, noise):
+        # Closed-form sampling q(x_t | x_0)
+        sqrt_alpha_bar = self.sqrt_alphas_cumprod[t][:, None, None, None]
+        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
+        return sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
+
+    def forward(self, x_0):
+        B = x_0.shape[0]
+        t = torch.randint(0, self.timesteps, (B,), device=x_0.device).long()
+        noise = torch.randn_like(x_0)
+        
+        # Add noise via closed-form equation
+        x_t = self.q_sample(x_0, t, noise)
+        
+        # Predict noise
+        predicted_noise = self.model(x_t, t)
+        
+        # Compute simplified MSE loss
+        loss = F.mse_loss(predicted_noise, noise)
+        return loss
+
+if __name__ == "__main__":
+    B, C, H, W = 4, 3, 32, 32
+    unet = MiniUNet(in_channels=C, time_dim=128)
+    ddpm = DDPM(model=unet, timesteps=1000)
+    
+    dummy_x0 = torch.randn(B, C, H, W)
+    loss = ddpm(dummy_x0)
+    
+    print(f"Computed DDPM Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("DDPM verification successful!")
+```
+
+## 10. Strengths
+- **Stable Training:** Optimizes a simple $\ell_2$ regression loss, eliminating GAN min-max training instabilities and mode collapse.
+- **High Visual Diversity:** Generates exceptionally diverse samples covering the full data distribution.
+- **Closed-Form Arbitrary Sampling:** $q(x_t \mid x_0)$ allows sampling noisy images at any timestep $t$ in a single operation during training.
+
+## 11. Weaknesses
+- **Slow Sampling Speed:** Requires running $T=1000$ sequential network forward passes to generate a single image during inference.
+- **Pixel-Space Memory Demand:** Running diffusion directly on raw pixel spaces ($H \times W \times 3$) consumes high GPU VRAM.
+
+## 12. Research Evolution
+DDPM proved that diffusion models could generate high-fidelity images. It directly inspired **DDIM** (non-Markovian deterministic sampling), **Score-SDE** (continuous-time formulations), and **Latent Diffusion Models (LDM / Stable Diffusion)**.
+
+## 13. Interview Questions
+
+**Q1: How does DDPM sample $x_t$ at timestep $t$ in closed form during training without iterating through timesteps $1 \dots t-1$?**
+**A1:** Using the linear property of Gaussians, the recursive step $x_t = \sqrt{\alpha_t} x_{t-1} + \sqrt{1 - \alpha_t} \epsilon_{t-1}$ collapses into a direct closed-form equation: $x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon$, where $\bar{\alpha}_t = \prod_{s=1}^t (1 - \beta_s)$ and $\epsilon \sim \mathcal{N}(0, \mathbf{I})$.
+
+**Q2: What target does the U-Net in DDPM predict?**
+**A2:** The U-Net predicts the Gaussian noise vector $\epsilon$ that was added to the clean image $x_0$ to produce noisy image $x_t$. Optimizing $\|\epsilon - \epsilon_\theta(x_t, t)\|^2$ minimizes the KL divergence of the variational lower bound.
+
+**Q3: How is the timestep $t$ conditioned inside the U-Net architecture?**
+**A3:** Timestep $t$ is mapped into a sinusoidal positional embedding vector (similar to Transformer position encodings), passed through a 2-layer MLP, and added element-wise (or applied via adaptive layer norm) to intermediate feature maps in every residual block of the U-Net.
+
+**Q4: What is the main operational limitation of DDPM during inference?**
+**A4:** Sampling a single image requires evaluating the U-Net sequentially $T$ times (typically $T=1000$ steps), making inference $1000\times$ slower than GANs or VAEs.
+
+**Q5: What is the relationship between DDPM and Score-Based Generative Models?**
+**A5:** Predicting the noise $\epsilon_\theta(x_t, t)$ in DDPM is mathematically equivalent to estimating the score function $\nabla_{x_t} \log q(x_t)$ of the perturbed data distribution (up to a scaling factor $-\sqrt{1 - \bar{\alpha}_t}$).
+
+## 14. Related Papers
+- **DDPM Paper:** *Denoising Diffusion Probabilistic Models* (Ho, Jain, Abbeel, NeurIPS 2020)
+- **Deep Unsupervised Learning Paper:** *Deep Unsupervised Learning using Nonequilibrium Thermodynamics* (Sohl-Dickstein et al., ICML 2015)
+
+## 15. Further Reading
+- Lilian Weng's Blog: *What are Diffusion Models?*
+- Annoted DDPM Implementation by LabML

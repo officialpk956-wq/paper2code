@@ -1,0 +1,220 @@
+# Two-Tower Model
+
+## 1. Overview
+The Two-Tower Model (Dual-Encoder Architecture), introduced in 2019 by Xinyang Yi, Ji Yang, Lichan Hong, Derek Zhiyuan Cheng, Lukasz Heldt, Adith Swaminathan, Xuanhui Wang, and Ed H. Chi (Google Inc. / YouTube), is the dominant industrial architecture for **large-scale Candidate Retrieval** across search and recommendation platforms. Production recommendation systems operate on catalogs containing billions of items (e.g., YouTube videos, Amazon products, Google Play apps). Running deep non-linear rankers (like DLRM or DeepFM) over billions of items in real-time is computationally impossible within sub-10ms SLA latency limits. The Two-Tower model solves this by decoupling feature processing into two completely independent neural networks: a **User/Query Tower $u(x)$** and an **Item Tower $v(y)$**. Because the Item Tower operates independently of the user, item embedding vectors $v(y)$ for billions of items are pre-computed offline and indexed into an **Approximate Nearest Neighbor (ANN)** vector database (e.g., FAISS, ScaNN). At query time, the User Tower computes $u(x)$ in $<2\text{ms}$, reducing candidate retrieval to a sub-millisecond dot-product vector search across billions of pre-indexed items.
+
+:::note
+Two-Tower Model core concept: "Decouple into User Tower $u(x)$ and Item Tower $v(y)$. Compute similarity as dot product $u(x) \cdot v(y)^T$. Pre-index item embeddings into FAISS/ScaNN for sub-10ms retrieval over billions of items."
+:::
+
+## 2. Historical Context
+In 2019, Google and YouTube recommendation pipelines were split into a two-stage funnel: **Candidate Retrieval (Candidate Generation)** and **Ranking**. Early retrieval models relied on simple collaborative filtering or heuristic candidate pools.
+
+Xinyang Yi et al. designed the Deep Two-Tower Model for YouTube candidate retrieval. By mapping complex multi-modal user features (watch history, search queries, demographics) and item features (video title, channel tags, audio embeddings) into a shared $k$-dimensional vector space via dual deep MLPs, YouTube scaled personalized retrieval to billions of videos while preserving sub-10ms response times.
+
+## 3. Problem It Solves
+The Two-Tower model resolves three major industrial challenges in web-scale recommendation:
+1. **The Billion-Item Scalability Limit:** Eliminates calculating expensive non-linear cross-features across billions of items for every user query.
+2. **Sub-10ms Latency SLA Requirements:** Item embeddings $v(y)$ are pre-computed offline. Real-time serving requires evaluating only ONE neural network pass (the User Tower) followed by fast vector search.
+3. **Decoupled Heterogeneous Feature Processing:** Allows user features (real-time click stream, device context) and item features (video metadata, publisher ID) to have completely different structures and neural architectures.
+
+## 4. Architecture Diagram Data
+Below is the mandatory two-stage pipeline diagram showing Candidate Retrieval (ANN Vector Search via Two-Tower Model) followed by Deep Ranking.
+
+```text
+       ========================================================================
+       TWO-STAGE RECOMMENDATION PIPELINE (RETRIEVAL + RANKING)
+       ========================================================================
+
+       [ User Query & Real-Time Context x ]
+                        |
+                        v
+       +==================================================================+
+       | STAGE 1: CANDIDATE RETRIEVAL (TWO-TOWER MODEL + ANN SEARCH)      |
+       |                                                                  |
+       |  [ User Features x ]                  [ Item Features y ]        |
+       |           |                                    |                 |
+       |           v                                    v                 |
+       |  +==================+                 +==================+       |
+       |  | USER TOWER u(x)   |                 | ITEM TOWER v(y)  |       |
+       |  | (Deep MLP Stack)  |                 | (Deep MLP Stack) |       |
+       |  +==================+                 +==================+       |
+       |           |                                    |                 |
+       |           v                                    v                 |
+       |  [ User Vector u(x) ]                 [ Item Vector v(y) ]       |
+       |    (Dim k, Normalized)                  (Pre-Computed Offline)   |
+       |           |                                    |                 |
+       |           +-----------------+------------------+                 |
+       |                             |                                    |
+       |                             v                                    |
+       |           [ Fast Vector Search: Dot Product / Cosine ]           |
+       |           [ Index: FAISS / ScaNN (Billions of Items) ]           |
+       +==================================================================+
+                                     |
+                                     v (Retrieves Top-1000 Candidates)
+       +==================================================================+
+       | STAGE 2: HEAVY DEEP RANKING MODEL (DLRM / DeepFM / DIN)          |
+       | Evaluates complex User x Item Cross-Features on 1000 Candidates  |
+       +==================================================================+
+                                     |
+                                     v (Outputs Top-50 Ranked Items)
+                         [ User Recommendation Feed ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. User Tower ($u(x)$):**
+- **Inputs:** Sparse user IDs, historical watch sequence embeddings, search query text embeddings, device/geo context features.
+- **Architecture:** Dense Feature Concatenation $\to$ 3-Layer MLP ($1024 \to 512 \to 128$, ReLU) $\to$ **$L_2$ Normalization Layer**.
+- Output: Normalized User Embedding $u(x) \in \mathbb{R}^k$ ($\|u(x)\|_2 = 1$).
+
+**2. Item Tower ($v(y)$):**
+- **Inputs:** Sparse item IDs, categorical tags, title text embeddings, content category IDs.
+- **Architecture:** Dense Feature Concatenation $\to$ 3-Layer MLP ($1024 \to 512 \to 128$, ReLU) $\to$ **$L_2$ Normalization Layer**.
+- Output: Normalized Item Embedding $v(y) \in \mathbb{R}^k$ ($\|v(y)\|_2 = 1$).
+
+**3. Similarity Computation & Loss:**
+- Cosine similarity score $s(x, y) = \langle u(x), v(y) \rangle = u(x)^T v(y)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Two-Tower training for mini-batch $B=512$, user feature dim 256, item feature dim 128, output embedding dim $k=128$.
+
+1. **User & Item Tower Forward Passes:**
+   - User Features $x$: `(512, 256)` $\xrightarrow{\text{User Tower MLP}} u_{\text{raw}}$: `(512, 128)` $\xrightarrow{L_2 \text{ Norm}} u(x)$: `(512, 128)`
+   - Item Features $y$: `(512, 128)` $\xrightarrow{\text{Item Tower MLP}} v_{\text{raw}}$: `(512, 128)` $\xrightarrow{L_2 \text{ Norm}} v(y)$: `(512, 128)`
+2. **In-Batch Similarity Matrix:**
+   - Matrix Multiplication $u(x) \cdot v(y)^T \to$ Similarity Matrix $S$: `(512, 512)`
+   - Diagonal elements $S_{i,i}$ represent positive user-item pairs; off-diagonals $S_{i,j}$ represent in-batch negative pairs.
+3. **In-Batch Softmax Cross-Entropy Loss:**
+   - Scale logits by temperature $\tau = 0.07 \to$ Apply Softmax along rows $\to$ Cross-Entropy Loss against diagonal targets `0...511`.
+
+## 7. Mathematical Foundations
+
+### 1. In-Batch Softmax Loss with Temperature Scaling
+To train the Two-Tower model efficiently on massive streaming datasets without explicit negative sampling, YouTube uses **In-Batch Softmax Cross-Entropy Loss**.
+For a mini-batch of $B$ positive user-item pairs $\{(x_i, y_i)\}_{i=1}^B$, items of other users in the same batch serve as negative samples:
+
+$$\mathcal{L}(\theta) = -\frac{1}{B} \sum_{i=1}^B \log \frac{\exp\left( u(x_i)^T v(y_i) / \tau \right)}{\sum_{j=1}^B \exp\left( u(x_i)^T v(y_j) / \tau \right)}$$
+
+where $\tau$ is a temperature hyperparameter ($\tau \approx 0.05 - 0.1$) controlling logit sharpness.
+
+### 2. Sampled Softmax Correction for Item Frequency Bias
+Popular items appear more frequently in mini-batches, introducing popularity bias. To correct for item frequency $p_j = P(y_j)$, the similarity logit is adjusted by subtracting $\log p_j$:
+
+$$s^{c}(x_i, y_j) = u(x_i)^T v(y_j) - \log p_j$$
+
+$$\mathcal{L}_{\text{corrected}}(\theta) = -\frac{1}{B} \sum_{i=1}^B \log \frac{\exp\left( s^c(x_i, y_i) / \tau \right)}{\sum_{j=1}^B \exp\left( s^c(x_i, y_j) / \tau \right)}$$
+
+## 8. Training Procedure
+- Stream continuous logs of positive user-item interactions $(x_i, y_i)$.
+- Forward pass through User Tower $u(x_i)$ and Item Tower $v(y_i)$. Apply $L_2$ normalization.
+- Compute In-Batch Softmax Cross-Entropy Loss with log probability frequency correction.
+- Update weights using Adam optimizer ($\text{lr} = 10^{-3}$).
+- **Offline Indexing:** Periodically pass all catalog items through Item Tower $v(y)$ and build FAISS/ScaNN HNSW index.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Two-Tower Model with In-Batch Softmax Loss**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class UserTower(nn.Module):
+    def __init__(self, user_dim=256, embed_dim=128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(user_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, embed_dim)
+        )
+
+    def forward(self, x):
+        out = self.net(x)
+        return F.normalize(out, p=2, dim=-1) # L2 Normalization
+
+class ItemTower(nn.Module):
+    def __init__(self, item_dim=128, embed_dim=128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(item_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, embed_dim)
+        )
+
+    def forward(self, y):
+        out = self.net(y)
+        return F.normalize(out, p=2, dim=-1) # L2 Normalization
+
+class TwoTowerModel(nn.Module):
+    def __init__(self, user_dim=256, item_dim=128, embed_dim=128, temperature=0.07):
+        super().__init__()
+        self.user_tower = UserTower(user_dim=user_dim, embed_dim=embed_dim)
+        self.item_tower = ItemTower(item_dim=item_dim, embed_dim=embed_dim)
+        self.temperature = temperature
+
+    def forward(self, user_features, item_features):
+        """
+        user_features: (B, user_dim)
+        item_features: (B, item_dim)
+        """
+        u = self.user_tower(user_features) # (B, k)
+        v = self.item_tower(item_features) # (B, k)
+        
+        # In-Batch Similarity Matrix: (B, B)
+        similarity_matrix = torch.matmul(u, v.t()) / self.temperature
+        return similarity_matrix
+
+if __name__ == "__main__":
+    B, user_dim, item_dim, k = 512, 256, 128, 128
+    model = TwoTowerModel(user_dim=user_dim, item_dim=item_dim, embed_dim=k)
+    
+    user_x = torch.randn(B, user_dim)
+    item_y = torch.randn(B, item_dim)
+    
+    similarity_matrix = model(user_x, item_y)
+    targets = torch.arange(B, device=user_x.device) # Positive pairs are on diagonal
+    loss = F.cross_entropy(similarity_matrix, targets)
+    
+    print(f"In-Batch Similarity Matrix Shape: {similarity_matrix.shape}")
+    print(f"Two-Tower In-Batch Loss:          {loss.item():.4f}")
+    assert similarity_matrix.shape == (B, B)
+    print("Two-Tower verification successful!")
+```
+
+## 10. Strengths
+- **Sub-10ms Web-Scale Serving:** Pre-computed item embeddings enable vector search across billions of items in $<5\text{ms}$.
+- **Decoupled Architecture:** User features and item features are processed independently with domain-specific sub-networks.
+- **In-Batch Negative Efficiency:** Computes $B^2 - B$ negative pairs per mini-batch for free without explicit negative sampling.
+
+## 11. Weaknesses
+- **No Early User-Item Feature Interaction:** Cannot model complex cross-features (e.g., `user_gender x item_category`) inside the towers (handled downstream by heavy ranking models).
+
+## 12. Research Evolution
+The Two-Tower model remains the industry standard for candidate retrieval, leading directly to **ScaNN / FAISS integration**, **MIND (Multi-Interest Network)**, and **Que2Search**.
+
+## 13. Interview Questions
+
+**Q1: Why is the Two-Tower model used for Candidate Retrieval instead of a single heavy deep ranking network?**
+**A1:** Production catalogs contain billions of items. Running a heavy deep network that computes user-item cross-features for billions of items per user query is computationally impossible within sub-10ms SLA limits. The Two-Tower model decouples user and item processing, allowing item embeddings to be pre-computed offline and indexed into ANNs (FAISS/ScaNN) for sub-millisecond dot-product retrieval.
+
+**Q2: How does In-Batch Softmax Loss work in Two-Tower model training?**
+**A2:** In a mini-batch of $B$ positive user-item pairs $\{(x_i, y_i)\}_{i=1}^B$, the $B \times B$ dot-product matrix $u(x_i)^T v(y_j)$ is computed. The diagonal entries $S_{i,i}$ serve as positive pairs, while all off-diagonal entries $S_{i,j} (i \neq j)$ serve as negative samples within a Softmax cross-entropy loss.
+
+**Q3: What is Item Frequency Bias in Two-Tower models, and how is it corrected?**
+**A3:** Popular items appear more frequently in mini-batches, causing the model to over-predict popular items. It is corrected by subtracting $\log p_j$ (log sampling probability of item $y_j$) from the logit score before Softmax: $s^c(x_i, y_j) = u(x_i)^T v(y_j) - \log p_j$.
+
+**Q4: Why is $L_2$ Normalization applied to the output vectors of both User and Item towers?**
+**A4:** $L_2$ normalization forces all embedding vectors onto a unit hypersphere ($\|u\|_2 = 1, \|v\|_2 = 1$). This converts the dot product into Cosine Similarity, bounding values to $[-1, 1]$ and preventing exploding logits during vector search.
+
+**Q5: What is the role of the Temperature parameter $\tau$ in Two-Tower loss?**
+**A5:** Temperature $\tau$ scales logit magnitude before Softmax ($S / \tau$). Smaller $\tau$ values make the Softmax distribution sharper, penalizing hard negative items and forcing the network to learn fine-grained vector representations.
+
+## 14. Related Papers
+- **Two-Tower Model Paper:** *Sampling-Bias-Corrected Neural Modeling for Large Scale Recommendation* (Yi et al., RecSys 2019)
+- **YouTube Candidate Generation:** *Deep Neural Networks for YouTube Recommendations* (Covington et al., RecSys 2016)
+
+## 15. Further Reading
+- Google Research ScaNN Vector Search Library Documentation

@@ -1,0 +1,100 @@
+# Learning Theory
+
+## 1. Overview
+
+This topic picks up exactly where Statistical Learning Theory leaves off: classical generalization bounds predict that a massively overparameterized neural network (billions of parameters, far more than training examples) should generalize terribly, yet in practice such networks generalize *better* as they get bigger — the opposite of what the classical theory predicts. Learning Theory here refers to the modern research program built to explain this puzzle: understanding *why* overparameterized neural networks generalize at all, using tools beyond raw capacity counting, such as implicit bias of the optimizer, margin-based bounds, and the double descent phenomenon.
+
+## 2. Prerequisites in Context
+
+**Statistical Learning Theory** is the direct prerequisite — you need the classical VC-dimension and Rademacher-complexity machinery firmly in hand before you can appreciate exactly which of its assumptions modern theory has to relax or abandon to explain overparameterized generalization. **Kernel Methods** matter because a major line of modern theory explains neural network generalization by analyzing the infinite-width limit of a network, where its training dynamics become exactly equivalent to kernel regression under the Neural Tangent Kernel — without a working understanding of what a kernel method actually computes, this equivalence (and why it's theoretically useful) is opaque.
+
+## 3. Core Concept
+
+The empirical phenomenon this field explains is **double descent**: as you increase model capacity (or decrease training data), test error first decreases, then *increases* to a peak right around the "interpolation threshold" (where the model has just enough capacity to fit the training data exactly), and then — surprisingly — *decreases again* as capacity continues to grow past that point, eventually reaching lower test error than the best "classical" (underparameterized) model achieved. Classical bias-variance tradeoff theory, and classical VC-based generalization bounds, only predict the first (U-shaped) part of this curve — they have no mechanism to explain the second descent. Modern theory explains the second descent through the concept of **implicit regularization**: among the (many) sets of parameters that achieve zero training error once you're past the interpolation threshold, gradient descent doesn't converge to an arbitrary one — it has a systematic bias toward "simple" solutions (in a precise, mathematically characterizable sense, like minimum-norm solutions for certain model classes), and it's specifically this bias, not raw capacity, that explains why more-overparameterized models generalize *better*, not worse.
+
+## 4. Theoretical Foundations
+
+For linear regression in the overparameterized regime (more features than examples, $p > n$), gradient descent starting from zero initialization provably converges to the **minimum-norm interpolating solution**:
+$$\hat{w} = \arg\min_{w} \|w\|_2 \quad \text{subject to} \quad Xw = y$$
+This is not an arbitrary choice among the infinitely many $w$ satisfying $Xw = y$ — it's the specific one gradient descent's trajectory is biased toward, and this minimum-norm bias is exactly what controls generalization in the overparameterized regime (via norm-based generalization bounds, connecting back to Statistical Learning Theory). The **Neural Tangent Kernel (NTK)** framework extends this idea to (infinitely wide) neural networks: in this limit, training dynamics become linear in a specific kernel space defined by $\Theta(x, x') = \nabla_\theta f(x;\theta_0)^T \nabla_\theta f(x';\theta_0)$ (the inner product of the network's gradients with respect to its parameters, at initialization), and the network's evolution during training is provably equivalent to kernel regression with this kernel — turning a hard-to-analyze non-convex optimization problem into a tractable, convex kernel method, at least in this idealized infinite-width limit.
+
+## 5. Worked Example
+
+Fit polynomial regression models of increasing degree to a small, noisy dataset of 20 points. A degree-19 polynomial (19 parameters, exactly enough to interpolate all 20 points minus the constant term) will typically produce wild oscillations between data points and terrible test error — this is the classical overfitting peak, right at the interpolation threshold. Now go further: fit a degree-200 polynomial using a minimum-norm solver (like ridge regression with vanishing regularization, or gradient descent from zero init) instead of an arbitrary interpolating polynomial solver. Counter to naive intuition, this dramatically overparameterized fit is often *smoother and more accurate on test data* than the degree-19 fit — because among the infinitely many degree-200 polynomials that pass through all 20 points, the minimum-norm one happens to be a much better-behaved function than the unique, wildly oscillating degree-19 interpolant. This toy example reproduces the double descent curve directly and demonstrates that "more parameters than data" is not itself the problem — *which* interpolating solution you land on is what matters.
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+
+def min_norm_polynomial_fit(x, y, degree):
+    """Minimum-norm interpolating (or least-squares, if underparameterized)
+    polynomial fit via the pseudoinverse — this recovers the min-norm solution
+    exactly when the system is underdetermined (degree+1 > len(x))."""
+    X = np.vander(x, degree + 1, increasing=True)  # [1, x, x^2, ..., x^degree]
+    coeffs, *_ = np.linalg.lstsq(X, y, rcond=None)  # np.linalg.pinv-based min-norm solution
+    return coeffs
+
+def test_error(coeffs, x_test, y_test):
+    degree = len(coeffs) - 1
+    X_test = np.vander(x_test, degree + 1, increasing=True)
+    preds = X_test @ coeffs
+    return np.mean((preds - y_test) ** 2)
+
+if __name__ == "__main__":
+    rng = np.random.default_rng(0)
+    x_train = np.linspace(-1, 1, 20)
+    true_fn = lambda x: np.sin(3 * x)
+    y_train = true_fn(x_train) + rng.normal(0, 0.1, size=20)
+    x_test = np.linspace(-1, 1, 200)
+    y_test = true_fn(x_test)
+
+    for degree in [5, 19, 60, 200]:  # sweeping past the interpolation threshold (~19)
+        coeffs = min_norm_polynomial_fit(x_train, y_train, degree)
+        err = test_error(coeffs, x_test, y_test)
+        print(f"degree={degree:>4d}  test MSE={err:.4f}")
+    # Expect: error dips, spikes near degree=19 (interpolation threshold), then descends again
+```
+
+## 7. Real-World Applications
+
+The NTK framework is used directly in theoretical analyses of why very wide neural networks train stably and reliably — it's the mathematical justification behind some practical width-scaling and learning-rate-scaling heuristics used when scaling up architectures (the parameterization choices that determine whether a network trained at small width transfers cleanly to large width, as used in some large-scale LLM training recipes documented under `chinchilla` and `gpt-3`). Double descent has directly influenced practical guidance around model sizing: it's part of why "just make the model bigger" turned out to be a viable and often superior strategy compared to carefully tuning a smaller model to avoid overfitting — a strategy that seemed counterintuitive under classical bias-variance theory but is now well understood as consistent with implicit-regularization-driven generalization.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common mistake is treating double descent as evidence that "overfitting isn't real" or that regularization doesn't matter for large models — the second descent is a specific, delicate phenomenon that depends on the implicit bias of the specific optimizer and architecture used, and explicit regularization (weight decay, data augmentation) still meaningfully improves generalization even in the overparameterized regime where double descent applies. Another pitfall is assuming the NTK framework describes real, finite-width neural network training accurately — the NTK limit is a specific idealization (infinite width, particular initialization scaling) that real finite networks only approximate, and it's well documented that NTK dynamics fail to capture certain important behaviors (like feature learning) that make finite-width networks work as well as they do in practice.
+
+## 9. How This Connects
+
+This topic requires **Statistical Learning Theory** and **Kernel Methods** — without the classical VC/Rademacher framework as a baseline, and without understanding what a kernel method computes, the double-descent phenomenon and the NTK's kernel-regression equivalence have no theoretical contrast to be understood against. It directly unlocks **Scaling Law Research** (the empirical study of how model performance predictably improves with scale — a phenomenon this theory helps explain mechanistically, even though scaling laws were originally discovered empirically) and **Implicit Bias Research** (the deeper, ongoing research program of precisely characterizing what solutions gradient descent is biased toward across different architectures and optimizers, beyond the clean linear-regression case worked out here).
+
+## 10. Check Your Understanding
+
+**Q1: What does classical bias-variance theory fail to predict about the relationship between model capacity and test error?**
+It predicts a single U-shaped curve — test error decreases then increases monotonically as capacity grows, with no mechanism for it to decrease again. It fails to predict the "second descent," the empirically observed phenomenon where test error, after peaking near the interpolation threshold, decreases again as capacity continues to grow well past that threshold.
+
+**Q2: What is the "interpolation threshold," and why does test error typically spike there?**
+It's the point where a model has just enough capacity to fit the training data exactly (zero training error) but not more. Test error spikes there because, right at this threshold, there's typically only one (or very few) parameter configuration(s) achieving zero training error, and that particular configuration tends to be poorly behaved (highly sensitive to noise in the training data) — unlike the many available zero-training-error solutions once you're comfortably past the threshold, among which a well-behaved one can be selected.
+
+**Q3: What role does implicit regularization play in explaining the second descent?**
+Once past the interpolation threshold, there are infinitely many parameter settings that fit the training data exactly, but gradient descent doesn't land on an arbitrary one — it's systematically biased toward specific, "simple" solutions (like minimum-norm solutions in the linear case). This implicit bias, not the raw amount of capacity, is what causes generalization to improve again as capacity grows — the model isn't just memorizing more, it has more room to find a well-behaved fit.
+
+**Q4: What does the Neural Tangent Kernel framework claim about infinitely wide neural networks?**
+It claims that in the infinite-width limit (with an appropriate initialization scaling), a neural network's training dynamics become mathematically equivalent to kernel regression using a specific, fixed kernel (defined by the network's gradients at initialization) — turning the network's non-convex training process into a tractable, convex problem, at least within this idealized limit.
+
+**Q5: Why is it a mistake to conclude "regularization doesn't matter" from the double descent phenomenon?**
+Because double descent describes a specific pattern in how test error changes with capacity under a *particular* implicit bias (from the specific optimizer, architecture, and training procedure used) — it doesn't mean overfitting is impossible or that explicit regularization provides no benefit. In practice, explicit regularization (weight decay, dropout, data augmentation) continues to measurably improve generalization even for heavily overparameterized models operating well past the interpolation threshold.
+
+## 11. Further Reading
+
+- Belkin et al., "Reconciling Modern Machine-Learning Practice and the Classical Bias-Variance Trade-off" (2019) — the paper that named "double descent"
+- Jacot, Gabriel & Hongler, "Neural Tangent Kernel: Convergence and Generalization in Neural Networks" (2018)
+- Nakkiran et al., "Deep Double Descent: Where Bigger Models and More Data Hurt" (2019)
+- Bartlett et al., "Benign Overfitting in Linear Regression" (2020)
+- See also: `statistical-learning-theory` and `scaling-laws` on this platform for the classical theory and the empirical scale-driven counterpart
+
+## Related Platform Content
+
+- [MACHINE LEARNING curriculum overview](/learn/machine-learning)
+- [Architecture application](/architectures/darts)
+- [Browse all system designs](/system-design)

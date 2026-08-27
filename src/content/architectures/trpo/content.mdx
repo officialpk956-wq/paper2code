@@ -1,0 +1,194 @@
+# TRPO
+
+## 1. Overview
+Trust Region Policy Optimization (TRPO), introduced in 2015 by John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz (UC Berkeley), established the theoretical mathematical foundation for **Guaranteed Monotonic Policy Improvement** in deep reinforcement learning. Standard policy gradient methods (REINFORCE, Vanilla Actor-Critic) suffer from extreme step-size instability: taking a step size that is too large in parameter space $\theta$ can ruin policy performance catastrophically, collapsing performance into an unrecoverable state. TRPO solved this by constraining every policy update to lie within a strict **Trust Region** defined by the Kullback-Leibler (KL) divergence between the old policy $\pi_{\theta_{\text{old}}}$ and the new policy $\pi_\theta$ ($\mathbb{E}[\text{KL}(\pi_{\theta_{\text{old}}} \parallel \pi_\theta)] \le \delta$). TRPO optimizes a surrogate objective using **Conjugate Gradient Descent** and **Fisher Information Matrix-Vector Products**, guaranteeing that expected rewards monotonically increase at every training iteration.
+
+:::note
+TRPO's mathematical breakthrough: "Constrain policy updates to a KL-divergence Trust Region ($\mathbb{E}[\text{KL}] \le \delta$) solved via Conjugate Gradient, mathematically guaranteeing monotonic policy performance improvement."
+:::
+
+## 2. Historical Context
+In 2015, policy gradient methods were plagued by hyperparameter fragility. In supervised learning, taking a bad step size slightly increases loss, which can be corrected in the next iteration. In RL, taking a bad policy step causes the agent to collect terrible trajectory data, destroying the training data distribution and leading to irreversible performance collapse.
+
+John Schulman et al. built upon Kakade & Langford's Conservative Policy Iteration (2002). They proved mathematically that penalizing or constraining the maximum KL-divergence between consecutive policies guarantees that performance under the new policy is strictly greater than or equal to performance under the old policy ($\eta(\pi_{\text{new}}) \ge \eta(\pi_{\text{old}})$).
+
+## 3. Problem It Solves
+TRPO resolves two major theoretical and practical failure modes of policy gradients:
+1. **Catastrophic Policy Collapse from Large Steps:** Standard SGD can make parameter updates that destroy policy capability. TRPO enforces a hard mathematical bound on policy shift ($\text{KL} \le \delta = 0.01$).
+2. **Hyperparameter Step-Size Sensitivity:** Eliminates fragile learning rate tuning. The Trust Region boundary $\delta$ automatically adapts gradient step sizes based on local curvature of the policy manifold.
+3. **Monotonic Improvement Guarantees:** Provides formal mathematical proof that expected reward never degrades across iterations.
+
+## 4. Architecture Diagram Data
+Below is the Trust Region optimization landscape showing parameter updates constrained within the KL-divergence boundary $\delta$.
+
+```text
+       PARAMETER SPACE & TRUST REGION BOUNDARY
+
+                          Unconstrained Policy Gradient Step
+                          (Causes Catastrophic Performance Collapse!)
+                                         \
+                                          v  X [ Destructive Update ]
+       +-----------------------------------+-------------------+
+       |                                   |                   |
+       |     TRUST REGION (KL <= delta)    |                   |
+       |                                   |                   |
+       |              [ Current Policy theta_old ]             |
+       |                         |                             |
+       |                         v                             |
+       |              [ TRPO Step Direction ]                  |
+       |              s = H^-1 * g (Conjugate Gradient)        |
+       |                         |                             |
+       |                         v                             |
+       |              [ Optimal Step theta_new ] *             |
+       |                                   |                   |
+       +-----------------------------------+-------------------+
+                                           |
+                                           v
+                       [ Verified via Backtracking Line Search ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Policy & Value Networks:**
+- **Policy Network $\pi_\theta(a \mid s)$:** Maps state $s$ to action probability distributions (Gaussian mean/std for continuous actions; Softmax logits for discrete actions).
+- **Value Baseline $V_\phi(s)$:** Separate neural network predicting expected cumulative return $V(s)$ to compute GAE (Generalized Advantage Estimation).
+
+**2. Second-Order Optimization Module:**
+- **Policy Gradient $g$:** Computes first derivative of surrogate objective $\nabla_\theta \mathcal{L}(\theta)$.
+- **Conjugate Gradient (CG) Solver:** Computes search direction $x \approx H^{-1} g$ without forming the full Hessian matrix, using Fisher Information Matrix-Vector Products ($H \cdot v$).
+- **Backtracking Line Search:** Verifies that the candidate step $x$ satisfies both the KL constraint $\text{KL} \le \delta$ and improves the surrogate objective.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through TRPO for batch size $N=2048$ timesteps, continuous action space dimension 6 (MuJoCo).
+
+1. **Trajectory Rollout Collection:**
+   - States $s$: `(2048, 17)`, Actions $a$: `(2048, 6)`
+   - Old Policy Probabilities $\pi_{\theta_{\text{old}}}(a \mid s)$: `(2048, 6)`
+   - Advantage Estimates $\hat{A}(s, a)$: `(2048, 1)`
+2. **First-Order Gradient:**
+   - Surrogate Loss Derivative $\nabla_\theta \mathcal{L}(\theta) \to g$: `(P,)` (where $P$ is total parameter count).
+3. **Conjugate Gradient Search Direction:**
+   - Solves $H x = g$ using 10 iterations of Conjugate Gradient $\to$ Search Direction $x$: `(P,)`.
+4. **Max Step Length Scaling:**
+   - Compute step scale $\beta = \sqrt{\frac{2 \delta}{x^T H x}} \to \text{Step Vector } \Delta \theta = \beta x$: `(P,)`.
+5. **Backtracking Line Search:**
+   - Tests $\theta_{\text{new}} = \theta_{\text{old}} + \alpha^k \Delta \theta$ for $\alpha = 0.5^k$ until $\mathcal{L}(\theta_{\text{new}}) > 0$ and $\text{KL} \le \delta$.
+
+## 7. Mathematical Foundations
+
+### 1. Monotonic Improvement Theorem
+Let $\eta(\pi)$ be the expected discounted reward of policy $\pi$. Kakade and Langford proved:
+
+$$\eta(\pi_{\text{new}}) \ge L_{\pi_{\text{old}}}(\pi_{\text{new}}) - C \cdot D_{\text{KL}}^{\max}(\pi_{\text{old}} \parallel \pi_{\text{new}})$$
+
+where $L_{\pi_{\text{old}}}(\pi_{\text{new}}) = \eta(\pi_{\text{old}}) + \sum_s \rho_{\pi_{\text{old}}}(s) \sum_a \pi_{\text{new}}(a \mid s) A_{\pi_{\text{old}}}(s, a)$ is the surrogate objective.
+
+### 2. TRPO Constrained Optimization Problem
+Replacing the penalty $C \cdot D_{\text{KL}}$ with a hard constraint yields TRPO's formal optimization problem:
+
+$$\max_\theta \mathbb{E}_{s \sim \rho_{\theta_{\text{old}}}, a \sim \pi_{\theta_{\text{old}}}} \left[ \frac{\pi_\theta(a \mid s)}{\pi_{\theta_{\text{old}}}(a \mid s)} \hat{A}_{\theta_{\text{old}}}(s, a) \right]$$
+
+$$\text{subject to } \mathbb{E}_{s \sim \rho_{\theta_{\text{old}}}} \left[ D_{\text{KL}}\left(\pi_{\theta_{\text{old}}}(\cdot \mid s) \;\middle\|\; \pi_\theta(\cdot \mid s)\right) \right] \le \delta$$
+
+### 3. Solving TRPO via Taylor Series Expansion
+Expanding the objective to 1st order and the KL constraint to 2nd order around $\theta_{\text{old}}$:
+
+$$\max_{\Delta \theta} g^T \Delta \theta \quad \text{subject to } \frac{1}{2} \Delta \theta^T H \Delta \theta \le \delta$$
+
+where $g = \nabla_\theta \mathcal{L}(\theta)$ is the policy gradient, and $H = \nabla_\theta^2 D_{\text{KL}}$ is the **Fisher Information Matrix**.
+
+The closed-form analytical solution is:
+
+$$\Delta \theta = \sqrt{\frac{2 \delta}{g^T H^{-1} g}} H^{-1} g$$
+
+Conjugate Gradient computes $x = H^{-1} g$ in $O(P)$ time without forming the $P \times P$ matrix $H$.
+
+## 8. Training Procedure
+- Collect trajectory batch $N=2048$ steps using current policy $\pi_{\theta_{\text{old}}}$.
+- Compute GAE advantages $\hat{A}_t$.
+- Compute policy gradient vector $g = \nabla_\theta \mathcal{L}(\theta)$.
+- Run Conjugate Gradient (10 steps) to solve $H x = g$.
+- Compute maximum step length $\Delta \theta = \sqrt{\frac{2 \delta}{x^T H x}} x$.
+- Perform Backtracking Line Search to find step size $\alpha^k \Delta \theta$ satisfying constraint. Update $\theta_{\text{new}} \leftarrow \theta_{\text{old}} + \alpha^k \Delta \theta$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **TRPO's Conjugate Gradient Solver**.
+
+```python
+import torch
+import torch.nn as nn
+
+def conjugate_gradients(Av_func, b, nsteps=10, residual_tol=1e-10):
+    """ Solves A * x = b using Conjugate Gradient Algorithm """
+    x = torch.zeros_like(b)
+    r = b.clone()
+    p = b.clone()
+    rdotr = torch.dot(r, r)
+    
+    for _ in range(nsteps):
+        Av = Av_func(p)
+        alpha = rdotr / (torch.dot(p, Av) + 1e-8)
+        x += alpha * p
+        r -= alpha * Av
+        new_rdotr = torch.dot(r, r)
+        if new_rdotr < residual_tol:
+            break
+        beta = new_rdotr / rdotr
+        p = r + beta * p
+        rdotr = new_rdotr
+        
+    return x
+
+if __name__ == "__main__":
+    P = 100
+    # Simulate positive-definite Matrix A via A = M^T M + I
+    M = torch.randn(P, P)
+    A = torch.matmul(M.t(), M) + torch.eye(P)
+    b = torch.randn(P)
+    
+    Av_func = lambda v: torch.matmul(A, v)
+    
+    x = conjugate_gradients(Av_func, b, nsteps=10)
+    
+    # Check A * x - b ~ 0
+    error = torch.norm(torch.matmul(A, x) - b).item()
+    print(f"Conjugate Gradient Solution Error: {error:.6f}")
+    assert error < 1e-3, "Conjugate Gradient failed to converge!"
+    print("TRPO Conjugate Gradient verification successful!")
+```
+
+## 10. Strengths
+- **Guaranteed Monotonic Improvement:** Formally prevents policy degradation across updates.
+- **Robust Step-Size Autotuning:** Eliminates manual learning rate tuning by enforcing a fixed KL boundary ($\delta$).
+- **High Performance on Continuous Control:** Outstanding baseline for robotic control.
+
+## 11. Weaknesses
+- **Computationally Heavy Second-Order Math:** Requires Conjugate Gradient and Hessian-vector products.
+- **Incompatible with Shared Architectures:** Difficult to use with shared Actor-Critic architectures (solved by PPO).
+
+## 12. Research Evolution
+TRPO established trust region theory, leading directly to **PPO (Proximal Policy Optimization)** and **ACKTR**.
+
+## 13. Interview Questions
+
+**Q1: What is the main motivation behind Trust Region Policy Optimization (TRPO)?**
+**A1:** Standard policy gradients suffer from extreme step-size instability: taking a step that is too large in parameter space destroys policy capabilities catastrophically. TRPO constrains updates to a KL-divergence Trust Region ($\mathbb{E}[\text{KL}] \le \delta$), guaranteeing monotonic performance improvement.
+
+**Q2: Why does TRPO use Conjugate Gradient instead of standard Gradient Descent?**
+**A2:** Computing the exact Fisher Information Matrix $H$ and its inverse $H^{-1}$ requires $O(P^3)$ computation for $P$ parameters. Conjugate Gradient computes search direction $x = H^{-1} g$ in $O(P)$ time using matrix-vector products $H \cdot v$ without constructing $H$.
+
+**Q3: What is the purpose of Backtracking Line Search in TRPO?**
+**A3:** Taylor series approximations used to compute search direction $\Delta \theta$ are local approximations. Backtracking Line Search verifies that the proposed step actually improves the surrogate objective and satisfies the strict KL constraint $\text{KL} \le \delta$.
+
+**Q4: Write out the TRPO optimization objective and constraint.**
+**A4:** $\max_\theta \mathbb{E} \left[ \frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)} \hat{A}(s, a) \right]$ subject to $\mathbb{E} \left[ D_{\text{KL}}(\pi_{\theta_{\text{old}}} \parallel \pi_\theta) \right] \le \delta$.
+
+**Q5: Compare TRPO with PPO.**
+**A5:** TRPO enforces a hard KL constraint using second-order math (Conjugate Gradient + Fisher matrix). PPO replaces second-order constraints with a simple first-order Clipped Surrogate Objective ($\min(r_t \hat{A}_t, \text{clip}(r_t, 1-\epsilon, 1+\epsilon)\hat{A}_t)$), achieving similar stability with standard SGD.
+
+## 14. Related Papers
+- **TRPO Paper:** *Trust Region Policy Optimization* (Schulman et al., ICML 2015)
+- **Conservative Policy Iteration:** *Approximately Optimal Approximate Reinforcement Learning* (Kakade & Langford, ICML 2002)
+
+## 15. Further Reading
+- OpenAI Spinning Up TRPO Documentation

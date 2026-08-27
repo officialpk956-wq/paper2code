@@ -1,0 +1,95 @@
+# Scaling Laws
+
+## 1. Overview
+
+Scaling laws are the empirical discovery that a language model's loss follows smooth, remarkably predictable power-law curves as you increase model size, dataset size, or training compute — and, crucially, that you can predict how well a model *will* perform before you spend the money to train it, just by fitting a curve to a handful of smaller, cheaper training runs. This transformed AI research from "train it and see" into an engineering discipline where a lab can decide, in advance and with real confidence, exactly how large a model to train and how much data to feed it for a fixed compute budget — the single most consequential empirical finding behind the entire era of large language models.
+
+## 2. Prerequisites in Context
+
+**Transformer** architecture knowledge is required because scaling laws were discovered and are almost universally studied in the context of transformer-based language models — the specific power-law exponents and constants reported in the literature are architecture-dependent, so you need to know what's actually being scaled (attention heads, layers, hidden dimension) to interpret the results correctly. **Training Loop** familiarity matters because scaling laws are fit from the loss curves of many actual training runs — you need to understand what a loss curve represents and how compute budget translates into training steps and tokens processed to read the underlying experiments correctly. **Statistical Learning Theory** provides the conceptual backdrop for *why* a model's test loss should behave predictably as a function of capacity and data at all — scaling laws are the empirical, large-scale sibling of the generalization theory studied there.
+
+## 3. Core Concept
+
+The foundational empirical finding (from OpenAI's 2020 scaling laws paper) is that a transformer's test loss $L$ decreases as a power law in each of three quantities independently, when the other two are not the bottleneck: model size $N$ (number of non-embedding parameters), dataset size $D$ (number of training tokens), and compute $C$ (roughly $C \approx 6ND$ floating point operations). Each relationship takes the form $L(N) \propto N^{-\alpha_N}$, $L(D) \propto D^{-\alpha_D}$, with measured exponents remarkably consistent across a huge range of scales (many orders of magnitude in $N$ and $D$). This predictability is what makes scaling laws actionable: fit the power-law exponents using a set of small, cheap training runs, and you can extrapolate — with real, tested accuracy — what loss a much larger, much more expensive run will achieve, before spending the compute to actually run it. The original OpenAI scaling laws, however, held dataset size roughly fixed while scaling model size, which led to a specific — and, as Chinchilla later showed, suboptimal — recommendation about how to split a fixed compute budget between model size and data.
+
+## 4. Theoretical Foundations
+
+The combined scaling law, expressing loss as a function of both model size and data simultaneously, is commonly written as:
+$$L(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta}$$
+where $E$ is an irreducible loss floor (the entropy of natural language/data itself — no model, however large, can go below this), and the two power-law terms capture the additional loss incurred from finite model capacity and finite data respectively. Given a fixed compute budget $C \approx 6ND$, minimizing $L(N,D)$ subject to this compute constraint yields optimal scaling exponents for $N_{\text{opt}}$ and $D_{\text{opt}}$ as functions of $C$. The original OpenAI paper's fits implied you should scale $N$ much faster than $D$ as compute grows (train ever-larger models on roughly fixed amounts of data) — this is the recommendation Chinchilla directly overturned, by more carefully separating the effects of $N$ and $D$ and finding both should scale at roughly the same rate ($N_{\text{opt}} \propto C^{0.5}$ and $D_{\text{opt}} \propto C^{0.5}$), implying most large models of that era (like the original 175B-parameter GPT-3) were significantly undertrained relative to their size.
+
+## 5. Worked Example
+
+Suppose you fit a scaling law using models of 10M, 100M, and 1B parameters, each trained on their respective compute-optimal amount of data, and measure loss values of 3.5, 3.0, and 2.6 nats respectively. Fitting $L(N) = E + A/N^\alpha$ to these three points (using log-log linear regression, since a power law is a straight line in log-log space) lets you solve for $E$, $A$, and $\alpha$. Once fit, you can extrapolate: plug in $N = 100$B and the fitted curve predicts a specific loss value — and remarkably, when labs actually train the 100B-parameter model, the measured loss typically falls within a few percent of this extrapolated prediction, across many orders of magnitude of scale-up. This predictive accuracy, verified repeatedly across model families, is what elevated scaling laws from "an interesting empirical curiosity" to "the primary tool used to plan multi-million-dollar training runs before committing the compute."
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+from scipy.optimize import curve_fit
+
+def power_law_loss(N, E, A, alpha):
+    return E + A / (N ** alpha)
+
+def fit_scaling_law(model_sizes, losses):
+    """Fit L(N) = E + A / N^alpha from a handful of (model_size, loss) points."""
+    popt, _ = curve_fit(power_law_loss, model_sizes, losses,
+                         p0=[1.5, 10.0, 0.3], maxfev=10000)
+    return popt  # E, A, alpha
+
+if __name__ == "__main__":
+    # Synthetic example: small runs used to fit, then extrapolate to a much bigger model
+    N_observed = np.array([1e7, 1e8, 1e9])
+    L_observed = np.array([3.5, 3.0, 2.6])
+
+    E, A, alpha = fit_scaling_law(N_observed, L_observed)
+    print(f"Fitted: E={E:.3f} (irreducible loss floor), A={A:.3f}, alpha={alpha:.3f}")
+
+    N_target = 1e11  # a 100B-parameter model, never actually trained here
+    predicted_loss = power_law_loss(N_target, E, A, alpha)
+    print(f"Predicted loss at N=1e11 (extrapolated from 3 small runs): {predicted_loss:.3f}")
+    assert predicted_loss < L_observed[-1], "loss should keep decreasing as N grows, per the fitted power law"
+```
+
+## 7. Real-World Applications
+
+Every major frontier lab now runs a scaling-law-fitting phase — a set of smaller, systematically varied training runs — before committing to the final architecture and training budget of a flagship model; this is documented directly and explicitly in the Chinchilla paper (`chinchilla` on this platform) and referenced in the training methodology of GPT-4, PaLM, and LLaMA. Scaling laws are also used for compute-budget allocation decisions at the organizational level: given a fixed dollar budget for GPU-hours, scaling laws let a lab compute the loss-optimal model size and training token count in advance, rather than guessing and potentially wasting millions of dollars training a poorly-sized model.
+
+## 8. Common Pitfalls & Misconceptions
+
+A frequent mistake is treating scaling laws as universal physical constants rather than empirical fits specific to a particular architecture family, tokenizer, and data distribution — the exponents $\alpha$ and $\beta$ measured for one transformer variant do not automatically transfer to a meaningfully different architecture or an entirely different data domain, and re-fitting is required when those change substantially. Another pitfall, historically significant, is conflating "optimal model size for a fixed compute budget" with "the model that will perform best when deployed" — Chinchilla's compute-optimal recommendation minimizes training loss for a given training compute budget, but says nothing directly about inference cost, which is a separate optimization that often favors smaller, more heavily-trained (beyond Chinchilla-optimal) models for production deployment where inference happens far more often than training.
+
+## 9. How This Connects
+
+This topic requires **Transformer** architecture knowledge, familiarity with the **Training Loop**, and **Statistical Learning Theory** as conceptual grounding — without them, "loss follows a power law in model size" is an unmotivated empirical curiosity rather than a result connected to the theory of how models generalize as capacity and data scale. It directly unlocks **Training Budget Decisions** (the practical, organizational-level application of fitting and using scaling laws to plan real training runs) and **Pre-training Research** (the broader research area of studying and improving the pretraining process itself, of which predicting and optimizing scaling behavior is a central concern).
+
+## 10. Check Your Understanding
+
+**Q1: What does it mean that a model's loss "follows a power law" in model size or data?**
+It means the loss decreases in a specific, mathematically smooth way as size increases — $L \propto N^{-\alpha}$ — which appears as a straight line when both loss and model size are plotted on log-log axes. This smoothness and predictability, verified across many orders of magnitude, is what allows extrapolation from small experiments to predict the performance of much larger, more expensive models before training them.
+
+**Q2: What is the irreducible loss term $E$ in the combined scaling law, and why can't any model beat it?**
+$E$ represents the inherent entropy or unpredictability of the data distribution itself — even a hypothetically perfect model cannot predict genuinely random or ambiguous elements of natural data better than this floor. No amount of additional model capacity or training data can push loss below $E$, because that floor reflects information the data simply doesn't contain, not a limitation of the model.
+
+**Q3: What specific recommendation from the original OpenAI scaling laws did Chinchilla overturn?**
+The original paper's fits implied that, for a fixed compute budget, you should scale model size much faster than dataset size as compute grows. Chinchilla's more careful analysis found that model size and data size should actually scale at roughly the same rate, implying that many large models of that era (including the original 175B GPT-3) were substantially undertrained relative to their parameter count — a smaller model trained on proportionally more data would have achieved better loss for the same compute.
+
+**Q4: Why might a lab deliberately train a model beyond its Chinchilla-optimal token count?**
+Because Chinchilla-optimal minimizes loss for a fixed *training* compute budget, but says nothing about inference cost. A smaller model trained on more tokens than Chinchilla-optimal (an "overtrained" model, in this specific technical sense) can achieve similar quality to a larger Chinchilla-optimal model while being significantly cheaper and faster to run at inference time — and since inference happens vastly more often than training for a deployed model, this tradeoff often favors overtraining smaller models in production settings.
+
+**Q5: Why do scaling laws need to be re-fit when switching to a substantially different architecture or data domain?**
+Because the specific power-law exponents and constants are empirical properties of the particular architecture, tokenizer, and training data distribution used to measure them — they are not universal physical constants. A meaningfully different architecture family or data domain can have genuinely different scaling exponents, and extrapolating using exponents fit on one setting to predict performance in a substantially different setting can give inaccurate predictions.
+
+## 11. Further Reading
+
+- Kaplan et al., "Scaling Laws for Neural Language Models" (2020) — the original OpenAI scaling laws paper
+- Hoffmann et al., "Training Compute-Optimal Large Language Models" (Chinchilla, 2022)
+- Hestness et al., "Deep Learning Scaling is Predictable, Empirically" (2017) — early precursor to modern scaling law research
+- Muennighoff et al., "Scaling Data-Constrained Language Models" (2023) — scaling laws when repeating limited data
+- See also: `chinchilla` and `gpt-3` on this platform for the direct architectural case studies
+
+## Related Platform Content
+
+- [DEEP LEARNING curriculum overview](/learn/deep-learning)
+- [Chinchilla](/architectures/chinchilla)
+- [Browse all system designs](/system-design)

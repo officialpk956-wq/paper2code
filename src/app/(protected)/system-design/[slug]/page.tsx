@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { SD_SYSTEMS } from '@/data/content/systemDesign';
 import { getMdxContent } from '@/lib/mdx';
@@ -6,9 +7,13 @@ import MdxRenderer from '@/components/MdxRenderer';
 import ArchDiagram from '@/components/arch/ArchDiagram';
 import { systemToFlowSlug } from '@/components/arch/archFlows';
 import { Reveal } from '@/components/anim';
+import { SYSTEM_DESIGN_ROUTE_ALIASES } from '@/data/content/routeAliases';
 
 export default async function SystemDesignSlugPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  const canonicalSlug = SYSTEM_DESIGN_ROUTE_ALIASES[slug];
+  if (canonicalSlug) redirect(`/system-design/${canonicalSlug}`);
+
   const sys = SD_SYSTEMS.find(s => s.slug === slug);
 
   if (!sys) {

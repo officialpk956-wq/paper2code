@@ -1,0 +1,216 @@
+# SASRec
+
+## 1. Overview
+Self-Attentive Sequential Recommendation (SASRec), introduced in 2018 by Wang-Cheng Kang and Julian McAuley (UC San Diego), revolutionized sequential recommendation by applying **Unidirectional Self-Attention Transformers** to user interaction sequences. Sequential recommendation aims to predict the next item a user will interact with based on the ordered sequence of their past interactions $(v_1, v_2, \dots, v_t)$. Prior to SASRec, sequential recommendation relied on Recurrent Neural Networks (LSTMs/GRUs) or Markov Chains. RNNs suffered from gradient vanishing over long sequences and forced strictly sequential, non-parallelizable processing. Markov Chains assumed strong 1st-order local transitions but failed to capture long-range contextual dynamics. Kang and McAuley adapted the Transformer architecture (Vaswani et al., 2017) with **Causal Self-Attention Masks**, allowing SASRec to dynamically weight relevant past interactions regardless of distance while training in parallel.
+
+:::tip
+SASRec innovation: "Sequential recommendation via Unidirectional Self-Attention Transformer. Uses causal masking to predict next item $v_{t+1}$ given history $[v_1 \dots v_t]$, achieving higher accuracy than RNNs and Markov Chains."
+:::
+
+## 2. Historical Context
+In 2018, sequential recommendation was dominated by two paradigms:
+1. **Markov Chains (FPMC):** Assumed that next item $v_{t+1}$ depends only on the immediately preceding item $v_t$. Excellent for high-density short transitions, but failed over long-term user histories.
+2. **RNN-Based Models (GRU4Rec):** Encoded historical sequences into a hidden state vector $h_t$. Excellent for long sequences, but suffered from sequential compute bottlenecks and forgetting early interactions.
+
+Kang and McAuley recognized that Self-Attention mechanisms could balance both extremes: assigning high attention weights to recent items (like Markov Chains) while maintaining long-range memory connections across 100+ past steps (like RNNs).
+
+## 3. Problem It Solves
+SASRec resolves three fundamental limits of sequential recommendation algorithms:
+1. **Sequential Compute Bottleneck of RNNs:** Eliminates sequential time-step dependencies ($h_t = \text{RNN}(h_{t-1})$), enabling massive parallel GPU training across sequence length $L$.
+2. **Short Memory Horizon of Markov Chains:** Captures long-range dependencies across past steps using multi-head self-attention without exponential decay.
+3. **Adaptive Range Attention:** Dynamically adjusts attention span: acts like a 1st-order Markov Chain on sparse datasets and like a dense RNN on rich datasets.
+
+## 4. Architecture Diagram Data
+Below is the Causal Self-Attentive sequential architecture of SASRec predicting next items across sequence timesteps.
+
+```text
+       USER INTERACTION SEQUENCE [ v_1, v_2, v_3, ... v_t ]
+                                  |
+                                  v
+       +===================================================================+
+       | EMBEDDING LAYER (Item Embeddings M + Learned Positional P)         |
+       | E_i = M_{v_i} + P_i                                               |
+       +===================================================================+
+                                  |
+                                  v
+       +===================================================================+
+       | CAUSAL MULTI-HEAD SELF-ATTENTION BLOCKS (L Blocks)                |
+       | - Q = E W^Q, K = E W^K, V = E W^V                                 |
+       | - Causal Attention Mask (Prevents information leak from future)    |
+       | - Multi-Head Attention -> LayerNorm -> Feed-Forward -> LayerNorm   |
+       +===================================================================+
+                                  |
+                                  v
+       +===================================================================+
+       | PREDICTION HEAD (Dot Product with Item Embedding Table M)         |
+       | r_{i,t} = F_t * M_i^T                                             |
+       | Output: Probability ranking for next candidate item v_{t+1}       |
+       +===================================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Embedding Layer (Item + Positional):**
+- Given sequence of item IDs $(v_1, v_2, \dots, v_n)$.
+- Looks up item embeddings $M \in \mathbb{R}^{n \times d}$ and learned positional embeddings $P \in \mathbb{R}^{n \times d}$.
+- Input embedding matrix $E = [M_{v_1} + P_1, \; M_{v_2} + P_2, \; \dots, \; M_{v_n} + P_n]^T \in \mathbb{R}^{n \times d}$.
+
+**2. Causal Self-Attention Block:**
+- Projects $E$ to Query $Q = E W^Q$, Key $K = E W^K$, Value $V = E W^V$.
+- Applies **Causal Attention Mask** $S_{i,j} = -\infty$ for $j > i$:
+  $$\text{Attention}(Q, K, V) = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} + \mathbf{M}_{\text{causal}} \right) V$$
+
+**3. Point-wise Feed-Forward Network:**
+- Applies two linear projections with ReLU activation and residual skip connection:
+  $$F_i = \text{FFN}(S_i) = \text{ReLU}(S_i W_1 + b_1) W_2 + b_2 + S_i$$
+
+**4. Prediction Layer:**
+- For timestep $t$, computes candidate item prediction score via inner product with target item embedding $M_i$:
+  $$r_{i,t} = F_t \cdot M_i^T$$
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through SASRec for mini-batch $B=128$, sequence length $L=50$, item embedding dimension $d=64$.
+
+1. **Embedding Layer:**
+   - Item Sequence: `(128, 50)` $\xrightarrow{\text{Item Embed + Pos Embed}} E$: `(128, 50, 64)`
+2. **Causal Self-Attention Block:**
+   - $Q, K, V$: `(128, 50, 64)`
+   - Causal Attention Matrix $(Q K^T / \sqrt{d}) + \text{Mask} \to$ `(128, 50, 50)`
+   - Output Attention Vectors: `(128, 50, 64)`
+3. **Point-wise Feed-Forward Layer:**
+   - FFN Pass + LayerNorm $\to$ Contextual Representations $F$: `(128, 50, 64)`
+4. **Prediction Score Generation:**
+   - Inner product with target item embeddings $M \in \mathbb{R}^{N_{\text{items}} \times 64} \to$ Logits: `(128, 50, N_items)`.
+
+## 7. Mathematical Foundations
+
+### 1. Causal Self-Attention Formula
+To prevent information leakage from future tokens (e.g., preventing step $t$ from attending to $t+1$), SASRec applies a causal mask:
+
+$$S = \text{Softmax}\left( \frac{E W^Q (E W^K)^T}{\sqrt{d}} + \mathbf{M}_{\text{causal}} \right) E W^V$$
+
+where $\mathbf{M}_{\text{causal}} \in \mathbb{R}^{L \times L}$ is defined as:
+
+$$\mathbf{M}_{\text{causal}, i, j} = \begin{cases} 0 & \text{if } i \ge j \\ -\infty & \text{if } i < j \end{cases}$$
+
+### 2. Binary Cross-Entropy Loss with Negative Sampling
+For each sequence step $t \in \{1 \dots L-1\}$, the true next item $v_{t+1}$ is positive ($y=1$), and a randomly sampled unobserved item $j$ is negative ($y=0$):
+
+$$\mathcal{L}_{\text{SASRec}} = -\sum_{u \in \mathcal{U}} \sum_{t=1}^{L-1} \left[ \log \sigma\left( r_{v_{t+1}, t} \right) + \log \left( 1 - \sigma\left( r_{j, t} \right) \right) \right]$$
+
+where $r_{i,t} = F_t \cdot M_i^T$.
+
+## 8. Training Procedure
+- Construct sequences of user past interactions $(v_1, v_2, \dots, v_L)$ padded to fixed length $L$.
+- Sample 1 negative item $j$ for each timestep $t$.
+- Apply causal self-attention mask to calculate next-item prediction scores.
+- Minimize Binary Cross-Entropy (BCE) loss using Adam optimizer ($\text{lr} = 10^{-3}$).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **SASRec Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SASRec(nn.Module):
+    """ Self-Attentive Sequential Recommendation (SASRec) """
+    def __init__(self, num_items, max_len=50, embed_dim=64, num_heads=2, num_blocks=2, dropout=0.2):
+        super().__init__()
+        self.num_items = num_items
+        self.max_len = max_len
+        self.embed_dim = embed_dim
+        
+        # Item & Positional Embeddings
+        self.item_embedding = nn.Embedding(num_items + 1, embed_dim, padding_idx=0)
+        self.pos_embedding = nn.Embedding(max_len, embed_dim)
+        self.emb_dropout = nn.Dropout(dropout)
+        
+        # Transformer Blocks
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=4*embed_dim, dropout=dropout, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_blocks)
+        self.layer_norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, item_seq):
+        """ item_seq: (B, L) """
+        B, L = item_seq.shape
+        device = item_seq.device
+        
+        # 1. Look up Embeddings
+        positions = torch.arange(L, device=device).unsqueeze(0).repeat(B, 1) # (B, L)
+        seq_embeds = self.item_embedding(item_seq) + self.pos_embedding(positions) # (B, L, d)
+        seq_embeds = self.emb_dropout(seq_embeds)
+        
+        # 2. Construct Causal Mask
+        causal_mask = torch.triu(torch.full((L, L), float('-inf'), device=device), diagonal=1)
+        
+        # 3. Pass through Transformer Decoder
+        feats = self.transformer(seq_embeds, mask=causal_mask) # (B, L, d)
+        feats = self.layer_norm(feats)
+        return feats
+
+    def predict_score(self, feats, target_item_ids):
+        """
+        feats: (B, L, d)
+        target_item_ids: (B, L)
+        """
+        target_embeds = self.item_embedding(target_item_ids) # (B, L, d)
+        scores = (feats * target_embeds).sum(dim=-1) # (B, L)
+        return scores
+
+if __name__ == "__main__":
+    B, L, num_items = 128, 50, 10000
+    model = SASRec(num_items=num_items, max_len=L, embed_dim=64)
+    
+    seq = torch.randint(1, num_items, (B, L))
+    pos_targets = torch.randint(1, num_items, (B, L))
+    neg_targets = torch.randint(1, num_items, (B, L))
+    
+    feats = model(seq)
+    pos_scores = model.predict_score(feats, pos_targets)
+    neg_scores = model.predict_score(feats, neg_targets)
+    
+    print(f"Contextual Features Output Shape: {feats.shape}")
+    print(f"Positive Prediction Scores Shape:  {pos_scores.shape}")
+    assert feats.shape == (B, L, 64)
+    assert pos_scores.shape == (B, L)
+    print("SASRec verification successful!")
+```
+
+## 10. Strengths
+- **Unidirectional Parallel Training:** Eliminates RNN sequential computation bottlenecks, training $10\times$ faster on GPUs.
+- **Adapts Attention Horizon:** Dynamically behaves like a 1st-order Markov chain or a deep RNN depending on dataset density.
+- **Superior Next-Item Accuracy:** Outperforms GRU4Rec and FPMC across sparse and dense benchmark datasets.
+
+## 11. Weaknesses
+- **Unidirectional Limitation:** Cannot look ahead to future tokens during training (addressed by BERT4Rec).
+
+## 12. Research Evolution
+SASRec revolutionized sequential recommendation, directly leading to **BERT4Rec**, **SSE-PT**, and **S3-Rec**.
+
+## 13. Interview Questions
+
+**Q1: How does SASRec differ from RNN-based sequential recommendation models like GRU4Rec?**
+**A1:** GRU4Rec processes interaction sequences sequentially ($h_t = \text{GRU}(h_{t-1})$), causing training bottlenecks and gradient decay. SASRec uses unidirectional Self-Attention with causal masking, allowing all timesteps to be trained in parallel on GPUs while dynamically weighting relevant historical steps.
+
+**Q2: What is the purpose of Causal Masking in SASRec?**
+**A2:** Causal masking sets attention scores $S_{i,j} = -\infty$ for $j > i$. This prevents timestep $t$ from attending to future tokens $t+1, t+2$, ensuring the model strictly predicts the next item $v_{t+1}$ using past interactions $[v_1 \dots v_t]$.
+
+**Q3: How does SASRec adapt its attention across sparse vs. dense datasets?**
+**A3:** On sparse datasets, SASRec learns to concentrate attention weights on the most recent item (behaving like a 1st-order Markov Chain). On dense datasets, it distributes attention across multiple past interactions (behaving like a deep RNN).
+
+**Q4: Write out the SASRec binary cross-entropy loss formula.**
+**A4:** $\mathcal{L} = -\sum_{u} \sum_{t=1}^{L-1} \left[ \log \sigma(F_t \cdot M_{v_{t+1}}^T) + \log(1 - \sigma(F_t \cdot M_j^T)) \right]$, where $M_{v_{t+1}}$ is the true next item and $M_j$ is a randomly sampled negative item.
+
+**Q5: Compare SASRec with BERT4Rec.**
+**A5:** SASRec is **Unidirectional** (causally masked, predicting next item $v_{t+1}$). BERT4Rec is **Bidirectional** (using Cloze task masking $[MASK]$), allowing representation learning from both past and future context during training.
+
+## 14. Related Papers
+- **SASRec Paper:** *Self-Attentive Sequential Recommendation* (Kang & McAuley, ICDM 2018)
+- **Transformer Paper:** *Attention Is All You Need* (Vaswani et al., NIPS 2017)
+
+## 15. Further Reading
+- Wang-Cheng Kang Official SASRec PyTorch Implementation

@@ -1,0 +1,232 @@
+# CornerNet
+
+## 1. Overview
+CornerNet, introduced in 2018 by Hei Law and Jia Deng from Princeton University, was a landmark paper that pioneered **Keypoint-Based Anchor-Free Object Detection**. Before CornerNet, object detectors relied on overlapping anchor boxes (e.g., Faster R-CNN, SSD, YOLO v2/v3), requiring manual tuning of anchor scales, aspect ratios, and IoU matching thresholds. CornerNet eliminated anchor boxes entirely by reformulating object detection as detecting a pair of keypoints: the **Top-Left Corner** and **Bottom-Right Corner** of an object's bounding box. Using an Hourglass backbone network, CornerNet predicts two heatmap pairs alongside **Associative Embeddings**—1D embedding vectors assigned to each corner that group corresponding top-left and bottom-right corners belonging to the same object instance. CornerNet also introduced **Corner Pooling**, a novel pooling layer designed to help convolutional networks locate corners when the corner pixel lies outside the object's visual boundaries.
+
+:::note
+CornerNet's innovation: "Detect objects as pairs of keypoints (Top-Left and Bottom-Right corners) using Associative Embeddings for grouping and Corner Pooling for spatial feature aggregation, eliminating anchor boxes completely."
+:::
+
+## 2. Historical Context
+In 2018, object detection was dominated by anchor-based architectures (Faster R-CNN, SSD, YOLO v3). While effective, anchor boxes suffered from two major drawbacks:
+1. **Inefficient Anchor Explosion:** Detectors placed hundreds of thousands of anchor boxes over images, requiring complex non-maximum suppression (NMS) and heavy memory consumption.
+2. **Hyperparameter Fragility:** Anchor sizes and aspect ratios had to be tuned carefully for every dataset.
+
+Hei Law and Jia Deng asked a fundamental question: *Why design bounding boxes around center priors when a box is uniquely determined by two spatial points?* They drew inspiration from human pose estimation (Stacked Hourglass networks), treating object detection as keypoint detection. CornerNet achieved 42.2% AP on MS COCO, outperforming all previous single-stage detectors and opening the door for anchor-free keypoint detection models like CenterNet and FCOS.
+
+## 3. Problem It Solves
+### Why Removing Anchors Simplifies the Object Detection Pipeline
+CornerNet eliminates anchor boxes to streamline object detection:
+1. **Eliminating Anchor Box Hyperparameters:** Removes the need to define anchor scales, aspect ratios, IoU thresholds, and AutoAnchor clustering scripts. Bounding boxes are determined by grouping predicted corner keypoints $(x_{tl}, y_{tl})$ and $(x_{br}, y_{br})$.
+2. **Solving Negative Anchor Imbalance:** In anchor-based models, $<0.1\%$ of anchors match ground-truth objects, creating extreme class imbalance. Keypoint heatmaps evaluate continuous Gaussian targets around corner locations, eliminating negative anchor domination.
+3. **Corner Localization Outside Objects:** The top-left corner of a circular or diagonal object often lies on the background (outside the object body). **Corner Pooling** solves this by scanning horizontally and vertically to gather boundary evidence.
+
+## 4. Architecture Diagram Data
+Below is the architecture of CornerNet featuring the Hourglass Backbone, Corner Pooling Modules, Top-Left / Bottom-Right Heatmaps, and Associative Embedding heads.
+
+```text
+                     [ Input Image: (B, 3, 511, 511) ]
+                                     |
+                                     v
+                  +=====================================+
+                  | Backbone: Stacked Hourglass (2x)    |
+                  | - Repeated Downsampling & Upsampling|
+                  | - Output Feature Map: (B, 256, 128, 128)|
+                  +=====================================+
+                                     |
+         +---------------------------+---------------------------+
+         |                                                       |
+         v                                                       v
+  +==============================+        +==============================+
+  | TOP-LEFT CORNER BRANCH       |        | BOTTOM-RIGHT CORNER BRANCH   |
+  |                              |        |                              |
+  | [ Top + Left Corner Pool ]   |        | [ Bottom + Right Corner Pool]|
+  |  - MaxPool Top-to-Bottom     |        |  - MaxPool Bottom-to-Top     |
+  |  - MaxPool Left-to-Right     |        |  - MaxPool Right-to-Left     |
+  |  - Sum & Conv 3x3            |        |  - Sum & Conv 3x3            |
+  +==============================+        +==============================+
+         |                                                       |
+         +-------------+-------------+           +---------------+-------------+
+         |             |             |           |               |             |
+         v             v             v           v               v             v
+  [ Heatmap TL ] [ Embed TL ]  [ Offset TL ] [ Heatmap BR ] [ Embed BR ]  [ Offset BR ]
+  (B, K, 128,128)(B, 1, 128,128)(B, 2, 128,128)(B, K, 128,128)(B, 1, 128,128)(B, 2, 128,128)
+         |             |             |           |               |             |
+         +-------------+-------------+-----------+---------------+-------------+
+                                     |
+                                     v
+                  +=====================================+
+                  | CORNER MATCHING & PAIRING (Inference)|
+                  | - Extract top keypoints from Heatmap|
+                  | - Pair TL & BR with closest Embed d |
+                  |   |e_tl - e_br| < threshold         |
+                  | - Apply Corner Offsets              |
+                  +=====================================+
+                                     |
+                                     v
+                   [ Output Boxes: (x1, y1, x2, y2) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+CornerNet consists of three core structural modules:
+
+**1. Stacked Hourglass Backbone Network:**
+- Uses a 2-stack Hourglass architecture pre-trained on human pose estimation.
+- Downsamples features via strided convolutions and residual blocks, then upsamples via nearest-neighbor interpolation with skip connections.
+- Output spatial feature map: $128 \times 128 \times 256$ (for a $511 \times 511$ input).
+
+**2. Corner Pooling Module:**
+- **Top-Left Corner Pool:** Takes feature map $T$. Scans from top-to-bottom ($\text{MaxPool}_{\text{top}}$) and left-to-right ($\text{MaxPool}_{\text{left}}$) and sums their outputs element-wise:
+  $$y_{\text{tl}} = \text{MaxPool}_{\text{top}}(T) + \text{MaxPool}_{\text{left}}(T)$$
+- **Bottom-Right Corner Pool:** Scans from bottom-to-top ($\text{MaxPool}_{\text{bottom}}$) and right-to-left ($\text{MaxPool}_{\text{right}}$) and sums their outputs.
+
+**3. Dual Keypoint Prediction Heads:**
+- **Heatmaps ($\hat{H}_{\text{tl}}, \hat{H}_{\text{br}}$):** Predicts class-wise keypoint probabilities for $K$ categories. Shape: $(B, K, 128, 128)$.
+- **Associative Embeddings ($e_{\text{tl}}, e_{\text{br}}$):** Predicts a 1D embedding vector per keypoint. Small distance $\|e_{\text{tl}} - e_{\text{br}}\|$ indicates corners belong to the same object. Shape: $(B, 1, 128, 128)$.
+- **Offsets ($o_{\text{tl}}, o_{\text{br}}$):** Predicts 2D sub-pixel discretization offsets $(\Delta x, \Delta y)$ to recover resolution lost during downsampling. Shape: $(B, 2, 128, 128)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through CornerNet for input `(B, 3, 511, 511)` and $K=80$ COCO classes.
+
+1. **Backbone Output:**
+   - Stacked Hourglass $\rightarrow$ Feature Map: `(B, 256, 128, 128)` ($1/4$ scale)
+2. **Corner Pooling Execution:**
+   - Top-Left Pool: `(B, 256, 128, 128)`
+   - Bottom-Right Pool: `(B, 256, 128, 128)`
+3. **Head Output Predictions:**
+   - **Top-Left Heatmap:** Conv(256 $\rightarrow 80$) $\rightarrow$ `(B, 80, 128, 128)`
+   - **Top-Left Embedding:** Conv(256 $\rightarrow 1$) $\rightarrow$ `(B, 1, 128, 128)`
+   - **Top-Left Offset:** Conv(256 $\rightarrow 2$) $\rightarrow$ `(B, 2, 128, 128)`
+   - **Bottom-Right Heatmap:** Conv(256 $\rightarrow 80$) $\rightarrow$ `(B, 80, 128, 128)`
+   - **Bottom-Right Embedding:** Conv(256 $\rightarrow 1$) $\rightarrow$ `(B, 1, 128, 128)`
+   - **Bottom-Right Offset:** Conv(256 $\rightarrow 2$) $\rightarrow$ `(B, 2, 128, 128)`
+4. **Keypoint Extraction & Pairing:**
+   - Select top 100 TL keypoints and top 100 BR keypoints based on heatmap scores.
+   - Pair TL keypoint $i$ and BR keypoint $j$ if $\|e_{\text{tl}}(i) - e_{\text{br}}(j)\| < 0.5$ and class labels match.
+
+## 7. Mathematical Foundations
+
+### 1. Corner Pooling Derivation
+Let $T \in \mathbb{R}^{C \times H \times W}$ be the feature map.
+The Top-Left Corner Pool at coordinate $(i, j)$ computes the maximum feature vector looking right and down:
+
+$$t_{i,j} = \max_{k=j}^{W-1} T_{i,k}, \quad l_{i,j} = \max_{k=i}^{H-1} T_{k,j}$$
+
+$$\text{CornerPool}_{\text{tl}}(i, j) = t_{i,j} + l_{i,j}$$
+
+```text
+       Top-to-Bottom Max Scan
+               |
+               v
+  +--------------------------+
+  |                          |
+  |        Corner (i, j)     |
+  |        * --------------> |  Left-to-Right Max Scan
+  |                          |
+  +--------------------------+
+```
+
+### 2. Penalty-Reduced Focal Loss for Heatmaps
+For ground-truth corner location $y_{c,i,j} = 1$, unnormalized 2D Gaussian targets $y_{c,i,j} = \exp\left(-\frac{x^2+y^2}{2\sigma^2}\right)$ reduce loss penalties for near-miss predictions:
+
+$$\mathcal{L}_{\text{det}} = -\frac{1}{N} \sum_{c=1}^K \sum_{i=1}^H \sum_{j=1}^W \begin{cases} (1 - \hat{y}_{cij})^\alpha \log(\hat{y}_{cij}) & \text{if } y_{cij} = 1 \\ (1 - y_{cij})^\beta (\hat{y}_{cij})^\alpha \log(1 - \hat{y}_{cij}) & \text{otherwise} \end{cases}$$
+
+where $\alpha=2, \beta=4$.
+
+### 3. Associative Embedding Loss
+For object instance $k$ with top-left embedding $e_{t_k}$ and bottom-right embedding $e_{b_k}$:
+- **Pull Loss** (minimizes distance between corners of the SAME object, where $e_k = (e_{t_k} + e_{b_k})/2$):
+  $$\mathcal{L}_{\text{pull}} = \frac{1}{N} \sum_{k=1}^N \left( (e_{t_k} - e_k)^2 + (e_{b_k} - e_k)^2 \right)$$
+- **Push Loss** (maximizes distance between embeddings of DIFFERENT objects $k$ and $j$):
+  $$\mathcal{L}_{\text{push}} = \frac{1}{N(N-1)} \sum_{k=1}^N \sum_{j \neq k}^N \max\left(0, 1 - |e_k - e_j|\right)$$
+
+## 8. Training Procedure
+- **Loss Weights:** $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{det}} + 0.1 \mathcal{L}_{\text{pull}} + 0.1 \mathcal{L}_{\text{push}} + \mathcal{L}_{\text{off}}$.
+- **Optimizer:** Adam, initial learning rate $2.5 \times 10^{-4}$. Trained for 250k iterations on MS COCO.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Top-Left Corner Pooling Module**.
+
+```python
+import torch
+import torch.nn as nn
+
+class TopLeftCornerPooling(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv_top = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
+        self.conv_left = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # x shape: (B, C, H, W)
+        B, C, H, W = x.shape
+        
+        # 1. Max Scan Left-to-Right (Horizontal Max Pool)
+        max_left = x.clone()
+        for j in range(W - 2, -1, -1):
+            max_left[:, :, :, j] = torch.max(max_left[:, :, :, j], max_left[:, :, :, j + 1])
+            
+        # 2. Max Scan Top-to-Bottom (Vertical Max Pool)
+        max_top = x.clone()
+        for i in range(H - 2, -1, -1):
+            max_top[:, :, i, :] = torch.max(max_top[:, :, i, :], max_top[:, :, i + 1, :])
+            
+        # 3. Sum Pooled Features
+        pooled_sum = max_left + max_top
+        
+        # Conv Fusion
+        out1 = self.bn1(self.conv_top(pooled_sum))
+        out2 = self.bn2(self.conv_left(pooled_sum))
+        return self.relu(out1 + out2)
+
+if __name__ == "__main__":
+    B, C, H, W = 2, 256, 32, 32
+    tl_pool = TopLeftCornerPooling(channels=C)
+    
+    dummy_feat = torch.randn(B, C, H, W)
+    out = tl_pool(dummy_feat)
+    
+    print(f"Input Feature Shape:  {dummy_feat.shape}")
+    print(f"Corner Pooled Shape:  {out.shape}")
+    assert out.shape == (B, C, H, W)
+    print("Top-Left Corner Pooling verification successful!")
+```
+
+## 10. Strengths
+- **Fully Anchor-Free:** Completely eliminates anchor boxes and manual anchor scale design.
+- **Novel Corner Pooling Layer:** Successfully extracts boundary features even when corner pixels lie outside the visual boundary of the object.
+- **High Accuracy:** Achieved 42.2% AP on MS COCO, outperforming all contemporary single-stage detectors.
+
+## 11. Weaknesses
+- **Heavy Pair Matching Complexity:** Matching top-left and bottom-right keypoints requires $O(N^2)$ distance checks between embedding vectors.
+- **False Corner Pairings:** In dense scenes with identical objects, corner embeddings can occasionally pair top-left of object A with bottom-right of object B (fixed later by CenterNet's center keypoint).
+
+## 12. Research Evolution
+CornerNet proved that keypoint detection was viable for object recognition. It directly inspired **CenterNet** (Zhou et al., 2019, which added a center keypoint to eliminate false pairings) and **FCOS**.
+
+## 13. Interview Questions
+
+**Q1: How does CornerNet pair top-left and bottom-right corner keypoints without anchor boxes?**
+**A1:** CornerNet predicts a 1D Associative Embedding scalar $e$ for each detected keypoint. The training loss (Pull loss) forces the embedding vectors of top-left and bottom-right corners belonging to the *same* object to be near-identical ($e_{\text{tl}} \approx e_{\text{br}}$), while Push loss separates embeddings of different objects. During inference, keypoint pairs with the smallest embedding distance $|e_{\text{tl}} - e_{\text{br}}|$ are grouped into bounding boxes.
+
+**Q2: Why is Corner Pooling necessary?**
+**A2:** The top-left corner of an object (e.g., a round ball or diagonal object) often lies on the background, where local pixel features contain no object evidence. Corner Pooling scans rightward ($\text{MaxPool}_{\text{left}}$) and downward ($\text{MaxPool}_{\text{top}}$) to gather boundary evidence from inside the object body and aggregate it at the corner pixel location.
+
+**Q3: How does CornerNet handle discretization errors caused by backbone downsampling?**
+**A3:** Downsampling an image by $4\times$ maps continuous coordinate $(x, y)$ to integer grid $(\lfloor x/4 \rfloor, \lfloor y/4 \rfloor)$. CornerNet predicts sub-pixel 2D offset vectors $o = (\Delta x, \Delta y) = (x/4 - \lfloor x/4 \rfloor, y/4 - \lfloor y/4 \rfloor)$ to restore exact continuous boundary positions.
+
+**Q4: What is penalty-reduced focal loss in CornerNet?**
+**A4:** Ground-truth corner labels are represented as 2D Gaussians centered at the true corner. If a predicted keypoint falls within the Gaussian radius of the true corner, penalty-reduced focal loss reduces the penalty applied to that false positive, acknowledging that near-miss keypoint predictions still produce high-quality bounding boxes.
+
+**Q5: Compare CornerNet with Faster R-CNN.**
+**A5:** Faster R-CNN evaluates thousands of dense anchor boxes using an RPN and RoI Pooling. CornerNet is anchor-free: it detects top-left and bottom-right corner keypoints directly on heatmaps and pairs them using 1D associative embeddings.
+
+## 14. Related Papers
+- **CornerNet Paper:** *CornerNet: Detecting Objects as Paired Keypoints* (Law & Deng, ECCV 2018)
+- **Associative Embedding:** *Associative Embedding: End-to-End Learning for Joint Detection and Grouping* (Newell et al., NIPS 2017)
+
+## 15. Further Reading
+- Princeton Vision Group CornerNet GitHub Repository

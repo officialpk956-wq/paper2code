@@ -20,6 +20,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT_DIR = path.join(ROOT, "src", "content");
 const OUT_DIR = path.join(ROOT, "src", "generated");
 const OUT_FILE = path.join(OUT_DIR, "content-index.json");
+const PAPER_REGISTRY_FILE = path.join(ROOT, "src", "data", "content", "papers.ts");
+
+const paperRegistrySource = fs.readFileSync(PAPER_REGISTRY_FILE, "utf8");
+const paperRegistryLiteral = paperRegistrySource.match(
+  /export const PAPERS[^=]*=\s*(\[[\s\S]*?\]);/,
+)?.[1];
+if (!paperRegistryLiteral) throw new Error("Could not parse canonical paper registry");
+const paperRegistry = Function(`"use strict"; return (${paperRegistryLiteral});`)();
+const paperRegistryBySlug = new Map(paperRegistry.map((paper) => [paper.slug, paper]));
 
 const TYPE_DIRS = {
   architecture: "architectures",
@@ -62,6 +71,18 @@ const entries = [];
 
 function fail(file, message) {
   errors.push(`${path.relative(ROOT, file)}: ${message}`);
+}
+
+function effectiveMeta(meta, type, slug) {
+  if (type !== "paper") return meta;
+  const registry = paperRegistryBySlug.get(slug);
+  return {
+    ...meta,
+    difficulty: String(meta.difficulty).toLowerCase() === "expert"
+      ? "advanced"
+      : meta.difficulty,
+    year: meta.year ?? registry?.year,
+  };
 }
 
 function validateMeta(meta, type, slug, file) {
@@ -114,6 +135,8 @@ for (const [type, dirName] of Object.entries(TYPE_DIRS)) {
       fail(metaFile, `invalid JSON: ${e.message}`);
       continue;
     }
+
+    meta = effectiveMeta(meta, type, entry.name);
 
     validateMeta(meta, type, entry.name, metaFile);
 

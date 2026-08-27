@@ -1,0 +1,226 @@
+# Whisper
+
+## 1. Overview
+Whisper, introduced in 2022 by Alec Radford, Jong Wook Kim, Tao Xu, Greg Brockman, Christine McLeavey, and Ilya Sutskever (OpenAI), set a new milestone in **Robust Automatic Speech Recognition (ASR) and Speech Translation**. Before Whisper, state-of-the-art speech models (like wav2vec 2.0 or HuBERT) relied on complex self-supervised pre-training followed by fine-tuning on small supervised datasets (e.g., 960 hours of LibriSpeech). However, LibriSpeech audio was clean and recorded in studio conditions; models fine-tuned on it failed drastically when deployed in real-world noisy environments, struggling with accents, background noise, and technical jargon. Radford et al. demonstrated that a **Standard Encoder-Decoder Transformer trained on 680,000 hours of Weakly Supervised Multilingual Audio** could achieve human-level speech recognition accuracy and zero-shot robustness across diverse real-world acoustic conditions without complex self-supervised pre-training schemes.
+
+:::tip
+Whisper core concept: "Encoder-Decoder Transformer trained on 680,000 hours of weakly supervised web audio. Input log-mel spectrograms mapped via 1D ConvStem into Encoder, multitask conditioned on Special Tokens."
+:::
+
+## 2. Historical Context
+In 2022, speech recognition research was dominated by self-supervised learning (SSL) representations (wav2vec 2.0, Conformer). While SSL models achieved low Word Error Rate (WER) on LibriSpeech benchmarks, their zero-shot transfer to real-world podcasts, YouTube videos, or noisy phone calls was poor.
+
+Alec Radford et al. applied OpenAI's scaling philosophy (seen in GPT-3 and CLIP) to speech. They collected a massive 680,000-hour dataset of web audio paired with raw transcripts. By casting ASR, language identification, speech translation, and timestamp alignment as a **single sequence-to-sequence multitask prediction problem**, Whisper achieved human-level robustness.
+
+## 3. Problem It Solves
+Whisper resolves three fundamental failures of standard speech recognition systems:
+1. **Inability to Generalize to Noisy Real-World Audio:** Eliminates fragility to background noise, room reverberation, and diverse accents through 680,000 hours of weak supervision.
+2. **Multitask Specialization Fragmentation:** Unifies Automatic Speech Recognition (ASR), Multilingual Translation (Speech-to-Text Translation), Language Identification (LID), and Voice Activity Detection (VAD) into a single model conditioned on special tokens.
+3. **Complex Self-Supervised Acoustic Pipelines:** Replaces complex multi-stage SSL pipelines (wav2vec 2.0 quantizers) with a standard sequence-to-sequence Transformer.
+
+## 4. Architecture Diagram Data
+Below is the Whisper Encoder-Decoder Transformer architecture and Multitask Special Token Conditioning pipeline.
+
+```text
+       RAW AUDIO WAVEFORM (16 kHz Mono Signal x_audio)
+                             |
+                             v
+       +==================================================================+
+       | STFT & LOG-MEL SPECTROGRAM COMPUTATION                           |
+       |  - 25ms Frame Length, 10ms Hop Size                              |
+       |  - Compute 80-channel Log-Mel Spectrogram S in R^(80 x T_frames)  |
+       |  - Chunk Audio into 30-second Windows (T = 3000 Frames)          |
+       +==================================================================+
+                             |
+                             v
+       +==================================================================+
+       | 1D CONVOLUTIONAL STEM (Downsampling 2x)                          |
+       |  - Conv1D(stride=1, GELU) -> Conv1D(stride=2, GELU)              |
+       |  - Reduces 3000 frames -> 1500 acoustic feature vectors           |
+       |  - Output: Z_stem in R^(1500 x d_model)                          |
+       +==================================================================+
+                             |
+                             v
+       +==================================================================+
+       | AUDIO TRANSFORMER ENCODER (12 to 32 Layers)                      |
+       | Processes 1,500 Acoustic Feature Vectors -> H_audio              |
+       +==================================================================+
+                             |
+                             | (Cross-Attention Key / Value)
+                             v
+       +==================================================================+
+       | TEXT TRANSFORMER DECODER (12 to 32 Layers)                       |
+       | Special Task Tokens: [<SOT>, <Language>, <Task>, <Timestamps>]   |
+       | Target Output Tokens: Transcribed or Translated Text Sequence    |
+       +==================================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Log-Mel Spectrogram Pre-Processing:**
+- Audio is resampled to 16 kHz.
+- Computes Short-Time Fourier Transform (STFT) with 25ms window and 10ms hop size.
+- Applies 80-channel Mel-filterbank, converting raw audio into an 80-bin Log-Mel Spectrogram $S \in \mathbb{R}^{80 \times T}$ ($T=3000$ for 30s audio).
+
+**2. 1D Convolutional Stem:**
+- Two 1D Convolutional layers with kernel size 3 and stride 2:
+  $$Z_{\text{stem}} = \text{Conv1D}_2\left( \text{GELU}\left( \text{Conv1D}_1(S) \right) \right) \in \mathbb{R}^{1500 \times d_{\text{model}}}$$
+- Downsamples 3000 time frames to 1500 acoustic vectors (1 vector per 20ms).
+
+**3. Transformer Audio Encoder:**
+- Standard Transformer Encoder layers with Sinusoidal Positional Encodings processing 1,500 acoustic vectors: $H_{\text{audio}} \in \mathbb{R}^{1500 \times d_{\text{model}}}$.
+
+**4. Transformer Text Decoder & Multitask Prefix Conditioning:**
+- Standard Causal Transformer Decoder with Cross-Attention over $H_{\text{audio}}$.
+- Conditioned on special task prefix tokens: `<|startoftranscript|> <|en|> <|transcribe|> <|notimestamps|>`.
+
+## 6. Tensor Flow Walkthrough & Log-Mel Spectrogram Computation
+
+**Detailed Log-Mel Spectrogram Computation:**
+1. Input Audio Waveform: $x \in \mathbb{R}^{B \times 480,000}$ (30 seconds of 16,000 Hz audio).
+2. Apply Short-Time Fourier Transform (STFT):
+   - Window size $N_{\text{fft}} = 400$ (25ms), Hop length $N_{\text{hop}} = 160$ (10ms).
+   - Magnitude Spectrogram: $|X| \in \mathbb{R}^{B \times 201 \times 3000}$.
+3. Apply 80-Channel Mel Filterbank Matrix $M_{\text{mel}} \in \mathbb{R}^{80 \times 201}$:
+   - $S_{\text{mel}} = M_{\text{mel}} \times |X| \in \mathbb{R}^{B \times 80 \times 3000}$.
+4. Dynamic Range Compression (Log-Mel):
+   - $S_{\text{log\_mel}} = \log_{10}\left( \text{clamp}(S_{\text{mel}}, \text{min}=10^{-5}) \right) \in \mathbb{R}^{B \times 80 \times 3000}$.
+
+**Encoder Input Mapping Step-by-Step:**
+- Log-Mel Spectrogram: `(B, 80, 3000)`
+- Conv1D Layer 1 (`in=80, out=d, kernel=3, stride=1`) $\to$ `(B, d, 3000)`
+- Conv1D Layer 2 (`in=d, out=d, kernel=3, stride=2`) $\to$ `(B, d, 1500)`
+- Transpose to Sequence First $\to Z_{\text{stem}}$: `(B, 1500, d)`
+- Add Sinusoidal Positional Embeddings $\to$ Audio Encoder Input: `(B, 1500, d)`
+- Encoder Output $H_{\text{audio}}$: `(B, 1500, d)`.
+
+## 7. Mathematical Foundations
+
+### 1. Multitask Sequence-to-Sequence Loss Formulation
+Whisper predicts target text tokens $Y = (y_1, y_2, \dots, y_U)$ given input audio log-mel features $S$ and special task prefix tokens $P = (p_1, \dots, p_K)$:
+
+$$\mathcal{L}_{\text{Whisper}}(\theta) = -\sum_{u=1}^U \log P_\theta\left( y_u \;\middle|\; y_{<u}, \; P, \; \text{Encoder}(S) \right)$$
+
+Special task prefix tokens control execution mode:
+- $P = [\text{SOT}, \text{LANG\_ID}, \text{TASK}, \text{TIMESTAMPS\_FLAG}]$
+- Example Task Tokens: `<|startoftranscript|> <|es|> <|translate|> <|0.00|>` instructs Whisper to transcribe Spanish audio and translate it into English with timestamp alignments.
+
+### 2. Acoustic 1D Convolutional Downsampling
+The 1D Convolutional stem downsamples the 3,000 log-mel time frames by factor 2:
+
+$$T_{\text{enc}} = \left\lfloor \frac{T_{\text{mel}} - 1}{2} \right\rfloor + 1 = \left\lfloor \frac{3000 - 1}{2} \right\rfloor + 1 = 1500 \text{ vectors}$$
+
+Each acoustic vector in $H_{\text{audio}}$ represents exactly 20 milliseconds of audio.
+
+## 8. Training Procedure
+- **Dataset:** 680,000 hours of weakly supervised web audio (438,000 hours of English ASR, 126,000 hours of non-English ASR, 117,000 hours of Speech Translation).
+- **Data Filtering:** Automated heuristics removing machine-generated captions (transcripts matching commercial ASR outputs) and transcript-audio language mismatches.
+- **Model Sizes:** Whisper Tiny (39M), Base (74M), Small (244M), Medium (769M), Large-v3 (1.55B parameters).
+- **Optimization:** AdamW with linear learning rate warmup and cosine decay.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **Whisper's 1D ConvStem, Audio Encoder, and Multitask Decoder**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class WhisperConvStem(nn.Module):
+    """ Whisper 1D Convolutional Stem Downsampling 80-bin Log-Mel to 1500 Vectors """
+    def __init__(self, in_channels=80, embed_dim=512):
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_channels, embed_dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1)
+
+    def forward(self, x):
+        """ x: (B, 80, 3000) Log-Mel Spectrogram """
+        x = F.gelu(self.conv1(x)) # (B, d, 3000)
+        x = F.gelu(self.conv2(x)) # (B, d, 1500)
+        return x.transpose(1, 2)  # (B, 1500, d)
+
+class WhisperModel(nn.Module):
+    """ Whisper Speech Recognition Model Architecture """
+    def __init__(self, n_mels=80, embed_dim=512, vocab_size=51865, n_encoder_layers=4, n_decoder_layers=4):
+        super().__init__()
+        self.stem = WhisperConvStem(in_channels=n_mels, embed_dim=embed_dim)
+        
+        # Audio Encoder
+        enc_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=8, batch_first=True)
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_encoder_layers)
+        
+        # Text Decoder
+        dec_layer = nn.TransformerDecoderLayer(d_model=embed_dim, nhead=8, batch_first=True)
+        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=n_decoder_layers)
+        
+        self.text_embed = nn.Embedding(vocab_size, embed_dim)
+        self.lm_head = nn.Linear(embed_dim, vocab_size)
+
+    def forward(self, log_mel_spec, text_tokens):
+        """
+        log_mel_spec: (B, 80, 3000)
+        text_tokens:  (B, L_text)
+        """
+        # 1. 1D ConvStem Pass: (B, 1500, 512)
+        x_stem = self.stem(log_mel_spec)
+        
+        # 2. Audio Encoder Pass: (B, 1500, 512)
+        h_audio = self.encoder(x_stem)
+        
+        # 3. Text Decoder Pass with Cross-Attention over h_audio
+        t_embed = self.text_embed(text_tokens) # (B, L_text, 512)
+        causal_mask = torch.triu(torch.full((text_tokens.shape[1], text_tokens.shape[1]), float('-inf'), device=text_tokens.device), diagonal=1)
+        
+        h_dec = self.decoder(tgt=t_embed, memory=h_audio, tgt_mask=causal_mask) # (B, L_text, 512)
+        logits = self.lm_head(h_dec) # (B, L_text, 51865)
+        return logits
+
+if __name__ == "__main__":
+    B, n_mels, n_frames, L_text = 2, 80, 3000, 40
+    whisper = WhisperModel()
+    
+    # 30 Seconds Audio Log-Mel Spectrogram
+    log_mel = torch.randn(B, n_mels, n_frames)
+    text_tokens = torch.randint(0, 51865, (B, L_text))
+    
+    logits = whisper(log_mel, text_tokens)
+    
+    print(f"Whisper Decoder Output Logits Shape: {logits.shape}")
+    assert logits.shape == (B, L_text, 51865)
+    print("Whisper verification successful!")
+```
+
+## 10. Strengths
+- **Human-Level Zero-Shot Robustness:** 680,000 hours of weak supervision provides resilience to noise, accents, and jargon.
+- **Multitask Unity:** Unifies ASR, translation, language identification, and timestamp generation in one model.
+- **Open-Source Standard:** Deployed globally across millions of applications for real-time transcription.
+
+## 11. Weaknesses
+- **Fixed 30-Second Window Processing:** Processing audio in fixed 30s chunks requires padding or sliding windows for longer recordings.
+
+## 12. Research Evolution
+Whisper established massive weakly supervised ASR, directly inspiring **SeamlessM4T**, **USM**, and **Whisper-Large-v3**.
+
+## 13. Interview Questions
+
+**Q1: How does Whisper process raw input audio into Transformer encoder inputs?**
+**A1:** Audio (16kHz) is converted into an 80-channel **Log-Mel Spectrogram** over 30-second windows ($80 \times 3000$). A **1D Convolutional Stem** (2 conv layers with stride 2) downsamples frames into 1,500 acoustic feature vectors ($1500 \times d_{\text{model}}$), which are passed to the Transformer Encoder.
+
+**Q2: How does Whisper execute different tasks (ASR, Translation, Language ID)?**
+**A2:** Through **Special Task Prefix Tokens** prepended to the decoder prompt: `<|startoftranscript|> <|Language|> <|Task|> <|Timestamps_Flag|>`. Changing token `<|transcribe|>` to `<|translate|>` switches Whisper from ASR to Speech Translation.
+
+**Q3: Why did Whisper choose 680,000 hours of weakly supervised web audio over self-supervised learning?**
+**A3:** Self-supervised models fine-tuned on clean datasets (like LibriSpeech) overfit to studio conditions. Training on 680,000 hours of diverse, noisy web audio provided human-level zero-shot robustness across real-world acoustic environments.
+
+**Q4: Write out the output tensor shape of Whisper's 1D ConvStem for a 30-second audio clip.**
+**A4:** Input Log-Mel: `(B, 80, 3000)` $\to$ ConvStem Output: `(B, 1500, d_model)`. Each vector represents 20ms of audio.
+
+**Q5: Compare Whisper with wav2vec 2.0.**
+**A5:** wav2vec 2.0 is a self-supervised model operating on raw waveforms that requires fine-tuning with CTC loss. Whisper is a sequence-to-sequence Encoder-Decoder Transformer trained autoregressively on 680k hours of labeled text data.
+
+## 14. Related Papers
+- **Whisper Paper:** *Robust Speech Recognition via Large-Scale Weak Supervision* (Radford et al., ICML 2023)
+- **wav2vec 2.0 Paper:** *wav2vec 2.0: A Framework for Self-Supervised Learning of Speech Representations* (Baevski et al., NeurIPS 2020)
+
+## 15. Further Reading
+- OpenAI Whisper Official GitHub Repository & Python Package

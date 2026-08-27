@@ -1,104 +1,133 @@
 # BLOOM
 
 ## 1. Overview
-BLOOM (BigScience Large Open-science Open-access Multilingual Language Model), released in July 2022, was a monumental achievement in the democratization and global localization of AI. While Meta's OPT replicated GPT-3 in English, it was built by a single corporate lab. BLOOM was entirely different: it was a 176 Billion parameter model built by **BigScience**, a massive grassroots collaborative of over 1,000 researchers from 60 countries, backed by Hugging Face and funded by the French government's Jean Zay supercomputer. BLOOM's defining feature was its radical commitment to multilingualism. While GPT-3 and OPT were over 90% English, BLOOM was explicitly designed to speak 46 natural languages and 13 programming languages natively, bringing state-of-the-art AI to billions of non-English speakers. Architecturally, BLOOM popularized **ALiBi (Attention with Linear Biases)**, an elegant alternative to absolute positional embeddings that allowed the model to extrapolate seamlessly to long sequences during inference without complex math. 
+BLOOM (BigScience Large Open-science Open-access Multilingual Language Model) is a 176-billion parameter language model released in mid-2022. It is historically significant not just for its architecture, but for how it was created. BLOOM was the product of the BigScience research workshop, a massive international, crowdsourced collaboration involving over 1,000 researchers from 60+ countries, supported by Hugging Face and funded by the French government (providing compute on the Jean Zay supercomputer). Unlike corporate models (like GPT-3 or PaLM) which were trained primarily on English-centric web scrapes, BLOOM was intentionally designed to be aggressively multilingual from day one. Its training dataset, ROOTS, covered 46 natural languages and 13 programming languages. Architecturally, BLOOM is a decoder-only Transformer that incorporated ALiBi (Attention with Linear Biases) for positional encoding, allowing it to seamlessly extrapolate to sequence lengths longer than its training context. BLOOM proved that massive, frontier-level AI development could be democratized and executed transparently by a global open-science collective.
 
-:::tip
-BLOOM is a historic model for non-English NLP. If you are researching how AI models represent deeply localized languages (like Swahili, Basque, or Hindi) or how grassroots open-science communities can execute supercomputer-scale engineering projects, the BigScience initiative is the gold standard.
+:::note
+BLOOM was released under the Responsible AI License (RAIL), which allows for commercial use but explicitly restricts usage in specific harmful domains (like generating deepfakes, medical advice, or automated legal decisions).
 :::
 
 ## 2. Historical Context
-In 2021, the AI world was dominated by English. OpenAI's GPT-3 had proven the power of massive language models, but because it was trained almost exclusively on English web scrapes, it was largely useless for the global south and non-Western nations. Furthermore, the massive compute required to train these models meant that only giant tech corporations (Google, Meta, Microsoft) controlled the future of AI. Hugging Face, alongside the French CNRS (National Centre for Scientific Research), launched the BigScience workshop to challenge this. Over 1,000 volunteer researchers collaborated for a year to build a culturally diverse, multilingual dataset (the ROOTS corpus). They secured a massive grant of 5 million GPU hours on the French Jean Zay supercomputer. The result, BLOOM, proved that the open-source community could crowdsource the engineering, data curation, and ethics required to build a 176B parameter frontier model, breaking both the corporate monopoly and the English-centric bias of early AI.
+In 2021, the AI landscape was dominated by "Big Tech." OpenAI (GPT-3), DeepMind (Gopher), and Google (PaLM) were building massive LLMs behind closed doors. The academic and open-source communities were locked out due to the prohibitive cost of compute (millions of dollars) required to train 100B+ parameter models. In response, the BigScience initiative was born. It was an unprecedented social and scientific experiment: could a decentralized, global collective of researchers organize to build a frontier model? Over a year, working groups collaborated openly on data curation, ethics, legal licensing, and engineering. The French government granted 5 million GPU hours on the Jean Zay supercomputer (using 384 A100 GPUs). The result was BLOOM, a model that matched GPT-3 in scale but was built entirely in the open, proving that massive AI infrastructure and research didn't have to be a corporate monopoly.
 
 ## 3. Problem It Solves
-BLOOM solves the **Multilingual Representation Deficit** and the **Positional Extrapolation** problem. First, prior models tokenized non-English languages terribly. A word in Arabic might be fragmented into 15 meaningless byte-tokens in GPT-3, destroying the model's ability to reason in that language. BLOOM solved this by engineering a custom 250,000-token vocabulary trained on 46 distinct languages, allowing it to natively represent concepts in Hindi, Arabic, and French just as efficiently as English. Secondly, standard transformers (like OPT) used absolute position embeddings, meaning they would instantly crash if fed a sequence longer than their training length (e.g., 2048 tokens). BLOOM solved this by implementing ALiBi. Instead of adding positional vectors to the embeddings, ALiBi mathematically penalizes the attention scores based on the physical distance between tokens. This allowed BLOOM to be trained on 2048-token sequences but seamlessly process 4000+ token documents during inference, solving length extrapolation elegantly.
+BLOOM addressed two massive disparities in the AI field: the **language gap** and the **access gap**. Most large models prior to BLOOM were trained on datasets like Common Crawl, which are overwhelmingly English (often over 90%). This resulted in models that performed poorly in languages like Arabic, Swahili, or Hindi. The BigScience collective solved this by meticulously hand-curating the ROOTS corpus, partnering with native speakers globally to source high-quality, culturally relevant data across 46 languages. Secondly, it solved the access gap. By releasing the 176B parameter weights openly under the RAIL license, BLOOM allowed researchers worldwide to study a massive LLM directly—probing its inner workings, testing alignment strategies, and fine-tuning it for local dialects—without having to pay a corporate API toll.
 
 ## 4. Architecture Diagram Data
-```text
-           [ BLOOM 176B: Multilingual Open-Science Architecture ]
+Below is a conceptual representation of the BLOOM architecture, highlighting the use of ALiBi positional biases added directly to the attention scores.
 
-   Multilingual Prompt: "Bonjour, comment ça va? | مرحباً، كيف حالك؟"
-                               ^
+```text
+                     [ Input Text Tokens ]
                                |
-             +-----------------+-----------------+
-             |        BLOOM Decoder (176B)       |
-             |   (70 Layers, 14336 Hidden Dim)   |
-             |                                   |
-             |  +-----------------------------+  |
-             |  |   ALiBi Positional Bias     |  | <-- Extrapolates to long text!
-             |  |   Standard Dense Attention  |  | 
-             |  |   GELU FFN + Pre-Norm       |  |
-             |  +-----------------------------+  |
-             +-----------------+-----------------+
-                               ^
+                               v
+                  +---------------------------+
+                  |      Token Embedding      |
+                  |  (No Positional Encodings)|
+                  +---------------------------+
                                |
-               [ The ROOTS Corpus (341 Billion Tokens) ]
-               (46 Natural Languages, 13 Code Languages)
+                               v
+    +===========================================================+
+    |                 BLOOM Transformer Block (x 70)            |
+    |                                                           |
+    |  +-----------------------------------------------------+  |
+    |  |               Layer Normalization                   |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |               Multi-Head Attention                  |  |
+    |  |                                                     |  |
+    |  |    [ALiBi: Attention with Linear Biases Injected]   |  |
+    |  |    (Constant slope bias added to attention scores)  |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |               Layer Normalization                   |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |                  Dense FFN (GeLU)                   |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    +===========================================================+
+                               |
+                               v
+                  +---------------------------+
+                  |    Final Layer Norm       |
+                  +---------------------------+
+                               |
+                               v
+                  +---------------------------+
+                  |       Linear Head         |
+                  |     (250k Vocabulary)     |
+                  +---------------------------+
+                               |
+                               v
+                      [ Output Probabilities ]
 ```
-**Components:**
-- `The ROOTS Corpus`: A meticulously curated dataset built by hundreds of researchers focusing on ethical sourcing, balanced language representation, and high-quality local sources (not just machine-translated English).
-- `ALiBi`: Attention with Linear Biases. Replaces standard positional embeddings entirely. It applies a static, distance-based penalty directly to the attention matrix.
-- `Pre-Norm`: Essential for training stability at the 176B scale.
-- `Massive Vocabulary`: 250,680 tokens, allowing efficient compression of non-Latin scripts.
 
 ## 5. Layer-by-Layer Breakdown
-BLOOM was designed using Megatron-DeepSpeed, prioritizing stability for the massive, one-shot training run on the Jean Zay supercomputer.
-1. **Multilingual Tokenizer**: A Byte-Level BPE tokenizer with 250,680 tokens. This is massive (5x larger than GPT-3's), meaning the embedding matrix alone consumes over 3 Billion parameters.
-2. **No Positional Embeddings**: The input embedding layer strictly maps tokens to vectors. There is no absolute positional vector ($PE$) added to the input.
-3. **LayerNorm (Pre-Norm)**: Applied before Attention and FFN. Interestingly, BLOOM also applies an additional LayerNorm immediately after the embedding layer to stabilize early gradients.
-4. **Attention with ALiBi**: Inside the attention mechanism, a static bias matrix is subtracted from the `Q @ K^T` scores. The penalty increases linearly as the distance between the query and key token increases.
-5. **GeLU FFN**: A standard Multi-Layer Perceptron using the GeLU activation function.
-6. **Scale**: 70 layers, 14,336 hidden dimension, 112 attention heads.
+BLOOM is a 70-layer decoder-only Transformer. Because it must support 46 natural languages and 13 programming languages, it utilizes a massive **Token Embedding** layer with a vocabulary size of 250,680 tokens (BPE tokenizer). Notably, the embedding layer does *not* add any absolute positional encodings.
 
-:::warning
-Because BLOOM uses a 250,000 vocabulary, the final output layer (which projects the 14,336 hidden state to the 250k vocabulary) is a massive matrix multiplication. This can cause memory bottlenecks on smaller hardware compared to models with 32k vocabularies.
-:::
+Within the **Transformer Blocks**, BLOOM uses standard **LayerNorm** for pre-normalization. The attention mechanism is standard **Multi-Head Attention**, but it handles position via **ALiBi (Attention with Linear Biases)**. Instead of embedding position into the input vectors, ALiBi adds a static, non-learned penalty to the attention scores based on the distance between the query and key tokens. This penalty scales linearly with distance, meaning tokens pay less attention to words further away. 
+
+After a residual connection and another LayerNorm, the sequence processes through a dense **Feed-Forward Network** utilizing the **GeLU** activation function. The process repeats 70 times, finishing with a **Final LayerNorm** and a projection to the massive 250k vocabulary space.
 
 ## 6. Tensor Flow Walkthrough
-Let's trace the elegant mathematical simplicity of ALiBi inside the Attention layer.
-- `B`: Batch size
-- `T`: Sequence length
-- `H`: Number of heads (112)
-- `D_h`: Head dimension (128)
+Let's trace the tensor flow, focusing specifically on how the ALiBi bias is applied. Assume Batch `B=1`, Sequence `T=2048`, `D_model=14336` (BLOOM 176B dims), Heads `H=112`.
 
-1. **Standard Q, K, V**:
-   - `Q, K, V` shape `(B, H, T, D_h)`.
-2. **Standard Attention Scores**:
-   - `Scores = Q @ K^T`. Shape `(B, H, T, T)`. (Note: ALiBi specifically removes the $1/\sqrt{D_h}$ scaling factor here).
-3. **The ALiBi Bias Matrix**:
-   - A static matrix `M` of shape `(T, T)` is created where `M[i, j] = i - j`. (This represents the distance between tokens).
-   - A head-specific scalar penalty $m$ is assigned to each of the 112 heads. (e.g., Head 1 has $m=0.5$, Head 2 has $m=0.25$, etc.).
-   - `Bias_Tensor = m * M`. Shape `(H, T, T)`.
-4. **Apply ALiBi & Mask**:
-   - `Biased_Scores = Scores - Bias_Tensor`. (Distant tokens are mathematically penalized with lower scores).
-   - Apply standard causal mask (upper triangle = $-\infty$).
-5. **Context**:
-   - `Attn_Weights = Softmax(Biased_Scores)`.
-   - `Context = Attn_Weights @ V`. Shape `(B, H, T, D_h)`.
+1.  **Input to Block:** `X`
+    *   Shape: `(B, T, D_model)` -> `(1, 2048, 14336)`
+2.  **LayerNorm 1:** `X_norm = LN(X)`
+    *   Shape: `(1, 2048, 14336)`
+3.  **MHA Projections:**
+    *   `D_head = 14336 / 112 = 128`
+    *   `Q, K, V` Shapes: `(B, H, T, D_head)` -> `(1, 112, 2048, 128)`
+4.  **Attention Dot Product:**
+    *   `Scores = Q * K^T` (Note: ALiBi does not divide by `sqrt(D_head)`)
+    *   Shape: `(B, H, T, T)` -> `(1, 112, 2048, 2048)`
+5.  **ALiBi Bias Injection:**
+    *   Create a static distance matrix `Dist` where `Dist_{i,j} = i - j`.
+    *   For each head $h$, there is a predefined scalar slope $m_h$.
+    *   The ALiBi bias matrix for head $h$ is $-m_h \times \text{abs}(\text{Dist})$.
+    *   Add this static matrix to the `Scores`.
+    *   `Biased_Scores = Scores + ALiBi_Bias` -> `(1, 112, 2048, 2048)`
+6.  **Attention Output:**
+    *   Apply causal mask (upper triangular to $-\infty$).
+    *   `Attn = Softmax(Biased_Scores) * V`
+    *   Project back to `D_model`. Shape: `(1, 2048, 14336)`
+7.  **Residual & FFN:**
+    *   `X_mid = X + Attn_out`
+    *   `FFN_out = FFN(LN(X_mid))`
+    *   `X_out = X_mid + FFN_out` -> `(1, 2048, 14336)`
 
 ## 7. Mathematical Foundations
-The most significant architectural contribution of the BLOOM project is the validation of **ALiBi (Attention with Linear Biases)** at massive scale.
+The defining mathematical feature of BLOOM is **ALiBi (Attention with Linear Biases)**.
 
-**The Extrapolation Problem:**
-In standard models (GPT-3, OPT), absolute position vectors $p_i$ are added to embeddings $x_i$. The model learns that $p_{2048}$ is the end of the document. If you input 2049 tokens during inference, the model fails.
+Unlike Absolute Positional Encodings (added at the input) or Rotary Position Embeddings (RoPE, which rotates queries and keys), ALiBi modifies the attention score $S_{i,j}$ directly with a penalty that increases linearly as the distance between the query token $i$ and key token $j$ increases.
 
-**The ALiBi Solution:**
-ALiBi removes positional embeddings completely. It asserts that positional information is only relevant during the Attention calculation. Specifically, a word should attend more strongly to words immediately next to it, and less strongly to words far away.
-Let $q_i$ be the query at position $i$, and $k_j$ be the key at position $j$. The ALiBi attention score is:
-$$ \text{score}(q_i, k_j) = q_i \cdot k_j - m(i - j) $$
-Where $m$ is a head-specific slope (a scalar).
-Notice that as the distance $(i - j)$ increases, a larger penalty is subtracted from the attention score before the Softmax.
-The slopes $m$ are not learned; they are fixed geometrically across the attention heads (e.g., $1/2^1, 1/2^2, 1/2^3 ...$).
-Because this penalty is purely relative and mathematically continuous, the model can be trained on sequences of length 2048, but during inference, if you feed it a sequence of length 4000, the math holds up perfectly. The penalty just continues scaling linearly, allowing seamless length extrapolation without retraining.
+Let $q_i \cdot k_j$ be the raw dot-product attention score. In ALiBi, the biased score is:
+$$ S_{i,j} = q_i \cdot k_j - m \cdot |i - j| $$
+
+Where $m$ is a head-specific scalar slope. These slopes are *not learned parameters*. They are statically fixed before training. For a model with $H$ heads, the slopes form a geometric sequence. For example, for 8 heads, the slopes $m$ might be:
+$$ \frac{1}{2^1}, \frac{1}{2^2}, \frac{1}{2^3} \dots \frac{1}{2^8} $$
+
+**Why is this mathematically advantageous?**
+Because the penalty $-m \cdot |i - j|$ is completely agnostic to absolute sequence length, a model trained on sequences of length 2048 can be given a sequence of length 4096 during inference. The ALiBi mechanism seamlessly continues the linear penalty for the new tokens ($2049 \dots 4096$). Models using ALiBi demonstrated a remarkable ability to extrapolate to sequences much longer than they were trained on without catastrophic failure, a property called "length extrapolation."
 
 ## 8. Training Procedure
-1. **The ROOTS Corpus**: BigScience crowd-sourced the curation of a 341 Billion token dataset. They prioritized languages that were traditionally ignored by Big Tech, ensuring high-quality representation for languages like Catalan, Vietnamese, and Arabic. They explicitly removed toxic data and machine-translated filler.
-2. **Infrastructure (Jean Zay)**: The model was trained on the Jean Zay supercomputer in France, using 384 Nvidia A100 (80GB) GPUs. They utilized Megatron-DeepSpeed for 3D parallelism (Data, Tensor, and Pipeline parallelism) to fit the 176B model across the cluster.
-3. **Carbon Footprint**: In keeping with their open-science mandate, BigScience published an exhaustive audit of the model's energy consumption and carbon footprint, setting a standard for environmental transparency in AI that proprietary labs refused to match.
-4. **Training Stability**: Because they used ALiBi and an extra LayerNorm after the embeddings, the training run was remarkably stable, requiring very few manual interventions or rollbacks compared to the OPT-175B training run.
+The training of BLOOM was an open-book exercise in distributed systems engineering.
+
+**Infrastructure:** BLOOM 176B was trained on the Jean Zay supercomputer in France, utilizing 384 NVIDIA A100 80GB GPUs. The codebase used Megatron-DeepSpeed, combining Tensor Parallelism (splitting matrix multiplications across GPUs), Pipeline Parallelism (putting different layers on different GPUs), and Data Parallelism.
+
+**Dataset (ROOTS):** The ROOTS (Responsible Open-science Open-collaboration Text Sources) dataset was meticulously crafted. Instead of blindly scraping the web, working groups identified high-quality sources, books, and articles in 46 languages. The final corpus was 1.6TB. This intentional curation resulted in a model with incredibly strong multilingual capabilities, contrasting with models that accidentally ingested foreign languages via web scraping.
+
+**Transparency:** Every aspect of the training was broadcasted. When a node failed on Jean Zay, the community saw the logs. They utilized a custom training setup to ensure bitwise reproducibility, meaning if the training crashed, it could resume from a checkpoint and generate the exact same math as if it hadn't crashed. It trained for roughly 3.5 months.
 
 ## 9. PyTorch Implementation
-Here is a conceptual implementation of the ALiBi attention mechanism, demonstrating how the static distance penalty is applied to the attention scores.
+Below is a conceptual PyTorch implementation demonstrating the ALiBi attention mechanism used in BLOOM.
 
 ```python
 import torch
@@ -107,118 +136,115 @@ import torch.nn.functional as F
 import math
 
 class ALiBiAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model, n_heads):
         super().__init__()
-        self.d_model = d_model
         self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
+        self.d_head = d_model // n_heads
         
-        self.qkv_proj = nn.Linear(d_model, 3 * d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
+        self.wq = nn.Linear(d_model, d_model, bias=True)
+        self.wk = nn.Linear(d_model, d_model, bias=True)
+        self.wv = nn.Linear(d_model, d_model, bias=True)
+        self.wo = nn.Linear(d_model, d_model, bias=True)
         
-        # Calculate the ALiBi slopes for each head
-        # The slopes are a geometric sequence: 2^(-8/n), 2^(-16/n), ...
-        self.slopes = self._get_alibi_slopes(n_heads)
+        # Pre-compute ALiBi slopes for each head
+        # Geometric sequence: e.g., for 8 heads: 1/2, 1/4, 1/8...
+        slopes = self._get_alibi_slopes(n_heads)
+        # Register as a buffer so it moves to GPU with the module but isn't a learned parameter
+        self.register_buffer("slopes", torch.tensor(slopes).view(n_heads, 1, 1))
 
-    def _get_alibi_slopes(self, heads: int) -> torch.Tensor:
-        # For simplicity, calculate base geometrically
-        closest_power_of_2 = 2 ** math.floor(math.log2(heads))
-        base = 2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3)))
-        slopes = [math.pow(base, i) for i in range(1, closest_power_of_2 + 1)]
+    def _get_alibi_slopes(self, n_heads):
+        def get_slopes_power_of_2(n):
+            start = (2**(-2**-(math.log2(n)-3)))
+            ratio = start
+            return [start*ratio**i for i in range(n)]
         
-        # If heads is not a power of 2, handle the remainder (simplified here)
-        if closest_power_of_2 < heads:
-            extra_slopes = self._get_alibi_slopes(2 * closest_power_of_2)[1::2][:heads - closest_power_of_2]
-            slopes.extend(extra_slopes)
-            
-        return torch.tensor(slopes, dtype=torch.float32).view(heads, 1, 1)
+        if math.log2(n_heads).is_integer():
+            return get_slopes_power_of_2(n_heads)
+        else:
+            closest_power_of_2 = 2 ** math.floor(math.log2(n_heads))
+            return get_slopes_power_of_2(closest_power_of_2) + \
+                   get_slopes_power_of_2(2 * closest_power_of_2)[0::2][:n_heads-closest_power_of_2]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, D = x.shape
-        qkv = self.qkv_proj(x)
-        q, k, v = qkv.chunk(3, dim=-1)
+    def forward(self, x):
+        B, T, _ = x.shape
         
-        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        q = self.wq(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+        k = self.wk(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+        v = self.wv(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         
-        # 1. Standard Attention Scores (ALiBi removes the 1/sqrt(d) scaling)
-        scores = torch.matmul(q, k.transpose(-2, -1)) 
+        # Raw dot product scores (Note: ALiBi standard implementation doesn't scale by sqrt(d_head))
+        scores = torch.matmul(q, k.transpose(-2, -1)) # (B, H, T, T)
         
-        # 2. Create the distance matrix M[i, j] = j - i (relative distance)
-        # Using arange to create distances
-        positions = torch.arange(T, device=x.device)
-        distance_matrix = positions.unsqueeze(0) - positions.unsqueeze(1) # (T, T)
+        # Create relative distance matrix
+        seq_idx = torch.arange(T, device=x.device)
+        # distances[i, j] = i - j
+        distances = seq_idx.unsqueeze(1) - seq_idx.unsqueeze(0)
         
-        # ALiBi only penalizes past tokens (i > j), and causal mask handles future
-        # We take the absolute value or just let the causal mask block the future
-        distance_matrix = distance_matrix.abs().unsqueeze(0) # (1, T, T)
+        # Create ALiBi bias: -m * abs(i - j). Since causal, i >= j, so distances is positive in valid area
+        # Shape: (H, 1, 1) * (T, T) -> (H, T, T)
+        alibi_bias = self.slopes * -torch.abs(distances).float()
         
-        # 3. Multiply distances by head-specific slopes
-        slopes = self.slopes.to(x.device) # (H, 1, 1)
-        alibi_bias = distance_matrix * slopes * -1.0 # (H, T, T), negative penalty
+        # Add ALiBi bias to scores
+        biased_scores = scores + alibi_bias.unsqueeze(0)
         
-        # 4. Add ALiBi bias to scores
-        scores = scores + alibi_bias.unsqueeze(0) # (B, H, T, T)
+        # Causal Mask
+        causal_mask = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
+        biased_scores = biased_scores.masked_fill(~causal_mask.view(1, 1, T, T), float('-inf'))
         
-        # 5. Apply causal mask
-        mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-        scores.masked_fill_(mask, float('-inf'))
+        attn = F.softmax(biased_scores, dim=-1)
+        out = torch.matmul(attn, v)
         
-        # Softmax and Context
-        attn = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, T, D)
-        
-        return self.out_proj(context)
+        out = out.transpose(1, 2).contiguous().view(B, T, -1)
+        return self.wo(out)
 
-# --- Shape and Logic Verification Test ---
+# --- Test ---
 if __name__ == "__main__":
-    BATCH_SIZE, SEQ_LEN = 1, 8
-    D_MODEL, N_HEADS = 256, 8
+    B, T, d_model = 2, 8, 64
+    n_heads = 8
     
-    alibi_attn = ALiBiAttention(D_MODEL, N_HEADS)
+    attn = ALiBiAttention(d_model, n_heads)
+    x = torch.randn(B, T, d_model)
+    out = attn(x)
     
-    # Input has NO positional embeddings added
-    x = torch.randn(BATCH_SIZE, SEQ_LEN, D_MODEL)
-    
-    output = alibi_attn(x)
-    
-    expected_shape = (BATCH_SIZE, SEQ_LEN, D_MODEL)
-    assert output.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {output.shape}"
-    print("Test passed! ALiBi mathematically penalized distant tokens successfully.")
+    print(f"Input shape: {x.shape}")
+    print(f"Output shape: {out.shape}")
+    assert out.shape == (B, T, d_model), "Shape mismatch!"
+    print("Test passed: ALiBi Attention block evaluated successfully.")
 ```
 
 ## 10. Strengths
-BLOOM's monumental strength was its multilingual prowess. For the first time, developers in non-Western countries had an open-source model that treated their native language as a first-class citizen, not an afterthought, enabling a massive wave of localized AI applications. Architecturally, the implementation of ALiBi proved that complex positional embedding vectors (like RoPE or Absolute) were not strictly necessary; a simple, static distance penalty applied to the attention matrix was sufficient to achieve state-of-the-art results while seamlessly granting the model length extrapolation capabilities. Finally, the BigScience initiative proved that the open-source community could successfully organize and execute a $10M+ compute project ethically and transparently.
+BLOOM's defining strength is its phenomenal multilingual capability. Because the ROOTS dataset was intentionally curated with native speakers across 46 languages, BLOOM does not suffer from the "English-first" bias that plagues models trained heavily on US-centric web data. It translates, generates, and reasons in languages like Arabic, French, and Spanish with exceptional fluency. Architecturally, the use of ALiBi provides a significant strength in length extrapolation; the model can smoothly process inputs longer than its 2048 training length during inference without crashing or outputting gibberish. Furthermore, the massive 250k token vocabulary means it encodes non-English text highly efficiently, saving compute when generating foreign languages.
 
 ## 11. Weaknesses
-Like OPT, BLOOM was caught on the wrong side of the Chinchilla scaling laws. It had 176 Billion parameters but was trained on only 341 Billion tokens. This made the model incredibly bloated. It required a supercomputer to run inference, yet its actual reasoning capabilities (especially in English math and coding) were quickly surpassed by much smaller, highly optimized models (like LLaMA 1 65B and later Mistral 7B) that were trained on trillions of tokens. Furthermore, because BLOOM used standard Multi-Head Attention (MHA) instead of modern memory-saving techniques like Grouped Query Attention (GQA), serving it in production for multiple users was prohibitively expensive due to the massive KV-cache size.
+Like OPT and Gopher, BLOOM was trained prior to the widespread adoption of the Chinchilla scaling laws. It is a 176B parameter model trained on roughly 366 Billion tokens. This makes it heavily over-parameterized and vastly under-trained. Consequently, its reasoning capabilities in English often lag behind smaller, better-trained models (like LLaMA 2 70B), while requiring massive amounts of VRAM to serve. The model is also an artifact of its time regarding alignment; the base model lacks the rigorous RLHF (Reinforcement Learning from Human Feedback) chat-tuning that makes modern models easy to interact with out-of-the-box, operating more like a raw autocomplete engine.
 
 ## 12. Research Evolution
-BLOOM is remembered as the ultimate triumph of the BigScience open-research movement and a massive leap forward for multilingual AI. It successfully broke the English-only paradigm. However, the architecture (massive parameter count, low token count, standard MHA) was rendered obsolete by the efficiency-focused models of 2023. While ALiBi was an elegant solution to positional extrapolation, the industry eventually settled on Rotary Positional Embeddings (RoPE) as the dominant standard (used in LLaMA, Mistral, and PaLM), primarily because RoPE proved slightly more expressive for complex mathematical reasoning tasks. The spirit of BLOOM lives on in projects like Aya (Cohere), which continue to push the boundaries of extreme multilingual representation in modern efficient architectures.
+BLOOM is a triumph of open science. Before BigScience, it was assumed that only trillion-dollar tech conglomerates had the infrastructure and organizational capacity to build 100B+ parameter foundation models. BLOOM proved that decentralized networks of academics, supported by public compute infrastructure and open-source hubs (Hugging Face), could execute massive AI projects. It set a new standard for data transparency; the documentation of the ROOTS dataset curation is arguably the most meticulous in the industry, contrasting sharply with closed datasets. Architecturally, it popularized ALiBi, proving that relative positional biases could elegantly solve length extrapolation, heavily influencing subsequent open models until Rotary Position Embeddings (RoPE) eventually became the dominant industry standard.
 
 ## 13. Interview Questions
-**Q1: What was the core philosophical difference between BLOOM and models like GPT-3 or OPT?**
-**A1:** GPT-3 and OPT were built by highly secretive, centralized American corporate labs, and were over 90% focused on the English language. BLOOM was built by a grassroots, decentralized global cooperative (BigScience) with complete transparency, explicitly designed to treat 46 natural languages as first-class citizens.
 
-**Q2: What is the massive inefficiency associated with BLOOM's 250,000-token vocabulary?**
-**A2:** While a massive vocabulary compresses non-English text perfectly, it requires massive weight matrices. The initial embedding layer and the final output projection layer (which maps the hidden dimension to 250,000 tokens) consume over 3 Billion parameters combined. This inflates the model size and causes VRAM bottlenecks just to hold the vocabulary.
+**Q1: What was the BigScience initiative, and why was it necessary for the creation of BLOOM?**
+**A1:** BigScience was a global, crowdsourced research workshop involving over 1,000 researchers. It was necessary because training a 176B parameter model requires millions of dollars in compute, completely pricing out individual universities and independent researchers. By pooling global academic talent, utilizing Hugging Face for coordination, and securing a massive supercomputer grant from the French government, BigScience broke the corporate monopoly on frontier-scale AI development.
 
-**Q3: How does ALiBi differ from Absolute Positional Embeddings?**
-**A3:** Absolute embeddings add a learned vector directly to the input token (e.g., this is token #4). ALiBi completely removes embeddings. Instead, it adds a static, linear penalty to the attention scores based on distance. If token A and B are far apart, their attention score is heavily reduced. It's a purely relative, geometric penalty.
+**Q2: How does ALiBi (Attention with Linear Biases) handle positional information differently than Absolute Positional Encodings?**
+**A2:** Absolute encodings assign a specific, learned vector to position 1, position 2, etc., and add it to the input token. If the model never sees position 2049 during training, it doesn't know what to do with it. ALiBi adds a static penalty directly to the attention score (the dot product of query and key). This penalty is simply a fixed scalar multiplied by the distance between the two tokens. Because it relies purely on distance, ALiBi can naturally extrapolate and apply penalties to tokens at distances far beyond what was seen during training.
 
-**Q4: Why does ALiBi allow for "Length Extrapolation" during inference?**
-**A4:** Because ALiBi uses a mathematical formula (distance multiplied by a fixed slope) rather than learned vectors, it never runs out of capacity. If the model is trained on 2048 tokens, it learns the geometry. If you feed it 4000 tokens during inference, the math just continues to scale perfectly, penalizing distant tokens without crashing.
+**Q3: BLOOM has a massive vocabulary size of 250,680 tokens. Why was this necessary, and what is the trade-off?**
+**A3:** BLOOM was designed to support 46 natural languages and 13 programming languages. If a vocabulary is small (e.g., 32k) and trained mostly on English, foreign words are broken into many meaningless sub-word chunks, making the model slow and inaccurate for those languages. A 250k vocabulary ensures foreign words have dedicated tokens, increasing efficiency. The trade-off is model bloat: the embedding matrix and the final linear head contain billions of parameters dedicated entirely to vocabulary lookup, taking away from the parameter budget of the reasoning transformer layers.
 
-**Q5: Why was BLOOM fundamentally slower to run in production than later models like LLaMA 2 70B?**
-**A5:** BLOOM was heavily over-parameterized (176B) for the amount of data it was trained on (341B), meaning it required multiple A100 GPUs just to load the weights. Secondly, it used standard Multi-Head Attention, meaning the memory required to store the KV-cache during generation grew massively, severely limiting the batch size it could serve.
+**Q4: BLOOM was trained on 176B parameters with roughly 366B tokens. Evaluate this based on modern scaling laws.**
+**A4:** Based on the Chinchilla compute-optimal scaling laws, which advocate for roughly 20 tokens per parameter, BLOOM is massively under-trained. A 176B parameter model should optimally be trained on over 3.5 Trillion tokens. Because it was trained on only 366B tokens, it is highly inefficient—it requires the expensive hardware of a 176B model but possesses the reasoning capability of a much smaller model.
+
+**Q5: What is the Responsible AI License (RAIL) used for BLOOM, and how does it differ from standard open-source licenses like Apache 2.0?**
+**A5:** Standard open-source licenses (like Apache 2.0 or MIT) generally place no restrictions on how the software is used, even if used for malicious purposes. The RAIL license allows for commercial use, modification, and distribution, but it includes behavioral use restrictions. It explicitly prohibits using the BLOOM model to generate disinformation, automate legal/medical decisions, or generate deepfakes. It attempts to enforce ethical AI usage at the license level.
 
 ## 14. Related Papers
-- **BLOOM: A 176B-Parameter Open-Access Multilingual Language Model (BigScience Workshop, 2022)**: The colossal foundational paper detailing the global effort, dataset curation, and training stability.
-- **Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation (Press et al., 2021)**: The foundational paper that invented ALiBi, proving it allows seamless length extrapolation.
-- **The BigScience ROOTS Corpus (Laurençon et al., 2022)**: The detailed breakdown of how the massive 341B token multilingual dataset was ethically curated and filtered.
+*   **BLOOM: A 176B-Parameter Open-Access Multilingual Language Model (Workshop et al., 2022):** The massive, multi-author paper detailing the entire BigScience project and model.
+*   **Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation (Press et al., 2021):** The paper introducing the ALiBi mechanism.
+*   **The BigScience ROOTS Corpus (Laurençon et al., 2022):** Details the meticulous curation of the 46-language training dataset.
 
 ## 15. Further Reading
-- [HuggingFace: The BigScience Project](https://bigscience.huggingface.co/) - The home page of the historic global research cooperative that built BLOOM.
-- [HuggingFace Blog: BLOOM](https://huggingface.co/blog/bloom) - The official release post celebrating the democratization of 100B+ scale multilingual models.
-- [Understanding ALiBi (Towards Data Science)](https://towardsdatascience.com/alibi-attention-with-linear-biases-f9038fc9cf72) - A detailed mathematical breakdown of why ALiBi succeeds where Absolute Positional Embeddings fail.
+*   Hugging Face blog posts detailing the history and organization of the BigScience workshop.
+*   Deep dives into distributed training using Megatron-DeepSpeed on SLURM clusters.
+*   Analyses on the limitations of enforcing behavioral use restrictions via the RAIL license.
+*   Comparisons of tokenization efficiency across different languages (e.g., bytes per token for Arabic vs English).

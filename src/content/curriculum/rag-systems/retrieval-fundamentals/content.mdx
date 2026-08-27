@@ -1,0 +1,132 @@
+# Retrieval Fundamentals
+
+## 1. Overview
+
+A large language model trained on text up to a cutoff date has no knowledge of events after that date and no direct access to information from proprietary databases, documents, or real-time data. Retrieval-augmented generation (RAG) solves this by treating the LLM as a **generator** and adding an external **retriever** — a system that searches through documents, databases, or knowledge bases and surfaces relevant information the LLM can then use to generate an informed response. This topic is about the retriever component: how to efficiently search through potentially billions of documents to find a small set of relevant ones, given a user query, in milliseconds. It's the foundation on which RAG systems are built.
+
+## 2. Prerequisites in Context
+
+**Information Retrieval** and **Search Engines** are the direct conceptual predecessors — classical IR techniques (TF-IDF, BM25, indexing) laid the groundwork for modern retrieval, and you need to understand why those worked before understanding their neural alternatives. **Embedding Models** matter because most modern retrievers represent queries and documents as dense vectors and rank by similarity, so understanding what embeddings are (learned dense representations of text) is essential. **Vector Similarity** and **Distance Metrics** are technically important because retrieval accuracy depends heavily on whether you're measuring similarity correctly (cosine distance, Euclidean distance, angular distance all have different properties).
+
+## 3. Core Concept
+
+A retriever's job is: given a query (a short text, often from a user) and a corpus (potentially millions of documents), rank documents by relevance to the query. **Classical IR** approaches (TF-IDF, BM25) treat documents and queries as bags of words, computing relevance by counting term overlap and weighting important terms higher. This is fast (linear scan, billions of documents per second with modern hardware) and works surprisingly well for keyword-heavy queries but struggles with semantic understanding — a query about "car" won't retrieve documents about "vehicle" unless you explicitly handle synonymy. **Dense retrieval** represents queries and documents as vectors (embeddings) and ranks by similarity (typically cosine distance). A well-trained embedding model can capture semantic similarity — "car" and "vehicle" have similar embeddings — but requires computing or looking up vector embeddings for every document (offline) and then doing nearest-neighbor search for queries (online), which is less trivial than keyword search at scale. **Hybrid retrieval** combines both: search the corpus using fast classical IR, then re-rank using dense embeddings, getting reasonable speed (not as fast as pure keyword search, but faster than pure dense retrieval at billion-scale corpus sizes) and better semantics than pure keyword.
+
+## 4. Theoretical Foundations
+
+**Relevance** in IR is formalized as a probability: $p(\text{relevant} | q, d)$, the probability a document $d$ is relevant to query $q$. TF-IDF and BM25 compute heuristic proxies for this using term statistics. Dense retrieval learns end-to-end: encode the query as $e_q = \text{encoder}(q)$ and document as $e_d = \text{encoder}(d)$, then score relevance as similarity $\text{sim}(e_q, e_d) = \frac{e_q \cdot e_d}{||e_q|| \cdot ||e_d||}$ (cosine similarity). The encoder is trained on labeled pairs of (query, relevant_document) to maximize similarity between relevant pairs and minimize between non-relevant pairs — this is called **contrastive learning** and is the foundation of modern dense retrieval. The tradeoff is that dense retrieval requires a well-trained encoder and nearest-neighbor search infrastructure, while keyword search is simpler but less semantically sophisticated.
+
+## 5. Worked Example
+
+A user queries "How do I fix a broken screen?" against a database of tech support articles. Classical BM25 search: scores documents by term overlap ("fix," "broken," "screen"), ranking articles about screen repair highly. But it may miss an article titled "Replacing a Cracked Display: Repair Guide" because the words "cracked" and "display" don't appear in the query. Dense retrieval: the query and article are encoded, and semantic similarity captures that "cracked display" is semantically close to "broken screen," so the article ranks highly. However, dense retrieval requires an embedding model (which costs compute to train and inference time to run). Hybrid: keyword search finds high-overlap articles instantly, then re-ranks using dense embeddings, combining speed and semantics.
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.spatial.distance import cosine
+
+def bm25_score(query_terms, doc_terms, doc_freq, corpus_size, avg_doc_length, k1=1.5, b=0.75):
+    """
+    Simplified BM25 scoring: weights term importance and accounts for document length.
+    query_terms, doc_terms: set of terms
+    doc_freq: dict of term -> number of docs containing term
+    """
+    score = 0
+    for term in query_terms:
+        if term in doc_terms:
+            # IDF component
+            idf = np.log((corpus_size - doc_freq.get(term, 0) + 0.5) / (doc_freq.get(term, 0) + 0.5))
+            # Term frequency component (BM25 dampens high frequencies)
+            tf = doc_terms[term]
+            normalized_tf = tf * (k1 + 1) / (tf + k1 * (1 - b + b * (len(doc_terms) / avg_doc_length)))
+            score += idf * normalized_tf
+    return score
+
+def dense_retrieval(query_embedding, document_embeddings):
+    """
+    Dense retrieval: rank documents by cosine similarity to query.
+    query_embedding: (embedding_dim,)
+    document_embeddings: (num_docs, embedding_dim)
+    Returns: ranking scores
+    """
+    # Cosine similarity (normalized dot product)
+    query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
+    doc_norms = document_embeddings / (np.linalg.norm(document_embeddings, axis=1, keepdims=True) + 1e-8)
+    scores = doc_norms @ query_norm
+    return scores
+
+if __name__ == "__main__":
+    # Simulate a small corpus
+    documents = [
+        "How to fix a broken screen",
+        "Replacing a cracked display: repair guide",
+        "Water damage on phone screens",
+        "Screen protector recommendations"
+    ]
+    query = "How do I fix a broken screen?"
+    
+    # Classical IR (TF-IDF)
+    vectorizer = TfidfVectorizer()
+    doc_vectors = vectorizer.fit_transform(documents)
+    query_vector = vectorizer.transform([query])
+    tfidf_scores = (doc_vectors * query_vector.T).toarray().flatten()
+    
+    print("TF-IDF Scores:")
+    for i, score in enumerate(tfidf_scores):
+        print(f"  Doc {i}: {score:.4f} - {documents[i]}")
+    
+    # Dense retrieval (simulated embeddings)
+    query_emb = np.random.randn(128)
+    doc_embs = np.random.randn(len(documents), 128)
+    # Make first doc similar to query (simulate training)
+    doc_embs[0] = query_emb + np.random.randn(128) * 0.1
+    dense_scores = dense_retrieval(query_emb, doc_embs)
+    
+    print("\nDense Retrieval Scores:")
+    for i, score in enumerate(dense_scores):
+        print(f"  Doc {i}: {score:.4f} - {documents[i]}")
+```
+
+## 7. Real-World Applications
+
+Google Search uses a combination of classical IR (indexing billions of web pages) and dense retrieval (neural ranking) to serve search results in ~200ms. Legal research tools (e.g., LexisNexis, Westlaw) use dense retrieval with fine-tuned legal embeddings to surface relevant case law. Enterprise search within companies (searching internal documents, Confluence pages, Slack messages) almost universally uses dense retrieval because keyword-only search is insufficient for complex documents with domain-specific terminology.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that dense retrieval is always better than keyword search — it's not, it depends on the query. Keyword-heavy queries ("budget report Q3 2024") often work better with classical IR; semantic queries ("how do I apply for a job") work better with dense retrieval. Another pitfall is treating retrieval as solved once you pick a method — retriever quality depends heavily on whether the embedding model was trained on similar data (a legal case law retriever needs legal embeddings, not generic web embeddings), and this data-model fit matters more than the algorithm. A third pitfall is ignoring the cost of dense retrieval at scale — encoding documents and storing billions of embeddings is expensive, and dense retrieval infrastructure (vector databases, approximate nearest-neighbor indexing) adds operational complexity.
+
+## 9. How This Connects
+
+This topic requires **Information Retrieval** and **Embedding Models** as direct prerequisites. It unlocks the entire **RAG Systems** domain and directly connects to **Dense Retrieval and Embedding Similarity**, **Hybrid Search Strategies**, **Re-Ranking and Fusion** (using multiple retrievers), **Production RAG at Scale**, and downstream in applications to **Chatbots**, **Question Answering**, and **Search Systems**.
+
+## 10. Check Your Understanding
+
+**Q1: What is the fundamental problem that retrieval solves in RAG?**
+It finds relevant documents or information from a corpus that can ground the LLM's response, allowing the model to generate answers about information it wasn't trained on and reducing hallucination by providing verifiable sources.
+
+**Q2: How do TF-IDF and BM25 differ in their approach to ranking documents?**
+TF-IDF ranks purely by term frequency and inverse document frequency. BM25 extends this with a dampening term for very high frequencies and adjusts for document length, making it more robust to longer documents and term frequency artifacts.
+
+**Q3: What is the main advantage of dense retrieval over classical IR methods?**
+Dense retrieval captures semantic similarity — queries about "vehicles" can retrieve documents about "cars" even without explicit term overlap, because embeddings encode semantic meaning, while classical IR relies on term overlap.
+
+**Q4: What is a major disadvantage of dense retrieval at scale?**
+It requires computing and storing embeddings for all documents (expensive at billions of scale), and nearest-neighbor search at scale requires approximate indexing structures (vector databases, HNSW, etc.), adding infrastructure complexity compared to classical IR's simple inverted index.
+
+**Q5: Why might hybrid retrieval (combining classical and dense) be preferable to either alone?**
+Classical IR is fast and works well for keyword queries; dense retrieval is semantically sophisticated but slower at scale. Hybrid combines both: use fast classical IR for initial filtering, then re-rank with dense embeddings, achieving speed competitive with classical IR and accuracy close to dense retrieval.
+
+## 11. Further Reading
+
+- Robertson & Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" (2009)
+- Karpukhin et al., "Dense Passage Retrieval for Open-Domain Question Answering" (Meta, 2020) — foundational dense retrieval work
+- Thakur et al., "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models" (2021) — evaluation framework for retrievers
+- See also: `dense-retrieval-and-embedding-similarity` in this domain and `embeddings` in the NLP curriculum
+
+## Related Platform Content
+
+- [RAG SYSTEMS curriculum overview](/learn/rag-systems)
+- [Production system](/system-design/rag-systems)
+- [Browse all system designs](/system-design)

@@ -1,0 +1,219 @@
+# Consistency Models
+
+## 1. Overview
+Consistency Models, introduced in 2023 by Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya Sutskever (OpenAI), established a groundbreaking new class of generative models that generate high-quality images in **a single sampling step ($N=1$)**, completely bypassing the multi-step iteration bottleneck of traditional diffusion models. While diffusion models generate images by integrating an Ordinary Differential Equation (ODE) backward over 20 to 1,000 steps, Consistency Models learn a mapping function $f_\theta(x_t, t)$ that maps **ANY point $x_t$ along the same continuous probability flow ODE trajectory directly to its origin $x_0$**. By enforcing a mathematical **Self-Consistency Property** ($f_\theta(x_t, t) = f_\theta(x_{t'}, t')$ for all $t, t'$ on the same trajectory) enforced via a crucial **Boundary Condition** ($f(x_\epsilon, \epsilon) = x_\epsilon$), Consistency Models achieve single-step generation (100 FPS+) while maintaining the ability to trade compute for quality via multi-step sampling.
+
+:::tip
+Consistency Models' breakthrough idea: "Train a network $f_\theta(x_t, t)$ to map ALL points along the same ODE trajectory to the exact same origin $x_0$. One forward pass = One complete generated image."
+:::
+
+## 2. Historical Context
+By 2023, diffusion models (DDPM, LDM, SDXL) dominated image generation. However, their reliance on iterative reverse sampling (even accelerated methods like DDIM required 20–50 steps) made real-time interactive generation (such as real-time canvas painting, live video synthesis, or AR/VR applications) impossible.
+
+Existing single-step alternatives had major flaws:
+- **GANs:** Fast single-step sampling, but unstable, prone to mode collapse, and lacking diversity.
+- **Diffusion Distillation (Progressive Distillation - Salimans & Ho):** Distilled 1000 steps to 8 steps, but required training multiple intermediate student models iteratively.
+
+Yang Song et al. designed Consistency Models to support single-step generation natively from scratch (Consistency Training) or via rapid 1-stage distillation of pre-trained diffusion models (Consistency Distillation).
+
+## 3. Problem It Solves
+Consistency Models resolve the core trade-off in generative modeling:
+1. **Multi-Step Inference Latency:** Eliminates 20–50 step iterations. Generates samples in a **single network evaluation ($N=1$)**, enabling real-time generation at 100+ FPS on consumer hardware.
+2. **Flexible Compute Scaling:** Unlike GANs (which are strictly single-step), Consistency Models can chain a few steps ($N=2$ to $4$) to progressively improve visual quality, bridging single-step speed and multi-step precision.
+3. **Zero Diffusion Retraining Multi-Stage Distillation:** Consistency Distillation converts any pre-trained diffusion model (e.g., Stable Diffusion) into a single-step generator in a single training stage.
+
+## 4. Architecture Diagram Data
+Below is the ODE Trajectory mapping principle of Consistency Models showing how points $x_t, x_{t'}$ map to the same origin $x_0$.
+
+```text
+       CONTINUOUS PROBABILITY FLOW ODE TRAJECTORY
+       Origin x_0 <------------------- x_{t'} <------------------- x_t <------------------- x_T ~ N(0, I)
+         ^                               |                          |
+         |                               |                          |
+         +===== Self-Consistency =======+                          |
+         |      f_theta(x_{t'}, t') = x_0                           |
+         +==========================================================+
+                f_theta(x_t, t) = x_0
+
+       ========================================================================
+
+       CONSISTENCY MODEL ARCHITECTURE & BOUNDARY CONDITION
+
+                        [ Noisy Latent x_t at continuous time t ]
+                                       |
+                                       v
+               +===============================================+
+               | Consistency Network F_theta(x_t, t)           |
+               +===============================================+
+                                       |
+                                       v
+               +===============================================+
+               | BOUNDARY CONDITION ENFORCEMENT LAYER          |
+               | f_theta(x_t, t) = c_skip(t)*x_t + c_out(t)*F  |
+               | - Where c_skip(eps) = 1 and c_out(eps) = 0    |
+               | - Guarantees f(x_eps, eps) = x_eps EXACTLY!   |
+               +===============================================+
+                                       |
+                                       v
+                        [ Single-Step Output: x_0 ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Backbone Network $F_\theta(x_t, t)$:**
+- Uses standard U-Net or DiT backbone architectures.
+- Takes noisy image $x_t \in \mathbb{R}^{B \times C \times H \times W}$ and continuous time $t \in [\epsilon, T]$.
+
+**2. Parameterized Boundary Condition Wrapper:**
+- Wraps backbone $F_\theta(x_t, t)$ to guarantee the boundary condition $f(x_\epsilon, \epsilon) = x_\epsilon$ holds analytically:
+  $$f_\theta(x_t, t) = c_{\text{skip}}(t) x_t + c_{\text{out}}(t) F_\theta(x_t, t)$$
+- $c_{\text{skip}}(t)$ and $c_{\text{out}}(t)$ are differentiable scale functions designed such that:
+  $$c_{\text{skip}}(\epsilon) = 1, \quad c_{\text{out}}(\epsilon) = 0$$
+
+**3. Single-Step Inference Pipeline:**
+- Sample initial noise $x_T \sim \mathcal{N}(0, T^2 \mathbf{I})$.
+- Pass $x_T$ and $t=T$ through $f_\theta(x_T, T) \rightarrow$ Output clean image $x_0$ in **1 step**!
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through a Consistency Model for single-step inference batch size $B=2$, image resolution $64 \times 64$.
+
+1. **Sample Noise:**
+   - Sample $x_T \sim \mathcal{N}(0, T^2 \mathbf{I})$ at $t=T=80.0$: `(2, 3, 64, 64)`
+2. **Consistency Function Forward Pass:**
+   - Compute $c_{\text{skip}}(T) \approx 0$ and $c_{\text{out}}(T) \approx 1$.
+   - Backbone Forward Pass $F_\theta(x_T, T) \rightarrow$ `(2, 3, 64, 64)`
+   - Boundary Wrapper $f_\theta(x_T, T) = c_{\text{skip}}(T) x_T + c_{\text{out}}(T) F_\theta(x_T, T) \rightarrow$ `(2, 3, 64, 64)`
+3. **Single-Step Output:**
+   - Generated Clean Image $x_0$: `(2, 3, 64, 64)` produced in **1 single forward pass**!
+
+## 7. Mathematical Foundations
+
+### 1. Self-Consistency Property Definition
+Let $\{x_t\}_{t \in [\epsilon, T]}$ be a continuous trajectory of the Probability Flow ODE starting from clean data $x_0$. A **Consistency Model** $f_\theta(x, t)$ is defined as a function that satisfies:
+
+$$f_\theta(x_t, t) = f_\theta(x_{t'}, t') = x_0 \quad \forall t, t' \in [\epsilon, T]$$
+
+This means that NO MATTER where a point $x_t$ lies along the ODE trajectory, evaluating $f_\theta(x_t, t)$ outputs the exact same origin point $x_0$.
+
+### 2. The Boundary Condition $f(x_\epsilon, \epsilon) = x_\epsilon$
+For any small minimum noise level $\epsilon > 0$, the noisy image $x_\epsilon \approx x_0$ (at near-zero noise, the data is clean). Therefore, the consistency function MUST satisfy the **Boundary Condition**:
+
+$$f(x_\epsilon, \epsilon) = x_\epsilon$$
+
+#### Why the Boundary Condition is Crucial:
+1. **Mathematical Consistency Anchor:** The boundary condition anchors the entire trajectory. Without $f(x_\epsilon, \epsilon) = x_\epsilon$, the self-consistency loss $f(x_t, t) = f(x_{t'}, t')$ could trivially collapse to a constant dummy output (e.g., $f(x, t) = \mathbf{0}$ for all inputs).
+2. **Exact Identity at Zero Noise:** Guarantees that at zero noise level, the model acts as an exact identity function, preserving clean input data without distortion.
+3. **Analytical Parameterization:** In practice, $f_\theta(x, t)$ enforces this condition analytically by construction using skip functions:
+
+$$f_\theta(x_t, t) = c_{\text{skip}}(t) x_t + c_{\text{out}}(t) F_\theta(x_t, t)$$
+
+where $c_{\text{skip}}(\epsilon) = 1$ and $c_{\text{out}}(\epsilon) = 0$.
+
+### 3. Consistency Distillation Loss
+Using a pre-trained diffusion score model $\hat{\epsilon}_\phi$, a single ODE step updates $x_{t_{n+1}} \to \hat{x}_{t_n}$. Consistency Distillation minimizes the difference between predictions at step $t_{n+1}$ and step $t_n$:
+
+$$\mathcal{L}_{\text{CD}}(\theta, \theta^-) = \mathbb{E}\left[ d\left( f_\theta(x_{t_{n+1}}, t_{n+1}), \; f_{\theta^-}(\hat{x}_{t_n}, t_n) \right) \right]$$
+
+where $\theta^-$ is an Exponential Moving Average (EMA) of the online model parameters $\theta$.
+
+## 8. Training Procedure
+- **Consistency Distillation (CD):** Takes a pre-trained diffusion model, samples adjacent timesteps $t_{n+1}, t_n$, computes 1 Euler ODE step using the pre-trained model $\hat{x}_{t_n} = x_{t_{n+1}} + (t_n - t_{n+1}) \text{ODE}(x_{t_{n+1}})$, and minimizes loss between $f_\theta(x_{t_{n+1}})$ and $f_{\theta^-}(\hat{x}_{t_n})$.
+- **Optimizer:** RAdam ($\text{lr} = 1 \times 10^{-4}$), EMA decay rate $\mu = 0.99993$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Consistency Model Boundary Wrapper**.
+
+```python
+import torch
+import torch.nn as nn
+
+class ConsistencyBoundaryWrapper(nn.Module):
+    """ Enforces the Boundary Condition f(x_eps, eps) = x_eps analytically """
+    def __init__(self, backbone_model, sigma_min=0.002, sigma_data=0.5):
+        super().__init__()
+        self.backbone = backbone_model
+        self.sigma_min = sigma_min
+        self.sigma_data = sigma_data
+
+    def get_scalings(self, sigma):
+        """ Computes c_skip(sigma) and c_out(sigma) """
+        # c_skip(sigma) = sigma_data^2 / ((sigma - sigma_min)^2 + sigma_data^2)
+        c_skip = self.sigma_data**2 / ((sigma - self.sigma_min)**2 + self.sigma_data**2)
+        
+        # c_out(sigma) = (sigma - sigma_min) * sigma_data / (sigma^2 + sigma_data^2)^0.5
+        c_out = (sigma - self.sigma_min) * self.sigma_data / (sigma**2 + self.sigma_data**2)**0.5
+        return c_skip, c_out
+
+    def forward(self, x_t, sigma):
+        """
+        x_t: (B, C, H, W) - Noisy image at noise level sigma
+        sigma: (B,) - Continuous noise level
+        """
+        c_skip, c_out = self.get_scalings(sigma)
+        
+        # Reshape for spatial broadcasting
+        c_skip = c_skip[:, None, None, None]
+        c_out = c_out[:, None, None, None]
+        
+        # Backbone output
+        F_out = self.backbone(x_t, sigma)
+        
+        # Analytical Boundary Formula: f_theta = c_skip * x_t + c_out * F
+        f_theta = c_skip * x_t + c_out * F_out
+        return f_theta
+
+if __name__ == "__main__":
+    from ddpm import MiniUNet
+    
+    B, C, H, W = 2, 3, 32, 32
+    sigma_min = 0.002
+    
+    unet = MiniUNet(in_channels=C, time_dim=128)
+    cm_model = ConsistencyBoundaryWrapper(unet, sigma_min=sigma_min)
+    
+    # TEST BOUNDARY CONDITION: When sigma = sigma_min, f(x, sigma_min) MUST EQUAL x EXACTLY!
+    x_eps = torch.randn(B, C, H, W)
+    sigma_eps = torch.full((B,), sigma_min)
+    
+    out_eps = cm_model(x_eps, sigma_eps)
+    
+    diff = torch.abs(out_eps - x_eps).max().item()
+    print(f"Max Difference at sigma_min (Boundary Check): {diff:.8f}")
+    assert diff < 1e-5, "Boundary condition check failed!"
+    print("Consistency Model boundary condition verification successful!")
+```
+
+## 10. Strengths
+- **Single-Step Generation ($N=1$):** Generates high-quality images in 1 single forward pass (100 FPS+).
+- **Flexible Compute Scaling:** Can chain 2 to 4 steps to achieve higher image quality if extra compute is available.
+- **Fast 1-Stage Distillation:** Distills pre-trained diffusion models into single-step generators in a single training stage.
+
+## 11. Weaknesses
+- **Slightly Lower Max FID Than 100-Step Diffusion:** Pure 1-step samples can have minor fidelity drops compared to 100-step DDIM on complex scenes.
+
+## 12. Research Evolution
+Consistency Models solved single-step diffusion sampling, leading directly to **LCM (Latent Consistency Models)** and **Consistency Trajectory Models (CTM)**.
+
+## 13. Interview Questions
+
+**Q1: What is the Self-Consistency Property in Consistency Models?**
+**A1:** The property that any two points $(x_t, t)$ and $(x_{t'}, t')$ lying along the exact same continuous Probability Flow ODE trajectory map to the exact same origin point $x_0$: $f_\theta(x_t, t) = f_\theta(x_{t'}, t') = x_0$.
+
+**Q2: Why is the boundary condition $f(x_\epsilon, \epsilon) = x_\epsilon$ essential?**
+**A2:** At minimal noise $\epsilon \approx 0$, the image $x_\epsilon$ is clean. The boundary condition anchors the trajectory, preventing the consistency loss from collapsing to trivial constant solutions (like outputting zero for all inputs) and ensuring exact identity mapping at zero noise.
+
+**Q3: How does Consistency Models parameterize the boundary condition analytically?**
+**A3:** By wrapping the backbone $F_\theta(x, t)$ with skip functions: $f_\theta(x, t) = c_{\text{skip}}(t) x + c_{\text{out}}(t) F_\theta(x, t)$, where $c_{\text{skip}}(\epsilon) = 1$ and $c_{\text{out}}(\epsilon) = 0$.
+
+**Q4: Compare Consistency Models with GANs for single-step generation.**
+**A4:** GANs are prone to mode collapse and lack diversity because they optimize adversarial min-max losses. Consistency Models optimize stable consistency losses anchored to true ODE trajectories, maintaining full distribution diversity and allowing multi-step refinement.
+
+**Q5: How does multi-step sampling work in Consistency Models?**
+**A5:** Multi-step sampling alternates between evaluating the Consistency Model $x_0 = f_\theta(x_{t_n}, t_n)$ and adding back a small amount of Gaussian noise to step to a lower noise level $t_{n-1}$, refining image quality in 2 to 4 steps.
+
+## 14. Related Papers
+- **Consistency Models Paper:** *Consistency Models* (Song, Dhariwal, Chen, Sutskever, ICML 2023 - Oral)
+- **Latent Consistency Models (LCM):** *Latent Consistency Models: Synthesizing High-Resolution Images with Few-Step Inference* (Luo et al., 2023)
+
+## 15. Further Reading
+- OpenAI Official Consistency Models GitHub Repository

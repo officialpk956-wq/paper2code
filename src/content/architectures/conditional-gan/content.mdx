@@ -1,0 +1,217 @@
+# Conditional GAN (cGAN)
+
+## 1. Overview
+Conditional Generative Adversarial Networks (cGAN), introduced in 2014 by Mehdi Mirza and Simon Osindero, extended the unsupervised GAN framework to **directed, user-controlled image generation**. In an unconditional GAN, the generator draws a sample $x \sim p_g$ from an unconstrained noise distribution $z$, offering zero control over *what* specific class or category is generated. cGAN solved this by conditioning both the Generator and the Discriminator on auxiliary information $y$ (such as one-hot class labels, text tags, or modality attributes). The Generator receives a concatenated vector $[z, y]$ to synthesize samples belonging to class $y$, while the Discriminator evaluates whether image $x$ is real or fake *specifically conditioned on label $y$*.
+
+:::note
+cGAN's core contribution: "Feed auxiliary condition information $y$ (one-hot class label or attribute vector) into BOTH the Generator and Discriminator, turning unconstrained noise generation into targeted class-conditional synthesis."
+:::
+
+## 2. Historical Context
+In 2014, Ian Goodfellow's original GAN introduced adversarial learning. However, original GANs were purely unconditional: if trained on MNIST (0–9 digits), passing random noise vector $z$ yielded a random digit with no mechanism to request a specific digit (e.g., "generate a 7").
+
+Mehdi Mirza and Simon Osindero realized that conditioning the probability distribution $p(x \mid y)$ on additional label information $y$ would direct the generation process. cGAN laid the foundational groundwork for all subsequent conditional generative modeling, directly inspiring **Pix2Pix** (paired image-to-image translation), **StackGAN** (text-to-image), and **Class-Conditional BigGAN**.
+
+## 3. Problem It Solves
+cGAN addresses three major limitations of unconditional generative models:
+1. **Uncontrollable Generation:** Unconditional GANs sample randomly from the data distribution. cGAN allows explicit user control over output categories by providing label condition $y$.
+2. **Multi-Modal Mode Collapse:** Unconditional GANs often collapse to generating only a few easy classes. Conditioning on class labels forces the model to allocate generator capacity across all dataset classes.
+3. **Structured Attribute Editing:** Enables multi-attribute conditioning (e.g., generating faces with specific hair color, age, or facial expression).
+
+## 4. Architecture Diagram Data
+Below is the architecture of cGAN showing how condition vector $y$ is concatenated with noise vector $z$ in the Generator, and concatenated with image $x$ in the Discriminator.
+
+```text
+       [ Latent Noise z: (B, z_dim) ]       [ Class Label y: (B, num_classes) ]
+                     |                                       |
+                     +-------------------+-------------------+
+                                         |
+                                         v
+                         [ Concatenated Vector: [z, y] ]
+                         Shape: (B, z_dim + num_classes)
+                                         |
+                                         v
+                         +==============================+
+                         | Conditional Generator G(z,y) |
+                         | (MLP or ConvTranspose Net)   |
+                         +==============================+
+                                         |
+                                         v
+                         [ Generated Image G(z, y) ]
+                                         |
+         +-------------------------------+-------------------------------+
+         | (Fake Image Branch)                                           | (Real Image Branch)
+         v                                                               v
+  [ Generated Image G(z, y) ]                                    [ Real Image x ]
+         |                                                               |
+         +--------------+--------------------------------+---------------+
+                        |                                |
+                        v                                v
+         [ Class Label y: (B, num_classes) ]     [ Class Label y: (B, num_classes) ]
+                        |                                |
+                        v                                v
+       [ Concat: [G(z,y), y_spatial] ]          [ Concat: [x, y_spatial] ]
+                        |                                |
+                        +---------------+----------------+
+                                        |
+                                        v
+                        +===============================+
+                        | Conditional Discriminator D   |
+                        | Output: Real/Fake given y     |
+                        +===============================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Generator Conditioning Injection:**
+- **Vector Concatenation (MLP/Linear):** Noise vector $z \in \mathbb{R}^{z_{\text{dim}}}$ is concatenated with one-hot encoded class vector $y \in \mathbb{R}^{C}$ to form input $[z, y] \in \mathbb{R}^{z_{\text{dim}} + C}$.
+- **Spatial Map Concatenation (Convolutional):** For convolutional architectures, $y$ is mapped to a continuous embedding vector, reshaped to spatial dimensions $(B, C_y, H, W)$, and concatenated along channels with intermediate feature maps.
+
+**2. Discriminator Conditioning Injection:**
+- The Discriminator takes image $x \in \mathbb{R}^{C_{\text{img}} \times H \times W}$ and condition map $y_{\text{spatial}} \in \mathbb{R}^{C_y \times H \times W}$.
+- Concatenates image and spatial condition map along channel dimension $\rightarrow [x, y_{\text{spatial}}] \in \mathbb{R}^{(C_{\text{img}} + C_y) \times H \times W}$.
+- Evaluates whether image $x$ is real/fake AND whether it matches condition $y$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through a Convolutional cGAN for batch size $B=4$, noise $z \in \mathbb{R}^{100}$, $C=10$ classes (MNIST digits), image size $28 \times 28 \times 1$.
+
+1. **Generator Flow:**
+   - Noise $z$: `(4, 100)`
+   - One-hot Class Label $y$: `(4, 10)`
+   - Concatenate $[z, y]$: `(4, 110)`
+   - Linear Project + Reshape: `(4, 128, 7, 7)`
+   - ConvTranspose1 ($7 \to 14$): `(4, 64, 14, 14)`
+   - ConvTranspose2 ($14 \to 28$) + Tanh: `(4, 1, 28, 28)` $\rightarrow$ Generated Digit Image $G(z, y)$.
+2. **Discriminator Flow:**
+   - Image $x$: `(4, 1, 28, 28)`
+   - Class Embedding $y \to \text{Linear} \to \text{Reshape}$: `(4, 1, 28, 28)` (Spatial class map)
+   - Concatenate Image + Class Map: `(4, 2, 28, 28)`
+   - Conv1 (Stride 2): `(4, 64, 14, 14)` + LeakyReLU(0.2)
+   - Conv2 (Stride 2): `(4, 128, 7, 7)` + LeakyReLU(0.2)
+   - Linear Output $\rightarrow$ `(4, 1)` Sigmoid Probability $D(x, y)$.
+
+## 7. Mathematical Foundations
+
+### Minimax Objective Function
+The objective function of a Conditional GAN conditions the value function $V(D, G)$ on auxiliary variable $y$:
+
+$$\min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{\text{data}}(x)} \left[ \log D(x \mid y) \right] + \mathbb{E}_{z \sim p_z(z)} \left[ \log \left( 1 - D(G(z \mid y) \mid y) \right) \right]$$
+
+- $D(x \mid y)$ outputs the probability that real image $x$ belongs to real data distribution AND matches label $y$.
+- $G(z \mid y)$ synthesizes fake samples specifically matching label $y$.
+
+## 8. Training Procedure
+- Sample batch of real images $x$ with ground-truth labels $y$, and random noise vectors $z$.
+- **Discriminator Step:**
+  - Forward pass real images with correct labels $D(x, y) \to$ Target 1.
+  - Forward pass fake images with correct labels $D(G(z, y), y) \to$ Target 0.
+  - Compute BCE loss and update $D$.
+- **Generator Step:**
+  - Forward pass fake images with target labels $D(G(z, y), y) \to$ Target 1.
+  - Compute BCE loss and update $G$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **Conditional GAN (cGAN)** for MNIST digits.
+
+```python
+import torch
+import torch.nn as nn
+
+class CGANGenerator(nn.Module):
+    def __init__(self, z_dim=100, num_classes=10, img_channels=1):
+        super().__init__()
+        self.label_emb = nn.Embedding(num_classes, num_classes)
+        
+        self.fc = nn.Linear(z_dim + num_classes, 128 * 7 * 7)
+        self.net = nn.Sequential(
+            nn.BatchNorm2d(128),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1), # 14x14
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, img_channels, kernel_size=4, stride=2, padding=1), # 28x28
+            nn.Tanh()
+        )
+
+    def forward(self, z, labels):
+        # Embed and concatenate noise + label
+        c = self.label_emb(labels)
+        x = torch.cat([z, c], dim=1) # (B, z_dim + num_classes)
+        x = self.fc(x).view(-1, 128, 7, 7)
+        return self.net(x)
+
+class CGANDiscriminator(nn.Module):
+    def __init__(self, num_classes=10, img_channels=1):
+        super().__init__()
+        self.label_emb = nn.Embedding(num_classes, 28 * 28)
+        
+        self.net = nn.Sequential(
+            # Input channels = img_channels (1) + label channel (1) = 2
+            nn.Conv2d(img_channels + 1, 64, kernel_size=4, stride=2, padding=1), # 14x14
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1), # 7x7
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Flatten(),
+            nn.Linear(128 * 7 * 7, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, img, labels):
+        # Create spatial label channel (B, 1, 28, 28)
+        c = self.label_emb(labels).view(-1, 1, 28, 28)
+        x = torch.cat([img, c], dim=1) # Concat along channels -> (B, 2, 28, 28)
+        return self.net(x)
+
+if __name__ == "__main__":
+    B = 4
+    num_classes = 10
+    netG = CGANGenerator(z_dim=100, num_classes=num_classes)
+    netD = CGANDiscriminator(num_classes=num_classes)
+    
+    z = torch.randn(B, 100)
+    labels = torch.tensor([1, 5, 7, 9]) # Request specific digits
+    
+    fake_imgs = netG(z, labels)
+    preds = netD(fake_imgs, labels)
+    
+    print(f"Generated Image Shape: {fake_imgs.shape}")
+    print(f"Discriminator Output:  {preds.shape}")
+    assert fake_imgs.shape == (B, 1, 28, 28)
+    assert preds.shape == (B, 1)
+    print("cGAN verification successful!")
+```
+
+## 10. Strengths
+- **Explicit Category Control:** Allows targeted class generation on demand.
+- **Improved Sample Diversity:** Conditioning prevents mode collapse to a single dominant class.
+- **Generalizable Framework:** Accommodates class labels, continuous text embeddings, or image masks.
+
+## 11. Weaknesses
+- **Requires Labeled Datasets:** Depends on labeled datasets ($x, y$) for conditional training.
+
+## 12. Research Evolution
+cGAN established conditional adversarial framework, leading directly to **Pix2Pix**, **CycleGAN**, **BigGAN**, and **StyleGAN2-ADA**.
+
+## 13. Interview Questions
+
+**Q1: How does Conditional GAN (cGAN) differ from standard Unconditional GAN?**
+**A1:** Unconditional GANs sample randomly from noise $z$ with zero control over generated content. cGAN feeds auxiliary condition vector $y$ (such as class labels) into BOTH the Generator and Discriminator, allowing directed, user-controlled synthesis.
+
+**Q2: How is the condition label $y$ injected into the Discriminator in a convolutional cGAN?**
+**A2:** Label $y$ is embedded and reshaped into a single-channel spatial feature map $(B, 1, H, W)$ matching image dimensions, then concatenated along channels with input image $x \to (B, C_{\text{img}}+1, H, W)$.
+
+**Q3: What happens if the Discriminator in cGAN is NOT given condition label $y$?**
+**A3:** If the Discriminator only receives image $x$ without label $y$, the Generator will ignore condition $y$ because $D$ will evaluate image realism regardless of whether it matches label $y$.
+
+**Q4: Can cGAN be used with continuous condition signals (e.g., text embeddings)?**
+**A4:** Yes. Continuous vectors (e.g., CLIP text embeddings or attribute scalars) can be projected via linear layers into matching channel dimensions and concatenated in the exact same manner as one-hot class embeddings.
+
+**Q5: Write out the cGAN Minimax objective function.**
+**A5:** $\min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{\text{data}}} [\log D(x \mid y)] + \mathbb{E}_{z \sim p_z} [\log (1 - D(G(z \mid y) \mid y))]$.
+
+## 14. Related Papers
+- **cGAN Paper:** *Conditional Generative Adversarial Nets* (Mirza & Osindero, arXiv 2014)
+- **GAN Paper:** *Generative Adversarial Nets* (Goodfellow et al., NIPS 2014)
+
+## 15. Further Reading
+- PyTorch cGAN Image Generation Examples

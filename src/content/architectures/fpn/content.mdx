@@ -1,0 +1,278 @@
+# FPN
+
+## 1. Overview
+Feature Pyramid Network (FPN), introduced in 2016 by Tsung-Yi Lin, Piotr Dollár, Ross Girshick, Kaiming He, Bharath Hariharan, and Serge Belongie (FAIR & Cornell), solved a fundamental challenge in multi-scale object detection. Before FPN, detecting objects at multiple scales required either processing computationally expensive multi-scale image pyramids (featurized image pyramids) or relying solely on the final, deep layer of a CNN, which severely degraded small object detection. FPN created a **multi-scale feature pyramid in a single forward pass with negligible computational overhead**. By introducing a **Top-Down Pathway** (which upsamples deep semantic features) and **Lateral Connections** (which merge high-resolution low-level features from the bottom-up backbone via $1 \times 1$ convolutions), FPN outputs a rich feature pyramid $\{P_2, P_3, P_4, P_5, P_6\}$ where every level possesses both high spatial resolution and deep semantic understanding. FPN became a foundational architecture adopted across object detection, instance segmentation, and keypoint estimation.
+
+:::tip
+FPN's core motto: "Build high-level semantic feature maps at all scales in a single forward pass by combining bottom-up features with top-down upsampled features via lateral connections."
+:::
+
+## 2. Historical Context
+Before 2016, object recognition pipelines handled scale in four distinct ways:
+1. **Featurized Image Pyramids:** Resized the input image into multiple scales ($0.5\times, 1.0\times, 1.5\times$) and ran the full CNN independently over each scale. Highly accurate, but computationally ruinous for real-time applications.
+2. **Single Feature Map:** Used only the final, deepest layer of a CNN (e.g., $C_5$ at stride 32 in Faster R-CNN). Fast, but small objects ($16 \times 16$ pixels) disappeared or were reduced to sub-pixel points.
+3. **Pyramidal Feature Hierarchy:** Used different stages of the backbone for different scale predictions (e.g., SSD). Fast, but early stages ($C_2, C_3$) lacked deep semantic features necessary for accurate classification.
+4. **Feature Pyramid Network (FPN):** Lin et al. combined the best of all worlds. They recognized that the bottom-up backbone already constructs a feature hierarchy ($C_2$ to $C_5$). By adding a top-down pathway that upsamples deep semantic features and merges them with early bottom-up features via $1 \times 1$ lateral convolutions, FPN builds rich semantic features at *every* level of the pyramid without evaluating multi-scale image inputs.
+
+## 3. Problem It Solves
+FPN addresses three fundamental limitations of single-scale feature representations:
+1. **Small Object Detection Failure:** Deep CNN layers ($C_5$) have a stride of 32; a small $16 \times 16$ pixel object collapses to less than 1 cell, rendering it invisible to RPN or SSD heads. FPN's $P_2$ level maintains $1/4$ scale resolution rich in small-object features.
+2. **Computational Overhead of Image Pyramids:** Replaces external image scaling (which multiplies GPU FLOPs by the number of scales) with an internal feature pyramid constructed in a single forward pass ($\le 5\%$ runtime overhead).
+3. **Semantic Weakness of Early Layers:** Solves SSD's failure where early layers ($C_2, C_3$) lacked deep semantic context, by propagating deep $C_5$ semantics top-down into $P_2$ and $P_3$.
+
+## 4. Architecture Diagram Data
+Below is the full FPN architecture showing the Bottom-Up Backbone, Top-Down Pathway, Lateral Connections, and Feature Map Dimensions.
+
+```text
+       BOTTOM-UP PATHWAY                          TOP-DOWN PATHWAY
+       (Backbone: ResNet)                         (Semantic Feature Fusion)
+
+       [ Input Image: (3, 512, 512) ]
+                      |
+                      v
+       +-----------------------------+
+       | Conv1 + Stage 1 (Stride 4)  |
+       | Feature Map C1: (64,128,128)| (Not used due to high memory)
+       +-----------------------------+
+                      |
+                      v
+       +-----------------------------+               +------------------+
+       | Stage 2 (Stride 4)          |  1x1 Conv     | Pyramid Level P2 |
+       | Feature Map C2: (256,128,128)| ------------->| (256, 128, 128)  |
+       +-----------------------------+  (Lateral)    +------------------+
+                      |                                       ^
+                      |                                       | (2x Upsample + Add)
+                      v                                       |
+       +-----------------------------+               +------------------+
+       | Stage 3 (Stride 8)          |  1x1 Conv     | Pyramid Level P3 |
+       | Feature Map C3: (512, 64, 64)| ------------->| (256, 64, 64)    |
+       +-----------------------------+  (Lateral)    +------------------+
+                      |                                       ^
+                      |                                       | (2x Upsample + Add)
+                      v                                       |
+       +-----------------------------+               +------------------+
+       | Stage 4 (Stride 16)         |  1x1 Conv     | Pyramid Level P4 |
+       | Feature Map C4:(1024, 32, 32)| ------------->| (256, 32, 32)    |
+       +-----------------------------+  (Lateral)    +------------------+
+                      |                                       ^
+                      |                                       | (2x Upsample + Add)
+                      v                                       |
+       +-----------------------------+               +------------------+
+       | Stage 5 (Stride 32)         |  1x1 Conv     | Pyramid Level P5 |
+       | Feature Map C5:(2048, 16, 16)| ------------->| (256, 16, 16)    |
+       +-----------------------------+  (Lateral)    +------------------+
+                                                              |
+                                                              | (MaxPool 2x2, Stride 2)
+                                                              v
+                                                     +------------------+
+                                                     | Pyramid Level P6 |
+                                                     | (256, 8, 8)      |
+                                                     +------------------+
+
+       ==================================================================
+       DETECTION HEAD ATTACHMENT:
+       Independent RPN & RoI Heads attached to EACH level {P2, P3, P4, P5, P6}
+       All levels share the SAME head parameters!
+       ==================================================================
+```
+
+## 5. Layer-by-Layer Breakdown
+FPN transforms a standard backbone into a multi-scale pyramid via three components:
+
+### 1. Bottom-Up Pathway (Standard ResNet Backbone)
+- Passes the image through a standard ResNet backbone.
+- Extracts spatial feature maps at the end of each residual stage: $\{C_2, C_3, C_4, C_5\}$ with strides $\{4, 8, 16, 32\}$ relative to the input image.
+- Channels for ResNet-50/101 are: $C_2(256), C_3(512), C_4(1024), C_5(2048)$. Stage 1 ($C_1$) is omitted due to extreme memory consumption.
+
+### 2. Top-Down Pathway & Lateral Connections
+- **Top Level Initialization ($P_5$):** Applies a $1 \times 1$ convolution on $C_5$ to reduce channel dimension to $d=256$, producing $P_5$:
+  $$P_5 = \text{Conv}_{1\times1}(C_5) \in \mathbb{R}^{256 \times H/32 \times W/32}$$
+- **Iterative Top-Down Fusion ($P_4, P_3, P_2$):** For stage $k \in \{4, 3, 2\}$:
+  1. Upsample higher-level feature map $P_{k+1}$ by $2\times$ using nearest-neighbor interpolation.
+  2. Pass bottom-up map $C_k$ through a $1 \times 1$ lateral convolution to reduce channels to $d=256$.
+  3. Add the upsampled features and lateral features element-wise:
+     $$P_k^{\text{raw}} = \text{Upsample}_{2\times}(P_{k+1}) + \text{Conv}_{1\times1}(C_k)$$
+  4. Apply a $3 \times 3$ convolution on $P_k^{\text{raw}}$ (padding 1) to eliminate anti-aliasing artifacts caused by nearest-neighbor upsampling, producing final pyramid map $P_k \in \mathbb{R}^{256 \times H/2^k \times W/2^k}$.
+
+### 3. Extra Level for RPN ($P_6$)
+- $P_6$ is created by applying a $3 \times 3$ max-pooling with stride 2 on $P_5$, producing $P_6 \in \mathbb{R}^{256 \times H/64 \times W/64}$ (used exclusively in RPN for massive objects).
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through FPN (ResNet-50 backbone) for an input `(B, 3, 512, 512)` and uniform pyramid channels $d=256$.
+
+1. **Bottom-Up Feature Extraction (ResNet-50):**
+   - $C_2$: `(B, 256, 128, 128)`  (Stride 4)
+   - $C_3$: `(B, 512, 64, 64)`    (Stride 8)
+   - $C_4$: `(B, 1024, 32, 32)`   (Stride 16)
+   - $C_5$: `(B, 2048, 16, 16)`   (Stride 32)
+
+2. **Top-Down & Lateral Fusion:**
+   - **$P_5$ Generation:**
+     - Lateral $1\times1$ Conv on $C_5(2048 \rightarrow 256) \rightarrow$ `(B, 256, 16, 16)`
+     - Smooth $3\times3$ Conv $\rightarrow P_5$: `(B, 256, 16, 16)`
+   - **$P_4$ Generation:**
+     - Upsample $P_5(2\times) \rightarrow$ `(B, 256, 32, 32)`
+     - Lateral $1\times1$ Conv on $C_4(1024 \rightarrow 256) \rightarrow$ `(B, 256, 32, 32)`
+     - Element-wise Add $\rightarrow$ `(B, 256, 32, 32)`
+     - Smooth $3\times3$ Conv $\rightarrow P_4$: `(B, 256, 32, 32)`
+   - **$P_3$ Generation:**
+     - Upsample $P_4(2\times) \rightarrow$ `(B, 256, 64, 64)`
+     - Lateral $1\times1$ Conv on $C_3(512 \rightarrow 256) \rightarrow$ `(B, 256, 64, 64)`
+     - Element-wise Add $\rightarrow$ `(B, 256, 64, 64)`
+     - Smooth $3\times3$ Conv $\rightarrow P_3$: `(B, 256, 64, 64)`
+   - **$P_2$ Generation:**
+     - Upsample $P_3(2\times) \rightarrow$ `(B, 256, 128, 128)`
+     - Lateral $1\times1$ Conv on $C_2(256 \rightarrow 256) \rightarrow$ `(B, 256, 128, 128)`
+     - Element-wise Add $\rightarrow$ `(B, 256, 128, 128)`
+     - Smooth $3\times3$ Conv $\rightarrow P_2$: `(B, 256, 128, 128)`
+   - **$P_6$ Generation:**
+     - MaxPool2d($P_5$, $2\times2$, stride 2) $\rightarrow P_6$: `(B, 256, 8, 8)`
+
+3. **Output Pyramid:**
+   - $\{P_2, P_3, P_4, P_5, P_6\}$ all standardized to 256 channels!
+
+## 7. Mathematical Foundations
+
+### 1. Lateral Connection & Top-Down Fusion Equation
+For level $k \in \{4, 3, 2\}$:
+
+$$P_k = \text{Conv}_{3\times3} \left( \text{Conv}_{1\times1}(C_k) + \text{NearestUpsample}_{2\times}(P_{k+1}) \right)$$
+
+where:
+- $\text{Conv}_{1\times1}: \mathbb{R}^{C_k \times H_k \times W_k} \rightarrow \mathbb{R}^{256 \times H_k \times W_k}$ reduces channel dimensions.
+- $\text{NearestUpsample}_{2\times}: \mathbb{R}^{256 \times H_{k+1} \times W_{k+1}} \rightarrow \mathbb{R}^{256 \times H_k \times W_k}$ doubles spatial dimensions.
+- $\text{Conv}_{3\times3}: \mathbb{R}^{256 \times H_k \times W_k} \rightarrow \mathbb{R}^{256 \times H_k \times W_k}$ removes nearest-neighbor interpolation aliasing artifacts.
+
+### 2. RoI Assignment to Pyramid Levels
+In Faster R-CNN with FPN, an RoI of width $w$ and height $h$ on the input image is assigned to a specific pyramid level $P_k$ using the continuous formula:
+
+$$k = \left\lfloor k_0 + \log_2 \left( \frac{\sqrt{w \cdot h}}{224} \right) \right\rfloor$$
+
+where:
+- $k_0 = 4$ (the target level for a standard $224 \times 224$ RoI).
+- $\sqrt{w \cdot h}$ is the RoI's area scale.
+
+For example:
+- An RoI of $112 \times 112$ ($\sqrt{wh}=112$): $k = \lfloor 4 + \log_2(112/224) \rfloor = \lfloor 4 - 1 \rfloor = 3 \rightarrow P_3$.
+- An RoI of $448 \times 448$ ($\sqrt{wh}=448$): $k = \lfloor 4 + \log_2(448/224) \rfloor = \lfloor 4 + 1 \rfloor = 5 \rightarrow P_5$.
+
+Smaller RoIs map to high-resolution levels ($P_2, P_3$); larger RoIs map to coarse levels ($P_4, P_5$).
+
+## 8. Training Procedure
+- **Shared Parameters Across Pyramid Heads:** The same RPN head (a $3 \times 3$ conv + two $1 \times 1$ convs) and the same Fast R-CNN box head are evaluated on *all* pyramid levels $\{P_2, P_3, P_4, P_5, P_6\}$. Head parameters are shared across levels.
+- **Anchor Single Scale Per Level:** Instead of assigning 3 scales $\times$ 3 ratios to a single feature map, FPN assigns a single scale per pyramid level:
+  - $P_2 \rightarrow 32^2$ area anchors (3 ratios: 1:1, 1:2, 2:1)
+  - $P_3 \rightarrow 64^2$ area anchors
+  - $P_4 \rightarrow 128^2$ area anchors
+  - $P_5 \rightarrow 256^2$ area anchors
+  - $P_6 \rightarrow 512^2$ area anchors
+- **Optimizer:** SGD with momentum 0.9, weight decay $10^{-4}$, initial learning rate 0.02.
+
+## 9. PyTorch Implementation
+Here is a complete, self-contained PyTorch implementation of Feature Pyramid Network (FPN) with shape verification.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FeaturePyramidNetwork(nn.Module):
+    def __init__(self, in_channels_list=[256, 512, 1024, 2048], out_channels=256):
+        super().__init__()
+        assert len(in_channels_list) == 4 # Expecting C2, C3, C4, C5
+        
+        # 1x1 Lateral Convolutions
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(in_ch, out_channels, kernel_size=1) for in_ch in in_channels_list
+        ])
+        
+        # 3x3 Smooth Convolutions (to eliminate anti-aliasing artifacts)
+        self.fpn_convs = nn.ModuleList([
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1) for _ in in_channels_list
+        ])
+
+    def forward(self, c2, c3, c4, c5):
+        """
+        c2, c3, c4, c5: Feature maps from ResNet backbone stages
+        Strides: C2(4), C3(8), C4(16), C5(32)
+        """
+        # 1. Compute Top Level P5
+        p5 = self.lateral_convs[3](c5)
+        
+        # 2. Top-Down Pathway with Lateral Fusion
+        p4 = self.lateral_convs[2](c4) + F.interpolate(p5, scale_factor=2, mode='nearest')
+        p3 = self.lateral_convs[1](c3) + F.interpolate(p4, scale_factor=2, mode='nearest')
+        p2 = self.lateral_convs[0](c2) + F.interpolate(p3, scale_factor=2, mode='nearest')
+        
+        # 3. Apply 3x3 Smooth Convolutions
+        p2 = self.fpn_convs[0](p2)
+        p3 = self.fpn_convs[1](p3)
+        p4 = self.fpn_convs[2](p4)
+        p5 = self.fpn_convs[3](p5)
+        
+        # 4. Generate P6 via MaxPool on P5 (for RPN)
+        p6 = F.max_pool2d(p5, kernel_size=1, stride=2)
+        
+        return p2, p3, p4, p5, p6
+
+if __name__ == "__main__":
+    B = 2
+    out_channels = 256
+    fpn = FeaturePyramidNetwork(in_channels_list=[256, 512, 1024, 2048], out_channels=out_channels)
+    
+    # Dummy ResNet backbone feature maps for input (3, 512, 512)
+    c2 = torch.randn(B, 256, 128, 128) # Stride 4
+    c3 = torch.randn(B, 512, 64, 64)   # Stride 8
+    c4 = torch.randn(B, 1024, 32, 32)  # Stride 16
+    c5 = torch.randn(B, 2048, 16, 16)  # Stride 32
+    
+    p2, p3, p4, p5, p6 = fpn(c2, c3, c4, c5)
+    
+    print(f"P2 Shape: {p2.shape}") # Expect (B, 256, 128, 128)
+    print(f"P3 Shape: {p3.shape}") # Expect (B, 256, 64, 64)
+    print(f"P4 Shape: {p4.shape}") # Expect (B, 256, 32, 32)
+    print(f"P5 Shape: {p5.shape}") # Expect (B, 256, 16, 16)
+    print(f"P6 Shape: {p6.shape}") # Expect (B, 256, 8, 8)
+    
+    assert p2.shape == (B, out_channels, 128, 128)
+    assert p6.shape == (B, out_channels, 8, 8)
+    print("FPN Architecture verification successful!")
+```
+
+## 10. Strengths
+- **Multi-Scale Feature Hierarchy:** Generates rich multi-scale feature maps in a single forward pass without evaluating multi-scale image inputs.
+- **Dramatically Improved Small Object Detection:** Increases mAP on small objects by over 5 AP points on COCO benchmark.
+- **Universal Plug-and-Play Backbone:** Replaces single-scale backbones across two-stage detectors (Faster R-CNN), single-stage detectors (RetinaNet), and segmentation heads (Panoptic FPN).
+
+## 11. Weaknesses
+- **Top-Down Sequential Latency:** Top-down sequential feature fusion introduces slight latency dependencies that cannot be fully parallelized.
+- **Heuristic Level Assignment:** Mapping RoIs to pyramid levels using continuous log-area formula $k = \lfloor k_0 + \log_2(\sqrt{wh}/224) \rfloor$ is a hand-crafted rule (later relaxed by PANet's adaptive feature pooling).
+
+## 12. Research Evolution
+FPN established the multi-scale feature backbone standard. It inspired **PANet** (Path Aggregation Network, 2018, which added a bottom-up augmentation path), **BiFPN** (EfficientDet, 2020, bidirectional feature fusion), and **FPN in Vision Transformers** (ViT-FPN).
+
+## 13. Interview Questions
+
+**Q1: Why does FPN apply a $3 \times 3$ convolution to each feature map after top-down addition?**
+**A1:** Nearest-neighbor upsampling causes aliasing artifacts (blocky step-like pixel patterns) when merged with $1 \times 1$ lateral conv features. The $3 \times 3$ convolution acts as a spatial smoothing filter to eliminate these aliasing artifacts before passing features to detection heads.
+
+**Q2: How does FPN assign a proposed RoI to a specific pyramid level $P_k$?**
+**A2:** FPN assigns an RoI of width $w$ and height $h$ based on its area using $k = \lfloor k_0 + \log_2(\sqrt{wh}/224) \rfloor$, where $k_0 = 4$. Small RoIs (e.g., $112 \times 112$) map to high-resolution level $P_3$; large RoIs (e.g., $448 \times 448$) map to coarse level $P_5$.
+
+**Q3: Why is stage 1 ($C_1$) omitted from the FPN pyramid?**
+**A3:** Stage 1 operates at $1/2$ scale resolution ($256 \times 256$). Including $C_1$ in the pyramid consumes massive GPU memory for feature map storage and 1x1 convolutions while contributing negligible semantic information compared to $C_2$.
+
+**Q4: Are the parameters of the RPN heads shared across all FPN levels $\{P_2, P_3, P_4, P_5, P_6\}$?**
+**A4:** Yes. All pyramid levels are projected to a uniform channel dimension ($d=256$). This allows a single RPN head (and a single Fast R-CNN box head) with shared parameters to evaluate all levels of the pyramid.
+
+**Q5: Compare FPN with SSD (Single Shot MultiBox Detector) regarding multi-scale feature representations.**
+**A5:** SSD uses early bottom-up layers (e.g., Conv4_3) for small objects and deep layers for large objects. However, early SSD layers lack deep semantic features. FPN adds a **top-down pathway** that upsamples deep $C_5$ semantic features into early layers ($P_2, P_3$), ensuring that all levels have deep semantic context.
+
+## 14. Related Papers
+- **FPN Paper:** *Feature Pyramid Networks for Object Detection* (Lin et al., CVPR 2017)
+- **RetinaNet Paper:** *Focal Loss for Dense Object Detection* (Lin et al., ICCV 2017)
+- **PANet Paper:** *Path Aggregation Network for Instance Segmentation* (Liu et al., CVPR 2018)
+
+## 15. Further Reading
+- PyTorch Official Feature Pyramid Network Implementation (`torchvision.ops.FeaturePyramidNetwork`)
+- Detectron2 FPN Backbone Documentation & Benchmarks

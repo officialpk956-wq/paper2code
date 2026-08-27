@@ -1,0 +1,180 @@
+# Re-Ranking and Fusion
+
+## 1. Overview
+
+A retriever returns a ranked list, but not all rankings are optimal — a document that's relevant might rank lower than an irrelevant one because the retriever's signal (keyword overlap, simple embedding similarity) misses important relevance factors. **Re-ranking** takes that initial ranking and reorders it using a more sophisticated (and more expensive) model, applied only to the top-k candidates from the cheaper retriever. **Fusion** combines multiple independent rankings (from different retrievers, different stages, even human judgments) into a single, often better ranking. Both are critical to production RAG systems: re-ranking improves accuracy on small candidate sets; fusion leverages complementary signals from different rankers without committing to a single retrieval strategy.
+
+## 2. Prerequisites in Context
+
+**Ranking and Information Retrieval** is essential — you need to understand how ranking works and what makes one ranking better than another (MAP, NDCG metrics). **Learning to Rank (LTR)** is a key prerequisite — re-rankers are often trained using LTR techniques that directly optimize ranking metrics rather than classification or regression loss. **Multi-Stage Retrieval** and **Hybrid Search** provide practical context, as re-ranking is typically the second or later stage in multi-stage pipelines.
+
+## 3. Core Concept
+
+A **re-ranker** is a learned model, typically a transformer (like BERT fine-tuned for ranking), that takes a query and a candidate document and produces a relevance score more sophisticated than a simple embedding dot product. Examples: (1) **Pointwise reranking** — score each (query, document) pair independently, re-rank candidates by new scores; (2) **Pairwise reranking** — given two candidate documents and a query, learn to predict which is more relevant, enabling pairwise swaps in the ranking; (3) **Listwise reranking** — score all candidates as a list, optimizing for ranking metrics like NDCG directly. **LTR (Learning to Rank)** formalizes this: train a model to predict relevance scores or ranking orderings, optimizing for ranking quality (NDCG, MAP) rather than binary classification or MSE. **Score calibration** (translating model outputs into reliable probability estimates) and **threshold tuning** (choosing which candidates pass a quality bar) are practical considerations — a re-ranker that outputs high scores might be overconfident, requiring calibration.
+
+## 4. Theoretical Foundations
+
+**Pointwise LTR** treats ranking as a regression or classification task: predict a relevance score for each document independently. Loss: $\mathcal{L} = \sum_i (\hat{y}_i - y_i)^2$ where $\hat{y}$ is predicted relevance and $y$ is ground truth. Simple but ignores the fact that ranking quality depends on *relative* ordering, not absolute scores. **Pairwise LTR** treats ranking as pairwise preference prediction: given documents $d_i$ and $d_j$ with $d_i$ preferred to $d_j$, optimize: $\mathcal{L} = \log(1 + e^{-s_i + s_j})$ (ranking SVM-style loss). This directly optimizes ordering but ignores how far apart documents in the ranking are (position-independent). **Listwise LTR** (e.g., LambdaMART, LambdaRank) directly optimizes ranking metrics like NDCG:
+$$\text{NDCG} = \sum_i \frac{2^{y_i} - 1}{\log(i+1)}$$
+where $y_i$ is the relevance of the $i$-th document and $i$ is its position. Listwise methods account for position and the full ranking, making them the most aligned with evaluation metrics, though also the most complex to train.
+
+## 5. Worked Example
+
+Given a query "fix a broken laptop screen" and 100 retrieved candidate documents, a simple re-ranker (BERT fine-tuned for NLI — natural language inference) can re-score each (query, document) pair, determining whether the document entails or contradicts the query intent. Documents describing screen repair rank highly; documents about screen protectors rank lower. A pairwise re-ranker swaps adjacent documents that are out of order (e.g., if "Screen Replacement Guide" ranks below "Laptop Cases," swap them because screen replacement is more relevant to "fix screen"). A listwise re-ranker outputs a permutation of candidates optimized for NDCG, accounting for positions — ensuring the most relevant document ranks first gets higher value than ensuring a moderately relevant one ranks second.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+class PointwiseReranker:
+    """Pointwise reranking: score each (query, document) pair independently."""
+    def __init__(self, model_name="cross-encoder/ms-marco-MiniLM-L-12-v2", device="cpu"):
+        self.device = device
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
+    
+    def score(self, query, documents):
+        """Score all (query, doc) pairs."""
+        # Tokenize all pairs
+        inputs = self.tokenizer(
+            [query] * len(documents),
+            documents,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=512
+        ).to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            logits = outputs.logits
+        
+        # Scores are the logits for the "relevant" class (class 1)
+        scores = logits[:, 1].cpu().numpy()
+        return scores
+    
+    def rerank(self, query, documents, top_k=None):
+        """Rerank documents by relevance to query."""
+        scores = self.score(query, documents)
+        
+        # Sort by score
+        ranked = sorted(zip(documents, scores), key=lambda x: x[1], reverse=True)
+        
+        if top_k:
+            ranked = ranked[:top_k]
+        
+        return ranked
+
+class PairwiseReranker(nn.Module):
+    """Simplified pairwise reranking model."""
+    def __init__(self, embedding_dim=256):
+        super().__init__()
+        self.query_encoder = nn.Linear(embedding_dim, 128)
+        self.doc_encoder = nn.Linear(embedding_dim, 128)
+        self.scorer = nn.Linear(256, 1)
+    
+    def forward(self, query_emb, doc1_emb, doc2_emb):
+        """Predict which of doc1 or doc2 is more relevant to query."""
+        q = self.query_encoder(query_emb)
+        d1 = self.doc_encoder(doc1_emb)
+        d2 = self.doc_encoder(doc2_emb)
+        
+        # Concatenate query with each doc
+        pair1 = torch.cat([q, d1], dim=-1)
+        pair2 = torch.cat([q, d2], dim=-1)
+        
+        score1 = self.scorer(pair1)
+        score2 = self.scorer(pair2)
+        
+        # Return probability that doc1 is more relevant
+        logits = torch.cat([score1, score2], dim=-1)
+        return torch.softmax(logits, dim=-1)
+
+def calculate_ndcg(relevances, k=10):
+    """Calculate NDCG@k given relevance scores."""
+    relevances = relevances[:k]
+    
+    # DCG: sum of (2^rel - 1) / log2(i+1)
+    dcg = 0
+    for i, rel in enumerate(relevances):
+        dcg += (2**rel - 1) / np.log2(i + 2)
+    
+    # IDCG: DCG of perfect ranking (sorted by relevance)
+    ideal = sorted(relevances, reverse=True)
+    idcg = 0
+    for i, rel in enumerate(ideal):
+        idcg += (2**rel - 1) / np.log2(i + 2)
+    
+    return dcg / idcg if idcg > 0 else 0
+
+if __name__ == "__main__":
+    import numpy as np
+    
+    # Example pointwise reranking (pseudo-code)
+    query = "how do I fix a broken laptop screen?"
+    documents = [
+        "Laptop screen broken: common fixes",
+        "Laptop cases and protection",
+        "Screen replacement guide for most laptops",
+        "Keyboard repair for Dell XPS"
+    ]
+    
+    # Simulate scores (in practice, use a trained reranker)
+    simulated_scores = [0.85, 0.3, 0.92, 0.4]
+    ranked = sorted(zip(documents, simulated_scores), key=lambda x: x[1], reverse=True)
+    
+    print("Pointwise Reranking Results:")
+    for i, (doc, score) in enumerate(ranked, 1):
+        print(f"  {i}. ({score:.2f}) {doc}")
+    
+    # NDCG calculation
+    relevances = np.array([3, 0, 2, 1])  # relevance labels for above ranking
+    ndcg = calculate_ndcg(relevances[:2], k=2)
+    print(f"\nNDCG@2: {ndcg:.4f}")
+```
+
+## 7. Real-World Applications
+
+Google Search uses neural re-rankers based on BERT and learning-to-rank models to refine initial rankings. Elasticsearch's learning-to-rank plugin allows users to train custom re-rankers on their own relevance judgments. Question-answering systems use re-rankers that assess not just term overlap but semantic relevance and factual correctness. Recommendation systems use pairwise and listwise rankers to optimize for user engagement metrics (clicks, dwell time, conversions).
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that re-ranking always helps — if the initial retriever misses relevant documents entirely (low recall), re-ranking of the top-k can't recover them. Re-ranking improves precision on a fixed candidate set, not recall. Another pitfall is training re-rankers on the wrong metric — a re-ranker optimized for MSE loss (pointwise) won't necessarily maximize NDCG or MAP; listwise LTR or at least pairwise training aligns better with ranking metrics. A third pitfall is ignoring inference cost — applying an expensive neural re-ranker to every document is slow; the efficiency comes from applying it only to the top-k from a faster retriever.
+
+## 9. How This Connects
+
+This topic requires **Ranking and Information Retrieval** and **Learning to Rank** as prerequisites. It connects to **Hybrid Search Strategies** (re-ranking is a key stage in hybrid systems), **Production RAG at Scale** (deploying re-rankers efficiently), **Fusion** (combining rankings from different sources), and applications to **Search Systems**, **Question Answering**, and **Recommendation Systems**.
+
+## 10. Check Your Understanding
+
+**Q1: What is the fundamental difference between reranking and initial retrieval?**
+Initial retrieval is fast but may be less precise (uses simpler signals like keyword overlap). Reranking applies a more sophisticated (and expensive) model only to top-k candidates, improving precision without needing to score all documents.
+
+**Q2: Why is pointwise learning-to-rank less ideal than listwise for optimizing ranking quality?**
+Pointwise LTR scores documents independently and ignores their relative ranking positions. Listwise LTR directly optimizes ranking metrics like NDCG that account for position and relative ordering, making it more aligned with evaluation metrics.
+
+**Q3: What is the advantage of pairwise learning-to-rank?**
+Pairwise LTR learns relative preferences (which document is more relevant), which is more aligned with ranking quality than absolute scores. It's more efficient than listwise (fewer pairs than full lists) and more principled than pointwise (considers relative order).
+
+**Q4: How does score calibration affect reranker deployment?**
+A reranker outputs scores that may not reflect true relevance probabilities (e.g., outputting 0.9 when true confidence is 0.6). Calibration maps outputs to reliable probabilities, enabling principled thresholding and fusion with other signals.
+
+**Q5: Why is reranking typically applied only to top-k candidates from a retriever, not all documents?**
+Because applying expensive neural models to all documents is prohibitively slow at scale (billions of documents). Using a fast retriever (BM25) to filter to top-k, then reranking, achieves good accuracy with reasonable latency.
+
+## 11. Further Reading
+
+- Liu, "Learning to Rank for Information Retrieval" (2009) — foundational LTR text
+- Burges et al., "Learning to Rank Using Gradient Boosting" (LambdaMART, 2010)
+- Nogueira & Cho, "Passage Re-ranking with BERT" (2019) — neural reranking for QA
+- Thakur et al., "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation" (2021)
+- See also: `hybrid-search-strategies` in this domain and `learning-to-rank` in the ML curriculum
+
+## Related Platform Content
+
+- [RAG SYSTEMS curriculum overview](/learn/rag-systems)
+- [Production system](/system-design/rag-systems)
+- [Browse all system designs](/system-design)

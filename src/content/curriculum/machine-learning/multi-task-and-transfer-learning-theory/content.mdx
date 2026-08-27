@@ -1,0 +1,111 @@
+# Multi-Task & Transfer Learning Theory
+
+## 1. Overview
+
+Transfer learning — pretraining a model on one task or dataset, then reusing what it learned on a different task — is arguably the single most economically important idea in modern deep learning: it's the entire reason pretraining a foundation model once and fine-tuning it thousands of times is more efficient than training from scratch every time. Multi-task learning is closely related: training one model on several tasks simultaneously, hoping that what it learns for one task helps it on the others. This topic is about the *theory* behind both — precisely when and why sharing representations across tasks or transferring across a pretraining/fine-tuning boundary actually helps, and when it can hurt.
+
+## 2. Prerequisites in Context
+
+**Statistical Learning Theory** provides the generalization-bound machinery needed to formalize "how much does pretraining on task A reduce the sample complexity needed to learn task B well" as an actual provable statement, rather than an intuition. **Meta-Learning** is closely related in structure — both fields study how experience on a distribution of related tasks (or one auxiliary task) can improve performance on a new or held-out task, and many of the same mathematical tools (task similarity measures, shared-representation bounds) appear in both.
+
+## 3. Core Concept
+
+The theoretical backbone here is captured by **shared-representation learning bounds**. Suppose $T$ related tasks share a common, unknown low-dimensional representation function $\phi$ (mapping raw inputs to a shared feature space), and each task has its own task-specific "head" built on top of $\phi$. If you learn $\phi$ using data pooled across all $T$ tasks, the *effective* sample complexity for learning the shared representation well scales like $n \cdot T$ (total examples across all tasks) rather than just $n$ (examples for one task alone) — while each task-specific head, being much lower-capacity, still only needs its own modest per-task sample size to fit well on top of the shared representation. This is the formal reason why pretraining on a large, diverse pool of data (many tasks, or one enormous task like next-token prediction across a huge and varied text corpus) can produce a representation that transfers to a new task with far fewer labeled examples than would be needed to learn that representation from scratch using only the new task's own data.
+
+## 4. Theoretical Foundations
+
+A representative bound (informally, following the shared-representation learning literature) for the excess risk on a new target task $T+1$, given a representation $\hat\phi$ learned from $T$ source tasks with $n$ examples each, looks like:
+$$\text{ExcessRisk}(T+1) \leq O\left(\sqrt{\frac{C(\Phi)}{nT}}\right) + O\left(\sqrt{\frac{C(\mathcal{H})}{n_{T+1}}}\right)$$
+where $C(\Phi)$ is a complexity measure of the representation function class (amortized over $nT$ total source examples — hence shrinking as either $n$ or $T$ grows) and $C(\mathcal{H})$ is the complexity of just the per-task head (using only the target task's own $n_{T+1}$ examples). The crucial structural insight is that the *expensive* part (learning a good representation, which requires high capacity to capture rich, general features) gets amortized over all source tasks' data, while the *cheap* part (adapting the shared representation to a new task) only needs to fit a low-capacity head, which requires far fewer target-task examples than learning the whole thing from scratch would. This is precisely why fine-tuning a pretrained model's final layer (or a small adapter) on limited target-task data works so well: the theory predicts it should, given a sufficiently informative shared representation.
+
+## 5. Worked Example
+
+Imagine trying to build a medical image classifier for a rare disease with only 200 labeled X-rays available — far too few to train a deep CNN from random initialization without severe overfitting. Instead, take a network pretrained on ImageNet (1.2 million general images across 1,000 categories — a "source task" with no direct relationship to the rare disease) and fine-tune just its final classification layer (or a small adapter) on the 200 available X-rays. Despite ImageNet containing no medical images, the pretrained convolutional features (edges, textures, shapes) transfer well enough that this fine-tuned classifier substantially outperforms a from-scratch CNN trained only on the 200 images — exactly the shared-representation-bound prediction: the expensive representation-learning cost was amortized over ImageNet's millions of examples, leaving only a cheap, low-capacity adaptation step for the actual target task.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+class SharedRepresentationModel(nn.Module):
+    """Illustrates the shared phi + per-task head structure directly."""
+    def __init__(self, input_dim, repr_dim, num_tasks, task_output_dims):
+        super().__init__()
+        self.phi = nn.Sequential(          # shared representation, learned across all tasks
+            nn.Linear(input_dim, 128), nn.ReLU(),
+            nn.Linear(128, repr_dim), nn.ReLU(),
+        )
+        self.heads = nn.ModuleList([        # cheap, low-capacity per-task heads
+            nn.Linear(repr_dim, out_dim) for out_dim in task_output_dims
+        ])
+
+    def forward(self, x, task_id):
+        features = self.phi(x)              # shared, expensive-to-learn representation
+        return self.heads[task_id](features)  # cheap task-specific adaptation
+
+def multitask_loss(model, batches_per_task, loss_fns):
+    """batches_per_task: list of (x, y) per task. Pools gradient signal for phi
+    across all tasks simultaneously — the mechanism that amortizes representation
+    learning cost across n * T total examples."""
+    total_loss = 0.0
+    for task_id, ((x, y), loss_fn) in enumerate(zip(batches_per_task, loss_fns)):
+        preds = model(x, task_id)
+        total_loss = total_loss + loss_fn(preds, y)
+    return total_loss
+
+if __name__ == "__main__":
+    model = SharedRepresentationModel(input_dim=20, repr_dim=16, num_tasks=3, task_output_dims=[2, 5, 1])
+    tasks = [
+        (torch.randn(30, 20), torch.randint(0, 2, (30,))),
+        (torch.randn(30, 20), torch.randint(0, 5, (30,))),
+        (torch.randn(30, 20), torch.randn(30, 1)),
+    ]
+    loss_fns = [nn.CrossEntropyLoss(), nn.CrossEntropyLoss(), nn.MSELoss()]
+    loss = multitask_loss(model, tasks, loss_fns)
+    assert loss.item() > 0
+    print(f"Combined multi-task loss across {len(tasks)} tasks: {loss.item():.3f}")
+```
+
+## 7. Real-World Applications
+
+Every "pretrain then fine-tune" workflow in modern NLP and vision is a direct application of this theory — BERT and GPT-family pretraining (see `bert` and `gpt-1` on this platform) produce a shared representation from an enormous, task-agnostic corpus, which is then adapted with comparatively tiny amounts of task-specific data during fine-tuning. LoRA and other parameter-efficient fine-tuning methods take the shared-representation theory to its logical extreme: they freeze the (expensive-to-learn) shared representation entirely and only train a very low-rank, cheap adaptation on top — a direct engineering embodiment of the "amortize the expensive part, keep the adaptation cheap" theoretical structure. Multi-task learning itself is used directly in production recommendation systems (predicting click-through-rate, watch-time, and conversion simultaneously from shared user/item embeddings, as documented in the two-tower and DLRM style architectures on this platform).
+
+## 8. Common Pitfalls & Misconceptions
+
+A common mistake is assuming transfer learning always helps — **negative transfer** is a real, well-documented phenomenon where a source task's learned representation actively hurts performance on a dissimilar target task, precisely because the shared-representation bound's benefit depends on the source and target tasks actually sharing useful structure; when they don't, forcing a shared representation can bias the model toward source-task-specific features that are actively misleading for the target task. Another pitfall in multi-task learning specifically is naively summing losses across tasks without accounting for differing loss scales or gradient magnitudes — a task with a much larger natural loss scale can dominate the shared representation's gradient updates, effectively starving the other tasks of useful signal even though all tasks were nominally "included" in training.
+
+## 9. How This Connects
+
+This topic requires **Statistical Learning Theory** (for the generalization-bound machinery that makes "amortized sample complexity across tasks" a provable statement) and **Meta-Learning** (whose task-distribution framing and nested-optimization structure closely parallels multi-task and transfer learning theory). This topic has no further curriculum unlocks listed, but its ideas underpin essentially all of modern foundation-model practice — every fine-tuning workflow across the Curriculum's LLM Engineering, NLP, and Computer Vision domains rests on the shared-representation-bound intuition developed here.
+
+## 10. Check Your Understanding
+
+**Q1: What is the key structural assumption behind shared-representation learning bounds?**
+That multiple related tasks share a common, unknown representation function, and each task only needs a separate, low-capacity "head" built on top of that shared representation. This assumption is what allows the expensive part of learning (the representation) to be amortized across all tasks' combined data, while each task-specific head remains cheap to fit.
+
+**Q2: Why does pretraining on a large, unrelated-seeming dataset (like ImageNet) still help a very different target task (like rare-disease X-ray classification)?**
+Because the pretrained representation captures general, low-level and mid-level visual features (edges, textures, shapes, spatial structure) that are broadly useful across many visual tasks, not features specific to ImageNet's particular 1,000 categories. The target task only needs to fine-tune a cheap final layer on top of this already-useful shared representation, rather than learning such general features from scratch on a tiny target dataset.
+
+**Q3: What is "negative transfer," and why does it happen?**
+It's when using a representation learned from a source task actually hurts performance on a target task, compared to training on the target task alone. It happens when the source and target tasks don't actually share useful underlying structure — forcing a shared representation in that case biases the model toward source-task-specific features that are irrelevant or actively misleading for the target task.
+
+**Q4: How does parameter-efficient fine-tuning (like LoRA) relate to shared-representation theory?**
+It takes the theory's core structural insight to an extreme: it treats the pretrained model's full representation as already good enough to freeze entirely, and only trains a small, low-rank adaptation on top — directly matching the theoretical picture of "expensive shared representation, cheap per-task adaptation," just with the shared representation coming from a single massive pretraining task instead of multiple explicit source tasks.
+
+**Q5: Why can naively summing losses across tasks in multi-task learning cause problems?**
+Because different tasks can have very different natural loss magnitudes and gradient scales — a task whose loss function produces much larger gradients will dominate updates to the shared representation, effectively causing the model to prioritize that task's objective while other tasks receive comparatively little useful learning signal, even though they were nominally part of the combined training objective.
+
+## 11. Further Reading
+
+- Tripuraneni, Jin & Jordan, "On the Theory of Transfer Learning: The Importance of Task Diversity" (2020)
+- Ruder, "An Overview of Multi-Task Learning in Deep Neural Networks" (2017)
+- Hu et al., "LoRA: Low-Rank Adaptation of Large Language Models" (2021)
+- Zamir et al., "Taskonomy: Disentangling Task Transfer Learning" (2018) — empirical study of transfer relationships and negative transfer between vision tasks
+- See also: `bert` and `gpt-1` on this platform for the pretrain-then-fine-tune paradigm in practice
+
+## Related Platform Content
+
+- [MACHINE LEARNING curriculum overview](/learn/machine-learning)
+- [Architecture application](/architectures/darts)
+- [Browse all system designs](/system-design)

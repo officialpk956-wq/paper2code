@@ -1,0 +1,221 @@
+# Graph Convolutional Network (GCN)
+
+## 1. Overview
+Graph Convolutional Networks (GCN), introduced in 2016 by Thomas N. Kipf and Max Welling (University of Amsterdam), created a monumental bridge between **Spectral Graph Theory** and **Spatial Message-Passing Neural Networks**. Prior to GCN, spectral graph convolutions evaluated exact graph Laplacian eigen-decompositions ($U g_\theta \Lambda U^T x$), which required an intractable $O(|V|^3)$ computation time per layer and failed to scale to graphs with more than a few thousand nodes. Kipf and Welling derived a first-order localized linear approximation of spectral graph convolutions via Chebyshev polynomials. They proved that a spectral graph convolution can be simplified into a remarkably elegant spatial operation: $H^{(l+1)} = \sigma\left( \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2} H^{(l)} W^{(l)} \right)$, where $\hat{A} = A + I_N$ adds self-loops and $\hat{D}$ is the diagonal degree matrix. GCN established the foundational baseline for modern Graph Neural Networks (GNNs).
+
+:::note
+GCN's core formula: "First-order localized spectral graph convolution: $H^{(l+1)} = \sigma\left( \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2} H^{(l)} W^{(l)} \right)$, where $\hat{A} = A + I_N$ adds self-loops."
+:::
+
+## 2. Historical Context
+In 2014, Joan Bruna et al. defined graph convolutions in the spectral domain using Fourier transforms on graphs. However, computing the Fourier basis required calculating the eigenvectors of the normalized Graph Laplacian matrix $L = I_N - D^{-1/2} A D^{-1/2}$, an $O(|V|^3)$ operation.
+
+Defferrard et al. (ChebNet, 2016) truncated spectral filters using $K$-th order Chebyshev polynomials. Thomas Kipf and Max Welling further simplified ChebNet to $K=1$, assuming $\lambda_{\max} \approx 2$. By introducing the **Renormalization Trick** to prevent exploding/vanishing gradients, Kipf and Welling created GCN, proving that first-order spectral approximations scale linearly $O(|E|)$ while matching state-of-the-art accuracy.
+
+## 3. Problem It Solves
+GCN resolves three major theoretical and practical barriers in graph deep learning:
+1. **Intractable $O(|V|^3)$ Spectral Computations:** Replaces full Laplacian eigen-decompositions with a fast, localized 1-hop spatial aggregation matrix product ($O(|E|d)$ time complexity).
+2. **Gradient Exploding/Vanishing in Deep Graphs:** Solves spectral numerical instability by introducing self-loops ($\hat{A} = A + I_N$) and symmetric degree normalization ($\hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2}$).
+3. **End-to-End Supervised Node Classification:** Enables joint end-to-end training of node feature transformations and graph structure propagation.
+
+## 4. Architecture Diagram Data
+Below is the GCN layer propagation mechanism showing Self-Loop Insertion, Symmetric Degree Normalization, and Feature Projection.
+
+```text
+       GRAPH ADJACENCY MATRIX A  &  NODE FEATURES H^(0)
+             |
+             v
+       +===================================================================+
+       | 1. ADD SELF-LOOPS (Renormalization Trick)                         |
+       |    A_hat = A + I_N  (Ensures node retains its own features)       |
+       +===================================================================+
+             |
+             v
+       +===================================================================+
+       | 2. COMPUTE SYMMETRIC NORMALIZATION MATRIX                         |
+       |    D_hat_{i,i} = sum_j A_hat_{i,j}                                |
+       |    Symmetric Matrix: N = D_hat^(-1/2) * A_hat * D_hat^(-1/2)     |
+       +===================================================================+
+             |
+             v
+       +===================================================================+
+       | 3. GRAPH CONVOLUTION LAYER PROPAGATION                            |
+       |    H^(l+1) = Activation( N * H^(l) * W^(l) )                      |
+       |    - Step A: Weight Matrix Projection: H * W                      |
+       |    - Step B: Neighborhood Feature Aggregation: N * (H * W)        |
+       |    - Step C: Non-Linear Activation (ReLU)                         |
+       +===================================================================+
+             |
+             v
+       [ Layer Output Tensor H^(l+1) in R^(N x d_{out}) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Renormalized Graph Construction:**
+- Adds identity self-loops to adjacency matrix $A \in \mathbb{R}^{N \times N}$: $\hat{A} = A + I_N$.
+- Calculates diagonal degree matrix $\hat{D} \in \mathbb{R}^{N \times N}$ where $\hat{D}_{i,i} = \sum_j \hat{A}_{i,j}$.
+
+**2. Symmetric Degree Normalization:**
+- Computes normalized propagation matrix $\tilde{A} = \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2}$.
+- Entry $\tilde{A}_{i,j} = \frac{1}{\sqrt{\hat{D}_{i,i} \hat{D}_{j,j}}}$ scales incoming messages by the degrees of both source node $j$ and target node $i$.
+
+**3. Linear Feature Transformation & Aggregation:**
+- Multiplies node features $H^{(l)} \in \mathbb{R}^{N \times d_l}$ by weight matrix $W^{(l)} \in \mathbb{R}^{d_l \times d_{l+1}}$.
+- Propagates features across graph edges via matrix multiplication: $\tilde{A} \left( H^{(l)} W^{(l)} \right)$.
+- Applies activation function: $H^{(l+1)} = \text{ReLU}\left( \tilde{A} H^{(l)} W^{(l)} \right)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through a 2-layer GCN for $N=10,000$ nodes, initial feature dimension $d_0=1433$ (Cora dataset), hidden dimension $d_1=16$, output classes $d_2=7$.
+
+1. **Normalized Adjacency Matrix Setup:**
+   - Sparse Adjacency Matrix $\tilde{A} = \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2}$: `(10000, 10000)`
+2. **Layer 1 Forward Pass:**
+   - Node Features $H^{(0)}$: `(10000, 1433)`
+   - Weight Matrix $W^{(0)}$: `(1433, 16)` $\to H^{(0)} W^{(0)}$: `(10000, 16)`
+   - Message Passing $\tilde{A} (H^{(0)} W^{(0)}) \to (10000, 16) \xrightarrow{\text{ReLU}} H^{(1)}$: `(10000, 16)`
+3. **Layer 2 Output Pass:**
+   - Weight Matrix $W^{(1)}$: `(16, 7)` $\to H^{(1)} W^{(1)}$: `(10000, 7)`
+   - Message Passing $\tilde{A} (H^{(1)} W^{(1)}) \to (10000, 7) \xrightarrow{\text{LogSoftmax}}$ Logits: `(10000, 7)`.
+
+## 7. Mathematical Foundations
+
+### Step-by-Step Derivation from Spectral Laplacian to GCN Formula
+
+#### Step 1: Spectral Graph Convolution Definition
+The normalized Graph Laplacian is defined as $L = I_N - D^{-1/2} A D^{-1/2} = U \Lambda U^T$, where $U$ is the matrix of eigenvectors and $\Lambda$ is the diagonal matrix of eigenvalues.
+A spectral convolution of signal $x$ with filter $g_\theta$ is defined as:
+
+$$g_\theta \star x = U g_\theta(\Lambda) U^T x$$
+
+#### Step 2: Truncated Chebyshev Polynomial Approximation
+Defferrard et al. approximated $g_\theta(\Lambda)$ using $K$-th order Chebyshev polynomials $T_k(x)$:
+
+$$g_\theta \star x \approx \sum_{k=0}^K \theta_k' T_k(\tilde{L}) x$$
+
+where $\tilde{L} = \frac{2}{\lambda_{\max}} L - I_N$.
+
+#### Step 3: First-Order Linear Approximation ($K=1$)
+Assuming $K=1$ and $\lambda_{\max} \approx 2$, the equation simplifies to:
+
+$$g_\theta \star x \approx \theta_0' x + \theta_1' \left( L - I_N \right) x = \theta_0' x - \theta_1' D^{-1/2} A D^{-1/2} x$$
+
+Constraining parameter count to prevent overfitting ($\theta = \theta_0' = -\theta_1'$):
+
+$$g_\theta \star x \approx \theta \left( I_N + D^{-1/2} A D^{-1/2} \right) x$$
+
+#### Step 4: The Renormalization Trick
+The eigenvalues of $I_N + D^{-1/2} A D^{-1/2}$ lie in $[0, 2]$. Repeated matrix multiplications in deep networks cause exploding/vanishing gradients. Kipf and Welling introduced the **Renormalization Trick**:
+
+$$I_N + D^{-1/2} A D^{-1/2} \to \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2}$$
+
+where $\hat{A} = A + I_N$ and $\hat{D}_{i,i} = \sum_j \hat{A}_{i,j}$.
+
+Generalizing to signal matrix $H^{(l)} \in \mathbb{R}^{N \times C}$ with parameter matrix $W^{(l)}$ yields the final GCN layer formula:
+
+$$H^{(l+1)} = \sigma \left( \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2} H^{(l)} W^{(l)} \right)$$
+
+## 8. Training Procedure
+- Construct normalized sparse adjacency matrix $\tilde{A} = \hat{D}^{-1/2} (A + I_N) \hat{D}^{-1/2}$.
+- Forward pass through 2 GCN layers: $Z = \text{Softmax}\left( \tilde{A} \cdot \text{ReLU}(\tilde{A} H W^{(0)}) W^{(1)} \right)$.
+- Minimize Cross-Entropy loss over labeled nodes $\mathcal{Y}_L$:
+  $$\mathcal{L} = -\sum_{l \in \mathcal{Y}_L} \sum_{f=1}^F Y_{l,f} \ln Z_{l,f}$$
+- Update parameters $W^{(0)}, W^{(1)}$ using Adam optimizer ($\text{lr} = 0.01, \text{weight\_decay} = 5 \times 10^{-4}$).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **GCN Layer and 2-Layer GCN Network**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GCNLayer(nn.Module):
+    """ Graph Convolutional Network (GCN) Layer """
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features, bias=False)
+
+    def forward(self, x, adj_norm):
+        """
+        x:        (N, in_features) Node Features
+        adj_norm: (N, N) Normalized Adjacency Matrix D^-1/2 A_hat D^-1/2
+        """
+        # Step 1: Linear Feature Projection H * W
+        h_linear = self.linear(x) # (N, out_features)
+        
+        # Step 2: Neighborhood Propagation A_norm * (H * W)
+        if adj_norm.is_sparse:
+            out = torch.sparse.mm(adj_norm, h_linear)
+        else:
+            out = torch.matmul(adj_norm, h_linear)
+            
+        return out
+
+class GCN(nn.Module):
+    """ 2-Layer GCN for Node Classification """
+    def __init__(self, in_features, hidden_dim, out_classes, dropout=0.5):
+        super().__init__()
+        self.gc1 = GCNLayer(in_features, hidden_dim)
+        self.gc2 = GCNLayer(hidden_dim, out_classes)
+        self.dropout = dropout
+
+    def forward(self, x, adj_norm):
+        h1 = F.relu(self.gc1(x, adj_norm))
+        h1 = F.dropout(h1, p=self.dropout, training=self.training)
+        logits = self.gc2(h1, adj_norm)
+        return F.log_softmax(logits, dim=-1)
+
+if __name__ == "__main__":
+    N, in_dim, hidden_dim, out_classes = 100, 1433, 16, 7
+    gcn = GCN(in_features=in_dim, hidden_dim=hidden_dim, out_classes=out_classes)
+    
+    x = torch.randn(N, in_dim)
+    # Simulate Normalized Adjacency Matrix with self-loops
+    A_raw = (torch.rand(N, N) > 0.95).float()
+    A_hat = A_raw + torch.eye(N)
+    D_hat = torch.diag(A_hat.sum(dim=1) ** (-0.5))
+    adj_norm = torch.matmul(torch.matmul(D_hat, A_hat), D_hat)
+    
+    out_logits = gcn(x, adj_norm)
+    
+    print(f"GCN Logits Output Shape: {out_logits.shape}")
+    assert out_logits.shape == (N, out_classes)
+    print("GCN verification successful!")
+```
+
+## 10. Strengths
+- **First-Order Spectral Scalability:** Reduces graph spectral convolution complexity from $O(|V|^3)$ to $O(|E|)$.
+- **Mathematical Elegance:** Renormalization trick prevents exploding/vanishing gradients.
+- **Semi-Supervised Efficiency:** Achieves outstanding node classification with tiny labeled node percentages ($<5\%$).
+
+## 11. Weaknesses
+- **Over-Smoothing Problem:** Stacking more than 3-4 GCN layers causes node representations to collapse into uniform average vectors.
+- **Transductive Full-Graph Requirement:** Requires the full adjacency matrix during training (addressed by GraphSAGE).
+
+## 12. Research Evolution
+GCN created the foundation for modern graph neural networks, directly inspiring **GraphSAGE**, **GAT**, and **GIN**.
+
+## 13. Interview Questions
+
+**Q1: Write out the fundamental GCN layer propagation formula and explain every symbol.**
+**A1:** $H^{(l+1)} = \sigma\left( \hat{D}^{-1/2} \hat{A} \hat{D}^{-1/2} H^{(l)} W^{(l)} \right)$, where $\hat{A} = A + I_N$ (adjacency matrix with self-loops), $\hat{D}_{i,i} = \sum_j \hat{A}_{i,j}$ (degree matrix), $H^{(l)}$ is node feature matrix, $W^{(l)}$ is trainable parameter matrix, and $\sigma$ is non-linear activation.
+
+**Q2: What is the Renormalization Trick in GCN, and why is it necessary?**
+**A2:** First-order spectral filter $I_N + D^{-1/2} A D^{-1/2}$ has eigenvalues in $[0, 2]$. Repeated matrix multiplications in multi-layer networks cause exploding/vanishing gradients. Replacing it with $\hat{D}^{-1/2} (A + I_N) \hat{D}^{-1/2}$ constrains eigenvalues, stabilizing deep propagation.
+
+**Q3: What is the Over-Smoothing problem in GCNs?**
+**A3:** As GCN depth increases ($L > 4$), repeatedly multiplying by normalized adjacency matrix $\tilde{A}$ acts as a low-pass Laplacian smoothing filter, causing all node embedding vectors across connected components to collapse into identical average values.
+
+**Q4: How does GCN perform symmetric degree normalization?**
+**A4:** By scaling edge weight $A_{i,j}$ using $\frac{1}{\sqrt{\hat{D}_{i,i} \hat{D}_{j,j}}}$. This normalizes messages by taking into account both the out-degree of source node $j$ and the in-degree of target node $i$.
+
+**Q5: Compare GCN with GraphSAGE.**
+**A5:** GCN is **Transductive** (requires evaluating the full normalized adjacency matrix $\tilde{A}$ over all nodes at once). GraphSAGE is **Inductive** (samples fixed-size local neighborhoods per node, enabling mini-batch training and generalizing to unseen nodes).
+
+## 14. Related Papers
+- **GCN Paper:** *Semi-Supervised Classification with Graph Convolutional Networks* (Kipf & Welling, ICLR 2017)
+- **ChebNet Paper:** *Convolutional Neural Networks on Graphs with Fast Localized Spectral Filtering* (Defferrard et al., NIPS 2016)
+
+## 15. Further Reading
+- Thomas Kipf Official GCN Blog & PyTorch Code

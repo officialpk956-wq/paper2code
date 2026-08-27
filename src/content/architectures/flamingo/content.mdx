@@ -1,0 +1,219 @@
+# Flamingo
+
+## 1. Overview
+Flamingo, introduced in 2022 by Jean-Baptiste Alayrac et al. (Google DeepMind), established the paradigm for **Few-Shot In-Context Visual Language Learning**. Before Flamingo, adapting Vision-Language Models (VLMs) to new tasks (such as visual question answering or image captioning) required fine-tuning millions of model parameters on task-specific training datasets. Flamingo solved this by enabling **In-Context Learning over Interleaved Sequences of Text, Images, and Videos**. To connect a frozen pre-trained Vision Encoder (Normalizer-Free ResNet / ViT) to a frozen 70B parameter Language Model (Chinchilla), Flamingo introduced two architectural components: (1) a **Perceiver Resampler** that compresses variable-length grid image patches ($N=2048$ tokens) into a fixed sequence of 64 visual tokens, and (2) **Gated Cross-Attention Dense (XAttention) Layers** inserted into the frozen language model layers, initialized to zero to preserve pre-trained language capabilities.
+
+:::note
+Flamingo architecture: "Freeze Vision Encoder and 70B Chinchilla LLM. Compress $N$ image patches into 64 tokens via Perceiver Resampler, and inject visual context into LLM via Gated Cross-Attention (Gated xattn)."
+:::
+
+## 2. Historical Context
+In 2022, Large Language Models (GPT-3, Chinchilla) demonstrated extraordinary few-shot in-context learning: users could prompt the model with 2–3 examples in prose, and the model executed the task instantly without weight updates.
+
+DeepMind researchers asked: *Can we give a 70B LLM visual sight so it can perform few-shot in-context learning over interleaved sequences of text, images, and videos?*
+
+By freezing the 70B LLM and injecting visual features via a Perceiver Resampler and Gated Cross-Attention, Flamingo achieved state-of-the-art few-shot performance across 16 multimodal benchmarks without modifying the LLM's core weights.
+
+## 3. Problem It Solves
+Flamingo resolves three major engineering bottlenecks in Multimodal LLMs:
+1. **Variable-Length Visual Token Sequence Overflow:** High-resolution images produce thousands of patch tokens ($N=2048$), overflowing LLM context windows. The **Perceiver Resampler** compresses arbitrary visual inputs into a fixed 64-token sequence.
+2. **Catastrophic Forgetting of Pre-Trained LLMs:** Fine-tuning an entire 70B LLM on multimodal data destroys pre-trained language reasoning. Flamingo **freezes** the LLM and Vision Encoder completely.
+3. **Interleaved Text/Image/Video Sequences:** Handles arbitrary mixed multimodal sequences (e.g., `Image_1 + Text_1 + Image_2 + Text_2`) natively.
+
+## 4. Architecture Diagram Data
+Below is the mandatory detailed architecture diagram of Flamingo highlighting the **Perceiver Resampler** and Gated Cross-Attention LLM Injection.
+
+```text
+       ========================================================================
+       FLAMINGO PERCEIVER RESAMPLER ARCHITECTURE
+       ========================================================================
+
+       [ Input Vision Features from Frozen Vision Encoder: (B, N_patches, d_v) ] (e.g., N=2048)
+                                    |
+                                    v
+       +==================================================================+
+       | PERCEIVER RESAMPLER MODULE                                       |
+       |                                                                  |
+       |  1. Learned Latent Queries Vector: X_latent (64 tokens, dim d)   |
+       |                                                                  |
+       |  2. Cross-Attention:                                             |
+       |     - Queries Q = X_latent * W_Q  (64, d)                        |
+       |     - Keys K = Concat[Vision_Feat, X_latent] * W_K               |
+       |     - Values V = Concat[Vision_Feat, X_latent] * W_V             |
+       |     - Attn = Softmax( Q K^T / sqrt(d) ) * V                      |
+       |                                                                  |
+       |  3. Feed-Forward Network + Residual Connections                  |
+       +==================================================================+
+                                    |
+                                    v
+       [ Compressed Fixed-Length Visual Representation: (B, 64, d) ]
+
+       ========================================================================
+
+       GATED CROSS-ATTENTION LLM INJECTION (FROZEN CHINCHILLA 70B LLM)
+
+       [ Text Tokens ] ---> [ Frozen Self-Attention ] ---> [ LayerNorm ]
+                                                                |
+                                                                v
+       +==================================================================+
+       | GATED CROSS-ATTENTION (Gated xattn-dense)                        |
+       | h_out = h_text + tanh( alpha_xattn ) * CrossAttention( h_text, Vis_64 )|
+       | (alpha_xattn initialized to 0.0 -> Preserves LLM capabilities!) |
+       +==================================================================+
+                                                                |
+                                                                v
+       +==================================================================+
+       | GATED FEED-FORWARD NETWORK                                       |
+       | h_final = h_out + tanh( alpha_ffn ) * FFN( h_out )              |
+       +==================================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Frozen Vision Encoder & Media Processing:**
+- Processes input images or video frames through a frozen NFNet-F6 or ViT encoder, outputting feature map $X_v \in \mathbb{R}^{T \times N \times d_v}$.
+
+**2. Perceiver Resampler:**
+- Maintains $x_{\text{latent}} \in \mathbb{R}^{64 \times d}$ learned latent query vectors.
+- Key and Value matrices concatenate input visual features with latent queries: $K, V = \text{Concat}[X_v, x_{\text{latent}}]$.
+- Cross-Attention reduces arbitrary $N$-patch sequence to a fixed 64-token visual representation.
+
+**3. Frozen Language Model with Gated Cross-Attention:**
+- Frozen Chinchilla 70B Transformer blocks.
+- Inserts **Gated Cross-Attention (Gated xattn-dense)** layers after self-attention layers.
+- Text tokens attend to the 64 visual tokens output by the Perceiver Resampler.
+- Multiplied by tanh-gated scalar $\tanh(\alpha)$, initialized to 0.0 at the start of training.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Flamingo for batch size $B=2$, image resolution $448 \times 448 \to N=2048$ visual patches, 64 Perceiver tokens, LLM text dim $d=4096$.
+
+1. **Frozen Vision Encoding:**
+   - Raw Image: `(2, 3, 448, 448)` $\xrightarrow{\text{Vision Encoder}} X_v$: `(2, 2048, 1024)`
+2. **Perceiver Resampler Pass:**
+   - Latent Queries $x_{\text{latent}}$: `(64, 4096)`
+   - Cross-Attention($Q=x_{\text{latent}}, K=X_v, V=X_v$) $\to V_{\text{compressed}}$: `(2, 64, 4096)`
+3. **Gated Cross-Attention Injection inside LLM:**
+   - Text Hidden State $h_{\text{text}}$: `(2, 128, 4096)`
+   - Cross-Attention($Q=h_{\text{text}}, K=V_{\text{compressed}}, V=V_{\text{compressed}}$) $\to$ `(2, 128, 4096)`
+   - Multiply $\tanh(\alpha) \to$ Add Residual $\to h_{\text{out}}$: `(2, 128, 4096)`.
+
+## 7. Mathematical Foundations
+
+### 1. Gated Cross-Attention Formulation
+Let $x$ be the text token representation, and $y$ be the 64 visual tokens from the Perceiver Resampler.
+The Gated Cross-Attention layer is defined as:
+
+$$z = x + \tanh(\alpha_{\text{xattn}}) \cdot \text{CrossAttention}\left( \text{LayerNorm}(x), \; \text{LayerNorm}(y) \right)$$
+
+$$x_{\text{out}} = z + \tanh(\alpha_{\text{ffn}}) \cdot \text{FFN}\left( \text{LayerNorm}(z) \right)$$
+
+where $\alpha_{\text{xattn}}$ and $\alpha_{\text{ffn}}$ are single learnable scalar parameters initialized to $0.0$. When $\alpha = 0$, $\tanh(\alpha) = 0$, making the initial model strictly equivalent to the original pre-trained LLM.
+
+### 2. Perceiver Resampler Cross-Attention
+Let $X_v$ be visual features and $X_{\text{lat}} \in \mathbb{R}^{64 \times d}$ be learned latent queries.
+
+$$Q = X_{\text{lat}} W_Q, \quad K = \left[ X_v \;\Vert\; X_{\text{lat}} \right] W_K, \quad V = \left[ X_v \;\Vert\; X_{\text{lat}} \right] W_V$$
+
+$$\text{PerceiverOut} = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} \right) V \in \mathbb{R}^{64 \times d}$$
+
+## 8. Training Procedure
+- Freeze Vision Encoder and Chinchilla LLM weights.
+- Train ONLY the Perceiver Resampler and Gated Cross-Attention parameters ($\alpha$).
+- Dataset: Interleaved image-text web pages (M3W), paired image-caption data (ALIGN, LTIP), and video-text data (VTP).
+- Objective: Standard autoregressive text Cross-Entropy loss over text tokens using AdamW.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Flamingo Perceiver Resampler**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class PerceiverResampler(nn.Module):
+    """ Flamingo Perceiver Resampler: Compresses arbitrary visual patches to fixed 64 tokens """
+    def __init__(self, visual_dim=1024, embed_dim=512, num_latents=64, num_heads=8):
+        super().__init__()
+        self.num_latents = num_latents
+        self.embed_dim = embed_dim
+        
+        # 64 Learned Latent Query Tokens
+        self.latents = nn.Parameter(torch.randn(num_latents, embed_dim))
+        
+        # Projections
+        self.vis_proj = nn.Linear(visual_dim, embed_dim)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        
+        self.mha = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+        self.norm_latents = nn.LayerNorm(embed_dim)
+        self.norm_vis = nn.LayerNorm(embed_dim)
+
+    def forward(self, vis_feats):
+        """ vis_feats: (B, N_patches, visual_dim) """
+        B, N, _ = vis_feats.shape
+        
+        # 1. Project Visual Features & Latents
+        vis_proj = self.norm_vis(self.vis_proj(vis_feats)) # (B, N, d)
+        latents_expanded = self.norm_latents(self.latents).unsqueeze(0).repeat(B, 1, 1) # (B, 64, d)
+        
+        # 2. Key and Value concatenate Visual Features + Latents
+        kv_input = torch.cat([vis_proj, latents_expanded], dim=1) # (B, N + 64, d)
+        
+        # 3. Cross-Attention: Q = latents, K = kv_input, V = kv_input
+        q = self.q_proj(latents_expanded)
+        k = self.k_proj(kv_input)
+        v = self.v_proj(kv_input)
+        
+        attn_out, _ = self.mha(q, k, v) # (B, 64, d)
+        out = self.out_proj(attn_out) + latents_expanded
+        return out
+
+if __name__ == "__main__":
+    B, N_patches, vis_dim = 2, 2048, 1024
+    resampler = PerceiverResampler(visual_dim=vis_dim, embed_dim=512, num_latents=64)
+    
+    vis_feats = torch.randn(B, N_patches, vis_dim)
+    compressed_vis = resampler(vis_feats)
+    
+    print(f"Compressed Visual Tokens Output Shape: {compressed_vis.shape}")
+    assert compressed_vis.shape == (B, 64, 512)
+    print("Flamingo Perceiver Resampler verification successful!")
+```
+
+## 10. Strengths
+- **Few-Shot Multimodal Learning:** Executes in-context learning over interleaved text, image, and video prompts without weight updates.
+- **Fixed 64-Token Compression:** Perceiver Resampler prevents high-res visual tokens from overflowing LLM context windows.
+- **Zero-Initialization Stability:** Gated Cross-Attention ($\tanh(\alpha)=0$) guarantees zero degradation of pre-trained LLM capabilities at training start.
+
+## 11. Weaknesses
+- **High Parameter Count:** Flamingo 70B requires multi-GPU cluster infrastructure for inference.
+
+## 12. Research Evolution
+Flamingo established in-context visual language modeling, directly inspiring **OpenFlamingo**, **IDEFICS**, and **BLIP-2**.
+
+## 13. Interview Questions
+
+**Q1: What are the two core architectural components introduced in Flamingo?**
+**A1:** (1) The **Perceiver Resampler** (compresses arbitrary visual patch sequences into a fixed 64-token representation); (2) **Gated Cross-Attention (Gated xattn-dense)** layers (injects 64 visual tokens into frozen LLM layers via zero-initialized tanh gates).
+
+**Q2: Why are the Gated Cross-Attention scalars $\alpha$ initialized to 0.0 in Flamingo?**
+**A2:** Initializing $\alpha=0.0$ makes $\tanh(\alpha) = 0.0$, causing cross-attention outputs to be zero at the start of training. This guarantees that the pre-trained 70B LLM retains 100% of its language capabilities without initial degradation.
+
+**Q3: How does the Perceiver Resampler reduce visual token sequence length?**
+**A3:** It maintains 64 learned latent query vectors $X_{\text{lat}} \in \mathbb{R}^{64 \times d}$. Cross-attention queries $Q = X_{\text{lat}} W_Q$ attend to keys/values concatenated from $N=2048$ visual patches, producing a fixed 64-token output.
+
+**Q4: Does Flamingo update the weights of the pre-trained Vision Encoder or 70B LLM during training?**
+**A4:** No. Both the Vision Encoder and the 70B Chinchilla LLM remain **completely frozen**. Only the Perceiver Resampler and Gated Cross-Attention parameters are trained.
+
+**Q5: Compare Flamingo with LLaVA.**
+**A5:** Flamingo uses a **Perceiver Resampler** and **Gated Cross-Attention** injected into a frozen 70B LLM for few-shot in-context learning over interleaved text/image sequences. LLaVA uses a simple **Linear/MLP Projection** mapping CLIP visual tokens directly into LLaMA's input prefix context.
+
+## 14. Related Papers
+- **Flamingo Paper:** *Flamingo: a Visual Language Model for Few-Shot Learning* (Alayrac et al., NeurIPS 2022)
+- **Perceiver Paper:** *Perceiver: General Perception with Iterative Attention* (Jaegle et al., ICML 2021)
+
+## 15. Further Reading
+- OpenFlamingo Open-Source PyTorch Repository

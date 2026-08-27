@@ -1,0 +1,200 @@
+# DDPG
+
+## 1. Overview
+Deep Deterministic Policy Gradient (DDPG), introduced in 2015 by Timothy P. Lillicrap, Jonathan J. Hunt, Alexander Pritzel, Nicolas Heess, Tom Erez, Yuval Tassa, David Silver, and Daan Wierstra (Google DeepMind), extended deep Q-learning to **continuous action spaces**. Before DDPG, DQN could only handle low-dimensional discrete actions (e.g., left/right/jump) because finding the greedy optimal action $\max_{a'} Q(s', a')$ required evaluating every possible action explicitly—an intractable operation in continuous control (e.g., continuous torque values for robotic joints). DDPG solved this by combining the **Deterministic Policy Gradient (DPG)** algorithm (Silver et al., 2014) with deep neural networks. DDPG uses an off-policy **Actor-Critic architecture**: an Actor network $\mu_\theta(s)$ directly outputs continuous action vectors, while a Critic network $Q_\phi(s, a)$ evaluates action values. DDPG also introduced **Soft Target Network Updates** ($\theta^- \leftarrow \tau \theta + (1-\tau)\theta^-$) and **Ornstein-Uhlenbeck Exploration Noise** for continuous physical control.
+
+:::note
+DDPG's core contribution: "First off-policy deep Actor-Critic model for continuous action spaces. Actor outputs continuous actions $\mu_\theta(s)$, Critic evaluates $Q_\phi(s, a)$, stabilized via Soft Target Updates ($\tau=0.001$) and Replay Buffers."
+:::
+
+## 2. Historical Context
+In 2015, DQN showed that deep networks could master Atari games from raw pixels. However, discretization of continuous control domains (e.g., discretizing a 7-DOF robotic arm into 10 bins per joint yields $10^7 = 10,000,000$ discrete actions) leads to an exponential explosion in action space.
+
+Timothy Lillicrap et al. built upon David Silver's 2014 Deterministic Policy Gradient theorem. They proved that a deterministic policy $\mu_\theta(s)$ could be trained off-policy using an Experience Replay Buffer by backpropagating critic gradients through the actor network via the chain rule: $\nabla_\theta J \approx \mathbb{E} \left[ \nabla_a Q(s, a \mid \phi) \cdot \nabla_\theta \mu(s \mid \theta) \right]$.
+
+## 3. Problem It Solves
+DDPG resolves three major engineering barriers in continuous reinforcement learning:
+1. **Intractability of $\max_a Q(s, a)$ in Continuous Spaces:** Eliminates grid discretization of continuous actions. The Actor network $\mu_\theta(s)$ directly predicts continuous control outputs (e.g., steering angle $\in [-1, 1]$).
+2. **Off-Policy Sample Inefficiency:** Enables efficient off-policy learning using an **Experience Replay Buffer**, reusing past transitions $(s, a, r, s', d)$ millions of times.
+3. **Target Network Oscillation Shocks:** Replaces hard periodic target updates ($\theta^- \leftarrow \theta$ every 10,000 steps) with smooth **Soft Target Updates** ($\tau = 0.001$), eliminating sudden target value jumps.
+
+## 4. Architecture Diagram Data
+Below is the off-policy Actor-Critic architecture of DDPG showing Replay Buffer, Soft Target Network updates, and Ornstein-Uhlenbeck exploration noise.
+
+```text
+       [ Environment State s_t ]
+                   |
+                   v
+       +===================================================+  +===========================+
+       | Actor Network mu_theta(s)                         |  | Exploration Noise Module  |
+       | Output: Continuous Action Vector (B, action_dim)  |  | (Ornstein-Uhlenbeck /     |
+       +===================================================+  |  Gaussian Noise)          |
+                   |                                          +===========================+
+                   +-----------------------+--------------------------------+
+                                           |
+                                           v
+                       [ Executed Action a_t = mu(s_t) + Noise ]
+                                           |
+                                           v
+                       [ Transition (s_t, a_t, r_t, s_{t+1}, d) ]
+                                           |
+                                           v
+                       [ Insert into Replay Buffer (Cap: 1M) ]
+                                           |
+                                           v
+                       [ Sample Mini-Batch (B=64) ]
+                                           |
+         +---------------------------------+---------------------------------+
+         | (For Actor Training)                                              | (For Critic Training)
+         v                                                                   v
+  [ Critic Net Q_phi(s, mu_theta(s)) ]                           [ Target Critic Q_phi^-(s', mu^-(s')) ]
+         |                                                                   |
+         v (Chain Rule Gradient)                                             v
+  [ Grad = grad_a Q * grad_theta mu ]                            [ Target y = r + gamma * (1-d) * Q^- ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Actor Network ($\mu_\theta$):**
+- **State Encoder:** 2 Fully Connected layers (400 and 300 units, LayerNorm, ReLU).
+- **Output Layer:** Linear projection to continuous action dimension with **Tanh activation** mapping outputs to bounded range $[-1, 1]$.
+
+**2. Critic Network ($Q_\phi$):**
+- **State Branch:** FC layer (400 units, ReLU).
+- **Action Fusion:** Action vector $a$ is concatenated with state features at the second hidden layer (300 units, ReLU).
+- **Output Layer:** Linear projection to 1 scalar output $Q(s, a)$.
+
+**3. Target Networks ($\mu_{\theta^-}, Q_{\phi^-}$):**
+- Exact structural copies of Actor and Critic networks maintained for target calculation.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DDPG for batch size $B=64$, state dimension 17, continuous action dimension 6 (MuJoCo Ant).
+
+1. **Actor Forward Pass:**
+   - State $s$: `(64, 17)` $\xrightarrow{\text{Actor } \mu_\theta}$ Continuous Action $\mu(s)$: `(64, 6)`
+2. **Critic Forward Pass:**
+   - State $s$: `(64, 17)`, Action $a$: `(64, 6)`
+   - State Feature (400) + Action (6) Concat $\to$ Layer 2: `(64, 300)`
+   - Output Q-value $Q_\phi(s, a)$: `(64, 1)`
+3. **Target Q-Value Calculation:**
+   - Next States $s'$: `(64, 17)` $\xrightarrow{\text{Target Actor } \mu^-}$ Next Action $a'$: `(64, 6)`
+   - Target Critic $Q_{\phi^-}(s', a') \to$ Target Value: `(64, 1)`
+   - Target $y = r + \gamma (1 - d) Q_{\phi^-}(s', a') \to$ `(64, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Deterministic Policy Gradient Theorem
+Silver et al. proved that the gradient of expected performance $J(\theta) = \mathbb{E}_{s \sim \rho^\mu} [Q(s, \mu_\theta(s))]$ with respect to deterministic policy parameters $\theta$ is:
+
+$$\nabla_\theta J(\theta) = \mathbb{E}_{s \sim \rho^\beta} \left[ \left. \nabla_a Q(s, a \mid \phi) \right|_{a=\mu_\theta(s)} \cdot \nabla_\theta \mu(s \mid \theta) \right]$$
+
+This allows backpropagating gradients from Critic $Q$ directly into Actor $\mu$ using the chain rule.
+
+### 2. Critic TD Loss
+$$\mathcal{L}(\phi) = \frac{1}{B} \sum_{i=1}^B \left( y_i - Q(s_i, a_i \mid \phi) \right)^2$$
+
+$$y_i = r_i + \gamma (1 - d_i) Q\left(s_{i+1}, \; \mu\left(s_{i+1} \mid \theta^-\right) \;\middle|\; \phi^-\right)$$
+
+### 3. Soft Target Updates (Polyak Averaging)
+Instead of copying weights abruptly, target weights track online weights smoothly:
+
+$$\theta^- \leftarrow \tau \theta + (1 - \tau) \theta^-, \quad \phi^- \leftarrow \tau \phi + (1 - \tau) \phi^-$$
+
+where $\tau = 0.001$ or $0.005$.
+
+## 8. Training Procedure
+- Maintain Replay Buffer $\mathcal{D}$.
+- Collect step: $a_t = \text{clip}\left(\mu_\theta(s_t) + \mathcal{N}_{\text{OU}}, a_{\min}, a_{\max}\right)$. Store $(s_t, a_t, r_t, s_{t+1}, d)$.
+- Sample mini-batch of 64 transitions from $\mathcal{D}$.
+- Update Critic $\phi$ by minimizing MSE against target $y$.
+- Update Actor $\theta$ using Deterministic Policy Gradient $\nabla_\theta J$.
+- Soft update target networks: $\theta^- \leftarrow \tau \theta + (1-\tau)\theta^-$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **DDPG Actor and Critic Networks**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DDPGActor(nn.Module):
+    def __init__(self, state_dim=17, action_dim=6, max_action=1.0):
+        super().__init__()
+        self.max_action = max_action
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, 400),
+            nn.LayerNorm(400),
+            nn.ReLU(),
+            nn.Linear(400, 300),
+            nn.LayerNorm(300),
+            nn.ReLU(),
+            nn.Linear(300, action_dim),
+            nn.Tanh()
+        )
+
+    def forward(self, state):
+        return self.max_action * self.net(state)
+
+class DDPGCritic(nn.Module):
+    def __init__(self, state_dim=17, action_dim=6):
+        super().__init__()
+        self.l1 = nn.Linear(state_dim, 400)
+        self.l2 = nn.Linear(400 + action_dim, 300)
+        self.l3 = nn.Linear(300, 1)
+
+    def forward(self, state, action):
+        h1 = F.relu(self.l1(state))
+        h2 = F.relu(self.l2(torch.cat([h1, action], dim=1)))
+        return self.l3(h2)
+
+if __name__ == "__main__":
+    B, state_dim, action_dim = 64, 17, 6
+    actor = DDPGActor(state_dim=state_dim, action_dim=action_dim)
+    critic = DDPGCritic(state_dim=state_dim, action_dim=action_dim)
+    
+    state = torch.randn(B, state_dim)
+    action = actor(state)
+    q_val = critic(state, action)
+    
+    print(f"Actor Action Output Shape: {action.shape}")
+    print(f"Critic Q-Value Shape:     {q_val.shape}")
+    assert action.shape == (B, action_dim)
+    assert q_val.shape == (B, 1)
+    print("DDPG verification successful!")
+```
+
+## 10. Strengths
+- **Continuous Action Control:** Handles high-dimensional continuous action spaces natively.
+- **Off-Policy Sample Efficiency:** Replay buffer allows high sample reuse.
+- **Smooth Soft Target Updates:** Polyak averaging eliminates hard update shocks.
+
+## 11. Weaknesses
+- **Severe Q-Overestimation & Instability:** Inherits Q-overestimation bias from Q-learning (fixed by TD3).
+
+## 12. Research Evolution
+DDPG established deep continuous Actor-Critic RL, directly inspiring **TD3 (Twin Delayed DDPG)** and **SAC (Soft Actor-Critic)**.
+
+## 13. Interview Questions
+
+**Q1: Why can't standard DQN be used directly for continuous action spaces?**
+**A1:** Standard DQN requires computing $\max_{a'} Q(s', a')$ over all actions to find the target. In continuous action spaces, finding the maximum over infinitely many continuous vectors is an intractable optimization problem at every step.
+
+**Q2: How does DDPG backpropagate gradients into the Actor network?**
+**A2:** DDPG uses the Deterministic Policy Gradient theorem: $\nabla_\theta J = \mathbb{E} \left[ \nabla_a Q(s, a) \cdot \nabla_\theta \mu(s) \right]$. Gradients flow from the scalar Critic output through the action input down into the Actor parameters.
+
+**Q3: What are Soft Target Updates (Polyak Averaging) in DDPG?**
+**A3:** Slowly updating target parameters after every step using $\theta^- \leftarrow \tau \theta + (1-\tau)\theta^-$ with $\tau = 0.001$, preventing target values from jumping abruptly.
+
+**Q4: What noise processes are commonly used for exploration in DDPG?**
+**A4:** Ornstein-Uhlenbeck (OU) noise (which generates temporally correlated noise suited for physical momentum tasks) or simple zero-mean Gaussian noise $\mathcal{N}(0, \sigma^2)$.
+
+**Q5: Write out the DDPG Actor loss objective.**
+**A5:** $\mathcal{L}_{\text{Actor}}(\theta) = -\frac{1}{B} \sum_{i=1}^B Q(s_i, \mu_\theta(s_i) \mid \phi)$.
+
+## 14. Related Papers
+- **DDPG Paper:** *Continuous control with deep reinforcement learning* (Lillicrap et al., ICLR 2016)
+- **DPG Paper:** *Deterministic Policy Gradient Algorithms* (Silver et al., ICML 2014)
+
+## 15. Further Reading
+- OpenAI Spinning Up DDPG Documentation

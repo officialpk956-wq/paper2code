@@ -1,0 +1,253 @@
+# Stable Diffusion 3 (SD3)
+
+## 1. Overview
+Stable Diffusion 3 (SD3), introduced in 2024 by Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller, Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, Dustin Podell, Tim Dockhorn, Zion English, Kyle Lacey, Alex Goodwin, Yannik Lutke, and Robin Rombach (Stability AI), introduced the **Multimodal Diffusion Transformer (MMDiT)** paired with **Rectified Flow Matching**. While previous Stable Diffusion versions (SD 1.5, SDXL) relied on U-Net backbones conditioned on text via asymmetric cross-attention, SD3 replaced the U-Net with a 800M to 8B parameter Transformer featuring **separate weight sets for text and image streams** that join during attention computations. Combined with a triple text encoder system (CLIP ViT-L, OpenCLIP ViT-bigG, and T5-XXL), SD3 achieved unprecedented text-rendering accuracy, complex spatial prompt adherence, and photorealistic visual quality.
+
+:::note
+SD3's core innovation: "The Multimodal Diffusion Transformer (MMDiT) maintains separate parameter weights for text and image modalities, allowing text and image tokens to learn dedicated representations while interacting symmetrically via joint attention."
+:::
+
+## 2. Historical Context
+By 2024, text-to-image models faced a fundamental architectural trade-off:
+- **U-Net Architectures (SDXL):** Strong spatial generation, but struggled with complex text rendering and multi-subject prompt instructions due to 1-way cross-attention bottlenecks.
+- **Single-Stream Transformers (DiT, PixArt):** Concatenated text and image tokens into a single vector sequence, forcing the transformer to process text embeddings using weights optimized for image pixels.
+
+Stability AI researchers recognized that text and image modalities have vastly different statistical distributions. Processing text tokens through the exact same MLP layers as visual latent tokens is suboptimal. SD3 introduced **MMDiT**, where text and image streams maintain separate LayerNorms, linear projections, and MLPs, but share a unified Joint Self-Attention mechanism.
+
+## 3. Problem It Solves
+SD3 resolves three core limitations of text-to-image models:
+1. **Asymmetric Text-Image Feature Modulation:** Eliminates 1-way cross-attention where text features remain static. MMDiT allows text embeddings to be updated by image context during Joint Attention, enabling bidirectional multimodal reasoning.
+2. **Text Representation Contamination:** Separate weight streams for text and image modalities prevent visual features from diluting textual semantics in feed-forward MLP layers.
+3. **Curved Diffusion Sampling Trajectories:** Replaces standard score-based SDE diffusion with **Rectified Flow Matching**, enabling straight-line ODE sampling that reduces inference steps to 28 while maintaining sharp typography and spatial alignment.
+
+## 4. Architecture Diagram Data
+Below is the full MMDiT block architecture of Stable Diffusion 3 showing the dual parameter streams and Joint Attention block.
+
+```text
+       [ Image Latent z_t: (B, 16, 64, 64) ]        [ Text Prompt y: CLIP-L + OpenCLIP + T5 ]
+                     |                                              |
+                     v                                              v
+       [ Patchify: (B, 1024, 64) ]                   [ Text Tokens: (B, 333, 4096) ]
+                     |                                              |
+         +-----------+----------------------------------------------+-----------+
+         |                                                                      |
+         v                                                                      v
+  +===================================================================================+
+  | MMDiT BLOCK (Separate Weights for Image & Text Streams)                           |
+  |                                                                                   |
+  |  IMAGE STREAM (Weights W_img)                      TEXT STREAM (Weights W_txt)      |
+  |  - adaLN-Zero Modulation (t)                       - adaLN-Zero Modulation (t)     |
+  |  - Linear Projections -> Q_img, K_img, V_img       - Linear Projections -> Q_txt, K_txt, V_txt
+  |                        \                                 /                        |
+  |                         +--- JOINT SELF-ATTENTION ------+                         |
+  |                         | Q = [Q_img, Q_txt]            |                         |
+  |                         | K = [K_img, K_txt]            |                         |
+  |                         | V = [V_img, V_txt]            |                         |
+  |                         | Softmax(Q K^T / sqrt(d)) * V  |                         |
+  |                         +-------------------------------+                         |
+  |                        /                                 \                        |
+  |  - Split Output -> Attn_img                        - Split Output -> Attn_txt     |
+  |  - Image MLP Block (W_mlp_img)                     - Text MLP Block (W_mlp_txt)   |
+  |  - Residual: x_img + Attn + MLP                    - Residual: x_txt + Attn + MLP |
+  +===================================================================================+
+                                           |
+                                           v
+                     [ Velocity Output v_theta(x_t, t) (From Image Stream) ]
+                                           |
+                                           v
+                     [ Rectified Flow ODE Step: x_{t-dt} = x_t - v_theta * dt ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Triple Text Encoder System:**
+- **CLIP ViT-L (123M):** Generates 77 tokens of dimension 768.
+- **OpenCLIP ViT-bigG (695M):** Generates 77 tokens of dimension 1280.
+- **T5-XXL (4.6B):** Generates 256 tokens of dimension 4096.
+- Concatenated along token sequence length to form a unified text condition of shape $(B, 333, 4096)$.
+
+**2. MMDiT Transformer Blocks (24 to 38 Layers):**
+- **Dual Modulation:** Discrete timestep $t$ is passed to separate adaLN-Zero blocks to compute scale/shift parameters $(\gamma_{\text{img}}, \beta_{\text{img}}, \alpha_{\text{img}})$ and $(\gamma_{\text{txt}}, \beta_{\text{txt}}, \alpha_{\text{txt}})$.
+- **Independent Linear Projections:** Queries, Keys, and Values are projected using independent linear layers:
+  $$Q_{\text{img}} = W_{Q,\text{img}} x_{\text{img}}, \quad Q_{\text{txt}} = W_{Q,\text{txt}} x_{\text{txt}}$$
+- **Joint Attention:** Concatenates $Q = [Q_{\text{img}}, Q_{\text{txt}}]$, $K = [K_{\text{img}}, K_{\text{txt}}]$, $V = [V_{\text{img}}, V_{\text{txt}}]$ and executes self-attention across the combined 1,357-token sequence.
+- **Independent MLPs:** Attention outputs are split back into image and text streams, passing through separate feed-forward MLPs ($W_{\text{mlp,img}}$ and $W_{\text{mlp,txt}}$).
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through SD3 (8B Medium version) for input `(B, 3, 1024, 1024)`.
+
+1. **VAE Encoding:**
+   - Image $x$: `(B, 3, 1024, 1024)` $\xrightarrow{\text{16x VAE Encoder}} z_0$: `(B, 16, 64, 64)`
+   - Patchify ($2 \times 2$) $\rightarrow$ Image Tokens: `(B, 1024, 1536)`
+2. **Text Conditioning:**
+   - CLIP-L (77x768) + OpenCLIP (77x1280) + T5-XXL (256x4096) $\rightarrow$ Text Tokens: `(B, 333, 4096)`
+   - Linear projection to 1536 dim $\rightarrow$ `(B, 333, 1536)`
+3. **MMDiT Block Execution (24 Layers):**
+   - Image Tokens `(B, 1024, 1536)`, Text Tokens `(B, 333, 1536)`
+   - Separate Linear Projections $\rightarrow Q_{\text{img}}(B, 1024, 1536), Q_{\text{txt}}(B, 333, 1536)$
+   - Concatenate $\rightarrow Q_{\text{joint}}$ `(B, 1357, 1536)`
+   - Softmax Attention $\rightarrow$ Split outputs back to Image `(B, 1024, 1536)` and Text `(B, 333, 1536)`
+   - Separate MLP passes $\rightarrow$ Residual additions.
+4. **Velocity Prediction Output:**
+   - Unpatchify Image Tokens $\rightarrow$ Predicted Velocity Field $v_\theta(x_t, t)$: `(B, 16, 64, 64)`.
+
+## 7. Mathematical Foundations
+
+### 1. MMDiT Joint Attention Formulation
+Let $x_{\text{img}} \in \mathbb{R}^{N \times d}$ and $x_{\text{txt}} \in \mathbb{R}^{M \times d}$ be the image and text representations at block $l$.
+
+The queries, keys, and values are computed using separate weight matrices:
+
+$$\begin{aligned}
+Q_{\text{img}} &= W_Q^{\text{img}} \cdot \text{adaLN}(x_{\text{img}}), & Q_{\text{txt}} &= W_Q^{\text{txt}} \cdot \text{adaLN}(x_{\text{txt}}) \\
+K_{\text{img}} &= W_K^{\text{img}} \cdot \text{adaLN}(x_{\text{img}}), & K_{\text{txt}} &= W_K^{\text{txt}} \cdot \text{adaLN}(x_{\text{txt}}) \\
+V_{\text{img}} &= W_V^{\text{img}} \cdot \text{adaLN}(x_{\text{img}}), & V_{\text{txt}} &= W_V^{\text{txt}} \cdot \text{adaLN}(x_{\text{txt}})
+\end{aligned}$$
+
+The unified sequence matrices are formed by concatenation:
+
+$$Q = \begin{bmatrix} Q_{\text{img}} \\ Q_{\text{txt}} \end{bmatrix}, \quad K = \begin{bmatrix} K_{\text{img}} \\ K_{\text{txt}} \end{bmatrix}, \quad V = \begin{bmatrix} V_{\text{img}} \\ V_{\text{txt}} \end{bmatrix}$$
+
+Joint attention evaluates:
+
+$$\text{Attn}_{\text{joint}} = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} \right) V = \begin{bmatrix} \text{Attn}_{\text{img}} \\ \text{Attn}_{\text{txt}} \end{bmatrix}$$
+
+The outputs are split back, passed through independent MLPs, and added via residual connections:
+
+$$x_{\text{img}}^{(l+1)} = x_{\text{img}}^{(l)} + \alpha_{\text{img}} \cdot \text{MLP}_{\text{img}}\left( \text{Attn}_{\text{img}} \right)$$
+
+$$x_{\text{txt}}^{(l+1)} = x_{\text{txt}}^{(l)} + \alpha_{\text{txt}} \cdot \text{MLP}_{\text{txt}}\left( \text{Attn}_{\text{txt}} \right)$$
+
+## 8. Training Procedure
+- **Rectified Flow Matching:** Trained using straight-line trajectory formulation $x_t = (1-t)x_1 + t x_0$, regressing velocity target $v = x_0 - x_1$.
+- **Optimizer:** AdamW ($\text{lr} = 1 \times 10^{-4}$), trained on high-resolution synthetic and real image-text datasets.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **SD3 MMDiT Block**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MMDiTBlock(nn.Module):
+    """ Multimodal Diffusion Transformer (MMDiT) Block with Separate Weights """
+    def __init__(self, dim=1536, num_heads=16):
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        
+        # 1. IMAGE STREAM WEIGHTS
+        self.norm_img = nn.LayerNorm(dim, elementwise_affine=False)
+        self.qkv_img = nn.Linear(dim, dim * 3, bias=False)
+        self.mlp_img = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(dim * 4, dim)
+        )
+        self.adaLN_img = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
+        nn.init.zeros_(self.adaLN_img[1].weight); nn.init.zeros_(self.adaLN_img[1].bias)
+        
+        # 2. TEXT STREAM WEIGHTS (SEPARATE PARAMETERS!)
+        self.norm_txt = nn.LayerNorm(dim, elementwise_affine=False)
+        self.qkv_txt = nn.Linear(dim, dim * 3, bias=False)
+        self.mlp_txt = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(dim * 4, dim)
+        )
+        self.adaLN_txt = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
+        nn.init.zeros_(self.adaLN_txt[1].weight); nn.init.zeros_(self.adaLN_txt[1].bias)
+
+    def forward(self, x_img, x_txt, t_emb):
+        """
+        x_img: (B, N_img, dim)
+        x_txt: (B, N_txt, dim)
+        t_emb: (B, dim)
+        """
+        B, N_img, _ = x_img.shape
+        N_txt = x_txt.shape[1]
+        
+        # 1. Modulate Image Stream
+        g1_i, b1_i, a1_i, g2_i, b2_i, a2_i = self.adaLN_img(t_emb).chunk(6, dim=-1)
+        img_norm = self.norm_img(x_img) * (1 + g1_i.unsqueeze(1)) + b1_i.unsqueeze(1)
+        qkv_i = self.qkv_img(img_norm).reshape(B, N_img, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        q_i, k_i, v_i = qkv_i[0], qkv_i[1], qkv_i[2]
+        
+        # 2. Modulate Text Stream
+        g1_t, b1_t, a1_t, g2_t, b2_t, a2_t = self.adaLN_txt(t_emb).chunk(6, dim=-1)
+        txt_norm = self.norm_txt(x_txt) * (1 + g1_t.unsqueeze(1)) + b1_t.unsqueeze(1)
+        qkv_t = self.qkv_txt(txt_norm).reshape(B, N_txt, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        q_t, k_t, v_t = qkv_t[0], qkv_t[1], qkv_t[2]
+        
+        # 3. JOINT ATTENTION COMPUTATION
+        q = torch.cat([q_i, q_t], dim=2) # (B, heads, N_img + N_txt, d_head)
+        k = torch.cat([k_i, k_t], dim=2)
+        v = torch.cat([v_i, v_t], dim=2)
+        
+        attn_out = F.scaled_dot_product_attention(q, k, v)
+        
+        # 4. Split Output Back to Image & Text
+        attn_i = attn_out[:, :, :N_img, :].permute(0, 2, 1, 3).reshape(B, N_img, self.dim)
+        attn_t = attn_out[:, :, N_img:, :].permute(0, 2, 1, 3).reshape(B, N_txt, self.dim)
+        
+        # 5. Independent MLP Passes & Residual Updates
+        x_img = x_img + a1_i.unsqueeze(1) * attn_i
+        x_img = x_img + a2_i.unsqueeze(1) * self.mlp_img(self.norm_img(x_img) * (1 + g2_i.unsqueeze(1)) + b2_i.unsqueeze(1))
+        
+        x_txt = x_txt + a1_t.unsqueeze(1) * attn_t
+        x_txt = x_txt + a2_t.unsqueeze(1) * self.mlp_txt(self.norm_txt(x_txt) * (1 + g2_t.unsqueeze(1)) + b2_t.unsqueeze(1))
+        
+        return x_img, x_txt
+
+if __name__ == "__main__":
+    B, N_img, N_txt, dim = 2, 1024, 333, 1536
+    mmdit_block = MMDiTBlock(dim=dim, num_heads=16)
+    
+    x_img = torch.randn(B, N_img, dim)
+    x_txt = torch.randn(B, N_txt, dim)
+    t_emb = torch.randn(B, dim)
+    
+    out_img, out_txt = mmdit_block(x_img, x_txt, t_emb)
+    
+    print(f"Output Image Tokens Shape: {out_img.shape}")
+    print(f"Output Text Tokens Shape:  {out_txt.shape}")
+    assert out_img.shape == (B, N_img, dim)
+    assert out_txt.shape == (B, N_txt, dim)
+    print("SD3 MMDiT Block verification successful!")
+```
+
+## 10. Strengths
+- **Symmetric Multimodal Reasoning:** Joint attention allows text representation to adapt based on generated image context.
+- **Superior Typography & In-Image Spelling:** Triple text encoder system (T5-XXL + CLIPs) renders legible text inside images.
+- **Separate Weight Modality Protection:** Prevents visual latent features from corrupting language understanding.
+
+## 11. Weaknesses
+- **Heavy Memory Footprint:** Running T5-XXL alongside an 8B MMDiT Transformer requires high GPU VRAM.
+
+## 12. Research Evolution
+SD3 established MMDiT as the benchmark architecture for multimodal diffusion, directly influencing **Flux.1** and modern video generation models.
+
+## 13. Interview Questions
+
+**Q1: What is the core architectural innovation of MMDiT in Stable Diffusion 3?**
+**A1:** MMDiT maintains **separate parameter weight streams** for text and image modalities (independent LayerNorms, linear projections, and MLPs) while joining their queries, keys, and values into a single unified Joint Self-Attention operation. This allows multimodal interaction during attention without corrupting feature representations in MLP layers.
+
+**Q2: What triple text encoder system is used in SD3?**
+**A2:** CLIP ViT-L (768-d), OpenCLIP ViT-bigG (1280-d), and T5-XXL (4096-d). Their token outputs are concatenated to form a 333-token text condition sequence.
+
+**Q3: How does SD3's Joint Attention differ from traditional Cross-Attention in SD 1.5?**
+**A3:** In traditional cross-attention, image tokens attend to static text tokens (1-way interaction). In SD3 Joint Attention, image and text tokens are concatenated together, allowing bidirectional interaction: image tokens attend to text, AND text tokens attend to image context.
+
+**Q4: What sampling objective does SD3 use?**
+**A4:** Rectified Flow Matching, predicting velocity vectors $v = x_0 - x_1$ along straight-line ODE trajectories $x_t = (1-t)x_1 + t x_0$.
+
+**Q5: What is the spatial compression factor of SD3's VAE?**
+**A5:** $16\times$ spatial compression (compressing $1024 \times 1024$ images to $64 \times 64 \times 16$ latents).
+
+## 14. Related Papers
+- **SD3 Paper:** *Scaling Rectified Flow Transformers for High-Resolution Image Synthesis* (Esser et al., arXiv 2024)
+- **DiT Paper:** *Scalable Diffusion Models with Transformers* (Peebles & Xie, ICCV 2023)
+
+## 15. Further Reading
+- Stability AI Stable Diffusion 3 Research Announcement & Paper

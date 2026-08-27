@@ -1,0 +1,105 @@
+# Meta-Learning
+
+## 1. Overview
+
+Meta-learning — "learning to learn" — is about training a model not to solve one fixed task, but to become good at rapidly solving *new* tasks it hasn't seen before, given only a handful of examples. Instead of training on a single dataset and evaluating on held-out data from that same distribution, meta-learning trains across a distribution of *tasks*, so the model internalizes a general strategy for fast adaptation rather than memorizing any single task's solution. This sounds abstract, but it's exactly the mechanism that explains why large language models can perform a brand-new task from just a few examples in the prompt, with no gradient update at all — that "in-context learning" ability is a form of meta-learning that emerges from large-scale pretraining.
+
+## 2. Prerequisites in Context
+
+**Bayesian ML** matters because one of the cleanest ways to formalize meta-learning is as hierarchical Bayesian inference: a shared prior over task-solving strategies gets refined by each new task's few examples into a task-specific posterior, and understanding priors, posteriors, and hierarchical models is what makes this framing precise rather than metaphorical. **Gradient-Based Optimization** is essential because the most widely used meta-learning algorithm, MAML, literally differentiates *through* a gradient descent update — you need to be comfortable with what it means to take a gradient of a function that itself contains a gradient step, which is a genuinely more advanced use of the chain rule than ordinary backpropagation.
+
+## 3. Core Concept
+
+The standard meta-learning setup uses **episodic training**: instead of one dataset, you have a distribution of tasks $\mathcal{T}_i$, each providing a small "support set" (a few labeled examples) and a "query set" (examples to evaluate on after adapting). Training proceeds over many sampled episodes, each simulating the few-shot scenario the model will face at deployment. **Model-Agnostic Meta-Learning (MAML)** formalizes this as a two-level optimization: for each task, take one or a few gradient steps on the support set starting from shared parameters $\theta$, producing task-adapted parameters $\theta_i'$; then compute the loss of $\theta_i'$ on the *query* set, and update the shared $\theta$ by backpropagating through the entire adaptation process. The result is a $\theta$ that isn't good at any specific task directly, but is positioned such that a few gradient steps quickly move it to a good solution for *any* task drawn from the training distribution — an initialization optimized specifically for fast adaptability, not for immediate performance.
+
+## 4. Theoretical Foundations
+
+MAML's objective, written out, is:
+$$\min_\theta \sum_{\mathcal{T}_i \sim p(\mathcal{T})} \mathcal{L}_{\mathcal{T}_i}\big(\theta - \alpha \nabla_\theta \mathcal{L}_{\mathcal{T}_i}(\theta)\big)$$
+The inner term $\theta_i' = \theta - \alpha \nabla_\theta \mathcal{L}_{\mathcal{T}_i}(\theta)$ is the task-specific adaptation (one gradient step, learning rate $\alpha$, on the support set). The outer minimization then requires computing $\nabla_\theta \mathcal{L}_{\mathcal{T}_i}(\theta_i')$ — a gradient of a loss evaluated at a point that is *itself* a function of $\theta$ through a gradient computation, meaning the outer gradient involves a Hessian-vector product (a second-order derivative) of the inner loss. This is computationally expensive, which is why practical variants (like first-order MAML, or Reptile) approximate this second-order term away, trading some theoretical fidelity for tractable compute — an important practical lesson in meta-learning research: the "correct" formulation is often too expensive to run at scale, and the field's engineering progress is largely about finding cheaper approximations that retain most of the benefit.
+
+## 5. Worked Example
+
+Consider a 5-way, 1-shot image classification meta-learning task: each episode presents 5 classes, with exactly 1 labeled example per class (the support set) and several unlabeled query examples to classify. A model meta-trained with MAML across thousands of such episodes (drawn from a large pool of classes it will never see all of during training) learns an initialization $\theta$ such that, after seeing just those 5 single examples and taking one or two gradient steps, it can correctly classify the query examples for a *brand new* set of 5 classes it has never encountered — something a normally-trained classifier, given only 5 examples total, would fail at completely. The "meta" in meta-learning is precisely this: the training process optimizes for adaptability across an entire distribution of such small tasks, not accuracy on any single fixed classification problem.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+from copy import deepcopy
+
+def maml_inner_loop(model, loss_fn, support_x, support_y, inner_lr=0.01, steps=1):
+    """One (or a few) gradient step(s) on the support set, producing adapted params.
+    Uses functional-style parameter updates so gradients can flow through this
+    step during the outer-loop backward pass (the key MAML mechanism)."""
+    adapted_model = deepcopy(model)
+    for _ in range(steps):
+        preds = adapted_model(support_x)
+        loss = loss_fn(preds, support_y)
+        grads = torch.autograd.grad(loss, adapted_model.parameters(), create_graph=True)
+        for p, g in zip(adapted_model.parameters(), grads):
+            p.data = p.data - inner_lr * g  # simplified update (real MAML keeps this differentiable)
+    return adapted_model
+
+def maml_meta_loss(model, loss_fn, tasks, inner_lr=0.01):
+    """tasks: list of (support_x, support_y, query_x, query_y) tuples."""
+    total_loss = 0.0
+    for support_x, support_y, query_x, query_y in tasks:
+        adapted = maml_inner_loop(model, loss_fn, support_x, support_y, inner_lr)
+        query_preds = adapted(query_x)
+        total_loss = total_loss + loss_fn(query_preds, query_y)
+    return total_loss / len(tasks)
+
+if __name__ == "__main__":
+    model = nn.Sequential(nn.Linear(4, 16), nn.ReLU(), nn.Linear(16, 3))
+    loss_fn = nn.CrossEntropyLoss()
+    tasks = [(torch.randn(5, 4), torch.randint(0, 3, (5,)),
+              torch.randn(10, 4), torch.randint(0, 3, (10,))) for _ in range(4)]
+    meta_loss = maml_meta_loss(model, loss_fn, tasks)
+    assert meta_loss.item() > 0, "meta loss should be positive for a randomly initialized model"
+    print(f"Meta-loss across {len(tasks)} sampled tasks: {meta_loss.item():.3f}")
+```
+
+## 7. Real-World Applications
+
+Few-shot classification benchmarks (Omniglot, miniImageNet) were the original proving ground for MAML and its many descendants (Reptile, Prototypical Networks), and these algorithms are used directly in low-data domains like rare-disease medical imaging classification, where collecting thousands of labeled examples per condition is infeasible. More significantly for the current AI landscape, in-context learning in large language models — the ability of GPT-3-scale models to perform a new task from a handful of examples in the prompt, with zero gradient updates — is widely understood as an *emergent* form of meta-learning that arises purely from diverse large-scale pretraining, without any explicit MAML-style episodic training objective (see `gpt-3` on this platform for the original in-context learning demonstration).
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that meta-learning requires an explicit two-level optimization loop like MAML to occur — in-context learning demonstrates that meta-learning-like behavior can emerge implicitly from sufficiently diverse pretraining on a single large dataset, without any deliberate episodic task structure. Another pitfall is underestimating the compute cost of true second-order MAML — many practitioners default to first-order approximations without realizing they're sacrificing a meaningful chunk of the adaptation quality the full method would provide, especially for tasks requiring more than one or two inner-loop gradient steps. Finally, don't confuse meta-learning with transfer learning: transfer learning fine-tunes a pretrained model on a new task with standard training, while meta-learning explicitly optimizes for *fast adaptability itself* as the training objective.
+
+## 9. How This Connects
+
+This topic requires **Bayesian ML** and **Gradient-Based Optimization** — without a grasp of hierarchical priors and the ability to reason about differentiating through an optimization step, MAML's core mechanism (a gradient of a gradient) is easy to misunderstand as a notational trick rather than a genuine second-order computation. It directly unlocks **In-Context Learning Theory** (the formal study of why and how large language models perform meta-learning-like adaptation purely from prompt context, without any parameter updates) and **Foundation Model Adaptation** (the broader practice of adapting large pretrained models to new tasks efficiently, of which few-shot prompting and lightweight fine-tuning methods are direct descendants of meta-learning's core insight).
+
+## 10. Check Your Understanding
+
+**Q1: What's the fundamental difference between how meta-learning trains a model and how standard supervised learning trains a model?**
+Standard supervised learning optimizes performance on a single fixed task/dataset. Meta-learning optimizes across a *distribution of tasks*, each providing only a few examples, with the explicit objective of producing a model (or initialization) that adapts quickly and well to a brand-new task from that same distribution — the training signal is about adaptability, not single-task accuracy.
+
+**Q2: Why does MAML's outer-loop gradient require a second-order (Hessian-vector) computation?**
+Because the outer loss is evaluated at adapted parameters $\theta_i' = \theta - \alpha\nabla_\theta\mathcal{L}(\theta)$, which are themselves a function of $\theta$ through a gradient computation. Differentiating the outer loss with respect to the original $\theta$ therefore requires differentiating through that inner gradient — i.e., computing derivatives of a derivative, which is a second-order operation.
+
+**Q3: What is the practical tradeoff made by first-order MAML approximations?**
+First-order MAML treats the adapted parameters $\theta_i'$ as a constant when computing the outer gradient, ignoring how $\theta_i'$ actually depends on $\theta$ through the inner update. This is much cheaper to compute (no Hessian-vector products needed) but discards some of the gradient signal, typically resulting in somewhat worse adaptation quality, especially when the inner loop uses more than one gradient step.
+
+**Q4: How is in-context learning in large language models related to meta-learning?**
+Both involve a model adapting its behavior to a new task using only a small number of examples, without the kind of extensive training a standard supervised model would need. The key difference is that in-context learning requires no explicit gradient update at inference time — the "adaptation" happens purely through the forward pass processing the examples in the prompt — while classical meta-learning methods like MAML explicitly perform gradient-based adaptation. In-context learning is believed to emerge implicitly from diverse pretraining, without an explicit meta-learning objective being used.
+
+**Q5: Why can't you just evaluate a meta-learned model on one held-out task the way you would evaluate an ordinary classifier?**
+Because meta-learning's entire value proposition is about performance *across a distribution of new tasks*, not on any single task. Evaluating on one held-out task tells you almost nothing about whether the model has learned a genuinely adaptable strategy versus gotten lucky on that particular task's structure — proper evaluation requires averaging performance across many distinct held-out tasks, each with its own small support/query split.
+
+## 11. Further Reading
+
+- Finn, Abbeel & Levine, "Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks" (MAML, 2017)
+- Nichol, Achiam & Schulman, "On First-Order Meta-Learning Algorithms" (Reptile, 2018)
+- Brown et al., "Language Models are Few-Shot Learners" (GPT-3, 2020) — the emergent in-context learning paper
+- Hospedales et al., "Meta-Learning in Neural Networks: A Survey" (2021)
+- See also: `gpt-3` on this platform for the emergent in-context-learning perspective
+
+## Related Platform Content
+
+- [MACHINE LEARNING curriculum overview](/learn/machine-learning)
+- [Architecture application](/architectures/darts)
+- [Browse all system designs](/system-design)

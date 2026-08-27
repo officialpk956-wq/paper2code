@@ -1,0 +1,148 @@
+# ONNX: Open Neural Network Exchange
+
+> **Reading goal:** explain the problem, derive the central mechanism, reproduce a minimal version, and state where the method can fail.
+
+## 1. Overview
+
+Published in 2017 by Bai et al. (Microsoft, Facebook/Meta), **ONNX: Open Neural Network Exchange** belongs to the SYSTEMS part of the Paper2Code library. ONNX defines a common intermediate representation for neural network models, enabling models trained in one framework (PyTorch, TensorFlow, scikit-learn) to be deployed in any other runtime (TensorRT, OpenVINO, CoreML, ONNX Runtime). Solves the train-in-one-place, deploy-everywhere problem. [1]
+
+The shortest useful mental model is this: A graph model updates each entity using information carried by its neighbors while respecting that node order is arbitrary. The paper matters because it turns that general need into a concrete method that can be compared, implemented, and challenged. Do not memorize the name first. Start by asking what enters the method, what leaves it, what is learned, and which bottleneck is removed.
+
+## 2. Historical Context
+
+Spectral methods and shallow graph embeddings captured useful structure but were difficult to scale, transfer, or combine with rich node and edge features. By 2017, researchers had working baselines, but the remaining gap was large enough that simply adding more layers, data, or hardware did not answer the scientific question.
+
+The paper should be read in two timelines. The first is the **research timeline**: which assumptions from prior work it kept and which it rejected. The second is the **engineering timeline**: which computational constraint made the idea newly useful. Keeping these timelines separate prevents a common reading error—crediting an algorithm for gains that actually came from a different dataset, evaluation protocol, or compute budget.
+
+## 3. Research Problem
+
+The general problem can be stated as a contract: given the paper's input and available supervision, produce the required prediction, representation, action, or system behavior under a realistic resource budget. Repeated aggregation can oversmooth representations, amplify degree bias, leak split information, or become prohibitively expensive on high-degree dynamic graphs.
+
+A strong problem statement includes three baselines: the simplest credible baseline, the strongest comparable method available at the time, and an oracle or upper-bound condition where possible. When reproducing this work, hold data splits and evaluation code constant. Otherwise, you cannot tell whether the paper's mechanism caused the improvement.
+
+## 4. Prior Work
+
+Prior approaches typically solved only part of the contract. Some offered a good inductive bias but scaled poorly; others scaled but required more labels, memory, communication, or inference time. Spectral methods and shallow graph embeddings captured useful structure but were difficult to scale, transfer, or combine with rich node and edge features.
+
+Read the related-work section as a dependency graph, not a list of citations. For every predecessor, write down: **what it computes**, **its asymptotic or operational bottleneck**, **its supervision**, and **the failure case this paper targets**. This makes the novelty test concrete and keeps modern implementation improvements from being confused with the original contribution.
+
+## 5. Why Previous Methods Failed
+
+Repeated aggregation can oversmooth representations, amplify degree bias, leak split information, or become prohibitively expensive on high-degree dynamic graphs. Previous methods may also have been evaluated on averages that hid important slices. A result can look strong while failing on long inputs, rare classes, cold-start users, shifted environments, or strict latency targets.
+
+The practical lesson is to locate the bottleneck before adopting the method. If your workload is limited by data quality but the paper solves memory bandwidth, implementation complexity will not rescue the system. Reproduce the baseline failure first; only then add the proposed mechanism.
+
+## 6. Core Innovation
+
+The registry summarizes the paper's introduced concepts as:
+
+- **Computational graph serialization:** identify its input, output, learned parameters, and the assumption it adds to the baseline.
+- **operator standardization:** identify its input, output, learned parameters, and the assumption it adds to the baseline.
+- **opset versioning:** identify its input, output, learned parameters, and the assumption it adds to the baseline.
+- **runtime optimization passes:** identify its input, output, learned parameters, and the assumption it adds to the baseline.
+
+Its associated architecture or procedure is **A task-specific realization of the paper's central mechanism**. The contribution should be explained as a change to a baseline computation: what new state is introduced, where information flows differently, and which objective trains the change. ONNX defines a common intermediate representation for neural network models, enabling models trained in one framework (PyTorch, TensorFlow, scikit-learn) to be deployed in any other runtime (TensorRT, OpenVINO, CoreML, ONNX Runtime). Solves the train-in-one-place, deploy-everywhere problem.
+
+An honest explanation also states what is *not* new. Dataset scale, engineering polish, and evaluation breadth may be essential to the result without being the algorithmic novelty. Separating these pieces makes the paper easier to reuse correctly.
+
+## 7. Architecture Breakdown
+
+```text
+nodes/edges/features -> neighborhood sampling or propagation -> permutation-invariant aggregation -> node/edge/graph head
+       |                    |                    |
+       +-- shape checks ----+-- metrics ---------+-- error analysis
+```
+
+Trace one example through this flow. At each boundary, record the tensor or state shape, dtype, masking rule, normalization, and whether the operation runs during training, inference, or both. The defining mechanism belongs in one isolated module with a baseline-compatible interface. That design makes ablations possible and prevents the reproduction from becoming an untestable monolith.
+
+## 8. Mathematical Foundations
+
+A representative equation for this technical family is:
+
+$$
+h_v^{(l+1)}=\phi\!\left(h_v^{(l)},\operatorname{AGG}\{h_u^{(l)}:u\in\mathcal{N}(v)\}\right)
+$$
+
+The aggregation must be invariant to neighbor order. The update function controls how self-information and neighborhood evidence combine at each hop. This equation is a **reading scaffold**, not a substitute for the primary paper's exact notation. Re-derive the specialized objective from [1], check dimensions term by term, and test it on a tiny hand-computable example before implementing a full training loop.
+
+The most useful derivation questions are: Which quantities are observed? Which are latent or learned? Where does stochastic estimation enter? Which normalization prevents scale from changing the answer? What happens at an edge case such as an empty set, maximum sequence length, zero reward, or a single-class batch?
+
+## 9. Key Experiments
+
+The paper's main claim is summarized in the registry as: ONNX defines a common intermediate representation for neural network models, enabling models trained in one framework (PyTorch, TensorFlow, scikit-learn) to be deployed in any other runtime (TensorRT, OpenVINO, CoreML, ONNX Runtime). Solves the train-in-one-place, deploy-everywhere problem. The key experiments should therefore isolate **causality**, not merely display a large final score.
+
+Reproduction plan:
+
+1. Reproduce a simple baseline with the published split and metric definition.
+2. Add only the defining mechanism and keep the training budget fixed.
+3. Sweep the one or two hyperparameters that control the mechanism's strength or capacity.
+4. Evaluate both the headline metric and failure slices.
+5. Report node or graph task quality, inductive transfer, sampling variance, memory by edge count, throughput, and performance by degree.
+
+Use multiple seeds when training variance is material. Save predictions, not just aggregate scores, so disagreements can be inspected later.
+
+## 10. Benchmark Results
+
+The registry records the practical significance as: Industry standard for model portability. ONNX Runtime is used in Microsoft Azure ML and Windows ML. Enables deployment on edge devices without retraining. Over 150 operators in the ONNX opset. This statement explains *why the paper remained relevant*, but exact benchmark values must be taken from the primary tables in [1]. They are intentionally not invented or copied without experimental context here.
+
+When reading a table, verify whether higher or lower is better, whether results use extra data or pretraining, and whether compute is comparable. Report absolute values, the baseline delta, uncertainty where available, and operational cost. A smaller gain with a simpler or faster model may be the more important result.
+
+## 11. Ablation Studies
+
+An ablation removes or changes one component while preserving everything else. For this paper, begin with the introduced concepts listed above. Remove each component, replace it with the closest baseline operation, and vary its capacity. Also test data scale and compute scale separately; an idea that works only after a large budget increase is a different claim from an architecture that improves efficiency.
+
+Useful negative controls include shuffled labels or relationships, a frozen new module, matched parameter count, matched training FLOPs, and a simpler heuristic. A convincing ablation explains *why* the method works and identifies the regime where it stops helping.
+
+## 12. Implementation Details
+
+The following code is a minimal tensor-contract example for the paper's technical family. It is deliberately small enough to test; replace the placeholder mechanism with the exact equations from [1].
+
+```python
+import torch
+
+def mean_message_passing(node_features, adjacency):
+    degree = adjacency.sum(-1, keepdim=True).clamp_min(1)
+    neighbor_mean = adjacency @ node_features / degree
+    return torch.relu(node_features + neighbor_mean)
+
+x = torch.randn(6, 32)
+adj = torch.eye(6)
+assert mean_message_passing(x, adj).shape == x.shape
+```
+
+Before scaling, add tests for shapes, masking, deterministic evaluation, serialization, and a tiny batch that the model can overfit. Log configuration, source revision, data version, random seeds, parameter count, and peak memory beside every run.
+
+## 13. Engineering Insights
+
+Industry standard for model portability. ONNX Runtime is used in Microsoft Azure ML and Windows ML. Enables deployment on edge devices without retraining. Over 150 operators in the ONNX opset. To translate that impact into a production decision, measure the complete path rather than an isolated kernel or offline model. Include preprocessing, retrieval or batching, host-device transfer, post-processing, cache behavior, and tail latency.
+
+Design a safe fallback to the previous method. Shadow traffic or offline replay should confirm output compatibility before rollout. Monitor both quality and resource metrics, because an architecture can improve one while silently degrading the other. The paper's idea is production-ready only when its assumptions remain true under real traffic and data drift.
+
+## 14. Limitations
+
+Repeated aggregation can oversmooth representations, amplify degree bias, leak split information, or become prohibitively expensive on high-degree dynamic graphs. The primary paper's limitations and appendix should be treated as required reading, not optional caveats.
+
+Additional questions to test are: Does the method depend on unusually clean data? Does it transfer across domains and scales? Is the comparison budget-matched? Can its objective be gamed? What happens under corrupted input or missing context? Does the method concentrate errors on a subgroup? These questions turn a paper summary into engineering judgment.
+
+## 15. Influence on Later Research
+
+Later work tested the idea at larger scale, under different data regimes, and with stronger implementation techniques. This lineage is most useful when read as a sequence of repaired limitations. For each descendant, identify whether it changes the objective, data, architecture, scaling strategy, or evaluation. Then distinguish direct descendants from papers that share vocabulary but solve a different problem.
+
+The paper's enduring value is not that every detail remains state of the art. It is that later systems still inherit, modify, or explicitly reject its central abstraction.
+
+## 16. Related Architectures
+
+- [Architecture library](/architectures) — compare this mechanism with related model families.
+- [TensorRT: Scalable, Efficient Deep Learning Inference](/papers/tensorrt-scalable-efficient-deep-learning-inference) — adjacent reading from the same library section.
+- [Ring Attention with Blockwise Transformers](/papers/ring-attention-with-blockwise-transformers) — adjacent reading from the same library section.
+
+## 17. Related Problems
+
+- [Relevant curriculum lesson](/learn/machine-learning/multi-task-and-transfer-learning-theory) — build the prerequisite theory and vocabulary.
+- [Related production system](/system-design/recommendation-systems) — see how the research idea interacts with serving and reliability constraints.
+- [Practice in the Dojo](/dojo) — implement prerequisite tensor operations and test shape contracts.
+- [Browse the paper library](/papers) — continue along the research timeline.
+
+### Reference
+
+[1] Bai et al. (Microsoft, Facebook/Meta). **ONNX: Open Neural Network Exchange**. 2017.

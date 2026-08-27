@@ -1,0 +1,164 @@
+# Dense Retrieval and Embedding Similarity
+
+## 1. Overview
+
+Dense retrieval represents the shift from keyword-matching to **learned, semantic similarity**. Instead of asking "do the query and document share words," dense retrieval asks "are the query and document semantically similar," determined by computing embeddings (dense vector representations) and measuring their similarity. A good embedding model maps semantically similar text (queries and relevant documents, synonyms, paraphrases) to vectors with high cosine similarity, and dissimilar text to low similarity. This topic covers how embedding models are trained, why certain similarity metrics matter, and practical considerations for deploying embedders at scale.
+
+## 2. Prerequisites in Context
+
+**Embeddings** in the NLP curriculum are the direct prerequisite — you need to understand what embeddings are and how they're typically trained (e.g., contrastive learning in transformer models). **Similarity Metrics** and **Vector Operations** are essential — understanding cosine vs. Euclidean vs. angular distance, and why cosine is typically preferred for normalized embeddings, is central to dense retrieval. **Contrastive Learning** as a training paradigm is important because modern embedding models are trained on this objective: maximizing similarity between relevant pairs and minimizing similarity between non-relevant pairs.
+
+## 3. Core Concept
+
+An embedding model is a neural network encoder that maps text (queries or documents) into a fixed-dimensional vector space. A well-trained model places semantically similar texts close together: the embedding of "how do I fix a car?" is close to "what's a repair procedure for vehicles?" even though they don't share many keywords. **Contrastive training** is the standard approach: given a batch of (query, positive_document, negative_document) triples, the model is trained to maximize $\text{sim}(e_q, e_{\text{pos}})$ and minimize $\text{sim}(e_q, e_{\text{neg}})$, where $e$ denotes embeddings. The loss function (e.g., InfoNCE or triplet loss) directly optimizes this. A key insight is that the quality of the embedding model depends heavily on the training data — if you train on generic web text but deploy on legal documents, performance will be poor because the embedder hasn't learned to recognize legal-domain relevance. **Domain-specific fine-tuning** — continuing to train a general embedding model on domain-specific (query, document) pairs — dramatically improves performance in specialized settings.
+
+## 4. Theoretical Foundations
+
+The **InfoNCE loss** (Noise Contrastive Estimation) is widely used for training dense retrievers:
+$$\mathcal{L} = -\log \frac{\exp(\text{sim}(e_q, e_{\text{pos}}) / \tau)}{\sum_{i=1}^{N} \exp(\text{sim}(e_q, e_i) / \tau)}$$
+where $\tau$ is a temperature parameter controlling the softmax sharpness, $e_{\text{pos}}$ is the positive (relevant) document embedding, and the denominator sums over all other documents in the batch (negatives). This loss directly optimizes the ranking task: making the positive document's similarity highest relative to negatives. For similarity metrics, **cosine distance** (dot product of normalized vectors) is standard for embeddings because: (1) it's symmetric and bounded $[-1, 1]$; (2) it's computationally efficient (just a dot product after normalization); (3) it's rotation-invariant (direction matters more than magnitude); (4) it naturally handles high-dimensional spaces well (Euclidean distance becomes less meaningful in high dimensions). **Approximate nearest neighbor (ANN)** indices (HNSW, IVF, learned indices) enable fast retrieval at scale by organizing embeddings hierarchically, reducing $O(N)$ exact search to $O(\log N)$ or $O(\sqrt{N})$ approximate search.
+
+## 5. Worked Example
+
+Training a dense retriever on legal documents: start with a pre-trained embedder (e.g., Sentence-BERT trained on general text), then fine-tune it on pairs of (legal query, relevant case law document) collected through human annotation or implicit signals (queries answered by a case, confirmed by lawyers). After fine-tuning, the embedder learns that legal-domain relevance patterns (precedent relationships, statute citations, legal reasoning structures) map to high similarity, improving retrieval quality for legal questions. Without fine-tuning, a general embedder might rank documents by superficial term overlap; with fine-tuning, it recognizes deeper relevance. At inference, queries and documents are embedded (once, offline for documents; every time for queries) and ranked by cosine similarity, returning the top-k most similar documents.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from sentence_transformers import SentenceTransformer, models
+
+class DenseRetrieverTraining:
+    """Train a dense retrieval model with contrastive loss."""
+    def __init__(self, model_name="all-MiniLM-L6-v2", device="cpu"):
+        self.device = device
+        self.embedder = SentenceTransformer(model_name)
+    
+    def infonce_loss(self, query_emb, pos_doc_emb, neg_doc_embs, temperature=0.07):
+        """
+        InfoNCE loss: maximize similarity of positive pair, minimize negatives.
+        query_emb: (batch_size, embedding_dim)
+        pos_doc_emb: (batch_size, embedding_dim)
+        neg_doc_embs: (batch_size, num_negatives, embedding_dim)
+        """
+        batch_size = query_emb.shape[0]
+        
+        # Cosine similarities
+        pos_sim = F.cosine_similarity(query_emb, pos_doc_emb, dim=1)  # (batch,)
+        
+        # For each query, compute similarity to all negatives
+        neg_sims = []
+        for i in range(batch_size):
+            sims = F.cosine_similarity(
+                query_emb[i:i+1].expand(neg_doc_embs.shape[1], -1),
+                neg_doc_embs[i],
+                dim=1
+            )  # (num_negatives,)
+            neg_sims.append(sims)
+        
+        # Stack: (batch, num_negatives)
+        neg_sims = torch.stack(neg_sims)
+        
+        # InfoNCE: log of normalized positive similarity
+        pos_sim_scaled = pos_sim / temperature  # (batch,)
+        neg_sims_scaled = neg_sims / temperature  # (batch, num_negatives)
+        
+        # Concatenate positive and negatives
+        logits = torch.cat([pos_sim_scaled.unsqueeze(1), neg_sims_scaled], dim=1)  # (batch, 1+num_neg)
+        
+        # Target is always the first position (positive)
+        target = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        
+        loss = F.cross_entropy(logits, target)
+        return loss
+    
+    def train_step(self, queries, pos_docs, neg_docs):
+        """One training step."""
+        with torch.no_grad():
+            query_emb = self.embedder.encode(queries, convert_to_tensor=True)
+            pos_doc_emb = self.embedder.encode(pos_docs, convert_to_tensor=True)
+            neg_doc_embs = []
+            for neg_batch in neg_docs:
+                neg_doc_embs.append(self.embedder.encode(neg_batch, convert_to_tensor=True))
+            neg_doc_embs = torch.stack(neg_doc_embs)
+        
+        loss = self.infonce_loss(query_emb, pos_doc_emb, neg_doc_embs)
+        return loss.item()
+    
+    def retrieve(self, query, document_corpus, top_k=5):
+        """Retrieve top-k documents most similar to query."""
+        query_emb = self.embedder.encode(query, convert_to_tensor=True)
+        doc_embs = self.embedder.encode(document_corpus, convert_to_tensor=True)
+        
+        # Cosine similarities
+        similarities = F.cosine_similarity(
+            query_emb.unsqueeze(0).expand(len(document_corpus), -1),
+            doc_embs, dim=1
+        )
+        
+        top_indices = torch.argsort(similarities, descending=True)[:top_k]
+        return [(document_corpus[i], similarities[i].item()) for i in top_indices]
+
+if __name__ == "__main__":
+    retriever = DenseRetrieverTraining()
+    
+    # Example retrieval
+    query = "How do I fix a broken phone screen?"
+    documents = [
+        "Screen repair guide for iPhones",
+        "Battery replacement procedure",
+        "How to replace a cracked display",
+        "Water damage prevention tips",
+        "Camera module installation steps"
+    ]
+    
+    results = retriever.retrieve(query, documents, top_k=3)
+    print("Dense Retrieval Results:")
+    for doc, score in results:
+        print(f"  {score:.4f}: {doc}")
+```
+
+## 7. Real-World Applications
+
+OpenAI's semantic search and retrieval capabilities use dense embeddings trained on their datasets. Anthropic's Claude uses dense retrieval for context-window retrieval when given documents. Elasticsearch and Milvus vector databases enable dense retrieval at billion-scale for enterprise search. Specialized domains use fine-tuned embedders: medical QA systems fine-tune on clinical notes and medical literature; legal research platforms fine-tune on case law; programming question-answering fine-tunes on Stack Overflow data.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that better embedding models always mean better retrieval — retrieval quality also depends on the corpus content, indexing quality, and query formulation. Another pitfall is training on generic data and deploying on specialized domains without fine-tuning — a general embedder performs poorly when deployed on domain-specific documents (legal, medical, technical) because it hasn't learned domain-specific relevance patterns. A third pitfall is ignoring the cost of inference — embedding every query and searching through embeddings requires disk I/O and compute, and at scale (billions of queries per day), this cost matters and necessitates approximate indexing structures and careful infrastructure design.
+
+## 9. How This Connects
+
+This topic requires **Embeddings**, **Similarity Metrics**, and **Contrastive Learning** as prerequisites. It connects to **Retrieval Fundamentals** (the broader retrieval context), **Hybrid Search Strategies** (combining dense with classical retrieval), **Re-Ranking and Fusion** (using dense scores in multi-stage pipelines), **Production RAG at Scale** (serving dense retrieval efficiently), and downstream to **Chatbots** and **Question Answering**.
+
+## 10. Check Your Understanding
+
+**Q1: How does training with contrastive loss (InfoNCE) improve dense retrievers?**
+It directly optimizes the ranking objective: making the embedding of a query close to its relevant documents and far from non-relevant ones. This teaches the model to recognize domain-specific relevance patterns that simple keyword overlap misses.
+
+**Q2: Why is cosine similarity typically preferred over Euclidean distance for embeddings?**
+Cosine similarity is bounded and symmetric, computationally efficient, rotation-invariant (direction matters more than magnitude in high dimensions), and naturally handles normalized embeddings well. Euclidean distance becomes less meaningful in high-dimensional spaces.
+
+**Q3: What is the problem with using a general-purpose embedding model on domain-specific documents?**
+General embedders are trained on web text and other broad data, so they haven't learned domain-specific relevance patterns. A query about "systolic pressure" might rank documents about "pressure valves" highly (superficial term overlap) instead of medical papers, because the embedder wasn't trained on domain-specific (query, document) pairs.
+
+**Q4: How does domain-specific fine-tuning improve retrieval quality?**
+Fine-tuning the embedding model on domain-specific (query, relevant_document) pairs teaches it to recognize domain-specific relevance — legal precedents, medical evidence, technical relationships — improving ranking accuracy without needing a completely different embedder.
+
+**Q5: Why do dense retrievers need approximate nearest-neighbor indexing at scale?**
+Because exact nearest-neighbor search requires comparing every query to every document embedding ($O(N)$ cost), which is infeasible at billions of documents and billions of queries per day. ANN indices (HNSW, IVF) reduce this to $O(\log N)$ or $O(\sqrt{N})$ by organizing embeddings hierarchically.
+
+## 11. Further Reading
+
+- Jiao et al., "Domain-Specific Language Model Pretraining for Natural Language Understanding" (2022) — fine-tuning embedders for domains
+- Chen et al., "A Latent Semantic Model with Convolutional-Pooling Structure for Information Retrieval" (2014) — foundational semantic retrieval
+- Reimers & Gurevych, "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks" (2019)
+- Malkov & Yashunin, "Efficient and Robust Approximate Nearest Neighbor Search with Hierarchical Navigable Small World Graphs" (HNSW, 2018)
+- See also: `retrieval-fundamentals` in this domain and `embeddings` in the NLP curriculum
+
+## Related Platform Content
+
+- [RAG SYSTEMS curriculum overview](/learn/rag-systems)
+- [Production system](/system-design/rag-systems)
+- [Browse all system designs](/system-design)

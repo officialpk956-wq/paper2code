@@ -1,0 +1,216 @@
+# Matrix Factorization
+
+## 1. Overview
+Matrix Factorization (MF), popularized in 2009 by Yehuda Koren, Robert Bell, and Chris Volinsky (AT&T Labs - Research) during the historic Netflix Prize competition, remains the foundational building block of modern Collaborative Filtering recommendation systems. Matrix Factorization maps both users and items to a joint **Latent Factor Space** of dimensionality $k \ll \min(m, n)$. Interactions between user $u$ and item $i$ are modeled as the inner product (dot product) of their respective latent vector representations $p_u \cdot q_i^T$. By factorizing the highly sparse observed rating matrix $R \in \mathbb{R}^{m \times n}$ into two low-rank matrices—User Latent Matrix $P \in \mathbb{R}^{m \times k}$ and Item Latent Matrix $Q \in \mathbb{R}^{n \times k}$—Matrix Factorization uncovers hidden taste dimensions (e.g., genre affinity, director preferences, pacing) directly from implicit or explicit interaction patterns without relying on hand-crafted domain features.
+
+:::note
+Matrix Factorization core concept: "Decompose sparse rating matrix $R \approx P Q^T$. Predicted interaction $\hat{r}_{u,i} = \mu + b_u + b_i + p_u^T q_i$ learned via Stochastic Gradient Descent (SGD) or Alternating Least Squares (ALS)."
+:::
+
+## 2. Historical Context
+Prior to the 2006–2009 Netflix Prize competition, recommendation systems primarily used heuristic **Neighborhood-Based Collaborative Filtering** (User-based or Item-based k-NN). Neighborhood methods calculated cosine or Pearson similarities between raw user vectors. However, k-NN suffered from scalability bottlenecks ($O(m^2)$ pairwise comparisons), inability to capture complex multi-dimensional interactions, and severe vulnerability to sparse matrices.
+
+Koren, Bell, and Volinsky demonstrated that low-rank Matrix Factorization dramatically outperformed neighborhood approaches. Combining latent factor factorization with explicit user/item biases ($b_u, b_i$) won the $1M Netflix Prize, establishing matrix decomposition as a cornerstone of recommender system research.
+
+## 3. Problem It Solves
+Matrix Factorization resolves three core limitations of early recommendation systems:
+1. **Extreme Matrix Sparsity:** Real-world interaction matrices $R$ are typically $>99\%$ sparse (users rate only a tiny fraction of catalog items). MF projects sparse vectors into dense, continuous latent representations.
+2. **Computational Scalability Bottlenecks:** Replaces expensive $O(m^2)$ or $O(n^2)$ pairwise k-NN similarity lookups with fast $O(k)$ vector dot products.
+3. **Implicit Taste Discovery:** Automatically uncovers latent preference dimensions (e.g., sci-fi preference + dark comedy affinity) from raw interactions without manual tagging.
+
+## 4. Architecture Diagram Data
+Below is the structural decomposition of the sparse rating matrix $R$ into User Matrix $P$, Item Matrix $Q$, and Biases.
+
+```text
+       SPARSE RATING MATRIX R (m Users x n Items)
+       
+              Items (n) ->
+         +------------------------+
+         | 5  .  .  1  .  4  .  . |
+  Users  | .  3  .  .  5  .  .  2 |    ===> DECOMPOSED INTO LOW-RANK LATENT MATRICES
+   (m)   | .  .  .  4  .  .  1  . |
+         +------------------------+
+
+       ========================================================================
+
+       LOW-RANK LATENT FACTOR MATRIX FACTORIZATION
+
+       [ User Bias b_u ] + [ Item Bias b_i ] + [ Global Mean mu ]
+                                   |
+                                   v
+       +===================================================+
+       | User Latent Matrix P: (m x k)                     |  Row p_u: (k,)
+       +===================================================+
+                                   |
+                                   v  (Dot Product)
+       +===================================================+
+       | Item Latent Matrix Q: (n x k)                     |  Row q_i: (k,)
+       +===================================================+
+                                   |
+                                   v
+       [ Predicted Rating r_hat_{u,i} = mu + b_u + b_i + p_u^T * q_i ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Embedding Table Lookup:**
+- Given User ID $u \in \{1 \dots m\}$ and Item ID $i \in \{1 \dots n\}$.
+- Look up User Latent Vector $p_u \in \mathbb{R}^k$ from User Embedding Table $P \in \mathbb{R}^{m \times k}$.
+- Look up Item Latent Vector $q_i \in \mathbb{R}^k$ from Item Embedding Table $Q \in \mathbb{R}^{n \times k}$.
+
+**2. Bias Incorporation:**
+- Global Baseline Rating $\mu \in \mathbb{R}^1$ (average rating across entire dataset).
+- User Bias $b_u \in \mathbb{R}^1$ (captures user rating tendency, e.g., harsh vs. generous raters).
+- Item Bias $b_i \in \mathbb{R}^1$ (captures item popularity/quality, e.g., blockbuster movies).
+
+**3. Interaction Score Layer:**
+- Computes predicted rating $\hat{r}_{u,i} = \mu + b_u + b_i + \sum_{f=1}^k p_{u,f} \cdot q_{i,f}$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Matrix Factorization for mini-batch $B=1024$ user-item interaction pairs, $m=50,000$ users, $n=10,000$ items, latent dimension $k=64$.
+
+1. **Input Batch:**
+   - User Indices $u$: `(1024,)`, Item Indices $i$: `(1024,)`
+2. **Embedding Lookups:**
+   - User Latent Embeddings $p_u$: `(1024, 64)`
+   - Item Latent Embeddings $q_i$: `(1024, 64)`
+   - User Biases $b_u$: `(1024, 1)`, Item Biases $b_i$: `(1024, 1)`
+3. **Dot Product Interaction:**
+   - Element-wise Multiplication $p_u \odot q_i \to (1024, 64) \xrightarrow{\text{Sum along k}} (1024, 1)$
+4. **Final Predicted Rating:**
+   - $\hat{r} = \mu + b_u + b_i + \text{sum}(p_u \odot q_i) \to$ Predicted Ratings: `(1024, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Singular Value Decomposition (SVD) Formulation
+Classic Exact SVD decomposes a full matrix $R \in \mathbb{R}^{m \times n}$ into:
+
+$$R = U \Sigma V^T$$
+
+where $U \in \mathbb{R}^{m \times m}$ and $V \in \mathbb{R}^{n \times n}$ are orthogonal matrices, and $\Sigma \in \mathbb{R}^{m \times n}$ contains singular values. Truncating to rank $k \ll \min(m, n)$ yields low-rank approximation $P = U_k \sqrt{\Sigma_k}$ and $Q = V_k \sqrt{\Sigma_k}$ such that $R \approx P Q^T$. Because $R$ in recommendations contains $>99\%$ unobserved entries, classical SVD cannot be directly applied.
+
+### 2. Regularized Objective Function & Biases
+Matrix Factorization optimizes predicted ratings $\hat{r}_{u,i} = \mu + b_u + b_i + p_u^T q_i$ over observed rating indices $(u, i) \in \mathcal{K}$:
+
+$$\min_{P, Q, b} \sum_{(u,i) \in \mathcal{K}} \left( r_{u,i} - (\mu + b_u + b_i + p_u^T q_i) \right)^2 + \lambda \left( \|p_u\|_2^2 + \|q_i\|_2^2 + b_u^2 + b_i^2 \right)$$
+
+### 3. Stochastic Gradient Descent (SGD) Updates
+For a single observation error $e_{u,i} = r_{u,i} - \hat{r}_{u,i}$, parameter updates with learning rate $\gamma$ are:
+
+$$b_u \leftarrow b_u + \gamma (e_{u,i} - \lambda b_u), \quad b_i \leftarrow b_i + \gamma (e_{u,i} - \lambda b_i)$$
+
+$$p_u \leftarrow p_u + \gamma (e_{u,i} q_i - \lambda p_u), \quad q_i \leftarrow q_i + \gamma (e_{u,i} p_u - \lambda q_i)$$
+
+### 4. Alternating Least Squares (ALS) Optimization
+When $P$ is fixed, the objective is quadratic in $Q$ and can be solved analytically for each item $i$:
+
+$$q_i = \left( P_{\mathcal{U}_i}^T P_{\mathcal{U}_i} + \lambda \mathbf{I} \right)^{-1} P_{\mathcal{U}_i}^T \left( R_{\mathcal{U}_i, i} - \mu - b_{\mathcal{U}_i} - b_i \right)$$
+
+ALS alternates between fixing $P$ to solve for $Q$, and fixing $Q$ to solve for $P$. ALS is easily parallelized across multi-node clusters.
+
+## 8. Training Procedure
+- Initialize User Embeddings $P \sim \mathcal{N}(0, 0.01)$ and Item Embeddings $Q \sim \mathcal{N}(0, 0.01)$.
+- Compute global mean $\mu = \frac{1}{|\mathcal{K}|} \sum r_{u,i}$.
+- Optimization options:
+  - **SGD:** Stream mini-batches of $(u, i, r)$, compute gradients, update parameters.
+  - **ALS:** Parallelize closed-form linear updates over users and items alternately.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **Matrix Factorization with Biases**.
+
+```python
+import torch
+import torch.nn as nn
+
+class MatrixFactorization(nn.Module):
+    """ Matrix Factorization Model with User/Item Biases """
+    def __init__(self, num_users, num_items, latent_dim=64):
+        super().__init__()
+        self.num_users = num_users
+        self.num_items = num_items
+        self.latent_dim = latent_dim
+        
+        # Latent Factor Embeddings
+        self.user_embedding = nn.Embedding(num_users, latent_dim)
+        self.item_embedding = nn.Embedding(num_items, latent_dim)
+        
+        # User and Item Biases
+        self.user_bias = nn.Embedding(num_users, 1)
+        self.item_bias = nn.Embedding(num_items, 1)
+        
+        # Global Bias (learned or fixed scalar)
+        self.global_bias = nn.Parameter(torch.zeros(1))
+        
+        # Initialization
+        nn.init.normal_(self.user_embedding.weight, std=0.01)
+        nn.init.normal_(self.item_embedding.weight, std=0.01)
+        nn.init.zeros_(self.user_bias.weight)
+        nn.init.zeros_(self.item_bias.weight)
+
+    def forward(self, user_ids, item_ids):
+        """
+        user_ids: (B,)
+        item_ids: (B,)
+        """
+        p_u = self.user_embedding(user_ids) # (B, k)
+        q_i = self.item_embedding(item_ids) # (B, k)
+        
+        b_u = self.user_bias(user_ids).squeeze(-1) # (B,)
+        b_i = self.item_bias(item_ids).squeeze(-1) # (B,)
+        
+        # Interaction Dot Product
+        dot_product = (p_u * q_i).sum(dim=-1) # (B,)
+        
+        # Rating Prediction
+        prediction = self.global_bias + b_u + b_i + dot_product
+        return prediction
+
+if __name__ == "__main__":
+    B, num_users, num_items, k = 1024, 50000, 10000, 64
+    mf_model = MatrixFactorization(num_users=num_users, num_items=num_items, latent_dim=k)
+    
+    users = torch.randint(0, num_users, (B,))
+    items = torch.randint(0, num_items, (B,))
+    
+    ratings_pred = mf_model(users, items)
+    
+    print(f"Predicted Ratings Batch Shape: {ratings_pred.shape}")
+    assert ratings_pred.shape == (B,)
+    print("Matrix Factorization verification successful!")
+```
+
+## 10. Strengths
+- **Simplicity & Efficiency:** Computes predictions via simple vector dot products ($O(k)$ time).
+- **Uncovers Latent Features:** Automatically extracts hidden taste factors from raw interaction data.
+- **Scalable Optimization:** ALS allows massive parallelization across distributed clusters (Spark MLlib).
+
+## 11. Weaknesses
+- **Cold-Start Problem:** Cannot recommend for new users or items with zero historical interaction history.
+- **Linear Interaction Assumption:** Dot product $p_u^T q_i$ assumes simple linear feature combinations (addressed by NCF).
+
+## 12. Research Evolution
+Matrix Factorization won the Netflix Prize, directly inspiring **Neural Collaborative Filtering (NCF)**, **Wide & Deep**, and **Two-Tower Models**.
+
+## 13. Interview Questions
+
+**Q1: Write out the complete rating prediction equation for Matrix Factorization with biases.**
+**A1:** $\hat{r}_{u,i} = \mu + b_u + b_i + p_u^T q_i$, where $\mu$ is global mean, $b_u$ is user bias, $b_i$ is item bias, and $p_u, q_i \in \mathbb{R}^k$ are user/item latent factor vectors.
+
+**Q2: Compare SGD and ALS optimization for Matrix Factorization.**
+**A2:** SGD streams individual $(u, i, r)$ transitions, taking fast incremental steps; it is fast on GPUs but sensitive to hyperparameter tuning. ALS alternates fixing $P$ to solve $Q$ and vice versa via exact closed-form ridge regression; it is easily parallelized across distributed clusters (Spark) and works well on implicit feedback.
+
+**Q3: Why can't standard Truncated SVD be directly computed on recommendation rating matrices?**
+**A3:** Standard SVD requires a completely filled dense matrix. Real-world recommendation matrices are $>99\%$ sparse (missing unobserved ratings). Imputing missing values with zeros corrupts data and creates an intractable $O(m \cdot n)$ dense matrix computation.
+
+**Q4: What is the Cold-Start problem in Matrix Factorization, and how is it mitigated?**
+**A4:** When a new user or item enters the system with zero historical interactions, their embedding vector $p_u$ or $q_i$ has zero gradients and cannot be learned. It is mitigated by hybrid models (Wide & Deep, DLRM) that incorporate side features (demographics, metadata).
+
+**Q5: How does Matrix Factorization handle implicit feedback (e.g., clicks, views)?**
+**A5:** Implicit MF (Hu, Koren, Volinsky) converts binary interactions into confidence levels $c_{u,i} = 1 + \alpha r_{u,i}$ and penalizes unobserved interactions with lower confidence weights inside an ALS objective.
+
+## 14. Related Papers
+- **Netflix Prize Paper:** *Matrix Factorization Techniques for Recommender Systems* (Koren, Bell, Volinsky, IEEE Computer 2009)
+- **Implicit Feedback MF:** *Collaborative Filtering for Implicit Feedback Datasets* (Hu, Koren, Volinsky, ICDM 2008)
+
+## 15. Further Reading
+- PyTorch / Surprise Recommendation Systems Library Documentation

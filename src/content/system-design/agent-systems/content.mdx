@@ -1,0 +1,734 @@
+# Agent Systems
+
+An agent system gives a model a goal, state, and permitted actions, then closes the loop around observations and tool results. The core engineering problem is not autonomy by itself; it is useful autonomy inside enforceable limits.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Know how LLMs work and what prompting is**, **Basic Python**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. An agent system gives a model a goal, state, and permitted actions, then closes the loop around observations and tool results. The core engineering problem is not autonomy by itself; it is useful autonomy inside enforceable limits. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Define what an AI agent is vs a chatbot vs a pipeline
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **task API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the ReAct loop: Reason → Act → Observe → Reason...
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **planner/policy** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know the 4 core agent components: perception, memory, planning, action
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **tool registry** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe tool use: what a tool is, how an agent decides to use it, how it handles the result
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **permission layer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: ReAct loop: user task → LLM reasons → tool call → tool result → LLM reasons again → final answer
+
+```text
+Agent Systems: ReAct loop user task LLM reasons tool call tool result LLM reasons again final answer
+
+[user task]
+        |
+        v
+  [LLM reasons]
+          |
+          v
+    [tool call]
+            |
+            v
+      [tool result]
+              |
+              v
+        [LLM reasons again]
+                |
+                v
+          [final answer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **ReAct loop: user task → LLM reasons → tool call → tool result → LLM reasons again → final answer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 2: Agent component diagram: perception (input parsing) + memory (context/retrieval) + planning (next action) + action (tool execution)
+
+```text
+Agent Systems: Agent component diagram perception input parsing memory context retrieval planning next action action tool execution
+
+  [producer / request]
+           |
+           v
+      [planner/policy] ---- control, version, policy ----> [tool registry]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [permission layer] ---- measured result + trace -----> [sandbox]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agent component diagram: perception (input parsing) + memory (context/retrieval) + planning (next action) + action (tool execution)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 3: Tool definition schema: name, description, parameters (JSON Schema), return type — how the LLM "sees" tools
+
+```text
+Agent Systems: Tool definition schema name description parameters JSON Schema return type how the LLM sees tools
+
+  [producer / request]
+           |
+           v
+      [tool registry] ---- control, version, policy ----> [permission layer]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [sandbox] ---- measured result + trace -----> [memory]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Tool definition schema: name, description, parameters (JSON Schema), return type — how the LLM "sees" tools** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 4: Agent vs pipeline comparison: pipeline (fixed DAG of steps) vs agent (dynamic decision about next step)
+
+```text
+Agent Systems: Agent vs pipeline comparison pipeline fixed DAG of steps vs agent dynamic decision about next step
+
+  [producer / request]
+           |
+           v
+      [permission layer] ---- control, version, policy ----> [sandbox]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [memory] ---- measured result + trace -----> [verifier]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agent vs pipeline comparison: pipeline (fixed DAG of steps) vs agent (dynamic decision about next step)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+### Case Studies
+
+#### OpenAI ChatGPT with Code Interpreter: the simplest real-world agent — write code, execute it, observe output, revise
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI ChatGPT with Code Interpreter: the simplest real-world agent — write code, execute it, observe output, revise**—creates pressure at the **task API** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### LangChain's basic agent: how the ReAct prompt template structures tool use for a simple search + calculator agent
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**LangChain's basic agent: how the ReAct prompt template structures tool use for a simple search + calculator agent**—creates pressure at the **planner/policy** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Anthropic's Claude with tool use: the computer use agent — how perception (screenshot) + action (click/type) creates a GUI agent
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Anthropic's Claude with tool use: the computer use agent — how perception (screenshot) + action (click/type) creates a GUI agent**—creates pressure at the **tool registry** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: What's the difference between an LLM pipeline and an LLM agent?
+
+A pipeline follows a developer-defined control flow. An agent chooses among permitted actions from observations and may replan. The distinction is dynamic control, not whether an LLM or tool appears in the system. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Explain the ReAct framework. Why does showing reasoning traces improve reliability?
+
+ReAct interleaves reasoning or planning with actions and observations. The useful engineering property is the explicit feedback loop and trace, which allows correction after tool results; hidden reasoning text itself should not be treated as a guarantee of correctness. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: What are the 4 failure modes of basic agents?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How does a tool call work in the Claude / OpenAI API?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **RAG Systems Beginner**, **Async Python (async/await)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. An agent system gives a model a goal, state, and permitted actions, then closes the loop around observations and tool results. The core engineering problem is not autonomy by itself; it is useful autonomy inside enforceable limits. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a multi-agent system: orchestrator + specialized sub-agents + shared memory
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **task API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement agent memory architecture: in-context / external / episodic / semantic memory
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **planner/policy** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Handle agent reliability: retry logic, error recovery, graceful degradation
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **tool registry** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Design an agent evaluation framework: task completion rate, cost per task, step efficiency
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **permission layer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Multi-agent orchestrator pattern: planner agent → task decomposition → assigns sub-tasks to specialized agents (researcher, coder, critic) → result synthesis
+
+```text
+Agent Systems: Multi agent orchestrator pattern planner agent task decomposition assigns sub tasks to specialized agents researcher coder critic result synthesis
+
+[planner agent]
+        |
+        v
+  [task decomposition]
+          |
+          v
+    [assigns sub-tasks to specialized agents (researcher, coder, critic)]
+            |
+            v
+      [result synthesis]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-agent orchestrator pattern: planner agent → task decomposition → assigns sub-tasks to specialized agents (researcher, coder, critic) → result synthesis** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 2: Agent memory hierarchy: working memory (context window) → episodic memory (external store of past interactions) → semantic memory (vector search over knowledge) → procedural memory (stored tools/functions)
+
+```text
+Agent Systems: Agent memory hierarchy working memory context window episodic memory external store of past interactions semantic memory vector search over knowledge procedural memory stored tools functions
+
+[working memory (context window)]
+        |
+        v
+  [episodic memory (external store of past interactions)]
+          |
+          v
+    [semantic memory (vector search over knowledge)]
+            |
+            v
+      [procedural memory (stored tools/functions)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agent memory hierarchy: working memory (context window) → episodic memory (external store of past interactions) → semantic memory (vector search over knowledge) → procedural memory (stored tools/functions)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 3: Agent reliability stack: tool call → retry with exponential backoff → fallback tool → error handler → graceful answer with uncertainty
+
+```text
+Agent Systems: Agent reliability stack tool call retry with exponential backoff fallback tool error handler graceful answer with uncertainty
+
+[tool call]
+        |
+        v
+  [retry with exponential backoff]
+          |
+          v
+    [fallback tool]
+            |
+            v
+      [error handler]
+              |
+              v
+        [graceful answer with uncertainty]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agent reliability stack: tool call → retry with exponential backoff → fallback tool → error handler → graceful answer with uncertainty** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 4: Reflexion loop: agent acts → evaluator scores result → agent reflects on failure → agent retries with revised plan
+
+```text
+Agent Systems: Reflexion loop agent acts evaluator scores result agent reflects on failure agent retries with revised plan
+
+[agent acts]
+        |
+        v
+  [evaluator scores result]
+          |
+          v
+    [agent reflects on failure]
+            |
+            v
+      [agent retries with revised plan]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Reflexion loop: agent acts → evaluator scores result → agent reflects on failure → agent retries with revised plan** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 5: Cost tracking: per-agent token counter → per-task total cost → budget enforcement → auto-stop when budget exceeded
+
+```text
+Agent Systems: Cost tracking per agent token counter per task total cost budget enforcement auto stop when budget exceeded
+
+[per-agent token counter]
+        |
+        v
+  [per-task total cost]
+          |
+          v
+    [budget enforcement]
+            |
+            v
+      [auto-stop when budget exceeded]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cost tracking: per-agent token counter → per-task total cost → budget enforcement → auto-stop when budget exceeded** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+### Case Studies
+
+#### AutoGPT (2023) failure analysis: what went wrong — infinite loops, inability to recognize when done, cost explosion — and how later systems (OpenDevin, SWE-agent) fixed these
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**AutoGPT (2023) failure analysis: what went wrong — infinite loops, inability to recognize when done, cost explosion — and how later systems (OpenDevin, SWE-agent) fixed these**—creates pressure at the **task API** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Devin: the first agent to score >13% on SWE-bench — the memory architecture (persistent workspace + scrollback), tool set (bash + browser + code editor), and planning approach
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Devin: the first agent to score >13% on SWE-bench — the memory architecture (persistent workspace + scrollback), tool set (bash + browser + code editor), and planning approach**—creates pressure at the **planner/policy** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Meta's Toolformer → Meta Llama with tool use: how they progressed from teaching models to use tools via self-supervised data to native function calling
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Meta's Toolformer → Meta Llama with tool use: how they progressed from teaching models to use tools via self-supervised data to native function calling**—creates pressure at the **tool registry** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design a coding agent that can solve LeetCode problems. What tools does it need? What memory architecture?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How do you prevent an agent from getting into an infinite loop?
+
+Enforce maximum steps, wall-clock and token budgets, repeated-state detection, idempotency keys, and a no-progress evaluator. On exhaustion, return a structured partial result or request human help rather than silently continuing. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk me through agent memory. What are the four types and when do you use each?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How do you evaluate whether an agent system is reliable enough for production?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: An agent makes a tool call that causes a side effect (sends an email, deletes a file). How do you design safe agent actions?
+
+Classify tools by effect, separate planning from execution, preview the exact action, require scoped authorization or human confirmation, and use idempotency plus audit logs. A model's textual intention is never the authorization boundary. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Systems security basics**, **Distributed systems: containerization, message queues**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. An agent system gives a model a goal, state, and permitted actions, then closes the loop around observations and tool results. The core engineering problem is not autonomy by itself; it is useful autonomy inside enforceable limits. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a production multi-agent platform: agent lifecycle management, sandboxing, observability
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **task API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement agent planning: hierarchical task networks, MCTS-based planning, plan verification
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **planner/policy** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Handle agent security: prompt injection defense, tool sandboxing, capability limiting
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **tool registry** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Build agent cost optimization: model routing (cheap model for simple steps, expensive for complex), caching, parallel subtask execution
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **permission layer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Production agent platform: API gateway → agent orchestrator → task queue → agent worker pool (sandboxed containers) → tool registry → result aggregator → audit log
+
+```text
+Agent Systems: Production agent platform API gateway agent orchestrator task queue agent worker pool sandboxed containers tool registry result aggregator audit log
+
+[API gateway]
+        |
+        v
+  [agent orchestrator]
+          |
+          v
+    [task queue]
+            |
+            v
+      [agent worker pool (sandboxed containers)]
+              |
+              v
+        [tool registry]
+                |
+                v
+          [result aggregator]
+                  |
+                  v
+            [audit log]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Production agent platform: API gateway → agent orchestrator → task queue → agent worker pool (sandboxed containers) → tool registry → result aggregator → audit log** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 2: Prompt injection defense: user input sanitization → tool output sanitization → canary token injection → anomaly detection on agent reasoning traces
+
+```text
+Agent Systems: Prompt injection defense user input sanitization tool output sanitization canary token injection anomaly detection on agent reasoning traces
+
+[user input sanitization]
+        |
+        v
+  [tool output sanitization]
+          |
+          v
+    [canary token injection]
+            |
+            v
+      [anomaly detection on agent reasoning traces]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Prompt injection defense: user input sanitization → tool output sanitization → canary token injection → anomaly detection on agent reasoning traces** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 3: Hierarchical planning: high-level plan (HTN) → task decomposition → subtask parallelization → dependency graph execution
+
+```text
+Agent Systems: Hierarchical planning high level plan HTN task decomposition subtask parallelization dependency graph execution
+
+[high-level plan (HTN)]
+        |
+        v
+  [task decomposition]
+          |
+          v
+    [subtask parallelization]
+            |
+            v
+      [dependency graph execution]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Hierarchical planning: high-level plan (HTN) → task decomposition → subtask parallelization → dependency graph execution** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 4: Agent sandboxing: Docker container per agent run → restricted network access → file system isolation → resource limits (CPU, memory, time)
+
+```text
+Agent Systems: Agent sandboxing Docker container per agent run restricted network access file system isolation resource limits CPU memory time
+
+[Docker container per agent run]
+        |
+        v
+  [restricted network access]
+          |
+          v
+    [file system isolation]
+            |
+            v
+      [resource limits (CPU, memory, time)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agent sandboxing: Docker container per agent run → restricted network access → file system isolation → resource limits (CPU, memory, time)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 5: Model router: complexity classifier (fast, cheap model) → route simple steps to Haiku, complex steps to Opus → per-step cost tracking
+
+```text
+Agent Systems: Model router complexity classifier fast cheap model route simple steps to Haiku complex steps to Opus per step cost tracking
+
+[complexity classifier (fast, cheap model)]
+        |
+        v
+  [route simple steps to Haiku, complex steps to Opus]
+          |
+          v
+    [per-step cost tracking]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Model router: complexity classifier (fast, cheap model) → route simple steps to Haiku, complex steps to Opus → per-step cost tracking** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+### Case Studies
+
+#### SWE-agent architecture: the Agent-Computer Interface (ACI) — custom tool set designed for software engineering (not generic bash) — why custom tools dramatically improve task completion vs raw terminal access
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**SWE-agent architecture: the Agent-Computer Interface (ACI) — custom tool set designed for software engineering (not generic bash) — why custom tools dramatically improve task completion vs raw terminal access**—creates pressure at the **task API** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### OpenDevin (2024): the open-source Devin — how they implemented the browser + code editor + bash environment with Docker isolation — security considerations
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenDevin (2024): the open-source Devin — how they implemented the browser + code editor + bash environment with Docker isolation — security considerations**—creates pressure at the **planner/policy** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### LangGraph: DAG-based agent orchestration with explicit state machines — why graph-based orchestration prevents the runaway agent problem
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**LangGraph: DAG-based agent orchestration with explicit state machines — why graph-based orchestration prevents the runaway agent problem**—creates pressure at the **tool registry** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design a customer service agent for an airline: access to booking system, policy documents, payment processing. What are the failure modes? How do you sandbox it?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How do you prevent prompt injection in an agent that reads external web pages as part of its task?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk me through the architecture of a coding agent that can complete SWE-bench tasks.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How do you parallelize subtasks in a multi-agent system safely?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: A user asks your agent to "do whatever it takes" to complete a task. How does your system prevent this from becoming dangerous?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. For **Agent Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: ReAct (2022), Reflexion (2023), LATS (2023), SWE-agent (2024), AgentBench (2023), Scalable Oversight (Bowman 2022)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. An agent system gives a model a goal, state, and permitted actions, then closes the loop around observations and tool results. The core engineering problem is not autonomy by itself; it is useful autonomy inside enforceable limits. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze frontier agent research: world models for planning, process reward models for agent verification, scalable oversight
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **task API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the fundamental unsolved problem of reliable long-horizon planning
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **planner/policy** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design a research experiment on agent evaluation: metrics beyond task completion rate
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **tool registry** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Propose a novel contribution to agent architecture or evaluation
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through task API, planner/policy, tool registry, permission layer. The governing quantitative model is: If step $i$ succeeds with conditional probability $p_i$, a fragile $n$-step plan has success probability roughly $P(\text{success})=\prod_{i=1}^{n}p_i$. Verification, retries, and replanning can help, but also add cost and new failure paths; measure end-to-end task success, not tool-call accuracy alone. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic workflow with the same tools and explicit human decisions; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **permission layer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Agent Systems, that boundary interacts with task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic workflow with the same tools and explicit human decisions), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Process reward model for agents: training PRMs to evaluate intermediate agent steps (not just final outcomes) — the verification-guided planning loop
+
+```text
+Agent Systems: Process reward model for agents training PRMs to evaluate intermediate agent steps not just final outcomes the verification guided planning loop
+
+  [producer / request]
+           |
+           v
+      [task API] ---- control, version, policy ----> [planner/policy]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [tool registry] ---- measured result + trace -----> [permission layer]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Process reward model for agents: training PRMs to evaluate intermediate agent steps (not just final outcomes) — the verification-guided planning loop** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 2: Scalable oversight: agent with human spot-checking — debate protocol, amplification, recursive reward modeling
+
+```text
+Agent Systems: Scalable oversight agent with human spot checking debate protocol amplification recursive reward modeling
+
+  [producer / request]
+           |
+           v
+      [planner/policy] ---- control, version, policy ----> [tool registry]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [permission layer] ---- measured result + trace -----> [sandbox]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Scalable oversight: agent with human spot-checking — debate protocol, amplification, recursive reward modeling** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 3: World model for planning: agent maintains a learned environment model → simulates plans before executing → selects highest-value plan — similar to MuZero applied to agentic tasks
+
+```text
+Agent Systems: World model for planning agent maintains a learned environment model simulates plans before executing selects highest value plan similar to MuZero applied to agentic tasks
+
+[agent maintains a learned environment model]
+        |
+        v
+  [simulates plans before executing]
+          |
+          v
+    [selects highest-value plan — similar to MuZero applied to agentic tasks]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **World model for planning: agent maintains a learned environment model → simulates plans before executing → selects highest-value plan — similar to MuZero applied to agentic tasks** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+#### Diagram 4: Constitutional agent: agent with embedded value system — self-critique against principles before executing potentially harmful actions
+
+```text
+Agent Systems: Constitutional agent agent with embedded value system self critique against principles before executing potentially harmful actions
+
+  [producer / request]
+           |
+           v
+      [permission layer] ---- control, version, policy ----> [sandbox]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [memory] ---- measured result + trace -----> [verifier]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Constitutional agent: agent with embedded value system — self-critique against principles before executing potentially harmful actions** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability.
+
+### Case Studies
+
+#### o1/o3 reasoning as agent planning: how inference-time search over reasoning chains relates to traditional agent MCTS — convergence in approach
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**o1/o3 reasoning as agent planning: how inference-time search over reasoning chains relates to traditional agent MCTS — convergence in approach**—creates pressure at the **task API** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Voyager's skill library: the emergent curriculum — what the 100th skill looks like vs the 10th skill, how complexity accumulates — lessons for open-ended agent design
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Voyager's skill library: the emergent curriculum — what the 100th skill looks like vs the 10th skill, how complexity accumulates — lessons for open-ended agent design**—creates pressure at the **planner/policy** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### METR's evaluations: how they test whether AI agents can autonomously replicate AI research — the task design challenges
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**METR's evaluations: how they test whether AI agents can autonomously replicate AI research — the task design challenges**—creates pressure at the **tool registry** layer of Agent Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic workflow with the same tools and explicit human decisions. Instrument it for task success, step and cost budgets, side effects, prompt injection, recoverability, and traceability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable Agent Systems slice.** Implement one request path using task API, planner/policy, tool registry. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build a deterministic workflow with the same tools and explicit human decisions, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable Agent Systems slice.** Implement one request path using task API, planner/policy, tool registry. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build a deterministic workflow with the same tools and explicit human decisions, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable Agent Systems slice.** Implement one request path using task API, planner/policy, tool registry. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build a deterministic workflow with the same tools and explicit human decisions, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable Agent Systems slice.** Implement one request path using task API, planner/policy, tool registry. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build a deterministic workflow with the same tools and explicit human decisions, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [RAG Systems](/system-design/rag-systems)
+- [LLM Serving](/system-design/llm-serving)
+- [ChatGPT Architecture](/system-design/chatgpt-architecture)
+- [Compound AI Systems curriculum](/learn/ai-system-design/compound-ai-systems)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- Yao et al., ReAct: Synergizing Reasoning and Acting in Language Models (2023)
+- AgentBench and SWE-bench papers
+- OWASP guidance for LLM and agentic application security
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

@@ -1,0 +1,93 @@
+# Differential Geometry for ML
+
+## 1. Overview
+
+Differential geometry is the mathematics of curved spaces — and it turns out that a lot of what neural networks do implicitly lives on curved spaces rather than flat Euclidean ones. The set of all valid rotation matrices, the space of probability distributions under a natural notion of distance, and even the "manifold hypothesis" (that real-world high-dimensional data like images actually sits on a much lower-dimensional curved surface embedded in pixel space) are all differential-geometry objects. This topic gives you the tools — manifolds, tangent spaces, Riemannian metrics, geodesics — to reason about optimization and representation learning correctly when the space you're actually working in isn't flat.
+
+## 2. Prerequisites in Context
+
+**Calculus II** (multivariable calculus) is the floor requirement — differential geometry is built entirely on generalizing derivatives and integrals from flat space to curved space, so you need to be fluent in gradients, Jacobians, and change of variables before generalizing them. **Linear Algebra II** matters because the tangent space at each point of a manifold is a vector space, and the metric tensor that defines distances on the manifold is literally a matrix (a symmetric positive-definite bilinear form) that varies smoothly from point to point — you need real comfort with quadratic forms and eigendecompositions to work with it. **Measure Theory** comes in because integrating a function over a curved manifold (to compute volumes, expectations, or normalizing constants) requires the measure-theoretic machinery of pushforward measures and the Riemannian volume form.
+
+## 3. Core Concept
+
+A **manifold** is a space that looks locally like flat Euclidean space (you can always zoom in enough that it looks flat, like how the surface of the Earth looks flat from where you're standing) but may be globally curved (the Earth is a sphere, not a plane). At each point $p$ on a manifold $\mathcal{M}$, the **tangent space** $T_p\mathcal{M}$ is the flat vector space of all possible "directions" you could move in at that point — this is where gradients of functions on the manifold actually live. A **Riemannian metric** $g_p$ assigns each tangent space an inner product, letting you measure lengths of tangent vectors and, by integrating along curves, distances between points on the manifold. The shortest path between two points under this metric is called a **geodesic** — the manifold generalization of a straight line. In ML, the "manifold hypothesis" claims that natural data distributions (images, audio, text embeddings) concentrate near a low-dimensional manifold inside their high-dimensional ambient space, which is why techniques that respect this structure (like properly-defined Riemannian optimizers, or generative models that learn to move along the data manifold) tend to work better than ones that treat the space as naively flat.
+
+## 4. Theoretical Foundations
+
+The metric tensor $g$ defines the squared length of an infinitesimal tangent vector $v \in T_p\mathcal{M}$ as $\|v\|_g^2 = v^T g_p v$, and the length of a curve $\gamma(t)$ on the manifold as $L(\gamma) = \int_0^1 \sqrt{\dot\gamma(t)^T g_{\gamma(t)} \dot\gamma(t)}\, dt$. A geodesic is a curve that locally minimizes this length, characterized by the **geodesic equation**:
+$$\ddot\gamma^k + \Gamma^k_{ij} \dot\gamma^i \dot\gamma^j = 0$$
+where $\Gamma^k_{ij}$ are the **Christoffel symbols**, which encode how the metric (and hence the notion of "straight") changes from point to point — they're built directly from derivatives of the metric tensor: $\Gamma^k_{ij} = \frac{1}{2}g^{kl}(\partial_i g_{jl} + \partial_j g_{il} - \partial_l g_{ij})$. For Riemannian optimization, natural gradient descent replaces the ordinary gradient update $\theta \leftarrow \theta - \eta \nabla L$ with $\theta \leftarrow \theta - \eta g^{-1}\nabla L$, using the inverse metric tensor (often the Fisher information matrix, when the parameter space is a statistical manifold of probability distributions) to correct for the fact that Euclidean distance in parameter space doesn't correspond to a meaningful distance between the models those parameters represent.
+
+## 5. Worked Example
+
+Consider the parameter space of a simple probability distribution family — say, 1D Gaussians parameterized by $(\mu, \sigma)$. Naive Euclidean distance would say $(\mu, \sigma) = (0, 0.01)$ and $(1, 0.01)$ are "distance 1" apart, the same as $(0, 100)$ and $(1, 100)$. But these pairs represent wildly different amounts of *statistical* change: shifting the mean by 1 when $\sigma = 0.01$ moves you to a distribution with almost zero overlap with the original (a huge change in KL divergence), while the same shift when $\sigma = 100$ barely changes the distribution at all. The Fisher information metric — the natural Riemannian metric on this statistical manifold — correctly assigns these two moves very different lengths, which is exactly why natural gradient descent (using this metric) converges faster and more stably for such models than plain Euclidean gradient descent.
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+
+def geodesic_distance_on_sphere(p1, p2, radius=1.0):
+    """
+    Geodesic (great-circle) distance between two points on a sphere,
+    the simplest non-trivial curved manifold: S^2 embedded in R^3.
+    p1, p2: unit-norm 3D vectors on the sphere's surface.
+    """
+    p1n, p2n = p1 / np.linalg.norm(p1), p2 / np.linalg.norm(p2)
+    cos_angle = np.clip(np.dot(p1n, p2n), -1.0, 1.0)
+    angle = np.arccos(cos_angle)
+    return radius * angle  # arc length = radius * central angle
+
+if __name__ == "__main__":
+    north_pole = np.array([0.0, 0.0, 1.0])
+    equator_point = np.array([1.0, 0.0, 0.0])
+    dist = geodesic_distance_on_sphere(north_pole, equator_point)
+    # 90 degrees of a unit sphere = pi/2 arc length
+    assert abs(dist - np.pi / 2) < 1e-6, f"expected pi/2, got {dist}"
+    print(f"Geodesic distance (north pole to equator, unit sphere): {dist:.4f}")
+    print("Note: straight-line (Euclidean) distance would be",
+          f"{np.linalg.norm(north_pole - equator_point):.4f} — different, and wrong for on-sphere motion")
+```
+
+## 7. Real-World Applications
+
+Natural gradient descent and its practical approximations (like K-FAC) are used in reinforcement learning policy optimization (TRPO, documented on this platform under `trpo`, is literally natural gradient descent applied to a policy's parameter space, using the Fisher information metric to bound the KL divergence between successive policies). Riemannian optimization is used directly for hyperbolic embeddings (representing hierarchical data like taxonomies or knowledge graphs in hyperbolic space, where tree structures embed with far less distortion than in Euclidean space) and for optimization over constrained manifolds like the space of rotation matrices (used in 3D pose estimation and robotics) or the Stiefel manifold of orthonormal matrices (used to keep weight matrices orthogonal during training for numerical stability).
+
+## 8. Common Pitfalls & Misconceptions
+
+A frequent mistake is assuming "manifold" means "smooth curved surface you can visualize," when in ML the manifolds in question are almost always high-dimensional and impossible to visualize directly — the manifold hypothesis is a statement about intrinsic dimensionality, not literal visual curvature. Another pitfall is using Euclidean distance as a proxy for "how different are these two models/distributions" without checking whether the parameter space actually has a Euclidean geometry — for statistical models, it usually doesn't, and Euclidean distance in parameter space can be a wildly misleading measure of functional difference (the Gaussian example in Section 5). Finally, don't confuse "the manifold hypothesis is true for this dataset" with "this dataset's manifold is easy to learn" — real data manifolds can have complex topology (multiple disconnected components, varying local dimensionality) that simple generative models struggle to capture.
+
+## 9. How This Connects
+
+This topic requires **Calculus II**, **Linear Algebra II**, and **Measure Theory** — without fluency in multivariable derivatives, quadratic forms, and integration theory, terms like "Christoffel symbols" and "Riemannian volume form" are just symbol manipulation with no geometric meaning attached. Once grounded here, it unlocks **Riemannian Optimizers** (natural gradient descent and its practical variants, directly used in policy-gradient RL and second-order optimization) and **Geometric Deep Learning** (the broader research program of designing neural network architectures — like graph neural networks and models on spheres or hyperbolic space — that respect the actual geometric structure of their input domain, rather than assuming everything is flat Euclidean space by default).
+
+## 10. Check Your Understanding
+
+**Q1: What does it mean for a manifold to "look locally flat" but be globally curved?**
+It means that if you zoom in closely enough around any single point, the space is indistinguishable from flat Euclidean space (this is the tangent space) — but as you move further away and compare directions or distances across the whole space, curvature effects (like geodesics converging or diverging, or angles in triangles not summing to 180 degrees) become apparent. The Earth's surface is the classic example: locally flat, globally a sphere.
+
+**Q2: Why can't you just use Euclidean distance between neural network weight vectors to measure "how different" two trained models are?**
+Because the mapping from weights to the function the network computes is highly non-linear and non-uniform — a small Euclidean step in weight space can correspond to a huge change in the network's output distribution in one region of weight space, and a negligible change in another region. The natural (Fisher information) metric corrects for this by measuring distance in terms of actual output/functional change, not raw parameter displacement.
+
+**Q3: What role do Christoffel symbols play in the geodesic equation?**
+They encode how the metric tensor changes from point to point on the manifold, which is exactly the correction term needed to describe "moving in a straight line" (zero acceleration in the manifold's own geometry) using ordinary coordinate derivatives, which would otherwise incorrectly measure acceleration relative to the flat ambient coordinate system rather than the curved manifold itself.
+
+**Q4: Why does TRPO use natural gradient descent instead of ordinary gradient descent on the policy parameters?**
+Because the KL divergence between two policies (the quantity TRPO wants to constrain, to guarantee monotonic improvement) is not well-approximated by Euclidean distance in the policy's parameter space — natural gradient descent, using the Fisher information metric, directly aligns the optimization step with the actual statistical distance between successive policies, giving a much more reliable trust-region constraint.
+
+**Q5: What is the manifold hypothesis, and why does it matter for generative models?**
+It's the hypothesis that real-world high-dimensional data (like natural images) actually concentrates near a much lower-dimensional curved manifold embedded in the full pixel space, rather than filling the space uniformly. It matters because generative models that implicitly or explicitly learn to move along this manifold (rather than treating the full ambient space as equally likely everywhere) can represent and generate realistic data far more efficiently than models that ignore this structure.
+
+## 11. Further Reading
+
+- do Carmo, "Riemannian Geometry" (the standard rigorous textbook)
+- Amari, "Natural Gradient Works Efficiently in Learning" (1998) — the foundational natural gradient paper
+- Nickel & Kiela, "Poincaré Embeddings for Learning Hierarchical Representations" (2017) — hyperbolic embeddings in practice
+- Bronstein et al., "Geometric Deep Learning: Grids, Groups, Graphs, Geodesics, and Gauges" (2021)
+- See also: `trpo` on this platform for natural gradient descent applied directly to policy optimization
+
+## Related Platform Content
+
+- [MATHEMATICS curriculum overview](/learn/mathematics)
+- [Architecture application](/architectures/transformer)
+- [Browse all system designs](/system-design)

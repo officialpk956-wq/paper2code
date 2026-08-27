@@ -1,0 +1,737 @@
+# TikTok Architecture
+
+TikTok's product is a low-latency feedback loop: serve one video, observe dense behavior, update features, and choose the next item. Media infrastructure, recommendation, experimentation, safety, and regional data boundaries all sit on that loop.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Basics of recommendation systems (what collaborative filtering is)**, **Basic social networks: follows, likes, shares**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. TikTok's product is a low-latency feedback loop: serve one video, observe dense behavior, update features, and choose the next item. Media infrastructure, recommendation, experimentation, safety, and regional data boundaries all sit on that loop. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain what makes TikTok's "For You Page" (FYP) fundamentally different from Instagram or YouTube recommendations
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **video ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand why TikTok can make accurate recommendations with no user history (the cold-start solution)
+
+Cold start means interactions are insufficient for a new user or item. Use content features, onboarding preferences, contextual/popularity priors, and controlled exploration; then transition toward personalized signals as evidence accumulates. The capability described by this objective is practical, not a definition to memorize. Begin at the **content understanding** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what video transcoding at scale means for short-form video
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **candidate service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe TikTok's content moderation pipeline
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **real-time features** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: FYP pipeline overview: new user → no history → trending pool + content signals → first personalization loop → rapid personalization after 10 interactions
+
+```text
+TikTok Architecture: FYP pipeline overview new user no history trending pool content signals first personalization loop rapid personalization after 10 interactions
+
+[new user]
+        |
+        v
+  [no history]
+          |
+          v
+    [trending pool + content signals]
+            |
+            v
+      [first personalization loop]
+              |
+              v
+        [rapid personalization after 10 interactions]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **FYP pipeline overview: new user → no history → trending pool + content signals → first personalization loop → rapid personalization after 10 interactions** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 2: Short video upload pipeline: phone upload → object storage → transcoding (multiple resolutions) → CDN → worldwide delivery within 60 seconds
+
+```text
+TikTok Architecture: Short video upload pipeline phone upload object storage transcoding multiple resolutions CDN worldwide delivery within 60 seconds
+
+[phone upload]
+        |
+        v
+  [object storage]
+          |
+          v
+    [transcoding (multiple resolutions)]
+            |
+            v
+      [CDN]
+              |
+              v
+        [worldwide delivery within 60 seconds]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Short video upload pipeline: phone upload → object storage → transcoding (multiple resolutions) → CDN → worldwide delivery within 60 seconds** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 3: Like/share/comment event pipeline: user action → event bus → real-time feature update → recommendation model feature refresh
+
+```text
+TikTok Architecture: Like share comment event pipeline user action event bus real time feature update recommendation model feature refresh
+
+[user action]
+        |
+        v
+  [event bus]
+          |
+          v
+    [real-time feature update]
+            |
+            v
+      [recommendation model feature refresh]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Like/share/comment event pipeline: user action → event bus → real-time feature update → recommendation model feature refresh** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 4: Content moderation tiers: automated (ML classifier) → human review queue → appeal process
+
+```text
+TikTok Architecture: Content moderation tiers automated ML classifier human review queue appeal process
+
+[automated (ML classifier)]
+        |
+        v
+  [human review queue]
+          |
+          v
+    [appeal process]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Content moderation tiers: automated (ML classifier) → human review queue → appeal process** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+### Case Studies
+
+#### TikTok's cold-start solution: why they can make great recommendations to brand new users — the reliance on item-side signals (video content, audio, hashtags) rather than user history
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's cold-start solution: why they can make great recommendations to brand new users — the reliance on item-side signals (video content, audio, hashtags) rather than user history**—creates pressure at the **video ingest** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### ByteDance's recommendation research papers: the Monolith feature system, the GDBT-based ranking, how they evolved to deep learning
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**ByteDance's recommendation research papers: the Monolith feature system, the GDBT-based ranking, how they evolved to deep learning**—creates pressure at the **content understanding** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### TikTok's global CDN: why they built a dedicated CDN for short video (different caching behavior than long-form video) — hot video 100% cache hit, long-tail delivery challenge
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's global CDN: why they built a dedicated CDN for short video (different caching behavior than long-form video) — hot video 100% cache hit, long-tail delivery challenge**—creates pressure at the **candidate service** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: How does TikTok recommend content to a brand new user with no history?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What's the difference between TikTok's FYP and Instagram's algorithm?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Why is short-form video recommendation harder than long-form recommendation?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What signals does TikTok use to determine if a video is "good"?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **Recommendation Systems Intermediate**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. TikTok's product is a low-latency feedback loop: serve one video, observe dense behavior, update features, and choose the next item. Media infrastructure, recommendation, experimentation, safety, and regional data boundaries all sit on that loop. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design TikTok's recommendation system end-to-end: candidate generation, scoring, diversity, real-time features
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **video ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand TikTok's creator monetization: how virality is incentivized, creator fund architecture
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **content understanding** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design TikTok's search: hashtag search, sound search, text search, user search
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **candidate service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about the feedback loop problem: when recommendation drives creation patterns
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **real-time features** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: TikTok recommendation funnel: 1B+ videos → multi-channel retrieval (collaborative + content + trending) → first-stage coarse ranker → deep ranking model → policy filters (diversity, safety, repeat suppression) → 15–20 video sequence
+
+```text
+TikTok Architecture: TikTok recommendation funnel 1B videos multi channel retrieval collaborative content trending first stage coarse ranker deep ranking model policy filters diversity safety repeat suppression 15 20 video sequence
+
+[1B+ videos]
+        |
+        v
+  [multi-channel retrieval (collaborative + content + trending)]
+          |
+          v
+    [first-stage coarse ranker]
+            |
+            v
+      [deep ranking model]
+              |
+              v
+        [policy filters (diversity, safety, repeat suppression)]
+                |
+                v
+          [15–20 video sequence]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **TikTok recommendation funnel: 1B+ videos → multi-channel retrieval (collaborative + content + trending) → first-stage coarse ranker → deep ranking model → policy filters (diversity, safety, repeat suppression) → 15–20 video sequence** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 2: Real-time feature pipeline: user watches video → Kafka event → Flink stream processing → feature update in Redis → recommendation model reads fresh features (&lt; 1 second delay)
+
+```text
+TikTok Architecture: Real time feature pipeline user watches video Kafka event Flink stream processing feature update in Redis recommendation model reads fresh features 1 second delay
+
+[user watches video]
+        |
+        v
+  [Kafka event]
+          |
+          v
+    [Flink stream processing]
+            |
+            v
+      [feature update in Redis]
+              |
+              v
+        [recommendation model reads fresh features (< 1 second delay)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Real-time feature pipeline: user watches video → Kafka event → Flink stream processing → feature update in Redis → recommendation model reads fresh features (&lt; 1 second delay)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 3: Creator monetization: view event → verified view (fraud filtered) → creator fund computation → daily payout calculation → payment
+
+```text
+TikTok Architecture: Creator monetization view event verified view fraud filtered creator fund computation daily payout calculation payment
+
+[view event]
+        |
+        v
+  [verified view (fraud filtered)]
+          |
+          v
+    [creator fund computation]
+            |
+            v
+      [daily payout calculation]
+              |
+              v
+        [payment]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Creator monetization: view event → verified view (fraud filtered) → creator fund computation → daily payout calculation → payment** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 4: FYP diversity controller: prevent showing 3 videos from same creator → prevent same hashtag > 2 in a row → inject 1 "discovery" video (outside comfort zone) per 10 videos
+
+```text
+TikTok Architecture: FYP diversity controller prevent showing 3 videos from same creator prevent same hashtag 2 in a row inject 1 discovery video outside comfort zone per 10 videos
+
+[prevent showing 3 videos from same creator]
+        |
+        v
+  [prevent same hashtag > 2 in a row]
+          |
+          v
+    [inject 1 "discovery" video (outside comfort zone) per 10 videos]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **FYP diversity controller: prevent showing 3 videos from same creator → prevent same hashtag > 2 in a row → inject 1 "discovery" video (outside comfort zone) per 10 videos** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 5: Social graph service: follow/follower storage (Cassandra) → friend video boost → following feed vs FYP blending → creator notification service
+
+```text
+TikTok Architecture: Social graph service follow follower storage Cassandra friend video boost following feed vs FYP blending creator notification service
+
+[follow/follower storage (Cassandra)]
+        |
+        v
+  [friend video boost]
+          |
+          v
+    [following feed vs FYP blending]
+            |
+            v
+      [creator notification service]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Social graph service: follow/follower storage (Cassandra) → friend video boost → following feed vs FYP blending → creator notification service** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+### Case Studies
+
+#### TikTok's "completion rate" signal: why watching 100% of a video is worth more than a like — the behavioral economics of attention — and how this shaped content length distribution on the platform
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's "completion rate" signal: why watching 100% of a video is worth more than a like — the behavioral economics of attention — and how this shaped content length distribution on the platform**—creates pressure at the **video ingest** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### TikTok LIVE: the real-time gift economy — virtual currency, gift animation rendering, creator earnings calculation — the system design of a real-time money transfer product
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok LIVE: the real-time gift economy — virtual currency, gift animation rendering, creator earnings calculation — the system design of a real-time money transfer product**—creates pressure at the **content understanding** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Douyin (Chinese TikTok) architecture: how ByteDance runs Douyin and TikTok on shared infrastructure with content and data segmentation for regulatory compliance
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Douyin (Chinese TikTok) architecture: how ByteDance runs Douyin and TikTok on shared infrastructure with content and data segmentation for regulatory compliance**—creates pressure at the **candidate service** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Walk me through TikTok's FYP recommendation system from user swipe to next video appearing.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How does TikTok implement real-time feature updates? Why does sub-second latency matter for recommendation?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Design TikTok's diversity controller. What rules prevent the feed from becoming an echo chamber?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How does TikTok detect that a video is "going viral" before it goes viral?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: Design TikTok LIVE: 100K concurrent viewers per streamer, real-time gift animations, creator earnings calculation.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Video/audio ML: CLIP, Whisper, content understanding models**, **Compliance: GDPR, COPPA basics**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. TikTok's product is a low-latency feedback loop: serve one video, observe dense behavior, update features, and choose the next item. Media infrastructure, recommendation, experimentation, safety, and regional data boundaries all sit on that loop. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design TikTok's content understanding pipeline: video understanding, audio fingerprinting, text overlay extraction
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **video ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement TikTok's safety and trust system: hate speech detection, misinformation flagging, underage user protection
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **content understanding** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design the global architecture: US/EU/APAC data sovereignty, content localization, regulatory compliance
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **candidate service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Handle trending detection: identify emerging trends in real time, amplify strategically
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **real-time features** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Video understanding pipeline: video frames → CLIP visual encoder → audio → Whisper transcript → text overlay OCR → hashtag/caption NLP → unified video embedding
+
+```text
+TikTok Architecture: Video understanding pipeline video frames CLIP visual encoder audio Whisper transcript text overlay OCR hashtag caption NLP unified video embedding
+
+[video frames]
+        |
+        v
+  [CLIP visual encoder]
+          |
+          v
+    [audio]
+            |
+            v
+      [Whisper transcript]
+              |
+              v
+        [text overlay OCR]
+                |
+                v
+          [hashtag/caption NLP]
+                  |
+                  v
+            [unified video embedding]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Video understanding pipeline: video frames → CLIP visual encoder → audio → Whisper transcript → text overlay OCR → hashtag/caption NLP → unified video embedding** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 2: Trending detection system: view velocity graph (views/minute) per video → anomaly detection → trending score → trending pool injection → global trending page
+
+```text
+TikTok Architecture: Trending detection system view velocity graph views minute per video anomaly detection trending score trending pool injection global trending page
+
+[view velocity graph (views/minute) per video]
+        |
+        v
+  [anomaly detection]
+          |
+          v
+    [trending score]
+            |
+            v
+      [trending pool injection]
+              |
+              v
+        [global trending page]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Trending detection system: view velocity graph (views/minute) per video → anomaly detection → trending score → trending pool injection → global trending page** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 3: Data sovereignty architecture: US user data stays in US (Oracle TikTok) → EU user data in EU (GDPR compliance) → content sharing between regions vs data isolation
+
+```text
+TikTok Architecture: Data sovereignty architecture US user data stays in US Oracle TikTok EU user data in EU GDPR compliance content sharing between regions vs data isolation
+
+[US user data stays in US (Oracle TikTok)]
+        |
+        v
+  [EU user data in EU (GDPR compliance)]
+          |
+          v
+    [content sharing between regions vs data isolation]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Data sovereignty architecture: US user data stays in US (Oracle TikTok) → EU user data in EU (GDPR compliance) → content sharing between regions vs data isolation** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 4: Trust and Safety pipeline: upload → automated content analysis (hate, NSFW, violence, spam) → risk score → auto-remove (high risk) + human queue (medium risk) + approve (low risk)
+
+```text
+TikTok Architecture: Trust and Safety pipeline upload automated content analysis hate NSFW violence spam risk score auto remove high risk human queue medium risk approve low risk
+
+[upload]
+        |
+        v
+  [automated content analysis (hate, NSFW, violence, spam)]
+          |
+          v
+    [risk score]
+            |
+            v
+      [auto-remove (high risk) + human queue (medium risk) + approve (low risk)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Trust and Safety pipeline: upload → automated content analysis (hate, NSFW, violence, spam) → risk score → auto-remove (high risk) + human queue (medium risk) + approve (low risk)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 5: Age verification: age gate at signup → behavioral signals for underage users → COPPA-compliant data handling → restricted feed for &lt;13 users
+
+```text
+TikTok Architecture: Age verification age gate at signup behavioral signals for underage users COPPA compliant data handling restricted feed for 13 users
+
+[age gate at signup]
+        |
+        v
+  [behavioral signals for underage users]
+          |
+          v
+    [COPPA-compliant data handling]
+            |
+            v
+      [restricted feed for <13 users]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Age verification: age gate at signup → behavioral signals for underage users → COPPA-compliant data handling → restricted feed for &lt;13 users** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+### Case Studies
+
+#### TikTok's Project Texas: the US data sovereignty effort — Oracle Cloud infrastructure, US-based data governance, how they separated US user data from ByteDance access
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's Project Texas: the US data sovereignty effort — Oracle Cloud infrastructure, US-based data governance, how they separated US user data from ByteDance access**—creates pressure at the **video ingest** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### TikTok's content moderation at scale: 1B users uploading 100M+ videos/day — the ratio of automated vs human moderation, regional policy differences (what's banned in Turkey vs US vs India)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's content moderation at scale: 1B users uploading 100M+ videos/day — the ratio of automated vs human moderation, regional policy differences (what's banned in Turkey vs US vs India)**—creates pressure at the **content understanding** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### TikTok's sound recommendation: how the audio signal drives discovery — recommending the same audio across creators (sounds go viral before videos) — the audio embedding and trending detection system
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's sound recommendation: how the audio signal drives discovery — recommending the same audio across creators (sounds go viral before videos) — the audio embedding and trending detection system**—creates pressure at the **candidate service** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: How does TikTok understand the content of a video without watching it manually?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Design TikTok's trending detection system. How do you distinguish "going viral" from "high baseline popularity"?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: TikTok is required to store EU user data exclusively in the EU. How does this affect the recommendation system?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How does TikTok prevent underage users from accessing adult content?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: Your content moderation system is removing 0.1% of videos incorrectly (false positives). At 100M uploads/day, that's 100K wrongly removed videos. How do you handle this?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. For **TikTok Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: Algorithmic amplification papers (Huszár 2022), TikTok's own research disclosures, FYP audit papers**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. TikTok's product is a low-latency feedback loop: serve one video, observe dense behavior, update features, and choose the next item. Media infrastructure, recommendation, experimentation, safety, and regional data boundaries all sit on that loop. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze the societal impact of recommendation algorithms: political polarization, mental health, attention fragmentation
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **video ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design a research experiment to measure algorithmic amplification of harmful content
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **content understanding** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Propose a technically rigorous intervention for recommendation systems that reduces harm without destroying engagement
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **candidate service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Understand the technical challenges of cross-cultural content moderation
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through video ingest, content understanding, candidate service, real-time features. The governing quantitative model is: A ranking score may combine calibrated predictions: $s=w_1P(\text{watch})+w_2E[\text{watch time}]+w_3P(\text{share})-w_4P(\text{negative feedback})$. The weights encode product policy; optimizing only watch time can damage diversity, safety, or satisfaction. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a popularity-and-recency feed with explicit diversity constraints; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **real-time features** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In TikTok Architecture, that boundary interacts with swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a popularity-and-recency feed with explicit diversity constraints), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Causal model of recommendation harm: recommendation → content exposure → attitude change → behavioral change — identifying the causal pathway for measurement
+
+```text
+TikTok Architecture: Causal model of recommendation harm recommendation content exposure attitude change behavioral change identifying the causal pathway for measurement
+
+[recommendation]
+        |
+        v
+  [content exposure]
+          |
+          v
+    [attitude change]
+            |
+            v
+      [behavioral change — identifying the causal pathway for measurement]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Causal model of recommendation harm: recommendation → content exposure → attitude change → behavioral change — identifying the causal pathway for measurement** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 2: Counterfactual recommendation audit: compare FYP feed vs chronological feed vs random feed → measure downstream metrics (time spent, sentiment, information diversity)
+
+```text
+TikTok Architecture: Counterfactual recommendation audit compare FYP feed vs chronological feed vs random feed measure downstream metrics time spent sentiment information diversity
+
+[compare FYP feed vs chronological feed vs random feed]
+        |
+        v
+  [measure downstream metrics (time spent, sentiment, information diversity]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Counterfactual recommendation audit: compare FYP feed vs chronological feed vs random feed → measure downstream metrics (time spent, sentiment, information diversity)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 3: Value-sensitive recommendation: multi-objective optimization including wellbeing proxy signals (session length declining = user unhappy) + engagement signals
+
+```text
+TikTok Architecture: Value sensitive recommendation multi objective optimization including wellbeing proxy signals session length declining user unhappy engagement signals
+
+  [producer / request]
+           |
+           v
+      [candidate service] ---- control, version, policy ----> [real-time features]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [ranker] ---- measured result + trace -----> [policy/diversity]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Value-sensitive recommendation: multi-objective optimization including wellbeing proxy signals (session length declining = user unhappy) + engagement signals** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+#### Diagram 4: Cross-cultural moderation: content policy ontology with 50 categories → region-specific thresholds per category → localized human review teams → appeal translations
+
+```text
+TikTok Architecture: Cross cultural moderation content policy ontology with 50 categories region specific thresholds per category localized human review teams appeal translations
+
+[content policy ontology with 50 categories]
+        |
+        v
+  [region-specific thresholds per category]
+          |
+          v
+    [localized human review teams]
+            |
+            v
+      [appeal translations]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cross-cultural moderation: content policy ontology with 50 categories → region-specific thresholds per category → localized human review teams → appeal translations** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation.
+
+### Case Studies
+
+#### Mozilla Foundation's TikTok algorithm audit (2023): their crowdsourced research on political content amplification — the methodology and findings
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Mozilla Foundation's TikTok algorithm audit (2023): their crowdsourced research on political content amplification — the methodology and findings**—creates pressure at the **video ingest** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### TikTok's "Screen Time" research: their own internal study on whether time limits improve user wellbeing — what they found and chose not to publish
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**TikTok's "Screen Time" research: their own internal study on whether time limits improve user wellbeing — what they found and chose not to publish**—creates pressure at the **content understanding** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Instagram/Facebook's internal research on recommendation effects on teenage girls — the parallel from Meta that informs TikTok design questions
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Instagram/Facebook's internal research on recommendation effects on teenage girls — the parallel from Meta that informs TikTok design questions**—creates pressure at the **candidate service** layer of TikTok Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a popularity-and-recency feed with explicit diversity constraints. Instrument it for swipe latency, feature freshness, diversity, creator cold start, moderation recall and precision, privacy, and regional isolation, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable TikTok Architecture slice.** Implement one request path using video ingest, content understanding, candidate service. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build a popularity-and-recency feed with explicit diversity constraints, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable TikTok Architecture slice.** Implement one request path using video ingest, content understanding, candidate service. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build a popularity-and-recency feed with explicit diversity constraints, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable TikTok Architecture slice.** Implement one request path using video ingest, content understanding, candidate service. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build a popularity-and-recency feed with explicit diversity constraints, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable TikTok Architecture slice.** Implement one request path using video ingest, content understanding, candidate service. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build a popularity-and-recency feed with explicit diversity constraints, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [Recommendation Systems](/system-design/recommendation-systems)
+- [YouTube Architecture](/system-design/youtube-architecture)
+- [Video Generation curriculum](/learn/computer-vision/video-generation)
+- [Alignment curriculum](/learn/natural-language-processing/alignment)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- ByteDance engineering and recommendation publications
+- Research on multi-objective recommendation and counterfactual evaluation
+- HLS/WebRTC specifications for video and live delivery
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

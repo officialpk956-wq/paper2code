@@ -1,0 +1,144 @@
+# Continual Learning
+
+## 1. Overview
+
+A model deployed in production faces a fundamental problem: the real world keeps changing. New trends, new vocabulary, new tasks emerge, and a model trained once and frozen eventually becomes outdated. Continual learning (also called incremental learning or lifelong learning) is the problem of updating a model over time on new data or new tasks **without catastrophic forgetting** — losing performance on old tasks while learning new ones — and without the luxury of retraining from scratch (which is too expensive and slow for production systems). Unlike batch training (learn once from all data at startup) or periodic retraining (retraining from scratch every quarter), continual learning updates the model incrementally while maintaining performance across all previously learned capabilities.
+
+## 2. Prerequisites in Context
+
+**Catastrophic Forgetting** as a phenomenon is the direct prerequisite — you need to understand why naive fine-tuning on new data causes a model to lose old knowledge before understanding the techniques that prevent it. **Regularization Methods** matter because the dominant family of continual learning approaches use regularization to constrain weight changes, preventing drastic updates that destroy old knowledge. **Replay and Memory** concepts are important because rehearsal-based continual learning (mixing old data with new data during training) is one of the most practically effective approaches despite being mechanistically simple.
+
+## 3. Core Concept
+
+When a model learns task A (e.g., classification on images of dogs), its weights settle into a solution optimized for task A. If you then fine-tune the same model on task B (classification of images of cats), standard SGD updates the weights to optimize for task B, but this often severely degrades performance on task A — the weight changes that helped on task B actively hurt on task A. **Catastrophic forgetting** is this complete loss of old task performance. The continual learning challenge is to learn new tasks while keeping old task performance high — an impossible problem if you're limited to static, isolated weight updates, but addressable through several strategies: (1) **Regularization-based** — add penalties to prevent large weight changes, keeping parameters close to their task-A solution while allowing modification; (2) **Replay-based** — mix examples from old tasks into new-task training, forcing the model to maintain old performance by seeing old data; (3) **Architecture-based** — add task-specific parameters or adapt architecture per task, keeping old task's learned weights frozen; (4) **Exemplar-based** — maintain a small, high-value dataset of past examples and mix them in (similar to replay but curated).
+
+## 4. Theoretical Foundations
+
+**Elastic Weight Consolidation (EWC)** formalizes the regularization idea: after learning task A, identify which parameters were most important for task A (using the Fisher information matrix $F$, which measures loss sensitivity to parameter changes), and then add an L2-style penalty when learning task B, preventing changes to those important parameters:
+$$\mathcal{L}(B) = L_B(\theta) + \frac{\lambda}{2} \sum_i F_i (\theta_i - \theta_A^*)^2$$
+where $\theta_A^*$ are the task-A weights and $F$ (Fisher matrix) weights the penalty — parameters with high $F_i$ (high importance for task A) are constrained more strongly. This is mathematically principled: it allows flexibility in unimportant parameters while protecting important ones, a more nuanced constraint than global weight decay. The limit of this approach is that the Fisher matrix is expensive to compute and becomes inaccurate as tasks diverge significantly, and the capacity constraint remains — if task B is dissimilar enough to task A, the model may simply not have free capacity to learn task B without some degradation of task A.
+
+## 5. Worked Example
+
+A customer-support chatbot is trained on task A: responding to account-management questions (password resets, billing inquiries). After deployment, a new category of questions (product recommendations) emerges, requiring task B training. Naive fine-tuning on task B data would severely degrade task A performance — the model would forget how to handle account questions. Using continual learning: (1) **EWC approach**: compute the Fisher information on task A examples (which parameters drove account-question accuracy), then during task B training, add an EWC penalty to prevent changes to those parameters; (2) **Replay approach**: keep a small pool of representative task A examples (password resets, billing), and during each task B training step, mix in a few task A examples so the model sees both task types regularly; (3) **Architecture approach**: add a task B-specific adapter (small module) to the model, keeping the core task A weights frozen. In practice, approach (2) often works best: it's simple, effective, and doesn't require computing Fisher matrices or maintaining strict parameter constraints.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class EWCRegularization(nn.Module):
+    """
+    Elastic Weight Consolidation: adds a penalty term based on task importance.
+    """
+    def __init__(self, model, fisher_matrix, prev_task_params, lam=0.4):
+        super().__init__()
+        self.model = model
+        self.fisher_matrix = fisher_matrix  # (param_size,) importance weights
+        self.prev_task_params = prev_task_params  # frozen old task weights
+        self.lam = lam
+    
+    def ewc_loss(self, current_params):
+        """Compute EWC penalty: penalize changes to important parameters."""
+        loss = 0
+        param_idx = 0
+        for param in self.model.parameters():
+            param_size = param.numel()
+            fisher_slice = self.fisher_matrix[param_idx:param_idx + param_size]
+            prev_slice = self.prev_task_params[param_idx:param_idx + param_size]
+            
+            # Penalize changes to parameters with high Fisher importance
+            loss += (fisher_slice * (param.view(-1) - prev_slice) ** 2).sum()
+            param_idx += param_size
+        
+        return self.lam * loss / 2
+
+def replay_buffer_strategy(model, new_task_loader, old_task_buffer, epochs=3):
+    """
+    Continual learning via replay: mix old-task examples with new-task examples.
+    """
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    
+    for epoch in range(epochs):
+        for new_batch in new_task_loader:
+            # Mix in old-task examples (exemplar replay)
+            old_batch = old_task_buffer.sample(batch_size=len(new_batch) // 2)
+            combined_batch = torch.cat([new_batch, old_batch], dim=0)
+            
+            optimizer.zero_grad()
+            outputs = model(combined_batch)
+            loss = F.cross_entropy(outputs, combined_batch['labels'])
+            loss.backward()
+            optimizer.step()
+    
+    return model
+
+if __name__ == "__main__":
+    # Simulate two tasks: task A learned, now learning task B
+    model = nn.Sequential(nn.Linear(10, 32), nn.ReLU(), nn.Linear(32, 2))
+    
+    # After task A training, snapshot the parameters and compute Fisher matrix
+    task_a_params = [p.detach().clone() for p in model.parameters()]
+    fisher = torch.ones(sum(p.numel() for p in model.parameters())) * 0.5  # simplified
+    
+    # Task B training with EWC constraint
+    ewc = EWCRegularization(model, fisher, task_a_params, lam=0.4)
+    x_b = torch.randn(16, 10)
+    y_b = torch.randint(0, 2, (16,))
+    
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    for _ in range(5):
+        optimizer.zero_grad()
+        output = model(x_b)
+        loss = F.cross_entropy(output, y_b) + ewc.ewc_loss(model.parameters())
+        loss.backward()
+        optimizer.step()
+    
+    print(f"Task B loss (with EWC): {loss.item():.4f}")
+    print("EWC prevents catastrophic forgetting by constraining parameter changes")
+```
+
+## 7. Real-World Applications
+
+Recommendation systems (YouTube, Netflix, Spotify) use continual learning to update models as user preferences and content libraries evolve — retraining from scratch weekly would be prohibitively expensive. Customer-facing chatbots and question-answering systems use replay-based continual learning: maintaining a buffer of past interactions and mixing them into new training. Robotics and autonomous systems use continual learning to adapt to new environments or failure modes without forgetting previously learned behaviors — a robot learning to navigate a new building should not forget how to avoid collisions.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that continual learning solves the capacity constraint — it doesn't. If task B is sufficiently different from task A and the model has limited capacity, some performance on task A *will* degrade, no matter which continual learning method you use. What continual learning does is **manage** that tradeoff gracefully rather than experiencing catastrophic collapse. Another pitfall is assuming replay-based approaches require storing enormous buffers of old data — in practice, small buffers (a few thousand high-value examples) are often sufficient, and curating the buffer (selecting the most informative examples) can reduce storage needs further. A third pitfall is conflating continual learning with online learning — they're related but distinct: continual learning maintains multiple past tasks' performance, while online learning updates on a stream of examples without explicit task boundaries.
+
+## 9. How This Connects
+
+This topic requires understanding **Catastrophic Forgetting** as a phenomenon and **Regularization Methods** as the core technical toolkit. It connects directly to **Lifelong Learning Research** (the broader research field studying how systems can learn over time without forgetting), **Few-Shot Learning** (learning new tasks from small data, closely related to continual learning), **Domain Adaptation** (adapting to new distributions, related but typically one-shot), and **Curriculum Learning** (choosing the order in which tasks are presented, which affects continual learning difficulty).
+
+## 10. Check Your Understanding
+
+**Q1: What is catastrophic forgetting, and why does naive fine-tuning on a new task cause it?**
+Catastrophic forgetting is the phenomenon where fine-tuning a model on a new task severely degrades performance on old tasks. Naive fine-tuning uses standard SGD, which updates weights to optimize for the new task, but these updates often contradict the old task's learned weights, causing complete loss of old performance.
+
+**Q2: How does Elastic Weight Consolidation (EWC) address catastrophic forgetting?**
+EWC computes the Fisher information matrix (importance weights) for each parameter based on the old task, then adds an L2-style regularization penalty during new-task training that prevents changes to high-importance parameters — those most critical for old-task performance stay close to their original values.
+
+**Q3: Why is replay-based continual learning often effective despite being mechanistically simple?**
+Because mixing old-task examples into new-task training forces the model to see old tasks regularly, maintaining performance on them as it learns new ones. It's simple (just store a buffer of old examples), robust (no Fisher matrix computation), and empirically effective in practice.
+
+**Q4: What is the capacity constraint in continual learning, and why can't any method completely eliminate it?**
+The capacity constraint is that a model has finite parameters — if task B is sufficiently different from task A, learning task B well may require weight changes that hurt task A. Continual learning methods manage this tradeoff, but cannot eliminate the fundamental tension between learning new and old tasks simultaneously.
+
+**Q5: How does continual learning differ from simply training on a mix of old and new data?**
+Training on a mix assumes you have all data available at once (batch learning). Continual learning assumes new data arrives in streams or task batches over time, and you cannot store or retrain on all previous data — you must update incrementally, which is fundamentally harder and requires dedicated techniques like EWC or replay buffering.
+
+## 11. Further Reading
+
+- Rusu et al., "Elastic Weight Consolidation: A Simple Method to Mitigate Catastrophic Forgetting" (2017)
+- Lopez-Paz & Ranzato, "Gradient Episodic Memory for Continual Learning" (Facebook, 2017)
+- Kirkpatrick et al., "Overcoming Catastrophic Forgetting in Neural Networks" (DeepMind, 2017)
+- Zenke, Poole & Ganguli, "Continual Learning Through Synaptic Intelligence" (2017)
+- See also: `transfer-learning` in the ML curriculum and `fine-tuning-strategies` in this domain
+
+## Related Platform Content
+
+- [LLM ENGINEERING curriculum overview](/learn/llm-engineering)
+- [Production system](/system-design/llm-serving)
+- [Browse all system designs](/system-design)

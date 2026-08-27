@@ -1,0 +1,133 @@
+# Flash Attention
+
+## 1. Overview
+
+Transformer attention is the bottleneck of LLM inference and training. A naive implementation computes the full $N \times N$ attention matrix explicitly (where $N$ is sequence length), consuming quadratic memory and requiring quadratic compute even when using optimizations like dropout. Flash Attention (Dao et al., 2022) is a mathematically equivalent but algorithmically different way to compute attention that **reduces memory access** — the real bottleneck on modern hardware — by using block-wise computation and careful I/O orchestration. For a 4K context window, naive attention allocates ~50 GB of intermediate memory and takes minutes; Flash Attention takes seconds and uses kilobytes. It's not a hyperparameter tweak or a new attention mechanism — it's an implementation that, hardware-theoretically, computes exactly the same result as standard attention but does so in a way that CPU/GPU memory bandwidth permits.
+
+## 2. Prerequisites in Context
+
+**Attention Mechanism** fundamentals are mandatory — you need to know what Q, K, V, the softmax, and the weighted sum compute before understanding how to reorganize their computation. **Memory Hierarchy** basics matter because Flash Attention's entire motivation is exploiting the gap between FLOP throughput (fast) and memory bandwidth (slow) on GPUs — GPUs can do trillions of FLOPs per second but can only read/write hundreds of GB per second, so doing more arithmetic per byte of memory read is the central insight. **CUDA and Kernel Optimization** is useful context but not required — you need to appreciate that rearranging computation to reduce memory traffic is what matters, not the details of thread blocks and shared memory, though understanding that helps.
+
+## 3. Core Concept
+
+Standard attention computes $\text{Attn}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$ in three steps: (1) compute the full $N \times N$ matrix $S = QK^T$, storing it to GPU memory; (2) apply softmax row-by-row, storing the full normalized matrix; (3) multiply by $V$. For $N = 4096$ and head dimension $d = 64$, the intermediate matrices are massive (~64 MB per head, multiplied by batch size and number of heads). Flash Attention reorganizes this into **tiled, block-wise computation**: process attention in small blocks (e.g., $128 \times 128$) that fit in fast GPU cache (SRAM), compute partial results, and carefully combine them — mathematically preserving softmax's two-pass behavior (computing row maxima for numerical stability, then normalized scores) but doing so in a cache-aware order that eliminates large intermediate allocations. The key insight is that softmax can be **computed in-place with streaming updates**: as you process each block of query positions, you incrementally update running row-maxima and row-sums, recomputing softmax on each tile rather than storing the full matrix.
+
+## 4. Theoretical Foundations
+
+Softmax stability and streaming computation: the softmax $\sigma(x_i) = \frac{e^{x_i - m}}{\sum_j e^{x_j - m}}$ is numerically stable if you subtract the maximum $m = \max_j x_j$ before exponentiation. Flash Attention computes attention block-by-block: after processing key/value tile $j$, the running maximum $m^{(j)}$ and row sum $\ell^{(j)} = \sum_k e^{s_k - m^{(j)}}$ are updated. When a new tile $j+1$ arrives, the previous running sums are rescaled by $e^{m^{(j)} - m^{(j+1)}}$ to maintain correctness under the new maximum — this is mathematically exact (equivalent to the full algorithm) and avoids storing the full attention matrix. Memory bandwidth analysis shows that standard attention requires $O(Nd)$ memory accesses but performs only $O(Nd)$ arithmetic, achieving ~0.1 GB/s throughput on GPUs capable of 1 TB/s — **compute-bound** hardware is starved. Flash Attention reorders computation to perform $O(N)$ arithmetic per byte of I/O in the critical path, moving closer to **memory-bound** efficiency limits.
+
+## 5. Worked Example
+
+Computing attention over a 4K-token sequence with head dimension 64: naive approach allocates a $4096 \times 4096$ attention matrix (~64 MB for float16), reads the full $4K \times 64$ query and key matrices, computes the matrix product, stores the intermediate, applies softmax (reading and writing the full matrix again), then multiplies by values. With Flash Attention's $128 \times 128$ tiling: (1) load a 128-token query block (128 × 64 = 8KB) into fast cache; (2) iterate over key blocks, computing $128 \times 128$ attention tiles on-the-fly, updating running max and sum; (3) accumulate into output, never storing the full $4096 \times 4096$ matrix, only ever holding $128 \times 128$ intermediate results in cache. Total intermediate memory drops from ~64 MB to ~1 MB, and the compute becomes memory-bandwidth-limited rather than starved.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def flash_attention_simple(Q, K, V, mask=None):
+    """
+    Simplified Flash Attention: block-wise tiled computation.
+    Q, K, V: (batch, seq_len, head_dim)
+    Returns attention output, same shape as Q.
+    
+    NOTE: This is a teaching implementation, not performance-optimized.
+    Real Flash Attention uses CUDA kernels for speedup.
+    """
+    batch_size, N, head_dim = Q.shape
+    block_size = 128  # tile size
+    
+    # Initialize output and running statistics
+    output = torch.zeros_like(Q)
+    row_max = torch.full((batch_size, N), float('-inf'))
+    row_sum = torch.zeros((batch_size, N))
+    
+    for i in range(0, N, block_size):
+        # Process query block i:i+block_size
+        Q_block = Q[:, i:i+block_size, :]  # (batch, block_size, head_dim)
+        
+        for j in range(0, N, block_size):
+            # Process key/value block j:j+block_size
+            K_block = K[:, j:j+block_size, :]  # (batch, block_size, head_dim)
+            V_block = V[:, j:j+block_size, :]  # (batch, block_size, head_dim)
+            
+            # Compute attention scores for this tile
+            S_tile = torch.matmul(Q_block, K_block.transpose(-2, -1)) / (head_dim ** 0.5)
+            
+            if mask is not None:
+                S_tile = S_tile.masked_fill(mask[:, i:i+block_size, j:j+block_size] == 0, float('-inf'))
+            
+            # Update row max (for numerical stability)
+            old_max = row_max[:, i:i+block_size].clone()
+            new_max = torch.max(old_max, S_tile.max(dim=-1).values)
+            row_max[:, i:i+block_size] = new_max
+            
+            # Rescale previous row sum with new max
+            exp_correction = torch.exp(old_max - new_max).unsqueeze(-1)
+            row_sum[:, i:i+block_size] *= exp_correction.squeeze(-1)
+            
+            # Compute softmax for this tile (with updated max)
+            P_tile = torch.exp(S_tile - new_max.unsqueeze(-1))
+            row_sum[:, i:i+block_size] += P_tile.sum(dim=-1)
+            
+            # Accumulate into output (with rescaling for numerical consistency)
+            output[:, i:i+block_size, :] = exp_correction * output[:, i:i+block_size, :] + torch.matmul(P_tile, V_block)
+    
+    # Normalize by row sums
+    output = output / row_sum.unsqueeze(-1)
+    
+    return output
+
+if __name__ == "__main__":
+    batch_size, seq_len, head_dim = 2, 512, 64
+    Q = torch.randn(batch_size, seq_len, head_dim)
+    K = torch.randn(batch_size, seq_len, head_dim)
+    V = torch.randn(batch_size, seq_len, head_dim)
+    
+    out = flash_attention_simple(Q, K, V)
+    print(f"Flash Attention output shape: {out.shape}")
+    print("(Real Flash Attention implemented as CUDA kernel for 10-20x speedup)")
+```
+
+## 7. Real-World Applications
+
+Flash Attention is now the standard attention implementation in all major LLM libraries — PyTorch's `F.scaled_dot_product_attention` defaults to Flash Attention when available, Hugging Face transformers uses it by default, and every production LLM deployment (GPT-4, Claude, Llama 3, Gemini) uses it. The speedup directly enables longer context windows: serving a 200K-token context that would otherwise timeout becomes feasible. Inference latency drops by 2-3x for long sequences, and memory savings enable running larger models on the same hardware. Flash Attention 2 (Dao et al., 2023) further optimizes by reducing synchronization overhead and improving instruction-level parallelism, achieving even closer to hardware memory-bandwidth limits.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that Flash Attention is a different algorithm for computing attention — it's not, it's the same mathematical algorithm, just reorganized for hardware efficiency. Another pitfall is assuming Flash Attention works for all attention variants — causal (autoregressive) attention and multi-head variants work seamlessly, but some exotic attention patterns (e.g., highly sparse patterns with irregular sparsity masks) don't map to the tiled computation efficiently, and custom CUDA implementations are needed. A third pitfall is failing to account for the implementation details of specific frameworks — PyTorch's built-in Flash Attention uses different block sizes and kernel implementations than Triton-based alternatives, leading to minor numerical differences in edge cases.
+
+## 9. How This Connects
+
+This topic requires understanding the **Attention Mechanism** and basic **Memory Hierarchy** concepts. It directly informs **Quantization** decisions (if you can afford longer sequences with Flash Attention, you have fewer incentives to use exotic sparsity or lower precision), **Inference Optimization**, and practical decisions around **Context Window Length** — longer windows are only feasible if attention doesn't blow up memory and compute, which is exactly what Flash Attention solves.
+
+## 10. Check Your Understanding
+
+**Q1: What is the fundamental bottleneck that Flash Attention addresses?**
+Memory bandwidth, not compute. Naive attention achieves only 0.1 GB/s of memory bandwidth on GPUs capable of 1 TB/s, because it allocates full $N \times N$ matrices to slow GPU memory, forcing repeated reads/writes. Flash Attention reorders computation to keep intermediate results in fast cache (SRAM), reducing memory traffic.
+
+**Q2: How does Flash Attention compute softmax without storing the full attention matrix?**
+It processes attention in blocks, maintaining running row-maxima and row-sums as it processes each tile. When a new tile arrives, previous sums are rescaled by $e^{m^{(\text{old})} - m^{(\text{new})}}$ to maintain numerical correctness under the updated maximum. This is mathematically equivalent to computing the full softmax but avoids storing it.
+
+**Q3: Why can Flash Attention maintain numerical stability without storing the full attention matrix?**
+Because softmax's stability property — subtracting the row maximum before exponentiation — can be applied incrementally: as the maximum changes when processing new tiles, previous exponentials are rescaled proportionally to maintain the same final result.
+
+**Q4: Does Flash Attention compute a mathematically different result than standard attention?**
+No, it computes the exact same result. The only differences are numerical precision (due to different ordering of floating-point operations, which may accumulate error slightly differently) and performance — Flash Attention is faster and uses less memory, not different.
+
+**Q5: Why does Flash Attention enable longer context windows?**
+Because memory and compute savings directly reduce the resource cost of sequence length. Without Flash Attention, a 200K-token sequence would consume gigabytes of intermediate attention memory and take minutes to process. With Flash Attention, the same sequence consumes kilobytes of intermediate memory and runs in seconds, making longer sequences practical.
+
+## 11. Further Reading
+
+- Dao et al., "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness" (2022)
+- Dao et al., "FlashAttention-2: Faster Accurate Attention with Multi-Query Single-Key-Value Attention" (2023)
+- Rabe & Staats, "The Transformer Architecture" (2021) — general attention background
+- See also: PyTorch `torch.nn.functional.scaled_dot_product_attention` documentation for production implementations
+
+## Related Platform Content
+
+- [LLM ENGINEERING curriculum overview](/learn/llm-engineering)
+- [Production system](/system-design/llm-serving)
+- [Browse all system designs](/system-design)

@@ -1,0 +1,105 @@
+# Reasoning in Language Models
+
+## 1. Overview
+
+For years, getting a language model to solve a multi-step math or logic problem correctly meant hoping it produced the right answer in a single forward pass — and it often didn't, because a single pass gives the model no mechanism to "think before it speaks." The chain-of-thought discovery changed this: simply prompting or training a model to write out intermediate reasoning steps before its final answer dramatically improves accuracy on multi-step problems, essentially giving the model extra sequential computation to work with. Models like OpenAI's o1 and DeepSeek-R1 push this idea to its logical extreme — training the model, via reinforcement learning, to generate long, deliberate chains of reasoning as a first-class trained behavior rather than a prompting trick, unlocking substantially better performance on hard reasoning tasks.
+
+## 2. Prerequisites in Context
+
+**Chain-of-Thought** as a prompting technique is the direct historical predecessor and conceptual starting point — you need to understand why simply asking a model to "think step by step" improves accuracy before appreciating why later work tries to *train* this behavior directly rather than relying on prompting alone. **RLHF** matters because training a model to produce good reasoning chains (not just good final answers) requires a reward signal that can evaluate the quality of an entire reasoning trajectory, and RLHF's machinery (reward models, policy optimization) is the direct toolkit extended for this purpose. **Process Reward Models** are a genuinely distinct and important prerequisite: they specifically reward correctness at *each step* of a reasoning chain (not just the final answer), which is the key technical ingredient that makes training genuinely better reasoning — rather than just longer text — possible.
+
+## 3. Core Concept
+
+The foundational **chain-of-thought (CoT)** finding is that including a few worked examples in a prompt, where each example shows step-by-step reasoning leading to an answer (rather than just the answer alone), causes a sufficiently large language model to spontaneously produce similar step-by-step reasoning for new problems — and this reasoning substantially improves accuracy on arithmetic, commonsense, and symbolic reasoning tasks compared to prompting for a direct answer. The natural follow-up question is how to reward *quality* reasoning during training, not just correct final answers. An **outcome reward model** only scores whether the final answer was right, which can inadvertently reward a reasoning chain that arrives at the correct answer through flawed logic (a "right for the wrong reason" trajectory) — this is a genuine problem because reinforcing lucky-but-flawed reasoning chains doesn't teach the model to reason better, it teaches it to be lucky more often. A **process reward model (PRM)**, by contrast, is trained to score the correctness of *each individual step* in a reasoning chain, providing a much more targeted training signal that specifically reinforces sound step-by-step logic, not just correct endpoints — this is the technical shift that models like o1 and DeepSeek-R1 build their reasoning-training pipelines around.
+
+## 4. Theoretical Foundations
+
+Formally, given a reasoning trajectory $\tau = (s_1, s_2, \ldots, s_n, a)$ (a sequence of reasoning steps $s_i$ followed by a final answer $a$), an outcome reward model computes a single scalar $R(\tau) = r(a)$ based only on the final answer's correctness, while a process reward model computes $R(\tau) = \sum_i r(s_i \mid s_{<i})$, a per-step reward that can be aggregated (summed, or used to guide search) to evaluate partial trajectories *before* the final answer is even reached. This per-step scoring is what enables **search over reasoning paths** at inference time — techniques like tree search or best-of-N sampling guided by a PRM can explore multiple candidate reasoning branches and prune ones that a trained PRM scores as going wrong early, rather than only being able to evaluate complete trajectories after the fact. Training with PRM-based rewards via policy gradient methods (a direct extension of the PPO-style RLHF machinery to reward entire multi-step trajectories rather than single-turn responses) is the core recipe underlying DeepSeek-R1's large jump in mathematical and coding reasoning benchmarks relative to models trained only with outcome-level reward.
+
+## 5. Worked Example
+
+Consider a model solving "If a train travels 60 miles in 1.5 hours, then speeds up by 20% for the next 2 hours, how far does it travel in total?" An outcome reward model only checks whether the final total-distance answer is correct — a model could stumble through an incorrect intermediate speed calculation, get lucky with a compensating arithmetic error, and still receive full credit for a coincidentally correct final number. A process reward model instead evaluates each intermediate step separately: is the initial speed (60/1.5 = 40 mph) computed correctly? Is the 20% speed increase (40 × 1.2 = 48 mph) applied correctly? Is the second-leg distance (48 × 2 = 96 miles) computed correctly? Is the final sum (60 + 96 = 156 miles) correct? A flawed-but-lucky trajectory that got the wrong intermediate speed but happened to land on the right final total would receive low reward at the specific step where the error occurred, even though its final answer matched — precisely the discriminating signal an outcome-only reward could never provide.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+class ProcessRewardModel(nn.Module):
+    """Scores each reasoning step independently, given the problem and steps so far.
+    Simplified: takes pre-embedded (problem + steps-so-far + current step) representations."""
+    def __init__(self, embed_dim=64):
+        super().__init__()
+        self.scorer = nn.Sequential(
+            nn.Linear(embed_dim, 128), nn.ReLU(),
+            nn.Linear(128, 1), nn.Sigmoid()   # probability this step is "correct"
+        )
+
+    def forward(self, step_embeddings):
+        # step_embeddings: (num_steps, embed_dim) — one embedding per reasoning step
+        return self.scorer(step_embeddings).squeeze(-1)  # (num_steps,) per-step scores
+
+def trajectory_reward(prm, step_embeddings, aggregation="min"):
+    """Aggregate per-step PRM scores into a trajectory-level reward.
+    'min' rewards only trajectories where EVERY step is sound —
+    one bad step tanks the whole trajectory's reward, unlike outcome-only reward."""
+    scores = prm(step_embeddings)
+    if aggregation == "min":
+        return scores.min()
+    return scores.prod()  # alternative: product, also penalizes any weak step
+
+if __name__ == "__main__":
+    prm = ProcessRewardModel(embed_dim=64)
+    good_trajectory = torch.randn(4, 64) * 0.1 + 1.0   # simulating "confidently correct" steps
+    flawed_trajectory = torch.randn(4, 64)              # simulating a mixed-quality trajectory
+
+    r_good = trajectory_reward(prm, good_trajectory)
+    r_flawed = trajectory_reward(prm, flawed_trajectory)
+    print(f"Trajectory reward (all-good steps):   {r_good.item():.3f}")
+    print(f"Trajectory reward (mixed-quality steps): {r_flawed.item():.3f}")
+    print("Min-aggregation means one bad step caps the whole trajectory's reward")
+```
+
+## 7. Real-World Applications
+
+OpenAI's o1 and o3 model series are trained explicitly to produce long internal reasoning chains before answering, using reinforcement learning against process-level correctness signals, and show dramatic improvements on competition mathematics and coding benchmarks compared to models without this training. DeepSeek-R1 (documented in its technical report as achieving strong reasoning performance via large-scale reinforcement learning with rule-based and process-oriented rewards) demonstrated that a comparatively smaller open model, trained with this reasoning-focused RL recipe, can match or exceed proprietary reasoning-focused models on many benchmarks — directly influencing how the field now approaches "test-time compute" as a lever, alongside model scale and training data, for improving performance on hard reasoning problems.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is treating "chain-of-thought prompting" and "trained reasoning models" (like o1) as the same thing — CoT prompting elicits reasoning-like text from a model's existing weights via clever prompting alone, with no training changes, while models like o1 and DeepSeek-R1 have their weights actually optimized via reinforcement learning specifically to produce better reasoning chains, a fundamentally more expensive and more effective intervention. Another pitfall is assuming longer reasoning chains are always better — there's a well-documented failure mode where models trained or prompted to reason at length can "overthink" simple problems, introducing unnecessary steps that sometimes actively derail an otherwise-correct initial intuition, meaning reasoning length itself is not a reliable proxy for reasoning quality.
+
+## 9. How This Connects
+
+This topic requires **Chain-of-Thought** prompting as its conceptual starting point, **RLHF** as the machinery being extended, and **Process Reward Models** as the specific technical mechanism that distinguishes genuine reasoning-training from simple outcome-based fine-tuning. It directly unlocks **Process Reward Models** (as a deeper research topic in its own right, beyond the introductory treatment here), **MCTS over Thoughts** (using tree search, guided by a PRM, to explore multiple candidate reasoning branches rather than committing to a single linear chain), and **GRPO** (Group Relative Policy Optimization, a training algorithm specifically designed for reasoning-chain RL that DeepSeek-R1 uses, avoiding some of the computational overhead of standard PPO for this setting).
+
+## 10. Check Your Understanding
+
+**Q1: What is the key limitation of an outcome reward model that a process reward model addresses?**
+An outcome reward model only evaluates whether the final answer is correct, which can inadvertently reward reasoning trajectories that reach the right answer through flawed or coincidental logic. A process reward model evaluates the correctness of each intermediate step, providing a training signal that specifically discourages flawed reasoning even when it happens to arrive at a correct final answer.
+
+**Q2: How does a process reward model enable more effective search over reasoning paths at inference time?**
+Because it can score partial (incomplete) reasoning trajectories, not just complete ones, a PRM can guide a search process (like tree search or best-of-N sampling) to prune reasoning branches that are going wrong early, before wasting computation completing an already-flawed trajectory — something an outcome-only reward model cannot do, since it can only evaluate a trajectory once it reaches a final answer.
+
+**Q3: What is the fundamental difference between chain-of-thought prompting and training a model like o1 to reason?**
+Chain-of-thought prompting elicits step-by-step reasoning from a model's existing, unchanged weights purely through the structure of the prompt (showing worked examples). Training a model like o1 actually modifies the model's weights via reinforcement learning specifically to produce better reasoning trajectories, using process-level reward signals — a fundamentally different and more expensive intervention than prompting alone.
+
+**Q4: Why is "longer reasoning chain" not a reliable proxy for "better reasoning"?**
+Because models can be documented to "overthink" simple problems when encouraged to reason at length — introducing unnecessary or even counterproductive additional steps that sometimes derail an initially correct intuition. Reasoning quality depends on the correctness of each step and the appropriateness of the reasoning strategy to the problem's actual difficulty, not simply on how many steps are produced.
+
+**Q5: Why did DeepSeek-R1's release matter for the broader field of reasoning-focused LLM training?**
+Because it demonstrated that a comparatively smaller, openly documented model, trained using reinforcement learning with process-oriented and rule-based rewards, could match or exceed the reasoning performance of larger proprietary models trained with similar techniques — showing that the reasoning-training recipe itself (not just raw model scale) is a powerful and independently valuable lever for improving performance on hard reasoning tasks.
+
+## 11. Further Reading
+
+- Wei et al., "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models" (2022)
+- Lightman et al., "Let's Verify Step by Step" (2023) — the process reward model paper
+- OpenAI, "Learning to Reason with LLMs" (o1 system card, 2024)
+- DeepSeek-AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning" (2025)
+- See also: `instructgpt` on this platform for the RLHF machinery this topic directly extends
+
+## Related Platform Content
+
+- [NATURAL LANGUAGE PROCESSING curriculum overview](/learn/natural-language-processing)
+- [DeepSeek-V2](/architectures/deepseek-v2)
+- [Browse all system designs](/system-design)

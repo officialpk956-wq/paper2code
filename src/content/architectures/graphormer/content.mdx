@@ -1,0 +1,218 @@
+# Graphormer
+
+## 1. Overview
+Graphormer, introduced in 2021 by Chengxuan Ying, Tianle Cai, Shengjie Luo, Shuxin Zheng, Guolin Ke, Di He, Yanming Shen, and Tie-Yan Liu (Microsoft Research Asia), achieved a historic milestone in graph deep learning by winning **1st Place in the Open Graph Benchmark Large-Scale Challenge (OGB-LSC)** on the PCQM4M-LVD quantum chemistry dataset (3.8 Million molecules). Before Graphormer, standard Transformers struggled on graphs because standard self-attention ignores structural topology. Graphormer introduced three simple, elegant structural encoding mechanisms that directly modify the Transformer attention bias and token representations:
+1. **Centrality Encoding:** Adds learned node degree embeddings $z_{\text{deg}^-(v_i)} + z_{\text{deg}^+(v_i)}$ to input node features.
+2. **Spatial Encoding (Shortest Path Distance Bias):** Adds a bias term $b_{\phi(v_i, v_j)}$ to the self-attention matrix corresponding to the shortest path distance $\text{SPD}(v_i, v_j)$ between nodes.
+3. **Edge Encoding:** Incorporates shortest path edge feature embeddings into the self-attention bias matrix.
+
+:::tip
+Graphormer attention formula: "Inject graph structural topology directly into self-attention: $A_{i,j} = \frac{(h_i W_Q)(h_j W_K)^T}{\sqrt{d}} + b_{\phi(v_i, v_j)}$, where $b_{\phi(v_i, v_j)}$ is the Shortest Path Distance (SPD) bias."
+:::
+
+## 2. Historical Context
+In 2021, the Open Graph Benchmark (OGB) presented the PCQM4M-LVD dataset—a massive quantum chemistry challenge to predict HOMO-LUMO energy gaps for 3.8 Million molecules.
+
+Standard GNNs (GCN, GIN) suffered from over-squashing over multi-hop molecular rings. Early Graph Transformers used Laplacian positional encodings, but struggled to capture fine-grained spatial distances between non-adjacent atoms.
+
+Microsoft Research Asia designed Graphormer. By incorporating Shortest Path Distance (SPD) spatial bias directly into the self-attention matrix, Graphormer allowed every atom to attend to every other atom while precisely understanding structural molecular distances, winning the OGB-LSC 2021 championship.
+
+## 3. Problem It Solves
+Graphormer resolves three major architectural limitations of GNNs and early Graph Transformers:
+1. **Structural Blindness of Standard Transformers:** Injects spatial node degree importance via **Centrality Encoding** and pair-wise graph distances via **Spatial Encoding**.
+2. **Over-Squashing over Long Paths:** All-to-all self-attention connects all node pairs in $O(1)$ path steps while preserving shortest path distance awareness.
+3. **Edge Feature Loss:** Incorporates edge feature embeddings along the shortest path directly into self-attention matrices via **Edge Encoding**.
+
+## 4. Architecture Diagram Data
+Below is the structural encoding pipeline of Graphormer showing Centrality Encoding, Spatial Encoding (SPD Bias), and Edge Feature Encoding.
+
+```text
+       INPUT GRAPH G = (V, E)
+       Node Features X  |  Adjacency Matrix A  |  Edge Features E
+
+       ========================================================================
+
+       1. CENTRALITY ENCODING (Node Input Embeddings)
+       h_i^(0) = x_i + z_{deg^-(v_i)} + z_{deg^+(v_i)}
+       (Adds learned in-degree and out-degree embedding vectors to node features)
+
+       ========================================================================
+
+       2. SPATIAL ENCODING (Shortest Path Distance Matrix SPD)
+       Compute shortest path distance phi(v_i, v_j) between all node pairs (v_i, v_j)
+       Map distance to learned bias scalar b_{phi(v_i, v_j)}
+
+       ========================================================================
+
+       3. EDGE ENCODING (Edge Features Along Shortest Path)
+       Extract edge features along shortest path e_1, e_2... e_N
+       Compute edge bias c_{ij} = (1/N) * sum_k ( e_k * w_k^E )
+
+       ========================================================================
+
+       GRAPHORMER SELF-ATTENTION LAYER
+       A_{i,j} = ( (h_i W_Q)(h_j W_K)^T / sqrt(d) ) + b_{phi(v_i, v_j)} + c_{i,j}
+       Output = Softmax( A ) * ( H W_V )
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Centrality Encoding (Node Inputs):**
+- Computes in-degree $\text{deg}^-(v_i)$ and out-degree $\text{deg}^+(v_i)$ for node $v_i$.
+- Looks up learned degree embedding vectors $z^- \in \mathbb{R}^d$ and $z^+ \in \mathbb{R}^d$:
+  $$h_i^{(0)} = x_i W_x + z_{\text{deg}^-(v_i)}^- + z_{\text{deg}^+(v_i)}^+$$
+
+**2. Spatial Encoding (Shortest Path Distance Bias):**
+- Computes Shortest Path Distance $\phi(v_i, v_j) = \text{SPD}(v_i, v_j) \in \{1, 2, \dots, \text{SPD}_{\max}\}$.
+- Maps distance integer to a learnable scalar bias parameter $b_{\phi(v_i, v_j)} \in \mathbb{R}^1$.
+
+**3. Edge Feature Encoding:**
+- For shortest path $SP_{i,j} = (e_1, e_2, \dots, e_N)$ connecting $v_i$ and $v_j$:
+  $$c_{i,j} = \frac{1}{N} \sum_{k=1}^N e_k w_k^E$$
+  where $w_k^E$ is a weight vector for the $k$-th edge along the path.
+
+**4. Graphormer Self-Attention Layer:**
+- Adds Spatial Bias $b_{\phi(v_i, v_j)}$ and Edge Bias $c_{i,j}$ directly into the attention matrix:
+  $$A_{i,j} = \frac{\left(h_i W_Q\right) \left(h_j W_K\right)^T}{\sqrt{d}} + b_{\phi(v_i, v_j)} + c_{i,j}$$
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Graphormer for batch size $B=16$, graph size $N=64$ nodes, node feature dim 128, $H=8$ attention heads, max SPD distance 50.
+
+1. **Centrality Encoding Input:**
+   - Raw Node Features $x$: `(16, 64, 128)`
+   - In-Degree IDs: `(16, 64)`, Out-Degree IDs: `(16, 64)`
+   - Add Degree Embeddings $\to h^{(0)}$: `(16, 64, 128)`
+2. **Spatial Bias Matrix Construction:**
+   - Pre-computed SPD Matrix: `(16, 64, 64)` (values $0 \dots 50$)
+   - Look up Spatial Bias Table $(51, H) \to B_{\text{spatial}}$: `(16, 8, 64, 64)`
+3. **Graphormer Multi-Head Self-Attention:**
+   - $Q K^T / \sqrt{d} \to$ `(16, 8, 64, 64)`
+   - Add Spatial Bias: $Q K^T / \sqrt{d} + B_{\text{spatial}} \to$ `(16, 8, 64, 64)`
+   - Softmax $\to$ Multiply $V \to$ Output: `(16, 64, 128)`.
+
+## 7. Mathematical Foundations
+
+### 1. The Graphormer Attention Formula
+Let $h_i, h_j \in \mathbb{R}^d$ be the hidden representations of nodes $v_i$ and $v_j$.
+The $(i, j)$-th element of the Graphormer self-attention matrix $A_{i,j}$ is:
+
+$$A_{i,j} = \frac{\left(h_i W_Q\right) \left(h_j W_K\right)^T}{\sqrt{d}} + b_{\phi(v_i, v_j)} + c_{i,j}$$
+
+where:
+- $\phi(v_i, v_j) = \text{SPD}(v_i, v_j)$ is the Shortest Path Distance between $v_i$ and $v_j$.
+- $b_{\phi(v_i, v_j)} \in \mathbb{R}^1$ is a learned scalar spatial encoding bias corresponding to distance $\phi(v_i, v_j)$.
+- $c_{i,j} = \frac{1}{N} \sum_{k=1}^N e_k w_k^E$ is the edge feature encoding along the shortest path.
+
+The attention output for node $i$ is:
+
+$$\text{Output}_i = \sum_{j=1}^N \text{Softmax}_j\left( A_{i,j} \right) \cdot \left( h_j W_V \right)$$
+
+### 2. Proof of Expressive Power Over Standard MPNNs
+Ying et al. proved that by setting spatial bias $b_{\phi(v_i, v_j)} = -\infty$ for $\text{SPD}(v_i, v_j) > 1$, Graphormer can represent any standard 1-hop Message-Passing GNN (GCN, GIN) as a strict special case. Thus, Graphormer is strictly more expressive than the 1-Weisfeiler-Leman (1-WL) test.
+
+## 8. Training Procedure
+- Compute Shortest Path Distance (SPD) matrices using Floyd-Warshall or Dijkstra algorithm during data pre-processing.
+- Forward pass through 12 to 24 stacked Graphormer layers.
+- Use a virtual `[V-Node]` (Graph Token) connected to all nodes for graph-level readout.
+- Minimize MAE loss using AdamW ($\text{lr} = 2 \times 10^{-4}, \text{weight\_decay} = 0.01$) with polynomial learning rate decay.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Graphormer Spatial-Biased Self-Attention Layer**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GraphormerAttention(nn.Module):
+    """ Graphormer Multi-Head Self-Attention with Spatial Distance Bias """
+    def __init__(self, embed_dim=128, num_heads=8, max_spd=50):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        
+        # Spatial Encoding Bias Table (max_spd + 1 distances, num_heads)
+        self.spatial_bias_table = nn.Embedding(max_spd + 1, num_heads)
+
+    def forward(self, x, spd_matrix):
+        """
+        x:          (B, N, embed_dim) Node features
+        spd_matrix: (B, N, N) Shortest path distance integer matrix (0..max_spd)
+        """
+        B, N, D = x.shape
+        
+        # 1. Linear Projections
+        q = self.q_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, N, d_k)
+        k = self.k_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, N, d_k)
+        v = self.v_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, N, d_k)
+        
+        # 2. Raw Attention Scores: (Q * K^T) / sqrt(d_k)
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5) # (B, H, N, N)
+        
+        # 3. Spatial Encoding Bias Lookup
+        spatial_bias = self.spatial_bias_table(spd_matrix) # (B, N, N, H)
+        spatial_bias = spatial_bias.permute(0, 3, 1, 2)     # (B, H, N, N)
+        
+        # 4. Add Spatial Bias to Attention Scores
+        total_attn = attn_scores + spatial_bias
+        attn_weights = F.softmax(total_attn, dim=-1) # (B, H, N, N)
+        
+        # 5. Multiply Values
+        out = torch.matmul(attn_weights, v) # (B, H, N, d_k)
+        out = out.transpose(1, 2).contiguous().view(B, N, D)
+        return self.out_proj(out)
+
+if __name__ == "__main__":
+    B, N, D, H, max_spd = 16, 64, 128, 8, 50
+    graphormer_attn = GraphormerAttention(embed_dim=D, num_heads=H, max_spd=max_spd)
+    
+    x = torch.randn(B, N, D)
+    spd = torch.randint(0, max_spd + 1, (B, N, N))
+    
+    out = graphormer_attn(x, spd)
+    
+    print(f"Graphormer Attention Output Shape: {out.shape}")
+    assert out.shape == (B, N, D)
+    print("Graphormer verification successful!")
+```
+
+## 10. Strengths
+- **State-of-the-Art Graph Benchmark Winner:** Won 1st place in OGB-LSC PCQM4M-LVD (3.8M molecules).
+- **Proved Strictly More Expressive Than 1-WL:** Proved that spatial-biased self-attention subsumes all MPNNs as special cases.
+- **Shortest Path Distance Awareness:** Explicitly informs every node pair of their exact graph spatial distance.
+
+## 11. Weaknesses
+- **Shortest Path Matrix Pre-Processing Overhead:** Computing all-pairs shortest path matrices (Floyd-Warshall $O(N^3)$) adds data pre-processing latency.
+
+## 12. Research Evolution
+Graphormer set the benchmark in graph Transformers, leading directly to **GraphGPS**, **EGT**, and **Graphormer-3D**.
+
+## 13. Interview Questions
+
+**Q1: What are the three core structural encoding innovations in Graphormer?**
+**A1:** (1) **Centrality Encoding:** Adds learned degree embeddings ($z^+ + z^-$) to node features; (2) **Spatial Encoding:** Adds a learned scalar bias $b_{\phi(v_i, v_j)}$ to the self-attention matrix based on Shortest Path Distance (SPD); (3) **Edge Encoding:** Incorporates shortest-path edge feature embeddings into the self-attention bias.
+
+**Q2: Write out the Graphormer self-attention formula.**
+**A2:** $A_{i,j} = \frac{(h_i W_Q)(h_j W_K)^T}{\sqrt{d}} + b_{\phi(v_i, v_j)} + c_{i,j}$.
+
+**Q3: How does Graphormer prove that it is strictly more expressive than 1-hop MPNNs (like GCN)?**
+**A3:** By setting spatial bias $b_{\phi(v_i, v_j)} = -\infty$ for $\text{SPD}(v_i, v_j) > 1$, Graphormer forces attention to attend exclusively to 1-hop neighbors, replicating standard GCN/GIN message passing as a strict special case.
+
+**Q4: How does Centrality Encoding help Graphormer?**
+**A4:** Standard self-attention measures feature similarity but cannot perceive node structural importance (degree centrality). Adding learned degree embeddings allows Graphormer to distinguish highly connected hub nodes from leaf nodes.
+
+**Q5: What dataset did Graphormer win 1st place on in 2021?**
+**A5:** The **Open Graph Benchmark Large-Scale Challenge (OGB-LSC)** PCQM4M-LVD dataset, containing 3.8 Million molecules for quantum chemical property prediction.
+
+## 14. Related Papers
+- **Graphormer Paper:** *Do Transformers Really Perform Bad for Graph Representation?* (Ying et al., NeurIPS 2021 - Oral)
+- **OGB-LSC Paper:** *OGB-LSC: A Large-Scale Challenge for Machine Learning on Graphs* (Hu et al., arXiv 2021)
+
+## 15. Further Reading
+- Microsoft Research Graphormer Official GitHub Repository

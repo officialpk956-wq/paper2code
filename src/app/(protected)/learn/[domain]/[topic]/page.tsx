@@ -1,13 +1,12 @@
-'use client';
-
-import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Clock, Key, ArrowRight } from 'lucide-react';
 import { CURRICULUM } from '@/data/content/curriculum';
 import { PREREQ_EDGES } from '@/data/content/prerequisites';
-import { dojoSlugFor, findArch } from '@/lib/crosslinks';
+import { dojoSlugFor, findArch, resolveLearningReference } from '@/lib/crosslinks';
 import { FadeIn } from '@/components/FadeIn';
 import AnimatedCard from '@/components/AnimatedCard';
+import { getMdxContent } from '@/lib/mdx';
+import MdxRenderer from '@/components/MdxRenderer';
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -22,13 +21,16 @@ const getDifficultyColor = (diff: string) => {
 const ALL_TOPICS = CURRICULUM.flatMap(d => d.topics.map(t => ({ ...t, domainSlug: d.slug })));
 const TOPIC_MAP = new Map(ALL_TOPICS.map(t => [t.title.trim().toLowerCase(), t]));
 
-export default function TopicPage() {
-  const params = useParams();
-  const domainSlug = params.domain as string;
-  const topicSlug = params.topic as string;
+export default async function TopicPage({
+  params,
+}: {
+  params: Promise<{ domain: string; topic: string }>;
+}) {
+  const { domain: domainSlug, topic: topicSlug } = await params;
 
   const domain = CURRICULUM.find(d => d.slug === domainSlug);
   const topic = domain?.topics.find(t => t.slug === topicSlug);
+  const mdxContent = getMdxContent(`curriculum/${domainSlug}`, topicSlug);
 
   if (!domain || !topic) {
     return (
@@ -44,12 +46,25 @@ export default function TopicPage() {
   const renderChip = (text: string, isPrereq: boolean) => {
     const trimmed = text.trim();
     const matched = TOPIC_MAP.get(trimmed.toLowerCase());
+    const reference = resolveLearningReference(trimmed);
     
     if (matched) {
       return (
         <Link 
           key={text} 
           href={`/learn/${matched.domainSlug}/${matched.slug}`} 
+          className="bg-[#111111] border border-[#262626] rounded-md px-3 py-1.5 text-[12px] text-white hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors flex items-center gap-1.5 cursor-pointer mr-2 mb-2 inline-flex"
+        >
+          {isPrereq ? <Key size={12} className="text-[#525252]" /> : <ArrowRight size={12} className="text-[#525252]" />}
+          {trimmed}
+        </Link>
+      );
+    }
+    if (reference) {
+      return (
+        <Link
+          key={text}
+          href={reference.href}
           className="bg-[#111111] border border-[#262626] rounded-md px-3 py-1.5 text-[12px] text-white hover:border-[#60A5FA]/50 hover:bg-[#60A5FA]/10 transition-colors flex items-center gap-1.5 cursor-pointer mr-2 mb-2 inline-flex"
         >
           {isPrereq ? <Key size={12} className="text-[#525252]" /> : <ArrowRight size={12} className="text-[#525252]" />}
@@ -211,6 +226,14 @@ export default function TopicPage() {
 
         {/* DYNAMIC SECTIONS - RENDERED FROM TS DATA */}
         <div className="space-y-12">
+          {mdxContent && (
+            <FadeIn>
+              <article className="curriculum-lesson">
+                <MdxRenderer source={mdxContent} />
+              </article>
+            </FadeIn>
+          )}
+
           {/* Motivation section */}
           {topic.why && (
             <FadeIn>

@@ -1,0 +1,211 @@
+# BERT4Rec
+
+## 1. Overview
+BERT4Rec (Bidirectional Encoder Representations from Transformers for Recommendation), introduced in 2019 by Fei Sun, Jun Liu, Xiaohua Wu, Changhua Pei, Linas Lin, Wenwu Ou, and Peng Jiang (Alibaba Group), introduced **Bidirectional Sequential Recommendation** using the **Cloze Masked Language Modeling Task**. Prior sequential recommendation models (like GRU4Rec or SASRec) were strictly unidirectional, assuming that user interaction sequences can only be processed from left to right ($v_1 \to v_2 \to \dots \to v_t$). Fei Sun et al. argued that real-world user behaviors are not strictly left-to-right deterministic processes: a user's choice of item at step $t$ is influenced by both preceding context ($v_{<t}$) AND subsequent context ($v_{>t}$) in historical interaction logs. By adapting Google's BERT architecture (Devlin et al., 2018) and replacing $15\%$ of items in user behavior sequences with a special $[MASK]$ token, BERT4Rec learns deep bidirectional context representations, setting new benchmark accuracy records for sequential recommendation.
+
+:::note
+BERT4Rec concept: "Replace unidirectional left-to-right processing with a Bidirectional Transformer trained via Cloze Masked Item Prediction ($15\%$ $[MASK]$ tokens). Predicts hidden item preferences from both past AND future context."
+:::
+
+## 2. Historical Context
+In 2019, SASRec demonstrated that self-attention outperformed RNNs for sequential recommendation. However, SASRec applied a causal mask ($S_{i,j} = -\infty$ for $j > i$), restricting attention to left-to-right past items.
+
+Fei Sun et al. recognized that during offline recommendation model training, complete user interaction logs are available. Restricting the model to unidirectional attention ignores valuable future context (e.g., seeing what a user bought at step $t+2$ provides massive signal about their intent at step $t$). By adapting BERT's Cloze task (Taylor, 1953), BERT4Rec allowed information to flow bidirectionally across user interaction sequences.
+
+## 3. Problem It Solves
+BERT4Rec resolves three core limitations of unidirectional sequential models:
+1. **Unidirectional Context Restriction:** Left-to-right models ignore subsequent context in historical interaction sequences. BERT4Rec encodes both past and future context simultaneously.
+2. **Suboptimal Representation Learning:** Cloze masked training forces the model to learn complex non-linear co-occurrence patterns across arbitrary positions in the user sequence.
+3. **Flexible Evaluation (Next-Item & Infill Recommendation):** Naturally supports predicting the next item (by appending $[MASK]$ to the sequence end) AND filling in missing historical interactions (infilling).
+
+## 4. Architecture Diagram Data
+Below is the Bidirectional Transformer architecture of BERT4Rec showing Cloze Masked Item Training and Next-Item Prediction.
+
+```text
+       CLOZE TASK TRAINING PIPELINE (Mask 15% Random Items)
+
+       Input Sequence: [ v_1,  v_2,  [MASK],  v_4,  v_5 ]
+                           |      |     |       |      |
+                           v      v     v       v      v
+       +===================================================================+
+       | EMBEDDING LAYER (Item Embeddings M + Positional P)                 |
+       | E = [ M_{v_1} + P_1,  ...  M_{[MASK]} + P_3,  ...  M_{v_5} + P_5 ]  |
+       +===================================================================+
+                                  |
+                                  v
+       +===================================================================+
+       | BIDIRECTIONAL TRANSFORMER ENCODER (L Layers)                      |
+       | - Full Self-Attention (NO Causal Masking!)                        |
+       | - Every item attends to ALL other items (Left AND Right)          |
+       +===================================================================+
+                                  |
+                                  v
+       [ Hidden Representation Vector for [MASK] Position: h_[MASK] ]
+                                  |
+                                  v
+       +===================================================================+
+       | SOFTMAX PREDICTION HEAD OVER CATALOG                              |
+       | P(v_3 | sequence) = Softmax( GELU( h_[MASK] W_1 + b_1 ) M^T + b_2 )|
+       +===================================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Input Sequence Processing & Cloze Masking:**
+- Given user interaction sequence $S = (v_1, v_2, \dots, v_n)$.
+- Randomly replace $15\%$ of items with special $[MASK]$ token ID (e.g., $v_3 \to [MASK]$).
+- During inference (next-item prediction), append $[MASK]$ to sequence end: $(v_1, v_2, \dots, v_n, [MASK])$.
+
+**2. Embedding Layer:**
+- Item Embedding $M \in \mathbb{R}^{(N_{\text{items}} + 2) \times d}$ (includes padding and $[MASK]$ token).
+- Positional Embedding $P \in \mathbb{R}^{N_{\text{max}} \times d}$.
+- Sum $E_i = M_{v_i} + P_i$.
+
+**3. Bidirectional Transformer Encoder:**
+- Stack of $L$ Transformer Encoder layers.
+- Uses **Full Bidirectional Self-Attention** (no causal mask applied). Information flows freely between all positions in the sequence.
+
+**4. Softmax Projection Head:**
+- Extracts output vector $h_m \in \mathbb{R}^d$ corresponding to $[MASK]$ position $m$.
+- Passes $h_m$ through a 2-layer feed-forward head with GELU activation and ties weights with item embedding table $M$:
+  $$P(v) = \text{Softmax}\left( \text{GELU}(h_m W_1 + b_1) M^T + b_2 \right)$$
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through BERT4Rec for mini-batch $B=128$, sequence length $L=50$, catalog size $N_{\text{items}}=10,000$, embedding dim $d=64$.
+
+1. **Input Sequence & Masking:**
+   - Sequence with $15\%$ Masks: `(128, 50)`
+   - Binary Mask Tensor indicating $[MASK]$ positions: `(128, 50)` (True for 15% masked positions)
+2. **Embedding Lookup:**
+   - Item + Positional Embeddings $\to E$: `(128, 50, 64)`
+3. **Bidirectional Transformer Encoder Pass:**
+   - Full Self-Attention over 50 tokens $\to$ Encoder Output $H$: `(128, 50, 64)`
+4. **Extract Masked Representations:**
+   - Gather representations at $[MASK]$ indices $\to h_{\text{mask}}$: `(K, 64)` (where $K$ is total masked tokens in batch).
+5. **Softmax Prediction Head:**
+   - $h_{\text{mask}} \cdot M^T \to$ Logits: `(K, 10002)` $\xrightarrow{\text{Cross-Entropy}}$ Loss.
+
+## 7. Mathematical Foundations
+
+### 1. Cloze Objective Formulation
+Let $S = (v_1, v_2, \dots, v_n)$ be the interaction sequence, and let $S'$ be the masked sequence where subset $M_m$ of items are replaced with $[MASK]$.
+BERT4Rec maximizes the log-likelihood of predicting the true original items $v_m^*$ at masked positions $m \in M_m$:
+
+$$\mathcal{L}_{\text{BERT4Rec}} = -\sum_{u \in \mathcal{U}} \sum_{m \in M_m} \log P\left( v_m = v_m^* \;\middle|\; S' \right)$$
+
+where probability distribution over the catalog is:
+
+$$P(v_m = i \mid S') = \frac{\exp\left( \text{GELU}(h_m W_1 + b_1) M_i^T + b_{2,i} \right)}{\sum_{j=1}^{N_{\text{items}}} \exp\left( \text{GELU}(h_m W_1 + b_1) M_j^T + b_{2,j} \right)}$$
+
+### 2. Why Weight Tying is Used
+BERT4Rec ties the weights of the output projection layer with the input item embedding matrix $M$. Weight tying dramatically reduces parameter count, prevents overfitting on long-tail items, and stabilizes training.
+
+## 8. Training Procedure
+- Construct sequences of user interactions $(v_1, v_2, \dots, v_L)$ padded to length $L$.
+- Randomly mask $15\%$ of sequence tokens ($80\%$ replaced by $[MASK]$, $10\%$ replaced by random item, $10\%$ unchanged).
+- Pass through Bidirectional Transformer Encoder.
+- Compute Cross-Entropy loss over all masked positions $m \in M_m$ using Adam optimizer ($\text{lr} = 10^{-4}$).
+- **Inference Strategy:** Append $[MASK]$ to current user history $(v_1 \dots v_t, [MASK])$ and extract output probabilities at the final position.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **BERT4Rec Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class BERT4Rec(nn.Module):
+    """ BERT4Rec: Bidirectional Sequential Recommendation """
+    def __init__(self, num_items, max_len=50, embed_dim=64, num_heads=2, num_blocks=2, dropout=0.2):
+        super().__init__()
+        self.num_items = num_items # ID 0: Padding, ID num_items+1: [MASK]
+        self.mask_idx = num_items + 1
+        self.max_len = max_len
+        self.embed_dim = embed_dim
+        
+        # Item & Positional Embeddings
+        self.item_embedding = nn.Embedding(num_items + 2, embed_dim, padding_idx=0)
+        self.pos_embedding = nn.Embedding(max_len, embed_dim)
+        self.emb_dropout = nn.Dropout(dropout)
+        
+        # Bidirectional Transformer Encoder (No Causal Mask!)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=4*embed_dim, dropout=dropout, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_blocks)
+        
+        # Output Prediction Head
+        self.out_dense = nn.Linear(embed_dim, embed_dim)
+        self.bias = nn.Parameter(torch.zeros(num_items + 2))
+
+    def forward(self, item_seq):
+        """ item_seq: (B, L) """
+        B, L = item_seq.shape
+        device = item_seq.device
+        
+        positions = torch.arange(L, device=device).unsqueeze(0).repeat(B, 1) # (B, L)
+        seq_embeds = self.item_embedding(item_seq) + self.pos_embedding(positions)
+        seq_embeds = self.emb_dropout(seq_embeds)
+        
+        # Padding Mask (True for padded positions)
+        pad_mask = (item_seq == 0)
+        
+        # Bidirectional Transformer Pass
+        feats = self.transformer(seq_embeds, src_key_padding_mask=pad_mask) # (B, L, d)
+        
+        # Output Projection Head (Weight Tying with item_embedding)
+        h = F.gelu(self.out_dense(feats)) # (B, L, d)
+        logits = torch.matmul(h, self.item_embedding.weight.t()) + self.bias # (B, L, num_items+2)
+        return logits
+
+if __name__ == "__main__":
+    B, L, num_items = 128, 50, 10000
+    model = BERT4Rec(num_items=num_items, max_len=L, embed_dim=64)
+    
+    seq = torch.randint(1, num_items, (B, L))
+    # Replace 15% of tokens with MASK ID (10001)
+    mask_indices = (torch.rand(B, L) < 0.15)
+    seq[mask_indices] = model.mask_idx
+    
+    logits = model(seq)
+    
+    print(f"BERT4Rec Output Logits Shape: {logits.shape}")
+    assert logits.shape == (B, L, num_items + 2)
+    print("BERT4Rec verification successful!")
+```
+
+## 10. Strengths
+- **Bidirectional Representation Learning:** Captures context from both left and right directions during training.
+- **Superior Representation Quality:** Cloze masked task forces deeper understanding of item co-occurrence dynamics.
+- **Versatile Inference:** Supports next-item prediction as well as historical sequence infilling.
+
+## 11. Weaknesses
+- **Inference Discrepancy:** During training, $[MASK]$ tokens appear randomly throughout sequences; during test-time next-item inference, $[MASK]$ appears exclusively at the final position.
+
+## 12. Research Evolution
+BERT4Rec established bidirectional sequential recommendation, leading directly to **S3-Rec** and **CL4SRec**.
+
+## 13. Interview Questions
+
+**Q1: What is the main structural difference between BERT4Rec and SASRec?**
+**A1:** SASRec is **Unidirectional** (uses causal masking $S_{i,j}=-\infty$ for $j>i$, attending only to past tokens). BERT4Rec is **Bidirectional** (uses full self-attention without causal masking, attending to both past and future tokens during Cloze training).
+
+**Q2: How does the Cloze Task (Masked Item Model) work in BERT4Rec?**
+**A2:** During training, $15\%$ of items in a user's interaction sequence are randomly replaced with a special $[MASK]$ token. The model is trained using Cross-Entropy loss to predict the true original item IDs at those masked positions using surrounding context.
+
+**Q3: How does BERT4Rec perform Next-Item Recommendation during test-time inference?**
+**A3:** During inference, a special $[MASK]$ token is appended to the end of the user's historical interaction sequence: $(v_1, v_2, \dots, v_t, [MASK])$. The model evaluates the predicted probability distribution over the catalog at that final $[MASK]$ position.
+
+**Q4: What is Weight Tying in BERT4Rec, and why is it useful?**
+**A4:** Weight Tying reuses the input item embedding matrix $M$ as the weight matrix for the output Softmax prediction layer ($\text{Logits} = h \cdot M^T$). It reduces parameter count by $50\%$, prevents long-tail overfitting, and improves embedding quality.
+
+**Q5: What is the "Inference Discrepancy" limitation in BERT4Rec?**
+**A5:** During training, $[MASK]$ tokens are distributed randomly throughout middle sequence positions (surrounded by both left and right context). During test-time next-item prediction, $[MASK]$ is always located at the very end of the sequence (with zero right context), creating a distribution mismatch.
+
+## 14. Related Papers
+- **BERT4Rec Paper:** *BERT4Rec: Sequential Recommendation with Bidirectional Encoder Representations from Transformer* (Sun et al., CIKM 2019)
+- **BERT Paper:** *BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding* (Devlin et al., NAACL 2019)
+
+## 15. Further Reading
+- Official Alibaba BERT4Rec TensorFlow Repository

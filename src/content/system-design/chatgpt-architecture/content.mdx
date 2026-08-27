@@ -1,0 +1,749 @@
+# ChatGPT Architecture
+
+ChatGPT is a compound system around language models: it manages conversations, selects models and tools, retrieves information, streams generation, applies safety controls, and learns from evaluation and user feedback.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Know what an LLM is and how transformers work at a conceptual level**, **Basic web architecture: HTTP, WebSockets**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. ChatGPT is a compound system around language models: it manages conversations, selects models and tools, retrieves information, streams generation, applies safety controls, and learns from evaluation and user feedback. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain what ChatGPT is architecturally: a fine-tuned GPT-4 with RLHF, served via an API and chat interface
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **conversation API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the three training stages: pretraining → SFT → RLHF
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **policy/router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what session management means for a stateless LLM: how context is passed back with each request
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **context builder** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe the streaming response architecture: tokens appearing one by one
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **model fleet** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: ChatGPT system overview: browser → OpenAI API → model serving cluster → GPT-4 → streaming response → browser renders tokens
+
+```text
+ChatGPT Architecture: ChatGPT system overview browser OpenAI API model serving cluster GPT 4 streaming response browser renders tokens
+
+[browser]
+        |
+        v
+  [OpenAI API]
+          |
+          v
+    [model serving cluster]
+            |
+            v
+      [GPT-4]
+              |
+              v
+        [streaming response]
+                |
+                v
+          [browser renders tokens]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **ChatGPT system overview: browser → OpenAI API → model serving cluster → GPT-4 → streaming response → browser renders tokens** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 2: RLHF training pipeline: GPT-4 base → SFT on human demonstrations → reward model from human comparisons → PPO optimization
+
+```text
+ChatGPT Architecture: RLHF training pipeline GPT 4 base SFT on human demonstrations reward model from human comparisons PPO optimization
+
+[GPT-4 base]
+        |
+        v
+  [SFT on human demonstrations]
+          |
+          v
+    [reward model from human comparisons]
+            |
+            v
+      [PPO optimization]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **RLHF training pipeline: GPT-4 base → SFT on human demonstrations → reward model from human comparisons → PPO optimization** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 3: Session context management: conversation history → token counting → context window management → truncation when approaching limit
+
+```text
+ChatGPT Architecture: Session context management conversation history token counting context window management truncation when approaching limit
+
+[conversation history]
+        |
+        v
+  [token counting]
+          |
+          v
+    [context window management]
+            |
+            v
+      [truncation when approaching limit]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Session context management: conversation history → token counting → context window management → truncation when approaching limit** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 4: Streaming token delivery: LLM generates token → Server-Sent Events (SSE) → browser receives partial response → renders incrementally
+
+```text
+ChatGPT Architecture: Streaming token delivery LLM generates token Server Sent Events SSE browser receives partial response renders incrementally
+
+[LLM generates token]
+        |
+        v
+  [Server-Sent Events (SSE)]
+          |
+          v
+    [browser receives partial response]
+            |
+            v
+      [renders incrementally]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Streaming token delivery: LLM generates token → Server-Sent Events (SSE) → browser receives partial response → renders incrementally** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+### Case Studies
+
+#### ChatGPT's launch (November 2022): the 1M users in 5 days moment — what the serving infrastructure had to handle, what actually broke (capacity limits, rate limiting)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**ChatGPT's launch (November 2022): the 1M users in 5 days moment — what the serving infrastructure had to handle, what actually broke (capacity limits, rate limiting)**—creates pressure at the **conversation API** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### OpenAI's API architecture: how the same underlying models serve both ChatGPT.com and the developer API with different SLOs
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI's API architecture: how the same underlying models serve both ChatGPT.com and the developer API with different SLOs**—creates pressure at the **policy/router** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### GPT-4V's multimodal serving: what changes when the input includes images — the vision encoder, increased compute per request, image upload handling
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**GPT-4V's multimodal serving: what changes when the input includes images — the vision encoder, increased compute per request, image upload handling**—creates pressure at the **context builder** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: What's the difference between GPT-4 (base) and ChatGPT?
+
+A base model predicts continuations from pretraining. ChatGPT is a product system around adapted models: instruction/alignment training, conversation state, routing, tools, safety controls, streaming, evaluation, and user interfaces. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How does ChatGPT remember what you said 10 messages ago?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: What happens architecturally when you type a message in ChatGPT and see the response appear word by word?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Why does ChatGPT have a context limit?
+
+Attention and KV memory grow with the retained token sequence, training only covers bounded lengths, and serving needs predictable resource limits. A context builder must budget system instructions, history, retrieved evidence, tool outputs, and room for generation. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **LLM Serving Intermediate**, **Basic safety/alignment concepts**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. ChatGPT is a compound system around language models: it manages conversations, selects models and tools, retrieves information, streams generation, applies safety controls, and learns from evaluation and user feedback. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design ChatGPT's serving infrastructure: latency budget, concurrency model, load balancing
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **conversation API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand OpenAI's model routing: GPT-4o vs GPT-4o-mini — the cost/quality routing decision
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **policy/router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design the safety layer: content policy enforcement before generation and after generation
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **context builder** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about the memory problem: why ChatGPT doesn't remember conversations across sessions
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **model fleet** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: OpenAI serving stack: API gateway → rate limiter → model router (GPT-4o vs mini based on complexity) → GPU cluster → output filter → response
+
+```text
+ChatGPT Architecture: OpenAI serving stack API gateway rate limiter model router GPT 4o vs mini based on complexity GPU cluster output filter response
+
+[API gateway]
+        |
+        v
+  [rate limiter]
+          |
+          v
+    [model router (GPT-4o vs mini based on complexity)]
+            |
+            v
+      [GPU cluster]
+              |
+              v
+        [output filter]
+                |
+                v
+          [response]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **OpenAI serving stack: API gateway → rate limiter → model router (GPT-4o vs mini based on complexity) → GPU cluster → output filter → response** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 2: Safety pipeline: user input → moderation classifier (before sending to model) → model generation → output moderation (after generation) → return to user
+
+```text
+ChatGPT Architecture: Safety pipeline user input moderation classifier before sending to model model generation output moderation after generation return to user
+
+[user input]
+        |
+        v
+  [moderation classifier (before sending to model)]
+          |
+          v
+    [model generation]
+            |
+            v
+      [output moderation (after generation)]
+              |
+              v
+        [return to user]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Safety pipeline: user input → moderation classifier (before sending to model) → model generation → output moderation (after generation) → return to user** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 3: Conversation memory architecture: in-context memory (within session) → memory feature (explicitly stored facts) → custom instructions (persistent user preferences)
+
+```text
+ChatGPT Architecture: Conversation memory architecture in context memory within session memory feature explicitly stored facts custom instructions persistent user preferences
+
+[in-context memory (within session)]
+        |
+        v
+  [memory feature (explicitly stored facts)]
+          |
+          v
+    [custom instructions (persistent user preferences)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Conversation memory architecture: in-context memory (within session) → memory feature (explicitly stored facts) → custom instructions (persistent user preferences)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 4: Model routing logic: request complexity classifier → latency SLO → cost threshold → route to GPT-4o-mini (simple) or GPT-4o (complex)
+
+```text
+ChatGPT Architecture: Model routing logic request complexity classifier latency SLO cost threshold route to GPT 4o mini simple or GPT 4o complex
+
+[request complexity classifier]
+        |
+        v
+  [latency SLO]
+          |
+          v
+    [cost threshold]
+            |
+            v
+      [route to GPT-4o-mini (simple) or GPT-4o (complex)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Model routing logic: request complexity classifier → latency SLO → cost threshold → route to GPT-4o-mini (simple) or GPT-4o (complex)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 5: Rate limiting: per-user token bucket (requests/minute + tokens/minute) → tier-based limits → queue for burst → 429 response when exceeded
+
+```text
+ChatGPT Architecture: Rate limiting per user token bucket requests minute tokens minute tier based limits queue for burst 429 response when exceeded
+
+[per-user token bucket (requests/minute + tokens/minute)]
+        |
+        v
+  [tier-based limits]
+          |
+          v
+    [queue for burst]
+            |
+            v
+      [429 response when exceeded]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Rate limiting: per-user token bucket (requests/minute + tokens/minute) → tier-based limits → queue for burst → 429 response when exceeded** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+### Case Studies
+
+#### OpenAI's outage retrospectives: the Dec 2022 capacity crisis, the March 2023 partial outage — what failed, how they communicated, what mitigations they put in place
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI's outage retrospectives: the Dec 2022 capacity crisis, the March 2023 partial outage — what failed, how they communicated, what mitigations they put in place**—creates pressure at the **conversation API** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### ChatGPT's memory feature (2024): the architecture of long-term memory — how they decide what to save, where it's stored, how it's retrieved and injected into context
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**ChatGPT's memory feature (2024): the architecture of long-term memory — how they decide what to save, where it's stored, how it's retrieved and injected into context**—creates pressure at the **policy/router** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### OpenAI's Custom Instructions: the persistent system prompt feature — how user preferences are stored and prepended to every conversation
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI's Custom Instructions: the persistent system prompt feature — how user preferences are stored and prepended to every conversation**—creates pressure at the **context builder** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: How does OpenAI decide whether to route your request to GPT-4o vs GPT-4o-mini?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Walk me through the safety stack in ChatGPT. How does OpenAI prevent the model from producing harmful content?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Design a conversation memory system for ChatGPT. What should be remembered? What should be forgotten?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How does ChatGPT handle a user who is consuming 1000× more API calls than average?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: What is the "alignment tax" — the tradeoff between making a model safer and making it more capable?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **LLM Serving Advanced**, **Multi-modal models: GPT-4V, Whisper, DALL-E**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. ChatGPT is a compound system around language models: it manages conversations, selects models and tools, retrieves information, streams generation, applies safety controls, and learns from evaluation and user feedback. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design ChatGPT's multi-modal serving: text + vision + audio + image generation in a unified interface
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **conversation API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the tool use serving architecture: code interpreter sandboxing, web search integration, function calling
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **policy/router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design a production safety evaluation system: red-teaming, automated safety benchmarks, canary testing
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **context builder** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Handle OpenAI's scale: 100M+ daily users, multi-model serving, cost optimization at $1B+ annual inference spend
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **model fleet** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: GPT-4o unified multi-modal serving: audio input → Whisper ASR → text → GPT-4o → text output → TTS output / code → sandbox → output
+
+```text
+ChatGPT Architecture: GPT 4o unified multi modal serving audio input Whisper ASR text GPT 4o text output TTS output code sandbox output
+
+[audio input]
+        |
+        v
+  [Whisper ASR]
+          |
+          v
+    [text]
+            |
+            v
+      [GPT-4o]
+              |
+              v
+        [text output]
+                |
+                v
+          [TTS output / code]
+                  |
+                  v
+            [sandbox]
+                    |
+                    v
+              [output]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **GPT-4o unified multi-modal serving: audio input → Whisper ASR → text → GPT-4o → text output → TTS output / code → sandbox → output** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 2: Code Interpreter architecture: generated Python code → Docker sandbox → execution with timeout → stdout/stderr/plots → returned to model context
+
+```text
+ChatGPT Architecture: Code Interpreter architecture generated Python code Docker sandbox execution with timeout stdout stderr plots returned to model context
+
+[generated Python code]
+        |
+        v
+  [Docker sandbox]
+          |
+          v
+    [execution with timeout]
+            |
+            v
+      [stdout/stderr/plots]
+              |
+              v
+        [returned to model context]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Code Interpreter architecture: generated Python code → Docker sandbox → execution with timeout → stdout/stderr/plots → returned to model context** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 3: Web search integration: model decides to search → tool call to search API → results returned as context → model answers with citations
+
+```text
+ChatGPT Architecture: Web search integration model decides to search tool call to search API results returned as context model answers with citations
+
+[model decides to search]
+        |
+        v
+  [tool call to search API]
+          |
+          v
+    [results returned as context]
+            |
+            v
+      [model answers with citations]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Web search integration: model decides to search → tool call to search API → results returned as context → model answers with citations** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 4: Production safety evaluation pipeline: new model checkpoint → automated safety benchmark (MMLU, TruthfulQA, safety evals) → red-team eval → canary deployment (1% traffic) → full deployment
+
+```text
+ChatGPT Architecture: Production safety evaluation pipeline new model checkpoint automated safety benchmark MMLU TruthfulQA safety evals red team eval canary deployment 1 traffic full deployment
+
+[new model checkpoint]
+        |
+        v
+  [automated safety benchmark (MMLU, TruthfulQA, safety evals)]
+          |
+          v
+    [red-team eval]
+            |
+            v
+      [canary deployment (1% traffic)]
+              |
+              v
+        [full deployment]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Production safety evaluation pipeline: new model checkpoint → automated safety benchmark (MMLU, TruthfulQA, safety evals) → red-team eval → canary deployment (1% traffic) → full deployment** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 5: Cost optimization: prefix caching (reuse KV cache for common system prompts) → batching similar requests → quantization for speed → spot GPU instances for batch jobs
+
+```text
+ChatGPT Architecture: Cost optimization prefix caching reuse KV cache for common system prompts batching similar requests quantization for speed spot GPU instances for batch jobs
+
+[prefix caching (reuse KV cache for common system prompts)]
+        |
+        v
+  [batching similar requests]
+          |
+          v
+    [quantization for speed]
+            |
+            v
+      [spot GPU instances for batch jobs]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cost optimization: prefix caching (reuse KV cache for common system prompts) → batching similar requests → quantization for speed → spot GPU instances for batch jobs** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+### Case Studies
+
+#### OpenAI's Code Interpreter safety: the sandboxing approach — why they chose Docker, what operations are blocked (network, filesystem persistence), how they handle the 10-minute timeout
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI's Code Interpreter safety: the sandboxing approach — why they chose Docker, what operations are blocked (network, filesystem persistence), how they handle the 10-minute timeout**—creates pressure at the **conversation API** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### ChatGPT's "memory" rollout: the A/B test results showing that users with memory enabled have higher retention — the privacy considerations that delayed rollout
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**ChatGPT's "memory" rollout: the A/B test results showing that users with memory enabled have higher retention — the privacy considerations that delayed rollout**—creates pressure at the **policy/router** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### OpenAI's red-teaming process: how they use both automated and human red-teaming to find model failure modes before deployment — the pipeline from finding to fixing
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI's red-teaming process: how they use both automated and human red-teaming to find model failure modes before deployment — the pipeline from finding to fixing**—creates pressure at the **context builder** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design ChatGPT's Code Interpreter. How do you sandbox user-generated code safely?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How does OpenAI test whether a new model is safer than the previous one?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk me through how ChatGPT's web search integration works architecturally.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: OpenAI's inference costs are $1B+ per year. What are the top 5 optimization levers they use?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: How do you A/B test a new model in ChatGPT without exposing users to a worse experience?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. For **ChatGPT Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: InstructGPT (2022), Constitutional AI (2022), DPO (2023), Measuring Massive Multitask Language Understanding (2021), Sparks of AGI (2023)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. ChatGPT is a compound system around language models: it manages conversations, selects models and tools, retrieves information, streams generation, applies safety controls, and learns from evaluation and user feedback. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze the alignment research frontier: Constitutional AI, RLHF vs DPO, scalable oversight, interpretability
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **conversation API** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the open problem of measuring AI capability vs alignment simultaneously
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **policy/router** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design a research contribution to safety evaluation methodology
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **context builder** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Analyze emergent capabilities: what abilities appear suddenly at scale and why
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through conversation API, policy/router, context builder, model fleet. The governing quantitative model is: Context must satisfy $T_{system}+T_{history}+T_{retrieval}+T_{tools}+T_{output}\le T_{max}$. The context builder is therefore a budget allocator: retaining one item means evicting, compressing, or declining another, and every choice affects quality and privacy. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is one stateless model endpoint with a fixed system prompt and no tools; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **model fleet** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In ChatGPT Architecture, that boundary interacts with quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (one stateless model endpoint with a fixed system prompt and no tools), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: DPO vs RLHF comparison: RLHF (reward model + PPO) vs DPO (direct optimization on preference pairs without explicit reward model) — training stability and data efficiency
+
+```text
+ChatGPT Architecture: DPO vs RLHF comparison RLHF reward model PPO vs DPO direct optimization on preference pairs without explicit reward model training stability and data efficiency
+
+  [producer / request]
+           |
+           v
+      [conversation API] ---- control, version, policy ----> [policy/router]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [context builder] ---- measured result + trace -----> [model fleet]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DPO vs RLHF comparison: RLHF (reward model + PPO) vs DPO (direct optimization on preference pairs without explicit reward model) — training stability and data efficiency** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 2: Scalable oversight: debate protocol — two AI models argue for/against claims, human judge (with limited time) evaluates — how this scales human oversight to superhuman tasks
+
+```text
+ChatGPT Architecture: Scalable oversight debate protocol two AI models argue for against claims human judge with limited time evaluates how this scales human oversight to superhuman tasks
+
+  [producer / request]
+           |
+           v
+      [policy/router] ---- control, version, policy ----> [context builder]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [model fleet] ---- measured result + trace -----> [tool sandbox]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Scalable oversight: debate protocol — two AI models argue for/against claims, human judge (with limited time) evaluates — how this scales human oversight to superhuman tasks** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 3: Interpretability pipeline: activation analysis → sparse autoencoders → feature visualization → circuit tracing — the mechanistic interpretability toolchain
+
+```text
+ChatGPT Architecture: Interpretability pipeline activation analysis sparse autoencoders feature visualization circuit tracing the mechanistic interpretability toolchain
+
+[activation analysis]
+        |
+        v
+  [sparse autoencoders]
+          |
+          v
+    [feature visualization]
+            |
+            v
+      [circuit tracing — the mechanistic interpretability toolchain]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Interpretability pipeline: activation analysis → sparse autoencoders → feature visualization → circuit tracing — the mechanistic interpretability toolchain** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+#### Diagram 4: Emergent capability measurement: per-task accuracy across model scales → emergent threshold detection → sharp phase transition identification
+
+```text
+ChatGPT Architecture: Emergent capability measurement per task accuracy across model scales emergent threshold detection sharp phase transition identification
+
+[per-task accuracy across model scales]
+        |
+        v
+  [emergent threshold detection]
+          |
+          v
+    [sharp phase transition identification]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Emergent capability measurement: per-task accuracy across model scales → emergent threshold detection → sharp phase transition identification** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost.
+
+### Case Studies
+
+#### DPO vs RLHF empirical comparison: where DPO wins (simpler, more stable) vs where RLHF wins (fine-grained reward modeling for complex tasks) — the Llama 3 instruction tuning report
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DPO vs RLHF empirical comparison: where DPO wins (simpler, more stable) vs where RLHF wins (fine-grained reward modeling for complex tasks) — the Llama 3 instruction tuning report**—creates pressure at the **conversation API** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Anthropic's interpretability research: golden gate Claude — how they found and steered a feature representing the "Golden Gate Bridge" in Claude's residual stream
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Anthropic's interpretability research: golden gate Claude — how they found and steered a feature representing the "Golden Gate Bridge" in Claude's residual stream**—creates pressure at the **policy/router** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### The emergent capabilities debate: Schaeffer et al. (2023) arguing that emergence is a measurement artifact vs Wei et al. defending the phenomenon — the implications for capability prediction
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**The emergent capabilities debate: Schaeffer et al. (2023) arguing that emergence is a measurement artifact vs Wei et al. defending the phenomenon — the implications for capability prediction**—creates pressure at the **context builder** layer of ChatGPT Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use one stateless model endpoint with a fixed system prompt and no tools. Instrument it for quality, TTFT, context limits, privacy, abuse resistance, tool safety, model availability, and inference cost, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable ChatGPT Architecture slice.** Implement one request path using conversation API, policy/router, context builder. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build one stateless model endpoint with a fixed system prompt and no tools, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable ChatGPT Architecture slice.** Implement one request path using conversation API, policy/router, context builder. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build one stateless model endpoint with a fixed system prompt and no tools, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable ChatGPT Architecture slice.** Implement one request path using conversation API, policy/router, context builder. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build one stateless model endpoint with a fixed system prompt and no tools, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable ChatGPT Architecture slice.** Implement one request path using conversation API, policy/router, context builder. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build one stateless model endpoint with a fixed system prompt and no tools, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [LLM Serving](/system-design/llm-serving)
+- [RAG Systems](/system-design/rag-systems)
+- [Agent Systems](/system-design/agent-systems)
+- [GPT-4](/architectures/gpt-4)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- OpenAI technical reports and system cards
+- InstructGPT and GPT-4 technical report
+- Primary literature on RAG, tool use, and LLM evaluation
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

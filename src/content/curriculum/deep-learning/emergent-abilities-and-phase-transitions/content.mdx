@@ -1,0 +1,94 @@
+# Emergent Abilities & Phase Transitions
+
+## 1. Overview
+
+If you plot most language model capabilities against model scale, performance improves smoothly — a bigger model is a bit better than a smaller one, following the smooth power-law curves of scaling laws. But a specific set of capabilities — multi-step arithmetic, certain kinds of instruction following, some forms of chain-of-thought reasoning — don't behave this way at all: performance stays near zero (essentially random guessing) across a wide range of model scales, and then, at some threshold scale, it jumps sharply upward over a comparatively narrow scale range, as if the model had suddenly "unlocked" the capability. This topic studies these emergent abilities: whether they're genuinely sudden phase transitions in what a model *can* do, or an illusion created by how researchers choose to measure performance.
+
+## 2. Prerequisites in Context
+
+**Scaling Laws** are the direct baseline this phenomenon is contrasted against — you need to understand the smooth, predictable power-law behavior scaling laws describe for loss (and many capabilities) before "emergent abilities" is a meaningful, surprising exception rather than just "capabilities improve with scale" restated. **Statistical Learning Theory** provides useful conceptual grounding for thinking rigorously about what it would even mean for a specific capability to have a genuine discontinuity in its scaling behavior, versus appearing discontinuous only under a particular (possibly poorly chosen) measurement.
+
+## 3. Core Concept
+
+The empirical phenomenon, documented across many benchmark tasks in models ranging from millions to hundreds of billions of parameters, is that certain tasks show **flat-then-sharp** performance curves against scale: near-chance accuracy for a wide range of smaller models, followed by a comparatively sudden jump to substantially above-chance performance once a model crosses some scale threshold — quite unlike the smooth, continuous improvement seen in loss and in most other benchmark tasks. A major, influential critique of this phenomenon (from Schaeffer, Miranda & Koyejo, 2023) argues that much of the apparent "emergence" is actually a measurement artifact: if you evaluate a task with a metric that requires getting an entire multi-step answer exactly right (like exact-match accuracy on a multi-digit arithmetic problem), then even smooth, continuous improvement in each individual step's per-token accuracy can produce a sharp, discontinuous-looking jump in the *overall* task success rate — because the probability of getting *every* step right simultaneously is a highly nonlinear (specifically, exponential) function of the per-step accuracy. Under this view, emergence isn't necessarily evidence of a genuine capability phase transition inside the model — it can be evidence that the chosen metric is a poor lens for observing genuinely smooth underlying improvement.
+
+## 4. Theoretical Foundations
+
+The metric-choice argument can be made precise: suppose a task requires $k$ independent sub-steps to all succeed for the overall answer to be marked correct (a common structure for tasks like multi-digit multiplication, where every digit of the answer must be right). If per-step accuracy improves smoothly and continuously with scale, say as $p(\text{scale}) = 1 - e^{-\alpha \cdot \text{scale}}$ (a smooth exponential approach to perfect accuracy), then the overall exact-match accuracy is $p(\text{scale})^k$ — and this quantity, plotted against scale, produces a sharp-looking S-curve even though the underlying per-step accuracy $p$ was perfectly smooth the entire time. The larger $k$ (the more sub-steps required for exact match), the sharper and more "emergent-looking" the overall curve appears, purely as a mathematical consequence of raising a smoothly improving probability to a fixed power — no discontinuity in the model's actual underlying computation is required to produce this pattern. This directly predicts (and the 2023 critique empirically confirms) that switching from a strict exact-match metric to a smoother, partial-credit metric (like token-level edit distance, or per-digit accuracy) on the *same* task and *same* set of models eliminates or dramatically softens the apparent emergence.
+
+## 5. Worked Example
+
+Take a 3-digit addition task. Suppose per-digit prediction accuracy improves smoothly with model scale: 70% for a small model, 85% for a medium model, 97% for a large model. Under exact-match scoring (all 3 digits correct AND correct carrying), overall accuracy is roughly $0.7^3 \approx 34\%$, $0.85^3 \approx 61\%$, and $0.97^3 \approx 91\%$ respectively — a jump from 34% to 91% that, if these three model sizes were the only ones tested, would look like a sharp, dramatic "emergent" capability jump. But if you instead measure per-digit accuracy directly (70%, 85%, 97%), the underlying trend is a smooth, continuous, and much less dramatic-looking improvement — exactly the same models, exactly the same underlying capability trend, but a completely different visual story depending purely on which metric was chosen to report the result.
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+
+def per_step_accuracy(scale, alpha=0.15):
+    """Smooth, continuous improvement in per-step accuracy with scale (log-scale x-axis)."""
+    return 1 - np.exp(-alpha * scale)
+
+def exact_match_accuracy(scale, k_steps, alpha=0.15):
+    """Overall accuracy requiring ALL k steps correct — this is where 'emergence' appears."""
+    return per_step_accuracy(scale, alpha) ** k_steps
+
+if __name__ == "__main__":
+    scales = np.array([1, 3, 5, 7, 9, 11])  # e.g. log10(model size) on some arbitrary scale
+    per_step = per_step_accuracy(scales)
+    print("Per-step accuracy (smooth, continuous improvement):")
+    for s, p in zip(scales, per_step):
+        print(f"  scale={s:2d}: {p:.3f}")
+
+    for k in [1, 3, 8]:
+        overall = exact_match_accuracy(scales, k)
+        print(f"\nExact-match accuracy requiring k={k} correct sub-steps:")
+        for s, o in zip(scales, overall):
+            print(f"  scale={s:2d}: {o:.3f}")
+    # Notice: as k grows, the SAME smooth per-step trend produces an increasingly
+    # sharp, "emergent-looking" jump in overall exact-match accuracy — a pure
+    # consequence of the metric, not a change in the underlying learning trend.
+```
+
+## 7. Real-World Applications
+
+This debate directly shapes how labs decide which capabilities to test for and report during pre-deployment evaluation of frontier models — if a lab is trying to predict whether a much larger model will suddenly acquire a dangerous capability, understanding whether "emergence" reflects a real discontinuity or a metric artifact changes what kind of extrapolation is trustworthy: smooth underlying trends (as revealed by better, partial-credit metrics) are far more predictable and extrapolatable than genuinely discontinuous ones. This also directly informs how benchmark designers choose evaluation metrics — the emergence debate is a strong practical argument for reporting smooth, granular metrics (like log-likelihood or per-token accuracy) alongside or instead of brittle exact-match metrics, specifically to get a more scale-predictable picture of a model's actual trajectory of improvement.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common mistake is treating the "it's just a metric artifact" explanation as having fully resolved the emergent abilities debate — while the metric-choice argument convincingly explains a substantial fraction of documented emergent-ability claims, it does not prove that *all* apparent emergence is metric artifact; some researchers argue certain capabilities (like specific forms of in-context learning or reasoning) show genuine qualitative shifts that persist even under smoother metrics, and this remains an active empirical question rather than a fully settled one. Another pitfall is assuming "emergence" (in either the genuine or metric-artifact sense) means a capability is unpredictable in principle — even genuinely sharp phase-transition-like behavior can often still be anticipated in advance by studying smoother proxy metrics (like the per-step accuracy in the worked example) that predict when the sharp transition in the harder metric will occur.
+
+## 9. How This Connects
+
+This topic requires **Scaling Laws** (as the smooth baseline behavior being contrasted) and **Statistical Learning Theory** (for rigorous conceptual grounding on what a genuine capability discontinuity would even mean). This topic has no further curriculum unlocks listed as its own downstream chain, but it directly informs how to interpret results across the entire **NLP** and **AI System Design** domains — particularly `reasoning-in-language-models` and any capability benchmark whose exact-match-style scoring should be examined skeptically for potential metric-driven "emergence" before concluding a model has undergone a genuine qualitative shift.
+
+## 10. Check Your Understanding
+
+**Q1: What is the empirical phenomenon that "emergent abilities" research set out to explain?**
+The observation that on certain benchmark tasks, model performance stays near chance level across a wide range of scales and then jumps sharply upward once models cross some threshold scale — a flat-then-sharp curve that contrasts with the smooth, continuous improvement seen for loss and most other benchmark tasks as scale increases.
+
+**Q2: What is the main argument of the "emergent abilities are a mirage" critique?**
+That much of the apparent sharpness in emergent-ability curves is an artifact of using metrics (like exact-match accuracy on multi-step tasks) that require an entire sequence of sub-steps to all be correct simultaneously — even smooth, continuous improvement in the accuracy of each individual sub-step produces a sharp-looking overall accuracy curve when you raise that per-step accuracy to the power of the number of required sub-steps.
+
+**Q3: Why does requiring more correct sub-steps (larger $k$) make the apparent emergence sharper, even with the exact same underlying per-step improvement trend?**
+Because overall success probability is per-step accuracy raised to the power $k$, and raising a smoothly increasing probability to a larger fixed power produces an increasingly steep S-curve — the mathematical operation of exponentiation itself concentrates the transition from "unlikely" to "likely" into a narrower range of the underlying variable, independent of any actual change in the model's learning trajectory.
+
+**Q4: What kind of evidence would distinguish a genuine capability phase transition from a metric artifact?**
+Re-evaluating the same task and same set of models using a smoother, partial-credit metric (like per-step or per-token accuracy, or log-likelihood, instead of strict exact-match) — if the apparent sharp jump disappears or substantially softens under the smoother metric, that's strong evidence the original "emergence" was a measurement artifact rather than a genuine discontinuity in the model's underlying capability.
+
+**Q5: Why does this debate matter practically for AI safety and capability forecasting, beyond being an academic curiosity?**
+Because if labs are trying to predict whether a future, larger model will suddenly acquire a dangerous capability, the answer depends heavily on whether the underlying capability trend is genuinely smooth (and therefore extrapolatable with reasonable confidence from smaller models) or genuinely discontinuous (in which case extrapolation from smaller models could badly underestimate or fail to predict a sudden, unanticipated capability jump) — getting this distinction right changes what kind of pre-deployment testing and forecasting can be trusted.
+
+## 11. Further Reading
+
+- Wei et al., "Emergent Abilities of Large Language Models" (2022) — the paper that popularized the phenomenon
+- Schaeffer, Miranda & Koyejo, "Are Emergent Abilities of Large Language Models a Mirage?" (2023) — the metric-artifact critique
+- Ganguli et al., "Predictability and Surprise in Large Generative Models" (2022)
+- Srivastava et al., "Beyond the Imitation Game: Quantifying and Extrapolating the Capabilities of Language Models" (BIG-bench, 2022)
+- See also: `scaling-laws` on this platform for the smooth baseline behavior this topic contrasts against
+
+## Related Platform Content
+
+- [DEEP LEARNING curriculum overview](/learn/deep-learning)
+- [Architecture application](/architectures/transformer)
+- [Browse all system designs](/system-design)

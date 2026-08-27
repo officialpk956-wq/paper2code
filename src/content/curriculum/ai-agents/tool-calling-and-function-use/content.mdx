@@ -1,0 +1,196 @@
+# Tool Calling and Function Use
+
+## 1. Overview
+
+An LLM generates text tokens; it cannot directly call functions, execute code, or change external state. **Tool calling** (or **function calling**) is the mechanism that bridges this gap: the LLM's output includes a structured instruction to call a specific function with specific arguments, an external system executes that function, and the result is fed back to the LLM. This is the foundation of agentic systems — it's how an LLM can "use tools" to solve real-world problems. Tool calling requires: (1) specifying available tools to the LLM (their names, arguments, descriptions); (2) instructing the LLM to output structured tool calls when appropriate; (3) parsing and executing those tool calls; (4) feeding results back to the LLM.
+
+## 2. Prerequisites in Context
+
+**Language Models and Prompting** is the foundation — you need to understand how to communicate with LLMs via prompts and understand how they generate text. **Agent Architecture and Reasoning Loops** is closely related — tool calling is how agents actually execute actions within loops. **Structured Output** from LLMs (JSON, function calls) is a direct prerequisite — understanding how to get models to output structured data rather than free text.
+
+## 3. Core Concept
+
+**OpenAI's function calling API** (now called "tool calling") popularized the pattern. Instead of instructing an LLM "use tools to solve this" (which the LLM might hallucinate about), the API lets you formally specify tools: each tool has a name, a description, and a schema defining its arguments. When prompted to solve a task, the LLM can output `{"type": "function", "function": {"name": "tool_name", "arguments": {"arg1": "value1"}}}`, signaling that it wants to call a tool. The system: (1) parses this output; (2) validates arguments against the schema; (3) calls the actual function; (4) captures the result; (5) feeds it back to the LLM in a structured format (e.g., `{"role": "tool", "content": "result", "tool_call_id": "call_123"}`). The LLM then continues reasoning with the result, deciding whether to call another tool, reason further, or output a final answer. **Structured outputs** are critical — free-form text from LLMs is often unparseable or ambiguous; structured outputs (via API-enforced schemas or special tokens) ensure tool calls are unambiguous and correctly formatted.
+
+## 4. Theoretical Foundations
+
+Tool calling is an instance of **grounding** — connecting abstract LLM reasoning to concrete external actions. From a **symbolic AI** perspective, tool calling approximates logical inference: the LLM reasons symbolically (what tool should I call?), executes that symbol (calls the tool), observes the result (binding variables to ground truth), and continues reasoning. From an **information-theoretic** view, tool calling compresses communication: instead of the LLM generating a 1000-token description of how to solve a problem, it generates a 50-token tool call and the system executes it concretely, then the LLM receives ground-truth feedback. **Reliability** of tool calling depends on the quality of the tool specification (is the description clear? does the schema match usage?) and the quality of the LLM (better models call tools more reliably and with fewer hallucinations).
+
+## 5. Worked Example
+
+An LLM is given the task "What's the weather in San Francisco right now?" with access to a `get_weather(city: str) -> str` tool. Process: (1) **Prompt**: "You have access to: get_weather(city: str) returns current weather. What's the weather in San Francisco right now?"; (2) **LLM Output**: `{"type": "function", "function": {"name": "get_weather", "arguments": {"city": "San Francisco"}}}`; (3) **Execution**: System calls `get_weather("San Francisco")`, receives "Sunny, 72°F"; (4) **Feedback**: System returns to LLM: `{"role": "tool", "tool_call_id": "call_xyz", "content": "Sunny, 72°F"}`; (5) **LLM continues**: "The weather in San Francisco right now is sunny with a temperature of 72°F."
+
+## 6. Code / Implementation
+
+```python
+import json
+from typing import Any, Callable, Dict, List
+from dataclasses import dataclass
+
+@dataclass
+class ToolSchema:
+    """Schema for a callable tool."""
+    name: str
+    description: str
+    parameters: Dict[str, Any]  # JSON schema for function parameters
+
+class ToolCaller:
+    """Manages tool calling: definition, parsing, and execution."""
+    def __init__(self, llm):
+        self.llm = llm
+        self.tools: Dict[str, Callable] = {}
+        self.tool_schemas: List[ToolSchema] = []
+    
+    def register_tool(self, name: str, func: Callable, description: str, parameters: Dict):
+        """Register a tool with the system."""
+        self.tools[name] = func
+        self.tool_schemas.append(ToolSchema(
+            name=name,
+            description=description,
+            parameters=parameters
+        ))
+    
+    def build_tool_prompt(self) -> str:
+        """Generate a prompt section describing available tools."""
+        prompt = "You have access to the following tools:\n\n"
+        for schema in self.tool_schemas:
+            prompt += f"- **{schema.name}**: {schema.description}\n"
+            prompt += f"  Parameters: {json.dumps(schema.parameters)}\n\n"
+        prompt += "When you need to use a tool, respond with:\n"
+        prompt += '{"type": "function", "function": {"name": "<tool_name>", "arguments": {...}}}\n'
+        return prompt
+    
+    def parse_tool_call(self, llm_output: str) -> tuple[str, Dict]:
+        """Parse LLM output for tool calls."""
+        try:
+            data = json.loads(llm_output)
+            if data.get("type") == "function":
+                func_info = data["function"]
+                return func_info["name"], func_info["arguments"]
+        except json.JSONDecodeError:
+            pass
+        return None, None
+    
+    def execute_tool(self, tool_name: str, arguments: Dict) -> Any:
+        """Execute a tool call."""
+        if tool_name not in self.tools:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        
+        try:
+            result = self.tools[tool_name](**arguments)
+            return result
+        except TypeError as e:
+            raise ValueError(f"Invalid arguments for {tool_name}: {str(e)}")
+    
+    def run_agent_loop(self, query: str, max_iterations: int = 5) -> str:
+        """Run an agent loop with tool calling."""
+        messages = []
+        
+        # Initial system prompt with tool descriptions
+        system_prompt = "You are a helpful assistant. " + self.build_tool_prompt()
+        messages.append({"role": "system", "content": system_prompt})
+        
+        # Add user query
+        messages.append({"role": "user", "content": query})
+        
+        for iteration in range(max_iterations):
+            # Get LLM response
+            llm_response = self.llm.query(messages)
+            messages.append({"role": "assistant", "content": llm_response})
+            
+            # Try to parse tool call
+            tool_name, arguments = self.parse_tool_call(llm_response)
+            
+            if tool_name is None:
+                # No tool call, LLM generated a final answer
+                return llm_response
+            
+            # Execute tool
+            try:
+                result = self.execute_tool(tool_name, arguments)
+                messages.append({
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": str(result)
+                })
+            except Exception as e:
+                messages.append({
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": f"Error: {str(e)}"
+                })
+        
+        return "Maximum iterations reached without final answer."
+
+if __name__ == "__main__":
+    class MockLLM:
+        def query(self, messages):
+            # Simulate LLM that calls get_weather first, then answers
+            for msg in messages:
+                if "weather" in msg.get("content", "").lower():
+                    return '{"type": "function", "function": {"name": "get_weather", "arguments": {"city": "San Francisco"}}}'
+            return "I don't know how to help with that."
+    
+    def get_weather(city: str) -> str:
+        return f"Sunny, 72°F in {city}"
+    
+    caller = ToolCaller(llm=MockLLM())
+    caller.register_tool(
+        name="get_weather",
+        func=get_weather,
+        description="Get current weather for a city",
+        parameters={
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name"}
+            },
+            "required": ["city"]
+        }
+    )
+    
+    result = caller.run_agent_loop("What's the weather in San Francisco?")
+    print(f"Agent response: {result}")
+```
+
+## 7. Real-World Applications
+
+OpenAI's GPT-4 with function calling powers customer support automation, code execution, and agentic workflows. Anthropic's Claude supports tool use for document analysis, calculations, and multi-step reasoning. Zapier and integrations platforms use tool calling to enable LLMs to trigger workflows and automations. Code execution environments (GitHub Copilot, Replit Ghostwriter) use tool calling to execute code and observe results.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that tool calling is automatic — without proper tool specification and prompt engineering, LLMs often fail to call tools appropriately or hallucinate tool calls. Another pitfall is poor tool descriptions — if a tool's description is unclear or the schema doesn't match the function signature, the LLM will misuse it. A third pitfall is insufficient error handling — tools fail, return errors, or receive malformed arguments, and the system must gracefully recover (report error to LLM, let it retry with different arguments). A fourth pitfall is ignoring latency — if tools are slow (database queries, API calls), total latency compounds across multiple tool calls, making the agent loop slow.
+
+## 9. How This Connects
+
+This topic requires **Language Models and Prompting** and **Structured Output** as prerequisites. It connects to **Agent Architecture and Reasoning Loops** (tool calling is how agents act), **Planning and Search Strategies** (selecting which tools to call), **Multi-Agent Systems** (agents calling each other as tools), and applications to **Autonomous Agents**, **Chatbots**, **Task Automation**.
+
+## 10. Check Your Understanding
+
+**Q1: What is tool calling, and why is it necessary for agents?**
+Tool calling is a mechanism for LLMs to output structured instructions to call functions/tools, with external systems executing those calls and feeding results back. It's necessary because LLMs can only generate text; they can't directly modify external state or fetch real-time information.
+
+**Q2: What are the key components of a tool specification?**
+Name (unique identifier), description (what the tool does), and parameter schema (JSON schema defining arguments — name, type, required fields, descriptions).
+
+**Q3: What is the difference between a tool call and a hallucinated tool call?**
+A valid tool call calls an existing tool with valid arguments. A hallucinated tool call calls a non-existent tool or uses invalid arguments. LLMs can hallucinate, so robust systems parse output, validate schemas, and gracefully report errors to the LLM.
+
+**Q4: How should errors from tool execution be communicated back to the LLM?**
+Via a structured message with the tool call ID, indicating what went wrong. The LLM can then reason about retry strategies (different arguments, different tool, giving up).
+
+**Q5: Why is tool description quality important?**
+A clear, detailed description helps the LLM understand when and how to use the tool. Vague descriptions lead to misuse (calling the tool on irrelevant queries, providing wrong arguments).
+
+## 11. Further Reading
+
+- OpenAI, "Function Calling and Other API Updates" (2023)
+- Anthropic, "Tool Use in Claude" documentation
+- Brown et al., "Language Models as Zero-Shot Planners: Extracting Actionable Knowledge for Embodied Agents" (2022)
+- Parisi et al., "TALM: Tool Augmented Language Models" (2022)
+- See also: `agent-architecture-and-reasoning-loops` in this domain
+
+## Related Platform Content
+
+- [AI AGENTS curriculum overview](/learn/ai-agents)
+- [Production system](/system-design/agent-systems)
+- [Browse all system designs](/system-design)

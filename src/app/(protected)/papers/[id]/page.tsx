@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
@@ -6,9 +7,12 @@ import WorkspacePaperClient from './WorkspacePaperClient';
 import ArchDiagram from '@/components/arch/ArchDiagram';
 import { paperToArchSlug } from '@/components/arch/archFlows';
 import { Reveal } from '@/components/anim';
+import { PAPER_ROUTE_ALIASES } from '@/data/content/routeAliases';
 
 export default async function PaperWorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const canonicalId = PAPER_ROUTE_ALIASES[id];
+  if (canonicalId) redirect(`/papers/${canonicalId}`);
   
   const mdxContent = getMdxContent('papers', id);
 

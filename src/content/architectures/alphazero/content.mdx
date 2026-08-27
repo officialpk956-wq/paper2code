@@ -1,0 +1,241 @@
+# AlphaZero
+
+## 1. Overview
+AlphaZero, introduced in 2017 by David Silver, Thomas Hubert, Julian Schrittwieser, Ioannis Antonoglou, Matthew Lai, Arthur Guez, Marc Lanctot, Laurent Sifre, Dharshan Kumaran, Thore Graepel, Timothy Lillicrap, Karen Simonyan, and Demis Hassabis (Google DeepMind), achieved total mastery over chess, shogi, and Go using a **single, tabula rasa self-play algorithm with zero human domain knowledge**. While AlphaGo relied on human expert game datasets, hand-crafted feature engineering, and separate policy/value networks, AlphaZero started from completely random parameter initialization with knowledge of only basic game rules. AlphaZero introduced a **Single Unified ResNet Architecture** that outputs both policy probabilities $\mathbf{p}$ and scalar value $v$, paired with a streamlined Monte Carlo Tree Search (MCTS) algorithm that eliminated fast rollouts. Within 24 hours of self-play training, AlphaZero defeated world-champion programs Stockfish (Chess), Elmo (Shogi), and AlphaGo Lee (Go).
+
+:::note
+AlphaZero's core revolution: "Tabula rasa self-play from zero human data using a single ResNet policy+value network integrated with MCTS across Chess, Shogi, and Go."
+:::
+
+## 2. Historical Context
+For centuries, human chess knowledge was accumulated into opening books, endgame tables, and heuristic evaluations (e.g., piece values). Computer chess engines like Deep Blue and Stockfish relied on millions of lines of hand-crafted evaluation code and massive alpha-beta search trees.
+
+Even AlphaGo (2016) relied heavily on human expert datasets (30M moves) and domain-specific features.
+
+AlphaZero proved that human domain knowledge is not only unnecessary, but can actually constrain an AI's potential. By learning exclusively through self-play from random initialization, AlphaZero discovered novel strategic concepts, hyper-aggressive piece sacrifices, and position evaluations that fundamentally transformed human grandmaster chess theory.
+
+## 3. Problem It Solves
+AlphaZero resolves three fundamental engineering complexities of classical game-playing systems:
+1. **Dependence on Human Expert Datasets:** Eliminates human game datasets. Learns purely from tabula rasa self-play, avoiding human strategic biases and blind spots.
+2. **Game-Specific Heuristic Codebases:** Replaces domain-specific heuristics (e.g., chess material evaluation) with a universal algorithm applicable to any two-player zero-sum perfect-information game.
+3. **Complex Multi-Network Pipelines:** Replaces AlphaGo's 4 separate networks with a single unified ResNet model predicting policy vector $\mathbf{p}$ and value scalar $v$.
+
+## 4. Architecture Diagram Data
+Below is the mandatory 4-phase MCTS + Neural Network Interaction diagram of AlphaZero showing Selection, Expansion, Evaluation, and Backup.
+
+```text
+       ========================================================================
+       ALPHAZERO MCTS & NEURAL NETWORK INTERACTION LOOP (4 PHASES)
+       ========================================================================
+
+       [ Current Game State s_0 ]
+                    |
+                    v
+       +------------------------------------------------------------------+
+       | PHASE 1: SELECTION                                               |
+       | Traverse tree from root s_0 to leaf s_L by choosing actions      |
+       | maximizing UCB score:                                            |
+       | a_t = argmax_a [ Q(s,a) + U(s,a) ]                               |
+       | where U(s,a) = c_puct * P(s,a) * sqrt(sum_b N(s,b)) / (1 + N(s,a))|
+       +------------------------------------------------------------------+
+                                        |
+                                        v
+       +------------------------------------------------------------------+
+       | PHASE 2 & 3: EXPANSION & EVALUATION                              |
+       | Pass unvisited leaf state s_L into UNIFIED RESNET MODEL:         |
+       |                                                                  |
+       |           [ Leaf State s_L: (B, 119, 8, 8) ]                     |
+       |                            |                                     |
+       |                            v                                     |
+       |               +===========================+                      |
+       |               | Shared ResNet Trunk (20)  |                      |
+       |               +===========================+                      |
+       |                            |                                     |
+       |         +------------------+------------------+                  |
+       |         |                                     |                  |
+       |         v                                     v                  |
+       |  [ Policy Head ]                       [ Value Head ]            |
+       |  Output: Prior p = P(s_L, a)           Output: Value v = V(s_L)  |
+       |  (Move Probabilities)                  (Win/Loss Predictor)      |
+       |                                                                  |
+       | Expand leaf node s_L using prior probabilities p = P(s_L, a)     |
+       +------------------------------------------------------------------+
+                                        |
+                                        v
+       +------------------------------------------------------------------+
+       | PHASE 4: BACKUP (BACKPROPAGATION THROUGH TREE)                   |
+       | Update visit counts N(s,a) and mean Q-values for all traversed   |
+       | ancestor nodes along path from s_L back to root s_0:             |
+       | N(s, a) = N(s, a) + 1                                            |
+       | Q(s, a) = [ N(s, a) * Q(s, a) + v ] / (N(s, a) + 1)              |
+       +------------------------------------------------------------------+
+                                        |
+                                        v
+       [ Select Action a ~ pi(a|s_0) proportional to N(s_0, a)^(1/temp) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Input Board Representation (Chess Example):**
+- Input tensor $s \in \mathbb{R}^{119 \times 8 \times 8}$: 119 feature planes representing current piece positions (6 piece types $\times$ 2 players), 7 historical time steps, repetition counts, color, castling rights, and move count.
+
+**2. Shared ResNet Trunk:**
+- **Conv Input:** $3 \times 3$ Conv (256 filters, BatchNorm, ReLU).
+- **Residual Blocks:** 20 Residual Blocks (for Chess/Shogi) or 40 Residual Blocks (for Go). Each block contains two $3 \times 3$ Convolutions (256 filters, BatchNorm, ReLU) with identity skip connection.
+
+**3. Policy Head ($\mathbf{p}$):**
+- $1 \times 1$ Conv (2 filters, BatchNorm, ReLU) $\to$ Linear layer to 4,672 outputs (all possible legal chess moves) $\to$ Softmax over legal moves.
+
+**4. Value Head ($v$):**
+- $1 \times 1$ Conv (1 filter, BatchNorm, ReLU) $\to$ Linear layer (256 units, ReLU) $\to$ Linear layer to 1 scalar output $\to$ **Tanh activation** $v \in [-1, +1]$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through AlphaZero for batch size $B=4$, Chess input `(4, 119, 8, 8)`.
+
+1. **Board Input:** `(4, 119, 8, 8)`
+2. **Shared ResNet Trunk (20 ResBlocks):**
+   - Conv1 ($3 \times 3$, 256) $\to$ `(4, 256, 8, 8)`
+   - 20x ResBlocks $\to$ `(4, 256, 8, 8)`
+3. **Policy Head:**
+   - Conv1x1 (2 filters) $\to$ `(4, 2, 8, 8)` $\to$ Flatten: `(4, 128)` $\to$ FC(4672) $\to$ Softmax $\to \mathbf{p}$: `(4, 4672)`
+4. **Value Head:**
+   - Conv1x1 (1 filter) $\to$ `(4, 1, 8, 8)` $\to$ Flatten: `(4, 64)` $\to$ FC(256) $\to$ FC(1) $\to$ Tanh $\to v$: `(4, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Unified AlphaZero Loss Function
+AlphaZero trains the single ResNet $(\mathbf{p}, v) = f_\theta(s)$ by minimizing the joint loss:
+
+$$\mathcal{L}(\theta) = (z - v)^2 - \boldsymbol{\pi}^T \log \mathbf{p} + c \|\theta\|_2^2$$
+
+where:
+- $(z - v)^2$ is the MSE between predicted value $v$ and final game outcome $z \in \{-1, 0, +1\}$.
+- $-\boldsymbol{\pi}^T \log \mathbf{p}$ is Cross-Entropy loss matching predicted policy $\mathbf{p}$ to MCTS search visit probabilities $\boldsymbol{\pi}$.
+- $c \|\theta\|_2^2$ is L2 weight regularization ($c = 10^{-4}$).
+
+### 2. MCTS Action Selection & Temperature
+After conducting 800 MCTS simulations, the search policy vector $\boldsymbol{\pi}$ is formed from root node visit counts:
+
+$$\pi(a \mid s_0) = \frac{N(s_0, a)^{1/\tau}}{\sum_b N(s_0, b)^{1/\tau}}$$
+
+where $\tau$ is the temperature parameter ($\tau=1.0$ for exploration during initial 30 moves, $\tau \to 0$ for greedy play).
+
+## 8. Training Procedure
+- **Self-Play Generation:** 5,000 TPU v2 workers continuously generate self-play games using 800 MCTS simulations per move.
+- **Neural Network Training:** 64 TPU v2 workers continuously sample mini-batches of 4,096 positions from the self-play buffer to optimize $\mathcal{L}(\theta)$ using SGD with momentum (0.9), learning rate $0.2 \to 0.002$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **AlphaZero Unified Policy + Value ResNet Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ResBlock(nn.Module):
+    def __init__(self, channels=256):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x):
+        residual = x
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        return F.relu(out + residual)
+
+class AlphaZeroResNet(nn.Module):
+    """ AlphaZero Unified ResNet Policy + Value Network """
+    def __init__(self, in_channels=119, num_actions=4672, num_res_blocks=20, num_channels=256):
+        super().__init__()
+        # Input Layer
+        self.conv_in = nn.Sequential(
+            nn.Conv2d(in_channels, num_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(num_channels),
+            nn.ReLU()
+        )
+        # Shared Residual Trunk
+        self.res_blocks = nn.ModuleList([ResBlock(num_channels) for _ in range(num_res_blocks)])
+        
+        # Policy Head
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(num_channels, 2, kernel_size=1, bias=False),
+            nn.BatchNorm2d(2),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(2 * 8 * 8, num_actions)
+        )
+        
+        # Value Head
+        self.value_head = nn.Sequential(
+            nn.Conv2d(num_channels, 1, kernel_size=1, bias=False),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(1 * 8 * 8, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        h = self.conv_in(x)
+        for block in self.res_blocks:
+            h = block(h)
+            
+        policy_logits = self.policy_head(h)
+        value = self.value_head(h)
+        return policy_logits, value
+
+if __name__ == "__main__":
+    B, C, H, W = 4, 119, 8, 8
+    num_actions = 4672 # All legal move combinations in Chess
+    
+    az_net = AlphaZeroResNet(in_channels=C, num_actions=num_actions, num_res_blocks=4)
+    board = torch.randn(B, C, H, W)
+    
+    policy_logits, value = az_net(board)
+    
+    print(f"Policy Logits Shape: {policy_logits.shape}")
+    print(f"Value Output Shape:  {value.shape}")
+    assert policy_logits.shape == (B, num_actions)
+    assert value.shape == (B, 1)
+    print("AlphaZero network verification successful!")
+```
+
+## 10. Strengths
+- **Zero Human Bias (Tabula Rasa):** Learns completely from self-play, discovering original strategies superior to human knowledge.
+- **Universal Multi-Game Mastery:** Single algorithm mastered Chess, Shogi, and Go without game-specific modifications.
+- **Unified Architecture:** Combines policy and value networks into a single elegant ResNet.
+
+## 11. Weaknesses
+- **Requires Known Perfect Rules:** Cannot be applied directly to environments with unknown dynamics (solved by MuZero).
+
+## 12. Research Evolution
+AlphaZero revolutionized game AI, directly leading to **MuZero**, **AlphaFold**, and **Leela Chess Zero (LCZero)**.
+
+## 13. Interview Questions
+
+**Q1: What are the 4 phases of AlphaZero's MCTS search?**
+**A1:** (1) **Selection:** Traverse tree maximizing UCB score $Q(s, a) + U(s, a)$ until reaching a leaf node $s_L$; (2) **Expansion:** Expand leaf $s_L$ using prior move probabilities $\mathbf{p} = P(s_L, a)$; (3) **Evaluation:** Evaluate leaf $s_L$ using the Value Head $v = V(s_L)$; (4) **Backup:** Update visit counts $N(s, a)$ and mean $Q(s, a)$ values back up to root $s_0$.
+
+**Q2: How does AlphaZero differ from AlphaGo?**
+**A2:** (1) AlphaGo used 30M human expert moves; AlphaZero learned from zero human data (tabula rasa); (2) AlphaGo used 4 separate policy/value networks and fast rollout policies; AlphaZero used a single unified ResNet for policy and value, eliminating fast rollouts.
+
+**Q3: Write out the AlphaZero joint loss function.**
+**A3:** $\mathcal{L}(\theta) = (z - v)^2 - \boldsymbol{\pi}^T \log \mathbf{p} + c \|\theta\|_2^2$.
+
+**Q4: How are MCTS visit counts $N(s_0, a)$ used during self-play training?**
+**A4:** Visit counts are normalized into probability distribution $\pi(a \mid s_0) \propto N(s_0, a)^{1/\tau}$, which serves as the cross-entropy target for the Policy Head $\mathbf{p}$.
+
+**Q5: Why did AlphaZero eliminate fast rollouts from MCTS?**
+**A5:** Fast rollout policies introduce biased noise and slow down tree search. Evaluating leaf nodes directly with a well-trained Value Network $v = V(s_L)$ proved more accurate and computationally efficient.
+
+## 14. Related Papers
+- **AlphaZero Paper:** *A general reinforcement learning algorithm that masters chess, shogi, and Go through self-play* (Silver et al., Science 2018)
+- **AlphaGo Zero Paper:** *Mastering the game of Go without human knowledge* (Silver et al., Nature 2017)
+
+## 15. Further Reading
+- DeepMind AlphaZero Open-Source Science Paper

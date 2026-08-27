@@ -1,0 +1,223 @@
+# StyleGAN
+
+## 1. Overview
+StyleGAN, introduced in 2018 by Tero Karras, Samuli Laine, and Timo Aila (NVIDIA), completely transformed generative modeling by introducing a **Style-Based Generator Architecture** that provides unprecedented control over image attributes at different semantic scales (coarse pose, fine facial features, hair texture, color scheme). Traditional GAN generators fed latent noise $z$ directly into the input layer of a convolutional network. StyleGAN completely abandoned feeding noise $z$ into the input layer. Instead, it introduced a **Two-Network Structure**:
+1. **Mapping Network ($f$):** An 8-layer MLP mapping noise $z \in \mathcal{Z}$ to an intermediate disentangled style space $w \in \mathcal{W}$.
+2. **Synthesis Network ($g$):** Starts from a **learned constant $4 \times 4 \times 512$ tensor** and injects style vector $w$ at every convolutional layer via **Adaptive Instance Normalization (AdaIN)**, alongside stochastic per-pixel Gaussian noise maps for fine details (hair strands, skin pores).
+
+:::note
+StyleGAN's architectural paradigm: "Discard input noise $z$ in the synthesis network. Start from a learned constant tensor, map $z \to w$ via an 8-layer MLP, inject $w$ at every layer via AdaIN styles, and add per-pixel noise maps for stochastic variation."
+:::
+
+## 2. Historical Context
+Prior to StyleGAN, GAN generators treated latent space $\mathcal{Z}$ as a black box. Input noise $z \sim \mathcal{N}(0, \mathbf{I})$ was fed into the first layer, forcing the network to perform two tasks simultaneously: warp the hyperspherical Gaussian noise distribution to match the dataset's complex feature distribution, and synthesize pixels. This caused severe **entanglement** in $\mathcal{Z}$ (e.g., attempting to change hair color accidentally changed facial age or gender).
+
+Tero Karras et al. drew inspiration from neural style transfer. They realized that decoupling style control from spatial resolution allows intermediate latent space $\mathcal{W}$ to become highly disentangled. StyleGAN enabled intuitive feature mixing, semantic latent space manipulation, and unmatched photorealism on the FFHQ (Flickr-Faces-HQ) dataset at $1024 \times 1024$.
+
+## 3. Problem It Solves
+StyleGAN addresses three major limitations of traditional GAN generators:
+1. **Latent Space Entanglement:** Standard Gaussian space $\mathcal{Z}$ forces features to be entangled. Mapping $z \to w$ via an 8-layer MLP creates a disentangled intermediate space $\mathcal{W}$ where individual vector dimensions correspond to isolated semantic concepts (e.g., eyeglasses, smile, pose).
+2. **Lack of Multi-Scale Attribute Control:** Traditional generators control features globally. StyleGAN's AdaIN layers inject style at specific spatial resolutions: coarse layers ($4^2 \dots 8^2$) control pose/face shape, medium layers ($16^2 \dots 32^2$) control facial features/eyes, fine layers ($64^2 \dots 1024^2$) control color schemes/micro-textures.
+3. **Deterministic Texture Rigidness:** Adding explicit per-pixel Gaussian noise maps ($B_i$) allows stochastic variations (e.g., exact placement of individual hair strands or freckles) without altering underlying facial geometry.
+
+## 4. Architecture Diagram Data
+Below is the mandatory two-network architecture of StyleGAN showing the Mapping Network ($z \to w$) and the Synthesis Network (Constant Input + AdaIN Style Injections + Per-Pixel Noise).
+
+```text
+       MAPPING NETWORK (8-Layer MLP)
+       [ Latent Noise z ~ N(0, I): (B, 512) ]
+                         |
+                         v
+       +===================================+
+       | 8-Layer FC Mapping Network f      |
+       | (Linear -> LeakyReLU 0.2)         |
+       +===================================+
+                         |
+                         v
+       [ Intermediate Style Vector w in W: (B, 512) ]
+                         |
+                         +-----------------------+-----------------------+
+                         |                       |                       |
+                         v                       v                       v
+                      (Style w)               (Style w)               (Style w)
+
+       ========================================================================
+
+       SYNTHESIS NETWORK (g)
+
+       [ Learned Constant Input: (B, 512, 4, 4) ]
+                         |
+                         v
+       +===================================+ <--- [ Noise Map B_0 ]
+       | Conv 3x3 (512 channels)           |
+       +===================================+
+                         |
+                         v
+       +===================================+ <--- [ Style w via AdaIN ]
+       | AdaIN Layer                       |      Affine Transform: (y_s, y_b)
+       +===================================+
+                         |
+                         v
+       +===================================+ <--- [ Noise Map B_1 ]
+       | Conv 3x3 (512 channels)           |
+       +===================================+
+                         |
+                         v
+       +===================================+ <--- [ Style w via AdaIN ]
+       | AdaIN Layer                       |
+       +===================================+
+                         |
+                         v (Upsample 2x to 8x8)
+                        ... (Repeated through 8x8, 16x16, ..., 1024x1024)
+                         |
+                         v
+       +===================================+
+       | Final ToRGB Conv -> Image         |
+       +===================================+
+                         |
+                         v
+       [ Generated Image: (B, 3, 1024, 1024) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Mapping Network ($f$):**
+- Takes noise vector $z \in \mathbb{R}^{512}$ and passes it through an 8-layer fully connected MLP (512 units per layer, LeakyReLU $\alpha=0.2$).
+- Outputs intermediate disentangled style vector $w \in \mathbb{R}^{512}$.
+
+**2. Synthesis Network ($g$):**
+- Starts with a **fixed, learned constant tensor** of shape $(1, 512, 4, 4)$ initialized to 1s.
+- Contains 18 layers (2 layers per resolution from $4 \times 4$ to $1024 \times 1024$).
+- At each layer:
+  1. Add scaled per-pixel Gaussian noise map $B_i \in \mathbb{R}^{1 \times H \times W}$ multiplied by learned channel weights.
+  2. Apply **AdaIN**: style vector $w$ is projected via a linear layer to scale $y_{s,i}$ and bias $y_{b,i}$ scalars per channel.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through StyleGAN for batch size $B=2$, resolution $64 \times 64 \times 3$.
+
+1. **Mapping Network:**
+   - Input $z$: `(2, 512)` $\xrightarrow{\text{8-Layer MLP}} w$: `(2, 512)`
+2. **Synthesis Network Execution:**
+   - Constant Input: `(2, 512, 4, 4)`
+   - Layer 1 ($4 \times 4$): Add Noise `(2, 512, 4, 4)` $\to$ AdaIN($w$) $\to$ `(2, 512, 4, 4)`
+   - Layer 2 ($8 \times 8$): Upsample $\to$ Conv $3 \times 3 \to$ Add Noise $\to$ AdaIN($w$) $\to$ `(2, 512, 8, 8)`
+   - Layer 3 ($16 \times 16$): Upsample $\to$ Conv $3 \times 3 \to$ Add Noise $\to$ AdaIN($w$) $\to$ `(2, 256, 16, 16)`
+   - Layer 4 ($32 \times 32$): Upsample $\to$ Conv $3 \times 3 \to$ Add Noise $\to$ AdaIN($w$) $\to$ `(2, 128, 32, 32)`
+   - Layer 5 ($64 \times 64$): Upsample $\to$ Conv $3 \times 3 \to$ Add Noise $\to$ AdaIN($w$) $\to$ `(2, 64, 64, 64)`
+   - ToRGB Conv $1 \times 1 \to$ Output RGB Image: `(2, 3, 64, 64)`.
+
+## 7. Mathematical Foundations
+
+### 1. Adaptive Instance Normalization (AdaIN)
+Feature map $x_i$ at channel $i$ is normalized to zero mean and unit variance, then scaled and shifted using style parameters $(y_{s,i}, y_{b,i})$ generated from $w$:
+
+$$\text{AdaIN}(x_i, y) = y_{s,i} \cdot \left( \frac{x_i - \mu(x_i)}{\sigma(x_i)} \right) + y_{b,i}$$
+
+where $\mu(x_i)$ and $\sigma(x_i)$ are spatial scalar mean and standard deviation computed independently per channel per sample.
+
+```text
+  AdaIN Step-by-Step:
+  Feature Map x_i ---> InstanceNorm(x_i) ---> Scale by y_{s,i}(w) ---> Shift by y_{b,i}(w)
+```
+
+### 2. Per-Pixel Stochastic Noise Injection
+Uncorrelated per-pixel Gaussian noise map $N \sim \mathcal{N}(0, \mathbf{I})$ of shape $(1, 1, H, W)$ is broadcast and multiplied by learned per-channel scaling factors $\mu_i$:
+
+$$x_i' = x_i + \mu_i \cdot N$$
+
+This modulates high-frequency stochastic details without perturbing global feature geometry.
+
+## 8. Training Procedure
+- **Style Mixing Regularization:** During training, two latent vectors $z_1, z_2$ are mapped to $w_1, w_2$. A random crossover point is selected, feeding $w_1$ to lower layers and $w_2$ to higher layers, forcing adjacent layers to learn independent styles.
+- **Loss Objective:** WGAN-GP or Non-Saturating GAN loss with $R_1$ regularization.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **StyleGAN's AdaIN Layer and Mapping Network**.
+
+```python
+import torch
+import torch.nn as nn
+
+class MappingNetwork(nn.Module):
+    """ 8-Layer FC Mapping Network mapping z -> w """
+    def __init__(self, z_dim=512, w_dim=512, num_layers=8):
+        super().__init__()
+        layers = []
+        for i in range(num_layers):
+            in_d = z_dim if i == 0 else w_dim
+            layers.append(nn.Linear(in_d, w_dim))
+            layers.append(nn.LeakyReLU(0.2))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, z):
+        return self.net(z)
+
+class AdaIN(nn.Module):
+    """ Adaptive Instance Normalization Block """
+    def __init__(self, in_channels, w_dim=512):
+        super().__init__()
+        self.norm = nn.InstanceNorm2d(in_channels, affine=False)
+        self.style_proj = nn.Linear(w_dim, in_channels * 2)
+
+    def forward(self, x, w):
+        # x: (B, C, H, W), w: (B, w_dim)
+        normalized = self.norm(x)
+        
+        # Project w to scale (ys) and bias (yb)
+        style = self.style_proj(w).unsqueeze(-1).unsqueeze(-1) # (B, 2*C, 1, 1)
+        ys, yb = style.chunk(2, dim=1)                         # (B, C, 1, 1) each
+        
+        return ys * normalized + yb
+
+if __name__ == "__main__":
+    B, C, H, W = 2, 512, 16, 16
+    mapping = MappingNetwork(z_dim=512, w_dim=512)
+    adain = AdaIN(in_channels=C, w_dim=512)
+    
+    z = torch.randn(B, 512)
+    x = torch.randn(B, C, H, W)
+    
+    w = mapping(z)
+    out = adain(x, w)
+    
+    print(f"Intermediate Style Vector w Shape: {w.shape}")
+    print(f"AdaIN Output Shape:               {out.shape}")
+    assert w.shape == (B, 512)
+    assert out.shape == (B, C, H, W)
+    print("StyleGAN Mapping and AdaIN verification successful!")
+```
+
+## 10. Strengths
+- **Disentangled Latent Space ($\mathcal{W}$):** Enables independent control of specific visual attributes (pose, age, hair, expression).
+- **Multi-Scale Style Control:** AdaIN injections regulate features at specific resolution scales.
+- **Stochastic Variation Control:** Explicit per-pixel noise maps generate natural high-frequency variations (hair strands, freckles).
+
+## 11. Weaknesses
+- **Water Droplet Artifacts:** AdaIN normalization creates characteristic "blob" or "water droplet" artifacts in feature maps (fixed in StyleGAN2).
+
+## 12. Research Evolution
+StyleGAN established style-based image synthesis. It directly led to **StyleGAN2**, **StyleGAN2-ADA**, and **StyleGAN3**.
+
+## 13. Interview Questions
+
+**Q1: Why does StyleGAN discard feeding input noise $z$ into the first layer of the synthesis network?**
+**A1:** Feeding $z$ into the first layer forces the network to warp hyperspherical Gaussian noise to match dataset feature distributions while simultaneously synthesizing pixels, leading to entangled representations. StyleGAN starts from a learned constant tensor and injects style vector $w$ via AdaIN at every layer.
+
+**Q2: What is the difference between latent space $\mathcal{Z}$ and intermediate space $\mathcal{W}$?**
+**A2:** $\mathcal{Z}$ is the standard Gaussian noise space $\mathcal{N}(0, \mathbf{I})$, which is inherently entangled. $\mathcal{W}$ is the intermediate space produced by passing $z$ through an 8-layer MLP. $\mathcal{W}$ does not need to follow a Gaussian distribution, making it unconstrained and highly disentangled.
+
+**Q3: How does StyleGAN control features at different resolution scales?**
+**A3:** By controlling which layers receive style vector $w$: Coarse layers ($4^2 \dots 8^2$) control pose and face shape; Medium layers ($16^2 \dots 32^2$) control eyes and expression; Fine layers ($64^2 \dots 1024^2$) control color schemes and micro-textures.
+
+**Q4: Write out the AdaIN equation.**
+**A4:** $\text{AdaIN}(x_i, y) = y_{s,i} \cdot \left( \frac{x_i - \mu(x_i)}{\sigma(x_i)} \right) + y_{b,i}$.
+
+**Q5: What is Style Mixing Regularization in StyleGAN?**
+**A5:** During training, two latent vectors $z_1, z_2$ are mapped to $w_1, w_2$, and fed into different layers of the synthesis network. This prevents adjacent layers from assuming correlated styles and enforces independent multi-scale control.
+
+## 14. Related Papers
+- **StyleGAN Paper:** *A Style-Based Generator Architecture for Generative Adversarial Networks* (Karras et al., CVPR 2019)
+- **ProGAN Paper:** *Progressive Growing of GANs* (Karras et al., ICLR 2018)
+
+## 15. Further Reading
+- NVIDIA Official StyleGAN GitHub Repository

@@ -1,0 +1,111 @@
+# Federated Learning
+
+## 1. Overview
+
+Federated learning trains a single shared model across many devices or organizations without ever moving their raw data to a central server. Instead of the usual "collect all the data, then train" pipeline, each participant trains locally on their own private data and sends only model updates (not data) back to a coordinator, which aggregates them into an improved shared model. This matters enormously whenever data is sensitive (hospital records, personal keyboard input, financial transactions) or simply too large and distributed to centralize — federated learning is what lets Gboard improve its next-word prediction using billions of phones' typing data without Google ever seeing what anyone typed.
+
+## 2. Prerequisites in Context
+
+**Distributed optimization** is the direct mathematical foundation — federated learning is fundamentally a distributed optimization problem where the usual assumption of independent, identically distributed data across workers is violated (each device's data reflects one person's or one hospital's idiosyncratic distribution), and you need to understand how standard distributed SGD convergence guarantees degrade under this "non-IID" setting. **Regularization** matters because a major practical challenge — client model updates drifting apart during local training (client drift) — is addressed by regularization terms that pull local updates back toward the shared global model. **Privacy** is essential because federated learning is often motivated by privacy requirements, and understanding what federated learning does and doesn't guarantee (it hides raw data, but model updates can still leak information) is necessary to reason about when additional privacy techniques like differential privacy or secure aggregation are required on top.
+
+## 3. Core Concept
+
+The canonical algorithm is **Federated Averaging (FedAvg)**. In each communication round: the server broadcasts the current global model $w_t$ to a subset of clients; each selected client $k$ runs several steps of local SGD on its own private dataset starting from $w_t$, producing an updated local model $w_t^k$; clients send these updated weights (not their data) back to the server; the server aggregates them, typically via a weighted average based on each client's dataset size: $w_{t+1} = \sum_k \frac{n_k}{n} w_t^k$. This process repeats for many rounds. The key departure from standard distributed training is that clients perform *multiple* local gradient steps before communicating (reducing communication frequency, which is often the real bottleneck — client-to-server bandwidth, not compute, is usually the limiting factor in cross-device federated settings), and their data is never IID across clients, meaning local updates can drift in different, conflicting directions before aggregation pulls them back together.
+
+## 4. Theoretical Foundations
+
+The core challenge is quantified by the degree of **statistical heterogeneity** across clients — formally, how different each client's local objective $F_k(w) = \mathbb{E}_{x \sim \mathcal{D}_k}[\ell(w, x)]$ is from the true global objective $F(w) = \sum_k \frac{n_k}{n}F_k(w)$. Under IID data, local SGD steps on each client would (in expectation) point in a similar direction to the global gradient, and FedAvg behaves like standard mini-batch SGD with larger effective batches. Under severe non-IID heterogeneity, each client's local steps can drive $w_t^k$ far from what's optimal globally — a phenomenon called **client drift**. FedProx addresses this by adding a proximal regularization term to each client's local objective: $F_k(w) + \frac{\mu}{2}\|w - w_t\|^2$, explicitly penalizing local updates for moving too far from the last global model — trading off some local optimization progress in exchange for a global aggregation step that behaves more predictably, especially when different clients are permitted very different numbers of local steps due to varying compute capability.
+
+## 5. Worked Example
+
+Imagine 1,000 phones training a next-word-prediction keyboard model. One subpopulation of users types mostly in Spanish, another mostly in English, and the phones are never shuffled together — each device's local data reflects only one language. Without any correction, a phone training purely on Spanish text for several local steps would push its local model weights strongly toward Spanish-specific patterns, and averaging this with an English-drifted phone's weights (via plain FedAvg) can produce a global model that's worse than either local model was on its own language, especially early in training or with very unbalanced client participation per round. This is exactly the client-drift problem FedProx's proximal term and other heterogeneity-aware aggregation methods are designed to control — without such corrections, FedAvg convergence, while theoretically guaranteed under IID assumptions, becomes empirically unstable under realistic, unbalanced, non-IID client populations.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+from copy import deepcopy
+
+def local_train(model, data_x, data_y, loss_fn, lr=0.01, local_steps=5, prox_mu=0.0, global_params=None):
+    """One client's local training round, with optional FedProx proximal term."""
+    local_model = deepcopy(model)
+    optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
+    for _ in range(local_steps):
+        optimizer.zero_grad()
+        preds = local_model(data_x)
+        loss = loss_fn(preds, data_y)
+        if prox_mu > 0 and global_params is not None:
+            prox_term = sum((lp - gp).pow(2).sum()
+                             for lp, gp in zip(local_model.parameters(), global_params))
+            loss = loss + (prox_mu / 2) * prox_term
+        loss.backward()
+        optimizer.step()
+    return local_model.state_dict()
+
+def federated_average(client_state_dicts, client_weights):
+    """Weighted average of client model parameters (FedAvg aggregation)."""
+    total = sum(client_weights)
+    avg_state = deepcopy(client_state_dicts[0])
+    for key in avg_state:
+        avg_state[key] = sum(sd[key] * (w / total) for sd, w in zip(client_state_dicts, client_weights))
+    return avg_state
+
+if __name__ == "__main__":
+    global_model = nn.Linear(10, 2)
+    loss_fn = nn.CrossEntropyLoss()
+    global_params = [p.detach().clone() for p in global_model.parameters()]
+
+    client_states, client_sizes = [], []
+    for client_n in [50, 200, 30]:  # simulating unbalanced client data sizes
+        x, y = torch.randn(client_n, 10), torch.randint(0, 2, (client_n,))
+        state = local_train(global_model, x, y, loss_fn, prox_mu=0.01, global_params=global_params)
+        client_states.append(state); client_sizes.append(client_n)
+
+    new_global_state = federated_average(client_states, client_sizes)
+    global_model.load_state_dict(new_global_state)
+    print(f"Aggregated model over {len(client_states)} clients, sizes {client_sizes}")
+```
+
+## 7. Real-World Applications
+
+Google's Gboard keyboard uses federated learning in production to improve next-word prediction and emoji suggestion models directly from on-device typing data, without that text ever leaving the phone. Apple uses federated learning (combined with differential privacy) for features like "Hey Siri" personalization and QuickType suggestions. In healthcare, federated learning consortiums allow multiple hospitals to collaboratively train diagnostic models across their combined patient populations — dramatically increasing effective training data size — without any hospital sharing raw patient records with another institution or a central party, which is often legally required (HIPAA, GDPR) rather than merely preferred.
+
+## 8. Common Pitfalls & Misconceptions
+
+A dangerous misconception is that federated learning alone guarantees privacy — it prevents raw data from leaving the client, but model updates themselves can still leak substantial information about the underlying data (via gradient inversion attacks or membership inference), which is why production federated systems often layer differential privacy (adding calibrated noise to updates) or secure aggregation (cryptographically ensuring the server only ever sees the *sum* of client updates, never any individual one) on top. Another pitfall is assuming standard distributed SGD convergence theory applies unchanged — the non-IID, unbalanced, and often unreliable (clients dropping out mid-round) nature of real federated deployments breaks core assumptions of classical distributed optimization theory, requiring heterogeneity-aware algorithms and convergence analysis.
+
+## 9. How This Connects
+
+This topic requires **Distributed Optimization**, **Regularization**, and **Privacy** — without understanding how non-IID data breaks standard convergence assumptions, why proximal regularization counteracts client drift, and what privacy guarantees are and aren't provided by keeping data local, federated learning's practical challenges look like arbitrary engineering quirks rather than principled responses to real theoretical issues. It directly unlocks **Privacy-Preserving ML** (the broader field of techniques — differential privacy, secure multi-party computation, homomorphic encryption — that combine with or extend federated learning's privacy properties) and **On-Device Training** (the systems engineering discipline of running training computation within the memory, power, and compute constraints of consumer devices, which federated learning fundamentally depends on).
+
+## 10. Check Your Understanding
+
+**Q1: What is the key structural difference between federated learning and standard distributed (data-parallel) training?**
+In standard distributed training, data is typically sharded roughly IID across workers that are all trusted and reliably available, and workers usually synchronize after every gradient step. In federated learning, each client's data reflects a genuinely different, non-IID distribution, clients may be unreliable or slow (phones going offline), and clients perform multiple local steps before infrequent communication — fundamentally different assumptions that break many standard distributed optimization guarantees.
+
+**Q2: What is "client drift," and why does it happen?**
+Client drift is the phenomenon where, because each client's local data distribution differs from the global distribution, a client's local model moves toward a solution that's good for its own data but potentially far from what's globally optimal — especially when many local steps are taken before aggregation. It happens because local SGD, run long enough on a non-representative data distribution, will naturally converge toward that distribution's own optimum rather than the shared global optimum.
+
+**Q3: How does FedProx's proximal term address client drift?**
+It adds a penalty term to each client's local loss that grows with the squared distance between the client's evolving local weights and the last global model — this discourages the local optimization from wandering too far from the shared starting point, keeping local updates more consistent with each other even under significant data heterogeneity across clients.
+
+**Q4: Does federated learning by itself guarantee that no private information leaks from a client?**
+No. Federated learning ensures raw data never leaves the client device, but the model updates sent back to the server can still be analyzed to infer information about the underlying private data (for example, via gradient inversion or membership inference attacks). Genuine strong privacy guarantees require additional techniques layered on top, such as differential privacy (adding calibrated noise to updates) or secure aggregation (cryptographically hiding individual client updates from the server).
+
+**Q5: Why is communication cost, rather than raw compute, often the primary bottleneck in cross-device federated learning?**
+Because clients in cross-device settings (like millions of phones) typically have limited and unreliable network bandwidth, while modern mobile hardware has reasonably capable local compute. FedAvg's design — having clients run multiple local SGD steps before each communication round — directly targets this bottleneck by amortizing the cost of each expensive communication round over more local computational progress.
+
+## 11. Further Reading
+
+- McMahan et al., "Communication-Efficient Learning of Deep Networks from Decentralized Data" (FedAvg, 2017)
+- Li et al., "Federated Optimization in Heterogeneous Networks" (FedProx, 2020)
+- Kairouz et al., "Advances and Open Problems in Federated Learning" (2021) — comprehensive survey
+- Bonawitz et al., "Towards Federated Learning at Scale: System Design" (2019) — the Gboard production system
+- See also: `federated-learning`'s systems counterpart in the `mlops` curriculum domain for production deployment concerns
+
+## Related Platform Content
+
+- [MACHINE LEARNING curriculum overview](/learn/machine-learning)
+- [Architecture application](/architectures/darts)
+- [Browse all system designs](/system-design)

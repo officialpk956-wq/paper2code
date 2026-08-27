@@ -1,108 +1,128 @@
 # PaLM
 
 ## 1. Overview
-PaLM (Pathways Language Model), announced by Google Research in April 2022 (Chowdhery et al.), was Google's first massive counter-offensive to OpenAI's GPT-3. Scaling an autoregressive transformer to 540 Billion parameters, PaLM was not just a model, but a proof-of-concept for **Pathways**, Google's revolutionary new ML system design. Training a 540B parameter model is a logistical nightmare; if a single TPU fails, the entire run crashes. The Pathways infrastructure allowed Google to seamlessly train a single model across two separate TPU v4 pods (totaling 6,144 TPUs) connected over a datacenter network with extreme efficiency. PaLM achieved state-of-the-art few-shot performance on hundreds of natural language, reasoning, and code tasks. Crucially, it popularized the concept of **Chain-of-Thought (CoT) reasoning**. The researchers discovered that at the 540B scale, if the prompt provided an example of step-by-step logic, the model could solve highly complex mathematical and physics problems that it completely failed at when prompted normally, proving that scale unlocks entirely new tiers of emergent algorithmic logic.
+PaLM (Pathways Language Model) is a monumental 540-billion parameter dense decoder-only Transformer developed by Google Research. Introduced in 2022, PaLM was a showcase of Google's new "Pathways" AI architecture—a system designed to train a single model to perform thousands or millions of tasks, rather than training specialized models for individual tasks. PaLM achieved state-of-the-art few-shot performance across hundreds of language, reasoning, and code generation benchmarks. Notably, PaLM demonstrated that breakthrough capabilities in complex reasoning, such as "chain-of-thought" prompting, emerge organically at extreme scale. The model was trained across two massive TPU v4 Pods (utilizing 6144 TPU chips), representing one of the largest and most efficient distributed training runs ever executed at the time. PaLM proved that scaling a standard, dense Transformer architecture, when combined with high-quality multilingual and code data, could unlock unprecedented levels of natural language understanding and logical deduction.
 
-:::tip
-PaLM established that "Chain-of-Thought" prompting (e.g., adding "Let's think step by step") is not just a neat trick, but an emergent property of scale. If you are using a model smaller than ~60B parameters, CoT prompting often hurts performance. With models larger than 100B, it drastically improves it.
+:::note
+PaLM is a "dense" model, meaning every parameter is activated for every token, unlike sparse models (like MoEs) which only activate a subset. This makes its 540B size even more impressive from a computational standpoint.
 :::
 
 ## 2. Historical Context
-By early 2022, the "Scaling Laws" hypothesis established by OpenAI's GPT-3 (2020) was the dominant philosophy in AI: larger models trained with more compute get predictably smarter. Google, having invented the Transformer in 2017, was widely perceived to be falling behind OpenAI in deploying massive, generalized models. While Google had internally developed massive models like Gopher and LaMDA, they needed a unified system that could scale compute far beyond a single supercomputer cluster. Jeff Dean introduced the "Pathways" vision—a single AI system that could generalize across thousands of tasks and modalities. PaLM was the first realization of this vision. By successfully orchestrating 6,144 TPU v4 chips across multiple data centers to train a dense 540 Billion parameter model, Google proved they possessed unparalleled hardware and distributed systems engineering. The resulting model didn't just beat GPT-3; its breakthrough in Chain-of-Thought reasoning shifted the entire industry's focus from mere text generation to complex agentic problem-solving.
+Before PaLM, the AI landscape was dominated by models trained on single, massive clusters using traditional data and model parallelism. Google introduced the Pathways system to overcome the limitations of these rigid training silos. Pathways was envisioned as a flexible, generalized AI architecture capable of orchestrating training across multiple distinct TPU Pods connected over a data center network. PaLM was the first large-scale demonstration of this system. Concurrently, the field was observing that while LLMs were great at pattern matching, they struggled with multi-step logic. The PaLM paper coincided with the rise of "chain-of-thought" (CoT) prompting. Researchers discovered that simply asking the model to explain its reasoning step-by-step drastically improved its performance on math and logic problems. Crucially, the PaLM researchers documented that this CoT capability was not present in smaller models (like 8B or 62B parameters) but emerged as a discontinuous breakthrough at the 540B scale, reshaping how the community viewed the relationship between scale and reasoning.
 
 ## 3. Problem It Solves
-PaLM solves the **Hardware Scale Bottleneck** and the **Multi-step Logic Failure** problem. Before PaLM, training models over 200B parameters (like Megatron-Turing NLG) was highly inefficient. The communication overhead between thousands of GPUs/TPUs meant that most of the time was spent waiting for data transfers, not doing actual math. The Pathways system solved this via a novel asynchronous client-server architecture, allowing PaLM to achieve a staggering 57.8% hardware FLOPs utilization, making massive-scale training economically viable. Secondly, standard LLMs act like intuition engines; they try to guess the answer instantly. If you ask GPT-3 a complex math problem, it guesses the final number and gets it wrong. PaLM solved this via Chain-of-Thought. By prompting the model to generate the intermediate mathematical steps *before* generating the final answer, PaLM uses the generated text as a temporary scratchpad, allowing it to solve multi-step constraints that defeat human-level intelligence tests.
+PaLM addressed several major challenges in AI development. Firstly, it solved the engineering problem of orchestrating training at an unprecedented scale. Training a 540B dense model on a single cluster is often impossible due to memory and compute constraints. PaLM proved that the Pathways system could efficiently distribute this workload across multiple decoupled TPU pods, maintaining high hardware utilization (57.8% model FLOPs utilization). Secondly, PaLM addressed the "reasoning gap" in LLMs. Previous models failed at tasks requiring multi-step deduction or mathematical problem solving. By leveraging its massive scale and high-quality data mix, PaLM, when prompted with chain-of-thought, solved complex word problems and logical puzzles that previously thwarted AI, bridging the gap between mere text generation and actual automated reasoning. Finally, it improved multi-lingual and coding capabilities natively without requiring separate, specialized models.
 
 ## 4. Architecture Diagram Data
-```text
-           [ PaLM: Pathways Language Model (540B) ]
+Below is a conceptual representation of the PaLM architecture, highlighting specific modifications like SwiGLU and parallel layers.
 
-   Input: "Q: If John has 5 apples, eats 2, and buys 4... A: Let's think..."
-                               ^
+```text
+                     [ Input Text Tokens ]
                                |
-            +------------------+------------------+
-            |        PaLM Decoder (540B)          |
-            |   (118 Layers, 18432 Hidden Dim)    |
-            |                                     |
-            |   +-----------------------------+   |
-            |   | SwiGLU FFN + RoPE Attention |   | <-- Shared input Norm
-            |   |    (Parallel Formulation)   |   |
-            |   +-----------------------------+   |
-            +------------------+------------------+
-                               ^
-                               | (Distributed via Pathways)
+                               v
+                  +---------------------------+
+                  |      Token Embedding      |
+                  +---------------------------+
                                |
-             [ TPU v4 Pod A ] <=====> [ TPU v4 Pod B ]
-              (3,072 chips)     DCN    (3,072 chips)
+                               v
+    +===========================================================+
+    |                    PaLM Transformer Block (x N)           |
+    |                                                           |
+    |  +-----------------------------------------------------+  |
+    |  |               Layer Normalization                   |  |
+    |  +-----------------------------------------------------+  |
+    |               |                         |                 |
+    |     [Parallel Path A]         [Parallel Path B]           |
+    |               |                         |                 |
+    |  +-------------------------+ +-------------------------+  |
+    |  | Multi-Query Attention   | |   Dense FFN w/ SwiGLU   |  |
+    |  | (w/ RoPE embeddings)    | |                         |  |
+    |  +-------------------------+ +-------------------------+  |
+    |               |                         |                 |
+    |               +-----------+-------------+                 |
+    |                           |                               |
+    |                           v                               |
+    |                     [Residual Add]                        |
+    +===========================================================+
+                               |
+                               v
+                  +---------------------------+
+                  |   Final Layer Norm        |
+                  +---------------------------+
+                               |
+                               v
+                  +---------------------------+
+                  |       Linear Head         |
+                  | (Shared w/ Embedding)     |
+                  +---------------------------+
+                               |
+                               v
+                      [ Output Probabilities ]
 ```
-**Components:**
-- `PaLM Decoder`: A massive autoregressive transformer featuring specific architectural tweaks (SwiGLU, RoPE, Parallel layers) designed strictly for training stability at massive scale.
-- `Parallel Formulation`: Unlike standard transformers where the FFN comes *after* the Attention layer, PaLM computes them in parallel to save communication overhead across TPUs.
-- `Pathways / DCN`: The Datacenter Network. Pathways manages the asynchronous gradient updates across two physically separate TPU pods, masking the latency of the network transfer.
-- `Chain of Thought`: The prompt explicitly begins with intermediate reasoning, triggering the model to utilize its massive capacity to calculate logic step-by-step.
 
 ## 5. Layer-by-Layer Breakdown
-PaLM introduced several crucial architectural modifications to the standard Transformer to ensure a 540B model didn't suffer from gradient explosion or collapse during months of training.
-1. **No Biases**: PaLM completely removes bias terms in all dense kernels and layer norms. This increases training stability for models over 100B parameters without harming performance.
-2. **RoPE (Rotary Position Embeddings)**: Instead of absolute position embeddings (like GPT-3) or standard relative embeddings, PaLM uses RoPE, which injects relative positional information directly into the Attention Query and Key vectors via mathematical rotation, greatly improving generalization to longer sequences.
-3. **Parallel Formulation**: In a standard block, $x_{next} = \text{FFN}(\text{Attn}(x))$. In PaLM, to increase speed and reduce communication across TPUs, they are computed simultaneously: $x_{next} = x + \text{Attn}(LN(x)) + \text{FFN}(LN(x))$.
-4. **SwiGLU Activation**: Standard GELU or ReLU is replaced with Swish-GLU. GLU (Gated Linear Unit) architectures require three weight matrices instead of two in the FFN, but offer significantly better performance for the same compute budget.
-5. **Multi-Query Attention (MQA)**: Instead of every attention head having its own Key and Value projection, all Query heads share a *single* Key and Value projection. This drastically reduces the memory bandwidth required for the KV-cache during autoregressive generation.
+PaLM utilizes a standard decoder-only Transformer setup but with several crucial modifications for efficiency and performance. It begins with a **Token Embedding** layer. PaLM notably shares the weights between the input embedding and the final output vocabulary projection, which saves memory. 
 
-:::warning
-Parallel Formulation provides a massive speedup during training because it allows the Attention and FFN matrices to be multiplied simultaneously. However, it slightly degrades the mathematical capacity of the layer compared to sequential processing, meaning you need a slightly larger model to achieve the same loss.
-:::
+Within the **Transformer Blocks**, PaLM implements a **Parallel Formulation**. Instead of the standard sequential processing (Attention -> Add -> Norm -> FFN -> Add), PaLM computes the Attention and the Feed-Forward Network (FFN) in parallel based on the same normalized input, and adds both results to the residual stream simultaneously. This allows for faster execution on TPUs. 
+
+The Attention mechanism is modified to use **Multi-Query Attention (MQA)**. Instead of each attention head having its own Key and Value projections, all heads share a single Key and Value projection, while maintaining separate Query projections. This drastically reduces the memory bandwidth required for the KV cache during autoregressive generation. Positional information is injected using **Rotary Position Embeddings (RoPE)** within the attention calculation. The FFN utilizes the **SwiGLU** activation function instead of standard ReLU or GELU, which provides empirical performance improvements. Finally, after passing through all blocks, a **Final Layer Norm** and the shared **Linear Head** output the token probabilities.
 
 ## 6. Tensor Flow Walkthrough
-Let's trace the shapes for a PaLM Parallel Transformer Block using Multi-Query Attention (MQA).
-- `B`: Batch size
-- `T`: Sequence length
-- `D`: Hidden dimension (18,432)
-- `H`: Number of Query heads (48)
-- `D_h`: Head dimension (256)
+Let's trace the tensor shapes through a PaLM parallel transformer block. Assume Batch `B=4`, Sequence `T=1024`, `D_model=18432` (actual PaLM 540B size).
 
-1. **Input**: `x` shape `(B, T, D)`.
-2. **Shared LayerNorm**: `normed_x = LayerNorm(x)`. Shape `(B, T, D)`.
-3. **Parallel Processing**:
-   - **MQA Path**:
-     - `Q = Linear_Q(normed_x)`: Shape `(B, T, H * D_h)`.
-     - `K = Linear_K(normed_x)`: Shape `(B, T, 1 * D_h)`. (Only ONE head!)
-     - `V = Linear_V(normed_x)`: Shape `(B, T, 1 * D_h)`.
-     - `Q` is split into `H` heads. `K` and `V` are broadcasted to match `H`.
-     - Apply RoPE to `Q` and `K`.
-     - `attn_out = Attention(Q, K, V)`. Shape `(B, T, D)`.
-   - **SwiGLU FFN Path (Simultaneous)**:
-     - `gate = Linear_gate(normed_x)`. Shape `(B, T, FFN_dim)`.
-     - `up = Linear_up(normed_x)`. Shape `(B, T, FFN_dim)`.
-     - `ffn_mid = Swish(gate) * up`.
-     - `ffn_out = Linear_down(ffn_mid)`. Shape `(B, T, D)`.
-4. **Residual Connection**:
-   - `out = x + attn_out + ffn_out`. Shape `(B, T, D)`.
+1.  **Input to Block:** `X`
+    *   Shape: `(B, T, D_model)` -> `(4, 1024, 18432)`
+2.  **Layer Normalization:** `X_norm = LN(X)`
+    *   Note: PaLM uses a standard LayerNorm without biases.
+    *   Shape: `(B, T, D_model)` -> `(4, 1024, 18432)`
+3.  **Parallel Path A (Multi-Query Attention):**
+    *   `Q` shape (H heads, D_head dim): `(B, T, H, D_head)`
+    *   `K, V` shape (Shared across heads): `(B, T, 1, D_head)`
+    *   After attention and output projection: `Attn_out`
+    *   Shape: `(B, T, D_model)` -> `(4, 1024, 18432)`
+4.  **Parallel Path B (SwiGLU FFN):**
+    *   Projects `D_model` to a hidden dimension (typically ~4x or 8/3x).
+    *   `FFN_out = SwiGLU_FFN(X_norm)`
+    *   Shape: `(B, T, D_model)` -> `(4, 1024, 18432)`
+5.  **Residual Addition:**
+    *   Because the layers are parallel, both are added to the un-normalized input `X`.
+    *   `X_out = X + Attn_out + FFN_out`
+    *   Shape: `(B, T, D_model)` -> `(4, 1024, 18432)`
 
 ## 7. Mathematical Foundations
-PaLM relies on the Rotary Position Embedding (RoPE) to handle sequence positions, and the SwiGLU activation for superior non-linear representations.
+Two key mathematical components define PaLM's specific architecture: the SwiGLU activation and Multi-Query Attention (MQA).
 
-**RoPE (Rotary Position Embedding):**
-Standard absolute embeddings $x + p$ degrade when the model encounters sequences longer than its training data. RoPE encodes absolute position with a rotation matrix and inherently incorporates relative position dependencies.
-For a token embedding $x_m$ at position $m$, and query/key projections $W_q, W_k$, RoPE defines the query vector as:
-$$ q_m = f_q(x_m, m) = (W_q x_m) e^{im\theta} $$
-When computing the attention score between query at position $m$ and key at position $n$, the dot product elegantly becomes dependent *only* on the relative distance $m-n$:
-$$ q_m \cdot k_n = (W_q x_m)^T (W_k x_n) \cos((m-n)\theta) $$
-This mathematical trick (implemented via 2D rotation matrices) allows the model to extrapolate perfectly to sequence lengths it has never seen before.
+**1. SwiGLU Activation:**
+Instead of a standard feed-forward layer $FFN(x) = \text{ReLU}(xW_1)W_2$, PaLM uses a Swish-Gated Linear Unit (SwiGLU). Given input $x$, it requires three weight matrices: $W, V$, and $W_2$.
 
-**SwiGLU Activation:**
-In a standard Transformer, the FFN is $W_2(\text{ReLU}(W_1 x))$.
-PaLM uses SwiGLU, a variant of the Gated Linear Unit. It uses three matrices ($W, V, W_2$) and the Swish activation function ($\text{Swish}(x) = x \cdot \sigma(\beta x)$).
-$$ \text{SwiGLU}(x, W, V, W_2) = (\text{Swish}(x W) \otimes x V) W_2 $$
-The element-wise multiplication ($\otimes$) of the Swish-gated branch and the linear branch provides a dynamic gating mechanism, allowing the network to explicitly suppress irrelevant information, resulting in lower perplexity than standard GELU at the same parameter count.
+$$ \text{Swish}_\beta(z) = z \cdot \sigma(\beta z) $$
+$$ \text{SwiGLU}(x, W, V) = (\text{Swish}_\beta(xW) \otimes xV) $$
+$$ \text{FFN}_{SwiGLU}(x) = \text{SwiGLU}(x, W, V) W_2 $$
+
+Where $\otimes$ is the element-wise product and $\sigma$ is the sigmoid function. This gating mechanism provides richer representational power, though it requires an extra weight matrix (compensated by reducing the hidden dimension size).
+
+**2. Multi-Query Attention (MQA):**
+Standard Multi-Head Attention projects the input into $h$ different Queries, Keys, and Values. MQA projects into $h$ Queries, but only **one** shared Key and Value.
+
+Let $W_q^{(i)}$ be the query projection for head $i$, and $W_k, W_v$ be the shared key/value projections.
+$$ Q_i = xW_q^{(i)} $$
+$$ K = xW_k $$
+$$ V = xW_v $$
+$$ \text{head}_i = \text{Attention}(Q_i, K, V) = \text{softmax}\left(\frac{Q_i K^T}{\sqrt{d_k}}\right)V $$
+
+This significantly reduces the size of the $K$ and $V$ tensors that must be cached in memory during generation, solving a major memory bandwidth bottleneck for large models.
 
 ## 8. Training Procedure
-1. **The Pathways System**: Training a 540B model requires splitting the model across thousands of chips. Standard Megatron-Turing approaches split the model heavily using Pipeline Parallelism (putting layer 1 on GPU A, layer 2 on GPU B), which is slow due to network bubbles. Pathways uses extreme Data and Tensor parallelism across two entirely separate TPU v4 pods. The asynchronous gradients were sent over the DCN (Data Center Network), achieving 57.8% hardware utilization—an unprecedented feat of distributed engineering.
-2. **Dataset**: PaLM was trained on 780 Billion tokens. The dataset was 78% English text (filtered web pages, books, Wikipedia), 22% non-English text (over 100 languages), and 5% code (GitHub).
-3. **Emergence**: The authors formally studied "Emergent Abilities." They evaluated PaLM at 8B, 62B, and 540B parameters. They proved mathematically that performance on complex reasoning tasks (like BIG-bench) is not linear. At 8B and 62B, the model scores 0%. At 540B, the performance suddenly spikes to 60%. This proved that certain intellectual capabilities only "unlock" once a model reaches a critical mass of parameters.
+Training PaLM 540B was a massive infrastructure challenge, orchestrated by the Pathways system across 6144 TPU v4 chips split across two distinct Pods. 
+
+**Infrastructure:** PaLM utilized a 2D mesh layout for model and data parallelism. The model was partitioned across TPU cores, and data was fed in parallel. Pathways managed the asynchronous dispatch of operations across the data center network, masking the latency of communicating between the two separate Pods. This setup achieved an incredibly high Model FLOPs Utilization (MFU) of 57.8%, meaning the hardware was spending most of its time doing actual math rather than waiting for data transfers.
+
+**Dataset:** The pre-training dataset consisted of 780 billion tokens of high-quality text. It was a diverse mix: 50% multilingual social media conversations, 27% filtered webpages, 13% books, 5% GitHub code, and 5% Wikipedia. This diverse mix was crucial for the model's performance on both logical reasoning and coding tasks.
+
+**Training:** The model was trained using a standard causal language modeling objective (predicting the next token). They employed several stability techniques, including using the Adafactor optimizer (which uses less memory than Adam) and scaling the initialization of weights by $1/\sqrt{n}$ where $n$ is the layer depth, which prevents activation spikes deep in the network.
 
 ## 9. PyTorch Implementation
-Here is a conceptual implementation of the PaLM Parallel block with Multi-Query Attention (MQA) and SwiGLU.
+Below is a minimal PyTorch implementation of the PaLM Parallel Transformer Block, featuring the parallel attention/FFN computation and the SwiGLU activation.
 
 ```python
 import torch
@@ -110,113 +130,93 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SwiGLU(nn.Module):
-    def __init__(self, d_model: int, hidden_dim: int):
+    def __init__(self, d_model, d_ff):
         super().__init__()
-        # PaLM uses no biases
-        self.w_gate = nn.Linear(d_model, hidden_dim, bias=False)
-        self.w_up = nn.Linear(d_model, hidden_dim, bias=False)
-        self.w_down = nn.Linear(hidden_dim, d_model, bias=False)
+        # SwiGLU requires two projections for the gating mechanism
+        self.w_gate = nn.Linear(d_model, d_ff, bias=False)
+        self.w_up = nn.Linear(d_model, d_ff, bias=False)
+        self.w_down = nn.Linear(d_ff, d_model, bias=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate = F.silu(self.w_gate(x)) # SiLU is Swish with beta=1
+    def forward(self, x):
+        # Swish(x * W_gate) * (x * W_up)
+        gate = F.silu(self.w_gate(x)) # silu is PyTorch's Swish(beta=1)
         up = self.w_up(x)
         return self.w_down(gate * up)
 
 class PaLMParallelBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model, num_heads):
         super().__init__()
-        self.d_model = d_model
-        self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
+        self.ln = nn.LayerNorm(d_model, bias=False)
         
-        # Shared LayerNorm (No bias/scale in PaLM, just normalization)
-        # Using standard LayerNorm here for simplicity without affine parameters
-        self.ln = nn.LayerNorm(d_model, elementwise_affine=False)
+        # Simplified Attention (Standard MHA for brevity, PaLM uses MQA)
+        self.attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True, bias=False)
         
-        # MQA: Q has n_heads, K and V have 1 head
-        self.q_proj = nn.Linear(d_model, d_model, bias=False)
-        self.k_proj = nn.Linear(d_model, self.head_dim, bias=False)
-        self.v_proj = nn.Linear(d_model, self.head_dim, bias=False)
-        self.o_proj = nn.Linear(d_model, d_model, bias=False)
-        
-        # SwiGLU FFN (Typically hidden_dim is 4/3 * 4 * d_model in GLU variants)
-        self.ffn = SwiGLU(d_model, int(d_model * 4 * 2 / 3))
+        # SwiGLU FFN
+        d_ff = (d_model * 4 * 2) // 3 # Typical SwiGLU hidden dim scaling
+        self.ffn = SwiGLU(d_model, d_ff)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, D = x.shape
-        normed_x = self.ln(x)
+    def forward(self, x):
+        # x shape: (B, T, d_model)
+        x_norm = self.ln(x)
         
-        # --- MQA Attention Branch ---
-        q = self.q_proj(normed_x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        # K and V have only 1 head. Shape: (B, 1, T, head_dim)
-        k = self.k_proj(normed_x).view(B, T, 1, self.head_dim).transpose(1, 2)
-        v = self.v_proj(normed_x).view(B, T, 1, self.head_dim).transpose(1, 2)
+        # Parallel Computation: Attn and FFN take the same normalized input
+        # Note: causal mask required for autoregressive, omitted for brevity
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm) 
+        ffn_out = self.ffn(x_norm)
         
-        # Broadcast K and V to match Q's heads during dot product
-        # (In practice, specialized CUDA kernels do this to save memory)
-        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        
-        # Causal mask
-        mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-        scores.masked_fill_(mask, float('-inf'))
-        
-        attn_weights = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn_weights, v) # (B, n_heads, T, head_dim)
-        context = context.transpose(1, 2).contiguous().view(B, T, D)
-        attn_out = self.o_proj(context)
-        
-        # --- FFN Branch ---
-        ffn_out = self.ffn(normed_x)
-        
-        # --- Parallel Residual ---
-        return x + attn_out + ffn_out
+        # Residual connection adds both parallel outputs at once
+        out = x + attn_out + ffn_out
+        return out
 
-# --- Shape Verification Test ---
+# --- Test ---
 if __name__ == "__main__":
-    BATCH_SIZE, SEQ_LEN = 2, 32
-    D_MODEL, N_HEADS = 512, 8
+    B, T, d_model = 2, 10, 128
+    num_heads = 4
     
-    block = PaLMParallelBlock(D_MODEL, N_HEADS)
-    x = torch.randn(BATCH_SIZE, SEQ_LEN, D_MODEL)
+    block = PaLMParallelBlock(d_model, num_heads)
+    x = torch.randn(B, T, d_model)
+    out = block(x)
     
-    output = block(x)
-    
-    expected_shape = (BATCH_SIZE, SEQ_LEN, D_MODEL)
-    assert output.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {output.shape}"
-    print("Test passed! PaLM Parallel Block with MQA executed successfully.")
+    print(f"Input shape: {x.shape}")
+    print(f"Output shape: {out.shape}")
+    assert out.shape == (B, T, d_model), "Shape mismatch!"
+    print("Test passed: Parallel block structure operates correctly.")
 ```
 
 ## 10. Strengths
-PaLM's ultimate strength is its sheer capacity for reasoning, unlocked via its 540 Billion parameter scale. It popularized Chain-of-Thought (CoT) prompting, proving that if a model is large enough, asking it to explain its work step-by-step drastically reduces hallucinations and solves logic puzzles that defeat smaller models. Secondly, the architectural decisions (MQA, SwiGLU, Parallel layers, no biases) created an incredibly stable, highly efficient framework for distributed training and inference. Multi-Query Attention (MQA), in particular, was a massive breakthrough for inference speed. Because K and V only have one head, the memory required to store the KV-cache during token generation is reduced by a factor of the number of heads (e.g., 48x less memory), drastically increasing the batch size that a single GPU can serve in production without significantly harming the model's intelligence.
+PaLM's primary strength is its massive scale, which unlocked emergent abilities in reasoning and logic. Its performance on complex, multi-step word problems (when using chain-of-thought prompting) was revolutionary, demonstrating that scale alone could solve qualitative problems previously thought to require explicit symbolic reasoning architectures. The parallel layer architecture and the Pathways training system proved that massive dense models could be trained efficiently across distributed data center infrastructure. Furthermore, PaLM exhibited exceptionally strong multilingual understanding and code generation capabilities straight out of the pre-training phase, without requiring task-specific fine-tuning, validating the efficacy of its diverse training data mixture.
 
 ## 11. Weaknesses
-PaLM is completely impractical for almost anyone outside of Google to run. At 540 Billion parameters, loading the model in 16-bit precision requires over 1 Terabyte of VRAM. That equates to roughly 14 Nvidia A100 (80GB) GPUs just to hold the weights in memory, making open-source deployment or fine-tuning impossible for average enterprises. Furthermore, while the Pathways system was a logistical marvel, the underlying training recipe was highly inefficient. Shortly after PaLM was released, DeepMind published the Chinchilla paper, proving that a 540B parameter model should theoretically be trained on roughly 11 Trillion tokens to be "compute-optimal." PaLM was only trained on 780 Billion tokens. This means PaLM is massively "under-trained"—it has too many parameters and not enough data, making it unnecessarily slow and expensive for the level of intelligence it achieved.
+The most glaring weakness of PaLM is the sheer computational cost required to run it. A 540B dense parameter model requires immense GPU/TPU VRAM just to load the weights (over 1 Terabyte in standard precision), making inference incredibly expensive and inaccessible to all but the largest organizations. Furthermore, the PaLM paper was published before the Chinchilla scaling laws were widely understood. By Chinchilla standards, PaLM was massively under-trained; it was trained on 780 billion tokens, whereas a compute-optimal model of its size should have been trained on over 10 trillion tokens. Therefore, it was highly inefficient regarding its parameter-to-training-data ratio. Finally, as a base model, it lacked the safety alignments and instruction tuning that make modern models safe and usable by the general public.
 
 ## 12. Research Evolution
-PaLM was Google's flex of pure hardware and systems engineering dominance. It proved that the Transformer could be scaled cleanly to half a trillion parameters across distinct data centers, and it cemented Chain-of-Thought as the standard for interacting with Foundation Models. However, the scientific revelation of Chinchilla (that data must scale proportionally with parameters) rendered the 540B PaLM architecture obsolete almost immediately. Google recognized this inefficiency. Instead of trying to deploy the 540B monolith as their primary API, they merged the Google Brain and DeepMind teams and utilized the Chinchilla scaling laws to create PaLM 2—a model that was significantly smaller in parameter count, but trained on vastly more data, resulting in a faster, cheaper, and strictly superior successor.
+PaLM marks the peak of the "pure scaling" era of dense Transformers. Following the success of GPT-3, researchers hypothesized that simply making models bigger would continually yield better results. PaLM validated this by discovering emergent reasoning at 540B. However, its development occurred precisely as the community was realizing the inefficiencies of this approach. Shortly after PaLM, DeepMind released the Chinchilla paper, proving that models like PaLM were far too large for the amount of data they were trained on. Consequently, the research trajectory shifted. The successor, PaLM 2, was significantly smaller than 540B but trained on vastly more data, proving to be both more capable and vastly more efficient to run. PaLM serves as a historical monument: a proof-of-concept that extreme scale unlocks reasoning, but also a lesson that extreme scale without proportional data scaling is computationally wasteful.
 
 ## 13. Interview Questions
-**Q1: What is "Chain-of-Thought" (CoT) prompting, and why did PaLM popularize it?**
-**A1:** CoT prompting involves providing the model with a few examples of step-by-step reasoning (e.g., "First, multiply 5 by 2. Then add 3...") before asking for the answer. PaLM popularized this because the researchers proved that CoT only works on models larger than ~100B parameters. At 540B, PaLM used CoT to achieve state-of-the-art results on logic and math benchmarks that previously seemed impossible for language models.
 
-**Q2: What is Multi-Query Attention (MQA), and why does it speed up inference?**
-**A2:** In standard Multi-Head Attention, every Query head has a corresponding Key and Value head. During autoregressive generation, past K and V vectors must be stored in memory (KV-cache). In MQA, all Query heads share a *single* Key and Value head. This drastically shrinks the memory footprint of the KV-cache, allowing the GPU to serve much larger batch sizes and generate text much faster.
+**Q1: What does it mean that PaLM demonstrated "emergent abilities" in reasoning?**
+**A1:** An emergent ability is a capability that is not present in smaller models but suddenly appears when the model reaches a certain scale (parameter count or compute). In PaLM's case, researchers found that models with 8B or 62B parameters completely failed at complex reasoning tasks even with "chain-of-thought" prompting. However, the 540B PaLM model experienced a discontinuous jump in performance, successfully solving these logic problems. The ability "emerged" purely through scaling up the dense architecture.
 
-**Q3: How does the "Parallel Formulation" of the Transformer block work in PaLM?**
-**A3:** In a standard block, the output is sequential: `x = x + Attn(x)`, then `x = x + FFN(x)`. In PaLM's parallel block, the input is passed to both sublayers simultaneously: `x = x + Attn(x) + FFN(x)`. This allows the massive matrix multiplications for Attention and FFN to be computed in parallel across TPUs, reducing communication latency by roughly 15%.
+**Q2: How does a parallel transformer block differ from a standard sequential block, and why did PaLM use it?**
+**A2:** In a standard block, the data flows sequentially: Input -> Norm -> Attention -> Add -> Norm -> FFN -> Add. Each step must wait for the previous one. In PaLM's parallel block, the normalized input is fed simultaneously to both the Attention layer and the FFN layer. The outputs of both are then added to the residual stream together. PaLM used this because it increases training speed on TPUs; computing the attention and FFN in parallel allows for larger matrix multiplications to be executed concurrently, maximizing hardware utilization.
 
-**Q4: Why did PaLM completely remove biases from all dense layers and LayerNorms?**
-**A4:** Removing biases has been shown empirically to drastically improve training stability for models exceeding 100 Billion parameters. It prevents certain activations from exploding or drifting during the millions of steps required for pre-training, without sacrificing any measurable predictive performance.
+**Q3: Explain Multi-Query Attention (MQA) and the problem it solves during inference.**
+**A3:** During text generation, a transformer processes one token at a time. To do this efficiently, it caches the Key (K) and Value (V) vectors of all previous tokens (the KV cache). In standard Multi-Head Attention, every attention head has its own K and V vectors, meaning the cache grows massive and loading it from GPU memory becomes a severe bottleneck (memory bandwidth bound). MQA solves this by forcing all query heads to share a single K and V projection. This drastically shrinks the size of the KV cache, significantly speeding up autoregressive generation.
 
-**Q5: What was the primary inefficiency with PaLM's training recipe according to later research (Chinchilla)?**
-**A5:** PaLM was massively under-trained. It had 540 Billion parameters but was trained on only 780 Billion tokens. Chinchilla scaling laws later proved that a model should be trained on roughly 20 tokens per parameter. Therefore, a 540B model should have been trained on 10.8 Trillion tokens. Because it wasn't, the model is bloated—it requires massive memory for inference but didn't see enough data to maximize the utility of those parameters.
+**Q4: PaLM was trained on 540 Billion parameters using 780 Billion tokens. Based on modern scaling laws, what is wrong with this ratio?**
+**A4:** Based on the Chinchilla scaling laws, which suggest that the number of parameters and the number of training tokens should scale equally (roughly 20 tokens per parameter), PaLM was massively under-trained. A 540B parameter model should ideally be trained on around 10 to 11 Trillion tokens to be compute-optimal. PaLM was "over-parameterized" for its dataset, meaning it wasted compute on parameters that didn't have enough data to learn effectively.
+
+**Q5: What is the Pathways system, and why was it significant for PaLM?**
+**A5:** Pathways was a Google AI architecture designed to facilitate training models across multiple, physically separate TPU Pods connected over a data center network. Traditionally, models were trained on a single, tightly coupled cluster. PaLM was significant because it proved the Pathways concept worked; Google successfully trained a monolithic 540B model across 6144 TPU chips split between two distinct Pods with high efficiency, overcoming massive network communication hurdles.
 
 ## 14. Related Papers
-- **PaLM: Scaling Language Modeling with Pathways (Chowdhery et al., 2022)**: The foundational PaLM architecture and infrastructure paper.
-- **Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al., 2022)**: The Google Brain paper released alongside PaLM that formalized CoT prompting.
-- **Fast Transformer Decoding: One Write-Head is All You Need (Shazeer, 2019)**: The foundational paper introducing Multi-Query Attention (MQA).
+*   **PaLM: Scaling Language Modeling with Pathways (Chowdhery et al., 2022):** The primary paper detailing the architecture and training of PaLM.
+*   **Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al., 2022):** The seminal paper demonstrating emergent reasoning capabilities utilized by PaLM.
+*   **Fast Transformer Decoding: One Write-Head is All You Need (Shazeer, 2019):** The paper introducing Multi-Query Attention (MQA).
+*   **GLU Variants Improve Transformer (Shazeer, 2020):** Introduces the SwiGLU activation function used in PaLM.
 
 ## 15. Further Reading
-- [Google AI Blog: Pathways Language Model (PaLM)](https://ai.googleblog.com/2022/04/pathways-language-model-palm-scaling-to.html) - The official release post summarizing the breakthrough performance on BIG-bench.
-- [Understanding RoPE (Rotary Position Embeddings)](https://blog.eleuther.ai/rotary-embeddings/) - A deep dive by EleutherAI into the mathematics of RoPE, which PaLM utilized to replace absolute embeddings.
-- [HuggingFace Blog: MQA and GQA](https://huggingface.co/blog/gqa) - A visual and technical explanation of why Multi-Query Attention saves massive amounts of memory during inference.
+*   Google AI Blog post announcing PaLM and the Pathways architecture.
+*   In-depth analyses on the memory bandwidth bottleneck in LLM inference and how MQA mitigates it.
+*   Discussions on emergent properties in deep learning models and the philosophy of scale.
+*   Comparisons of TPU mesh networking topologies used for distributed training.

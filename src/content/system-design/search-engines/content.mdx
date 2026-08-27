@@ -1,0 +1,738 @@
+# Search Engines
+
+A search engine converts a short, ambiguous query into an ordered set of useful documents. It must discover or ingest content, build searchable indexes, retrieve candidates cheaply, rank them accurately, and explain operational failures such as stale or missing results.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Basic probability and statistics**, **Familiarity with key-value data structures**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. A search engine converts a short, ambiguous query into an ordered set of useful documents. It must discover or ingest content, build searchable indexes, retrieve candidates cheaply, rank them accurately, and explain operational failures such as stale or missing results. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain the three phases of web search: crawling, indexing, retrieval
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **crawler/ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Describe how an inverted index works and how BM25 scoring ranks documents
+
+BM25 combines inverse document frequency, term-frequency saturation, and document-length normalization. It improves on raw TF-IDF because repeated terms have diminishing returns and long documents do not win merely by containing more words. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Understand the difference between term-based and semantic search
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **inverted index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Know what a query pipeline looks like: query parsing → retrieval → ranking → serving
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **dense index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: End-to-end search pipeline: user query → query parser → inverted index lookup → BM25 scorer → top-K → response
+
+```text
+Search Engines: End to end search pipeline user query query parser inverted index lookup BM25 scorer top K response
+
+[user query]
+        |
+        v
+  [query parser]
+          |
+          v
+    [inverted index lookup]
+            |
+            v
+      [BM25 scorer]
+              |
+              v
+        [top-K]
+                |
+                v
+          [response]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **End-to-end search pipeline: user query → query parser → inverted index lookup → BM25 scorer → top-K → response** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 2: Inverted index structure: term → postings list (docID, TF, positions)
+
+```text
+Search Engines: Inverted index structure term postings list docID TF positions
+
+[term]
+        |
+        v
+  [postings list (docID, TF, positions)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Inverted index structure: term → postings list (docID, TF, positions)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 3: Web crawler architecture: seed URLs → frontier queue → fetcher → parser → URL extractor → indexer
+
+```text
+Search Engines: Web crawler architecture seed URLs frontier queue fetcher parser URL extractor indexer
+
+[seed URLs]
+        |
+        v
+  [frontier queue]
+          |
+          v
+    [fetcher]
+            |
+            v
+      [parser]
+              |
+              v
+        [URL extractor]
+                |
+                v
+          [indexer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Web crawler architecture: seed URLs → frontier queue → fetcher → parser → URL extractor → indexer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 4: Search result page (SERP) anatomy: organic results, featured snippets, ads, knowledge panels
+
+```text
+Search Engines: Search result page SERP anatomy organic results featured snippets ads knowledge panels
+
+  [producer / request]
+           |
+           v
+      [dense index] ---- control, version, policy ----> [query understanding]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [candidate retrieval] ---- measured result + trace -----> [ranker]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Search result page (SERP) anatomy: organic results, featured snippets, ads, knowledge panels** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+### Case Studies
+
+#### Google's first architecture (Brin & Page 1998): PageRank + inverted index on commodity hardware — what made it better than AltaVista
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Google's first architecture (Brin & Page 1998): PageRank + inverted index on commodity hardware — what made it better than AltaVista**—creates pressure at the **crawler/ingest** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Elasticsearch: how it made Lucene accessible as a distributed search platform — usage at Wikipedia for article search
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Elasticsearch: how it made Lucene accessible as a distributed search platform — usage at Wikipedia for article search**—creates pressure at the **parser** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Algolia: how they built a developer-friendly search API for e-commerce (instant search, typo tolerance)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Algolia: how they built a developer-friendly search API for e-commerce (instant search, typo tolerance)**—creates pressure at the **inverted index** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Explain BM25. Why is it better than TF-IDF?
+
+BM25 combines inverse document frequency, term-frequency saturation, and document-length normalization. It improves on raw TF-IDF because repeated terms have diminishing returns and long documents do not win merely by containing more words. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is PageRank and why did it beat keyword-only search?
+
+PageRank treats links as weighted votes and estimates the stationary probability of a random surfer. It added an authority signal independent of exact query wording, helping distinguish pages that mention the same terms but differ greatly in importance. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: What happens between the user pressing Enter and seeing search results?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Why is inverted index lookup O(1) for a term but O(k) for a k-word query?
+
+An inverted index maps each term directly to its postings list, making dictionary lookup approximately constant-time. A multi-term query still has to fetch and combine multiple postings lists; the real cost depends on their lengths and intersection strategy, not merely the number of query words. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **Basic ML: logistic regression, gradient boosting**, **Distributed systems: partitioning, replication**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. A search engine converts a short, ambiguous query into an ordered set of useful documents. It must discover or ingest content, build searchable indexes, retrieve candidates cheaply, rank them accurately, and explain operational failures such as stale or missing results. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a search system from requirements: estimate index size, query throughput, indexing latency
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **crawler/ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement a two-stage ranking pipeline: retrieval (recall) → L2 ranking (precision)
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design query understanding: intent classification, entity extraction, query expansion, spell correction
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **inverted index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about indexing tradeoffs: forward index vs inverted index, index compression, positional posting lists
+
+An inverted index maps each term directly to its postings list, making dictionary lookup approximately constant-time. A multi-term query still has to fetch and combine multiple postings lists; the real cost depends on their lengths and intersection strategy, not merely the number of query words. The capability described by this objective is practical, not a definition to memorize. Begin at the **dense index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Two-stage ranking: L1 (BM25 → top-1000) + L2 (LTR model → top-10) + L3 (neural re-ranker → top-3)
+
+```text
+Search Engines: Two stage ranking L1 BM25 top 1000 L2 LTR model top 10 L3 neural re ranker top 3
+
+[L1 (BM25]
+        |
+        v
+  [top-1000) + L2 (LTR model]
+          |
+          v
+    [top-10) + L3 (neural re-ranker]
+            |
+            v
+      [top-3)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Two-stage ranking: L1 (BM25 → top-1000) + L2 (LTR model → top-10) + L3 (neural re-ranker → top-3)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 2: Query understanding pipeline: spell check → tokenization → NER → intent classifier → query rewriter → expansion
+
+```text
+Search Engines: Query understanding pipeline spell check tokenization NER intent classifier query rewriter expansion
+
+[spell check]
+        |
+        v
+  [tokenization]
+          |
+          v
+    [NER]
+            |
+            v
+      [intent classifier]
+              |
+              v
+        [query rewriter]
+                |
+                v
+          [expansion]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Query understanding pipeline: spell check → tokenization → NER → intent classifier → query rewriter → expansion** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 3: Index partition strategy: document-partitioned (horizontal sharding) vs term-partitioned — fanout diagrams for each
+
+```text
+Search Engines: Index partition strategy document partitioned horizontal sharding vs term partitioned fanout diagrams for each
+
+  [producer / request]
+           |
+           v
+      [inverted index] ---- control, version, policy ----> [dense index]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [query understanding] ---- measured result + trace -----> [candidate retrieval]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Index partition strategy: document-partitioned (horizontal sharding) vs term-partitioned — fanout diagrams for each** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 4: Freshness architecture: real-time index (recent documents) + batch index (historical) → merged result set
+
+```text
+Search Engines: Freshness architecture real time index recent documents batch index historical merged result set
+
+[real-time index (recent documents) + batch index (historical)]
+        |
+        v
+  [merged result set]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Freshness architecture: real-time index (recent documents) + batch index (historical) → merged result set** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 5: Relevance feedback loop: click data → implicit labels → LTR training → model deployment
+
+```text
+Search Engines: Relevance feedback loop click data implicit labels LTR training model deployment
+
+[click data]
+        |
+        v
+  [implicit labels]
+          |
+          v
+    [LTR training]
+            |
+            v
+      [model deployment]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Relevance feedback loop: click data → implicit labels → LTR training → model deployment** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+### Case Studies
+
+#### Bing: their two-phase ranking with LambdaMART for L2 and a BERT-based L3 re-ranker — how they balance latency with quality
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Bing: their two-phase ranking with LambdaMART for L2 and a BERT-based L3 re-ranker — how they balance latency with quality**—creates pressure at the **crawler/ingest** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DoorDash: restaurant search with freshness signals (open now, estimated delivery time) + relevance — hybrid ranking
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DoorDash: restaurant search with freshness signals (open now, estimated delivery time) + relevance — hybrid ranking**—creates pressure at the **parser** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Shopify: product search with faceted filtering + full-text search + vector search unified under a single query planner
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Shopify: product search with faceted filtering + full-text search + vector search unified under a single query planner**—creates pressure at the **inverted index** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design a search system for Twitter/X: 500M tweets/day. How do you index real-time content?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Walk me through a Learning to Rank pipeline. What features would you use?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: A user searches for "python" — they might mean the language, the snake, or the movie. How do you handle this?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Explain the difference between document-partitioned and term-partitioned indexing. When does each fail?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: How do you measure relevance? What is NDCG and why do we use it?
+
+NDCG discounts relevant results that appear low in the ranking and normalizes by the best possible ordering for that query. It supports graded relevance, making it more informative than binary accuracy when position strongly affects user value. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Distributed systems: consensus, consistent hashing, tail latency patterns**, **ML: BERT-class models, knowledge distillation**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. A search engine converts a short, ambiguous query into an ordered set of useful documents. It must discover or ingest content, build searchable indexes, retrieve candidates cheaply, rank them accurately, and explain operational failures such as stale or missing results. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a neural search stack: dense retrieval (DPR) + sparse retrieval (BM25) + re-ranking (cross-encoder) + answer generation (RAG)
+
+BM25 combines inverse document frequency, term-frequency saturation, and document-length normalization. It improves on raw TF-IDF because repeated terms have diminishing returns and long documents do not win merely by containing more words. The capability described by this objective is practical, not a definition to memorize. Begin at the **crawler/ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement production query serving: latency budgets, circuit breakers, graceful degradation
+
+A circuit breaker stops calls to a dependency after failures cross a threshold, then probes recovery after a timeout. It prevents thread and queue exhaustion from cascading, but requires a meaningful fallback and carefully tuned trip conditions. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design a relevance experimentation platform: A/B testing, interleaving experiments, metrics pipeline
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **inverted index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Handle search at trillion-scale: index sharding across 10K+ nodes, query routing, tail latency management
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **dense index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Neural ranking stack: DPR retriever → bi-encoder batch → ANN index lookup → cross-encoder re-ranker → LLM answer generation
+
+```text
+Search Engines: Neural ranking stack DPR retriever bi encoder batch ANN index lookup cross encoder re ranker LLM answer generation
+
+[DPR retriever]
+        |
+        v
+  [bi-encoder batch]
+          |
+          v
+    [ANN index lookup]
+            |
+            v
+      [cross-encoder re-ranker]
+              |
+              v
+        [LLM answer generation]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Neural ranking stack: DPR retriever → bi-encoder batch → ANN index lookup → cross-encoder re-ranker → LLM answer generation** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 2: Trillion-scale index: shard map → routing layer → per-shard Lucene → result merging → global re-ranker
+
+```text
+Search Engines: Trillion scale index shard map routing layer per shard Lucene result merging global re ranker
+
+[shard map]
+        |
+        v
+  [routing layer]
+          |
+          v
+    [per-shard Lucene]
+            |
+            v
+      [result merging]
+              |
+              v
+        [global re-ranker]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Trillion-scale index: shard map → routing layer → per-shard Lucene → result merging → global re-ranker** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 3: Search experimentation platform: traffic splitter → shadow rankers → interleaving experiment → click collection → metric computation → rollout decision
+
+```text
+Search Engines: Search experimentation platform traffic splitter shadow rankers interleaving experiment click collection metric computation rollout decision
+
+[traffic splitter]
+        |
+        v
+  [shadow rankers]
+          |
+          v
+    [interleaving experiment]
+            |
+            v
+      [click collection]
+              |
+              v
+        [metric computation]
+                |
+                v
+          [rollout decision]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Search experimentation platform: traffic splitter → shadow rankers → interleaving experiment → click collection → metric computation → rollout decision** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 4: Freshness pipeline: Kafka event stream → incremental indexing worker → near-real-time shard updates with version stamps
+
+```text
+Search Engines: Freshness pipeline Kafka event stream incremental indexing worker near real time shard updates with version stamps
+
+[Kafka event stream]
+        |
+        v
+  [incremental indexing worker]
+          |
+          v
+    [near-real-time shard updates with version stamps]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Freshness pipeline: Kafka event stream → incremental indexing worker → near-real-time shard updates with version stamps** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 5: Search quality dashboard: MRR@10, NDCG@10 per query segment, p50/p99/p999 latency, zero-result rate, query abandonment rate
+
+```text
+Search Engines: Search quality dashboard MRR 10 NDCG 10 per query segment p50 p99 p999 latency zero result rate query abandonment rate
+
+  [producer / request]
+           |
+           v
+      [query understanding] ---- control, version, policy ----> [candidate retrieval]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [ranker] ---- measured result + trace -----> [crawler/ingest]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Search quality dashboard: MRR@10, NDCG@10 per query segment, p50/p99/p999 latency, zero-result rate, query abandonment rate** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+### Case Studies
+
+#### Google MUM and Search Generative Experience: transition from ten blue links to AI-generated answers — architecture of the generative layer sitting on top of the traditional stack
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Google MUM and Search Generative Experience: transition from ten blue links to AI-generated answers — architecture of the generative layer sitting on top of the traditional stack**—creates pressure at the **crawler/ingest** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Pinterest: visual search — how they combine text + image queries, embedding image uploads for similarity search, personalization signals mixed with relevance signals
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Pinterest: visual search — how they combine text + image queries, embedding image uploads for similarity search, personalization signals mixed with relevance signals**—creates pressure at the **parser** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Meilisearch: building a typo-tolerant, sub-50ms full-text search engine on a single node — architecture decisions that enabled this
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Meilisearch: building a typo-tolerant, sub-50ms full-text search engine on a single node — architecture decisions that enabled this**—creates pressure at the **inverted index** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design Google Search at 1 trillion documents, 100K QPS, 200ms p99 SLA. Walk me through every system.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How do you maintain index freshness for a news search engine where articles are published at 10K/minute?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Your re-ranker adds 80ms of latency. The product team says you have 150ms total budget. Walk through how you optimize the stack.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How would you design a search system that personalizes results per user without leaking data between users?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: Describe how you would evaluate whether neural re-ranking is actually improving user outcomes.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. For **Search Engines**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: ColBERT (Khattab 2020), SPLADE (Formal 2021), DPR (Karpukhin 2020), MonoT5 (Nogueira 2020), MS MARCO benchmark**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. A search engine converts a short, ambiguous query into an ordered set of useful documents. It must discover or ingest content, build searchable indexes, retrieve candidates cheaply, rank them accurately, and explain operational failures such as stale or missing results. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze the frontier of learned sparse retrieval: SPLADE, DeepImpact, uniCOIL — and their relationship to BM25
+
+BM25 combines inverse document frequency, term-frequency saturation, and document-length normalization. It improves on raw TF-IDF because repeated terms have diminishing returns and long documents do not win merely by containing more words. The capability described by this objective is practical, not a definition to memorize. Begin at the **crawler/ingest** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design a research contribution to query understanding or re-ranking
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Critically evaluate multi-vector retrieval models (ColBERT) vs bi-encoders vs cross-encoders
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **inverted index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Formulate a research question about search and sketch an experimental protocol
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through crawler/ingest, parser, inverted index, dense index. The governing quantitative model is: BM25 scores a document $D$ for query term $q_i$ using $\operatorname{IDF}(q_i)\frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1(1-b+b|D|/\operatorname{avgdl})}$. The saturation term prevents repeated keywords from increasing score without bound, while length normalization avoids automatically favoring long documents. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify relevance, freshness, p99 latency, index size, abuse resistance, and privacy, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a deterministic BM25 index with judged queries; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **dense index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Search Engines, that boundary interacts with relevance, freshness, p99 latency, index size, abuse resistance, and privacy. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a deterministic BM25 index with judged queries), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: ColBERT MaxSim: per-token embeddings, late interaction, MaxSim scoring vs bi-encoder single-vector retrieval
+
+```text
+Search Engines: ColBERT MaxSim per token embeddings late interaction MaxSim scoring vs bi encoder single vector retrieval
+
+  [producer / request]
+           |
+           v
+      [crawler/ingest] ---- control, version, policy ----> [parser]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [inverted index] ---- measured result + trace -----> [dense index]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **ColBERT MaxSim: per-token embeddings, late interaction, MaxSim scoring vs bi-encoder single-vector retrieval** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 2: SPLADE: BERT → MLM head → FLOPS-regularized sparse activations → inverted index with learned weights
+
+```text
+Search Engines: SPLADE BERT MLM head FLOPS regularized sparse activations inverted index with learned weights
+
+[BERT]
+        |
+        v
+  [MLM head]
+          |
+          v
+    [FLOPS-regularized sparse activations]
+            |
+            v
+      [inverted index with learned weights]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **SPLADE: BERT → MLM head → FLOPS-regularized sparse activations → inverted index with learned weights** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 3: Generative retrieval: DSI — document ID generation from query without an explicit index — training and inference diagram
+
+```text
+Search Engines: Generative retrieval DSI document ID generation from query without an explicit index training and inference diagram
+
+  [producer / request]
+           |
+           v
+      [inverted index] ---- control, version, policy ----> [dense index]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [query understanding] ---- measured result + trace -----> [candidate retrieval]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Generative retrieval: DSI — document ID generation from query without an explicit index — training and inference diagram** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+#### Diagram 4: Multi-stage pipeline comparison: BM25 vs DPR vs ColBERT vs monoT5 — recall@100, MRR@10, latency tradeoff chart
+
+```text
+Search Engines: Multi stage pipeline comparison BM25 vs DPR vs ColBERT vs monoT5 recall 100 MRR 10 latency tradeoff chart
+
+  [producer / request]
+           |
+           v
+      [dense index] ---- control, version, policy ----> [query understanding]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [candidate retrieval] ---- measured result + trace -----> [ranker]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-stage pipeline comparison: BM25 vs DPR vs ColBERT vs monoT5 — recall@100, MRR@10, latency tradeoff chart** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing relevance, freshness, p99 latency, index size, abuse resistance, and privacy.
+
+### Case Studies
+
+#### Google's BERT for re-ranking (2019): how they inserted BERT into the ranking stack, what the latency cost was, how they used knowledge distillation to make it practical
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Google's BERT for re-ranking (2019): how they inserted BERT into the ranking stack, what the latency cost was, how they used knowledge distillation to make it practical**—creates pressure at the **crawler/ingest** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Facebook's DPR: why bi-encoders trained with in-batch negatives work so well — the importance of negative mining
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Facebook's DPR: why bi-encoders trained with in-batch negatives work so well — the importance of negative mining**—creates pressure at the **parser** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Vespa.ai's approach to combining BM25 + neural retrieval: WAND algorithm for early termination in hybrid search
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Vespa.ai's approach to combining BM25 + neural retrieval: WAND algorithm for early termination in hybrid search**—creates pressure at the **inverted index** layer of Search Engines. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a deterministic BM25 index with judged queries. Instrument it for relevance, freshness, p99 latency, index size, abuse resistance, and privacy, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable Search Engines slice.** Implement one request path using crawler/ingest, parser, inverted index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build a deterministic BM25 index with judged queries, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable Search Engines slice.** Implement one request path using crawler/ingest, parser, inverted index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build a deterministic BM25 index with judged queries, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable Search Engines slice.** Implement one request path using crawler/ingest, parser, inverted index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build a deterministic BM25 index with judged queries, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project:** What are the fundamental limitations of bi-encoder retrieval and how does ColBERT address them? What does ColBERT sacrifice?
+- **Research project:** Generative retrieval (DSI) represents a paradigm shift. What are the open research problems before it can scale to web-scale search?
+- **Research project:** Why does SPLADE outperform BM25 on some domains and underperform on others? What does this tell us about vocabulary mismatch?
+
+## Related Platform Content
+
+- [Vector Databases](/system-design/vector-databases)
+- [Recommendation Systems](/system-design/recommendation-systems)
+- [RAG Systems](/system-design/rag-systems)
+- [Production RAG curriculum](/learn/rag-systems/production-rag-architecture-at-scale)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- Robertson and Zaragoza, The Probabilistic Relevance Framework: BM25 and Beyond (2009)
+- Brin and Page, The Anatomy of a Large-Scale Hypertextual Web Search Engine (1998)
+- Introduction to Information Retrieval by Manning, Raghavan, and Schütze
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

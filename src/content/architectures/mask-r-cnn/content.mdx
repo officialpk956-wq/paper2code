@@ -1,0 +1,239 @@
+# Mask R-CNN
+
+## 1. Overview
+Mask R-CNN, introduced by Kaiming He, Georgia Gkioxari, Piotr Dollár, and Ross Girshick (FAIR) in 2017, is a landmark architecture that extended Faster R-CNN to solve **Instance Segmentation**—simultaneously detecting objects in an image while generating a high-quality pixel-level segmentation mask for each instance. Mask R-CNN won the COCO 2016 Challenge by introducing two critical technical innovations:
+1. **RoIAlign:** A quantization-free spatial feature extraction layer that replaces RoIPool. By using bilinear interpolation instead of rounding spatial coordinates, RoIAlign eliminates misalignments between region proposals and feature maps, preserving sub-pixel precision essential for pixel-level masks.
+2. **Decoupled Mask Branch:** A small Fully Convolutional Network (FCN) branch added in parallel to the existing classification and bounding box regression branches. The mask branch predicts a binary mask for each class independently (without cross-class competition), decoupling mask generation from class prediction.
+
+:::tip
+Mask R-CNN operates under the principle of "predicting a mask for every class independently." The final class prediction from the classification branch determines which binary mask is selected, avoiding competition between classes during mask training.
+:::
+
+## 2. Historical Context
+Prior to 2017, object detection (predicting bounding boxes via Faster R-CNN) and semantic segmentation (labeling every pixel via FCN) were treated as separate domains. Instance segmentation (identifying individual instances of objects, e.g., "Person 1" vs. "Person 2") was notoriously difficult. Early systems like FCIS (Fully Convolutional Instance Segmentation) used position-sensitive inside/outside feature maps, but suffered from severe artifacts when objects overlapped. The root cause of failure in applying object detectors like Faster R-CNN to pixel-level tasks was **RoIPool**. RoIPool performed harsh spatial quantization (rounding continuous floating-point coordinates to integer grid coordinates). While benign for coarse bounding box classification, this quantization caused spatial misalignments of up to several pixels, completely ruining pixel-accurate mask predictions. Mask R-CNN fixed this alignment issue with RoIAlign and demonstrated that instance segmentation could be solved elegantly as a lightweight extension of Faster R-CNN.
+
+## 3. Problem It Solves
+Mask R-CNN solves three key technical challenges:
+1. **Sub-Pixel Spatial Misalignment (RoIPool Quantization Loss):** RoIPool uses $\lfloor x/16 \rfloor$ and integer bin partitioning, introducing spatial errors that misalign feature maps with original image regions. RoIAlign fixes this via continuous sampling points and bilinear interpolation.
+2. **Coupled Class-Mask Competition:** Traditional semantic segmentation uses a per-pixel softmax across all classes, forcing classes to compete. Mask R-CNN uses a per-pixel sigmoid on class-specific binary masks, relying on the detection branch to select the class label.
+3. **Computational Efficiency:** Mask R-CNN runs at ~5 fps (using ResNet-50-FPN backbone), adding minimal computational overhead over Faster R-CNN (~200ms per image), making it practical for real-world robotics and medical imaging.
+
+## 4. Architecture Diagram Data
+Below is the full architecture of Mask R-CNN with Feature Pyramid Network (FPN) and RoIAlign.
+
+```text
+                        [ Input Image: (B, 3, H, W) ]
+                                      |
+                                      v
+                  +=======================================+
+                  |  Backbone: ResNet + FPN (P2 to P6)    |
+                  +=======================================+
+                                      |
+                                      v
+                  +=======================================+
+                  |  Region Proposal Network (RPN)        |
+                  +=======================================+
+                                      |
+                                      v
+                        [ Proposed RoIs (x1,y1,x2,y2) ]
+                                      |
+                                      v
+                  +=======================================+
+                  |     RoIAlign Layer (No Quantization)  |
+                  |     - Sample 4 points per bin via     |
+                  |       Bilinear Interpolation          |
+                  +=======================================+
+                                      |
+                                      v
+                      [ Fixed Size RoI Feature Maps ]
+                      [ (7x7 for Box/Class, 14x14 for Mask) ]
+                                      |
+                 +--------------------+--------------------+
+                 |                                         |
+                 v                                         v
+    +===========================+             +===========================+
+    |  Box Head (2x FC 1024)    |             |  Mask Head (FCN 4x Conv)  |
+    |                           |             |  256 -> 256 -> 256 -> 256 |
+    |  - Class Branch: Linear   |             |  Deconv 2x2 (14x14->28x28)|
+    |    (N_RoI, Num_Classes)   |             |  1x1 Conv (K classes)     |
+    |  - Box Branch: Linear     |             |  Output: (N_RoI, K,28,28) |
+    |    (N_RoI, 4 * K)         |             +===========================+
+    +===========================+                          |
+                 |                                         v
+                 +---------------------------------> [ Sigmoid per-pixel ]
+```
+
+## 5. Layer-by-Layer Breakdown
+Mask R-CNN consists of five modular stages:
+
+**1. FPN Backbone:** Extracts multi-scale feature maps $\{P_2, P_3, P_4, P_5, P_6\}$ with strides $\{4, 8, 16, 32, 64\}$. Lower levels ($P_2$) capture high-resolution edges; upper levels ($P_5$) capture deep semantics.
+
+**2. Region Proposal Network (RPN):** Slides a $3 \times 3$ convolution over FPN feature maps, outputting objectness scores and bounding box deltas for $K$ anchor ratios/scales. Top $N$ RoIs are selected after Non-Maximum Suppression (NMS).
+
+**3. RoIAlign:** Maps floating-point RoI coordinates $(x_1, y_1, x_2, y_2)$ directly onto FPN feature maps without rounding. For an output bin of size $7 \times 7$ or $14 \times 14$, RoIAlign constructs a grid, samples 4 regular points inside each bin using bilinear interpolation, and applies max/average pooling over the sampled values.
+
+**4. Bounding Box & Classifier Head:** Extracts $7 \times 7 \times 256$ features from RoIAlign, passes them through two 1024-d Fully Connected layers, and outputs:
+- **Classification Branch:** Logits of shape $(N_{\text{RoI}}, K+1)$.
+- **Box Bounding Branch:** Bounding box deltas of shape $(N_{\text{RoI}}, K \times 4)$.
+
+**5. FCN Mask Head:** Extracts $14 \times 14 \times 256$ features from RoIAlign, processes them through four $3 \times 3$ convolutional layers (256 channels, ReLU), followed by a $2 \times 2$ Transposed Convolution (stride 2) to upsample to $28 \times 28 \times 256$. A final $1 \times 1$ convolution projects to $K$ binary masks of shape $(N_{\text{RoI}}, K, 28, 28)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through the Mask Head for $N_{\text{RoI}} = 100$ proposed regions across $K = 80$ COCO classes.
+
+1. **RoI Proposals & Selection:**
+   - Input RoIs: `(100, 4)` continuous floating-point coordinates.
+2. **RoIAlign Extraction (Mask Branch):**
+   - Extracts from FPN map $P_k$ based on RoI scale.
+   - Output RoI Features: `(100, 256, 14, 14)`
+3. **FCN Mask Head Layers:**
+   - Conv1 ($3\times3$, 256 $\rightarrow$ 256, pad 1) + ReLU $\rightarrow$ `(100, 256, 14, 14)`
+   - Conv2 ($3\times3$, 256 $\rightarrow$ 256, pad 1) + ReLU $\rightarrow$ `(100, 256, 14, 14)`
+   - Conv3 ($3\times3$, 256 $\rightarrow$ 256, pad 1) + ReLU $\rightarrow$ `(100, 256, 14, 14)`
+   - Conv4 ($3\times3$, 256 $\rightarrow$ 256, pad 1) + ReLU $\rightarrow$ `(100, 256, 14, 14)`
+4. **Deconvolution Upsampling:**
+   - ConvTranspose2d ($2\times2$, stride 2, 256 $\rightarrow$ 256) + ReLU $\rightarrow$ `(100, 256, 28, 28)`
+5. **Class-Specific Mask Projection:**
+   - Conv1x1 (256 $\rightarrow$ 80 classes) $\rightarrow$ `(100, 80, 28, 28)`
+6. **Mask Selection during Inference:**
+   - If RoI #0 is predicted as Class 5 ("Dog"), slice `Mask[0, 5, :, :]` $\rightarrow$ `(28, 28)`.
+   - Apply Sigmoid threshold ($\ge 0.5$) and paste back to original image space.
+
+## 7. Mathematical Foundations
+
+### RoIPool Quantization vs. RoIAlign Derivation
+
+Consider an RoI with continuous image coordinates $(x_1, y_1, w, h) = (10, 10, 200, 200)$ mapped onto a feature map with stride $S = 16$.
+
+#### 1. RoIPool Quantization Failure
+RoIPool computes the feature map region by integer division (quantization):
+$$x_1' = \lfloor x_1 / S \rfloor = \lfloor 10 / 16 \rfloor = 0$$
+$$w' = \lfloor w / S \rfloor = \lfloor 200 / 16 \rfloor = 12$$
+
+When dividing this $12 \times 12$ feature region into $7 \times 7$ bins, each bin size is again quantized:
+$$\text{bin\_width} = \lfloor 12 / 7 \rfloor = 1$$
+This double quantization introduces spatial shifts up to $1.5$ feature pixels, which equals $1.5 \times 16 = 24$ original image pixels—catastrophic for pixel-level mask alignment.
+
+#### 2. RoIAlign Bilinear Interpolation Derivation
+RoIAlign avoids quantization entirely. The continuous feature map boundaries are:
+$$x_1' = x_1 / S = 10 / 16 = 0.625, \quad w' = w / S = 200 / 16 = 12.5$$
+
+For an output bin $B_{i,j}$ with continuous bounds $[x_a, x_b] \times [y_a, y_b]$, RoIAlign samples 4 regularly spaced points $(x_p, y_p)$ inside the bin.
+
+For any point $(x_p, y_p)$, its feature value $f(x_p, y_p)$ is computed via **Bilinear Interpolation** from the four surrounding integer grid points $(x_L, y_T), (x_R, y_T), (x_L, y_B), (x_R, y_B)$ where $x_L = \lfloor x_p \rfloor, x_R = x_L + 1, y_T = \lfloor y_p \rfloor, y_B = y_T + 1$:
+
+$$f(x_p, y_p) = \sum_{x \in \{x_L, x_R\}} \sum_{y \in \{y_T, y_B\}} w(x, x_p) \cdot w(y, y_p) \cdot V(x, y)$$
+
+where $V(x,y)$ is the feature map value at integer grid coordinate $(x,y)$, and the bilinear weights are:
+$$w(x, x_p) = \begin{cases} 1 - (x_p - x_L) & \text{if } x = x_L \\ 1 - (x_R - x_p) & \text{if } x = x_R \end{cases}$$
+$$w(y, y_p) = \begin{cases} 1 - (y_p - y_T) & \text{if } y = y_T \\ 1 - (y_B - y_p) & \text{if } y = y_B \end{cases}$$
+
+Finally, the bin value is computed via Max or Average pooling over the 4 sampled points:
+$$y_{i,j} = \frac{1}{4} \sum_{p=1}^{4} f(x_p, y_p)$$
+
+Since $f(x_p, y_p)$ is smooth and continuous with respect to $(x_1, y_1, w, h)$, exact gradients $\frac{\partial \mathcal{L}}{\partial x_p}$ backpropagate to the backbone without distortion.
+
+### Multi-Task Loss Function
+The total loss is:
+$$\mathcal{L} = \mathcal{L}_{\text{cls}} + \mathcal{L}_{\text{box}} + \mathcal{L}_{\text{mask}}$$
+
+$\mathcal{L}_{\text{mask}}$ is defined as the average binary cross-entropy loss over an $m \times m$ mask output, considering only the mask corresponding to the ground-truth class label $k$:
+$$\mathcal{L}_{\text{mask}} = -\frac{1}{m^2} \sum_{1 \le i, j \le m} \left[ y_{ij} \log \hat{y}_{ij}^k + (1 - y_{ij}) \log (1 - \hat{y}_{ij}^k) \right]$$
+
+## 8. Training Procedure
+- **Anchor Sampling:** 128/256 RoIs per image, with positive-to-negative ratio of 1:3. An RoI is positive if Intersection-over-Union (IoU) with ground-truth box $\ge 0.5$.
+- **Mask Target Construction:** For a positive RoI associated with ground-truth class $k$, the ground-truth mask is cropped to the RoI boundary and resized to $28 \times 28$ via bilinear interpolation using binary thresholding.
+- **Optimizer:** SGD with momentum 0.9, weight decay $10^{-4}$.
+- **Learning Schedule:** "1x" schedule (12 epochs) or "3x" schedule (36 epochs with data augmentation). Learning rate starts at 0.02 (for batch size 16) and steps down by $10\times$ at epochs 8 and 11.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the Mask R-CNN Mask Head with a dummy test assertion block.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MaskRCNNMaskHead(nn.Module):
+    def __init__(self, in_channels=256, conv_dim=256, num_classes=80):
+        super().__init__()
+        # 4 Consecutive 3x3 Conv Layers
+        self.conv1 = nn.Conv2d(in_channels, conv_dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(conv_dim, conv_dim, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(conv_dim, conv_dim, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(conv_dim, conv_dim, kernel_size=3, padding=1)
+        
+        # 2x Deconvolution (Transposed Conv) to upsample 14x14 -> 28x28
+        self.deconv = nn.ConvTranspose2d(conv_dim, conv_dim, kernel_size=2, stride=2)
+        
+        # 1x1 Conv to project to num_classes binary masks
+        self.predictor = nn.Conv2d(conv_dim, num_classes, kernel_size=1)
+
+    def forward(self, x):
+        # x shape: (N_roi, in_channels, 14, 14)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = F.relu(self.deconv(x)) # (N_roi, 256, 28, 28)
+        mask_logits = self.predictor(x) # (N_roi, num_classes, 28, 28)
+        return mask_logits
+
+if __name__ == "__main__":
+    num_rois = 16
+    in_channels = 256
+    num_classes = 80
+    
+    mask_head = MaskRCNNMaskHead(in_channels=in_channels, conv_dim=256, num_classes=num_classes)
+    
+    # Dummy RoIAlign output features (N_roi, C, 14, 14)
+    dummy_roi_features = torch.randn(num_rois, in_channels, 14, 14)
+    output_masks = mask_head(dummy_roi_features)
+    
+    print(f"RoI Feature Shape: {dummy_roi_features.shape}")
+    print(f"Mask Output Shape: {output_masks.shape}")
+    
+    assert output_masks.shape == (num_rois, num_classes, 28, 28), \
+        f"Expected shape ({num_rois}, {num_classes}, 28, 28), got {output_masks.shape}"
+    print("Mask R-CNN Mask Head verification successful!")
+```
+
+## 10. Strengths
+- **Sub-Pixel Accuracy:** RoIAlign eliminates quantization errors, enabling precise pixel-level mask boundaries.
+- **Decoupled Mask & Class Prediction:** Per-pixel Sigmoid binary cross-entropy prevents cross-class competition, significantly outperforming multi-class softmax masks.
+- **Generalizability:** Easily extends to human pose estimation by predicting keypoints as 1-hot $28 \times 28$ masks.
+- **Fast Execution:** Adds negligible overhead over Faster R-CNN, running at ~5 fps.
+
+## 11. Weaknesses
+- **Fixed Mask Resolution ($28 \times 28$):** Resizing masks to $28 \times 28$ can blur ultra-fine details (e.g., thin bicycle spokes or hair).
+- **Two-Stage Latency:** Dependencies on RPN proposal generation make it slower than real-time one-stage detectors (like YOLOv8 or SOLOv2).
+- **Overlapping Box Dependencies:** If bounding box proposals fail or overlap heavily, mask generation quality degrades.
+
+## 12. Research Evolution
+Mask R-CNN unified detection and segmentation, setting the standard for two-stage instance segmentation. It inspired **PANet** (Path Aggregation Network, 2018), **HTC** (Hybrid Task Cascade, 2019), and **Mask2Former** (2022). Its RoIAlign module became a universal component across modern object recognition pipelines.
+
+## 13. Interview Questions
+
+**Q1: Explain why RoIPool causes spatial misalignment and how RoIAlign fixes it.**
+**A1:** RoIPool uses integer quantization twice: first when rounding continuous RoI coordinates to the feature map grid ($\lfloor x/S \rfloor$), and second when dividing the region into pooling bins ($\lfloor w/k \rfloor$). This can shift features by up to 1.5 pixels (24 image pixels at stride 16). RoIAlign avoids quantization entirely by keeping continuous floating-point boundaries, sampling 4 regular points in each bin, and evaluating their exact feature values using bilinear interpolation.
+
+**Q2: Why does Mask R-CNN use per-pixel Sigmoid loss for its mask head instead of Softmax?**
+**A2:** Softmax forces classes to compete for each pixel (evaluating $P(\text{class } k \mid \text{pixel})$ across all classes). In Mask R-CNN, the mask head generates $K$ independent binary masks (one per class). The loss is computed using binary cross-entropy on the single ground-truth class mask. Class assignment is handled separately by the classification branch. Decoupling class prediction from mask generation significantly improves instance segmentation quality.
+
+**Q3: What are the input and output spatial sizes of the RoIAlign layer for the box head vs. mask head in Mask R-CNN?**
+**A3:** RoIAlign extracts $7 \times 7$ spatial feature maps for the box/classification head (which feeds into Fully Connected layers) and $14 \times 14$ spatial feature maps for the mask head (which feeds into a Fully Convolutional Network that upsamples to $28 \times 28$).
+
+**Q4: How does Mask R-CNN select which feature map level $P_k$ in FPN to extract an RoI from?**
+**A4:** The FPN level $k$ is determined dynamically based on the RoI's width $w$ and height $h$ using: $k = \lfloor k_0 + \log_2(\sqrt{wh} / 224) \rfloor$, where $k_0 = 4$. Larger RoIs are extracted from coarser, higher-level feature maps ($P_5$), while smaller RoIs are extracted from finer, high-resolution feature maps ($P_2$).
+
+**Q5: Can Mask R-CNN be used for Human Keypoint Detection? How?**
+**A5:** Yes. For keypoint estimation, a keypoint is modeled as a one-hot binary mask of size $m \times m$ where only a single pixel is 1. The mask head is configured to output $K$ keypoint masks (e.g., 17 keypoints for left elbow, right knee, etc.), and a Softmax loss over spatial $m^2$ locations encourages a single peak per keypoint map.
+
+## 14. Related Papers
+- **Mask R-CNN Paper:** *Mask R-CNN* (He et al., ICCV 2017 - Best Paper Award)
+- **Faster R-CNN Paper:** *Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks* (Ren et al., NIPS 2015)
+- **FPN Paper:** *Feature Pyramid Networks for Object Detection* (Lin et al., CVPR 2017)
+
+## 15. Further Reading
+- Torchvision Implementation of `torchvision.ops.roi_align`
+- Detectron2 Library Architecture & Mask R-CNN Benchmarks

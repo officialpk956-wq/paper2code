@@ -1,0 +1,743 @@
+# LLM Serving
+
+An LLM serving system turns variable-length prompts into streamed tokens while sharing expensive accelerators across many users. The scheduler, memory manager, kernels, and model partitioning are as important as the model weights.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Know what a transformer is (attention, feedforward, layers)**, **Basic Python + REST APIs**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. An LLM serving system turns variable-length prompts into streamed tokens while sharing expensive accelerators across many users. The scheduler, memory manager, kernels, and model partitioning are as important as the model weights. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain the difference between LLM training and LLM inference
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **API gateway** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the autoregressive generation loop: one token at a time, KV cache reuse
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **tokenizer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what throughput and latency mean in LLM serving context
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **request scheduler** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe what a KV cache is and why it's the memory bottleneck
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **prefill workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Autoregressive generation loop: input tokens → KV cache → attention → feedforward → next token → append → repeat
+
+```text
+LLM Serving: Autoregressive generation loop input tokens KV cache attention feedforward next token append repeat
+
+[input tokens]
+        |
+        v
+  [KV cache]
+          |
+          v
+    [attention]
+            |
+            v
+      [feedforward]
+              |
+              v
+        [next token]
+                |
+                v
+          [append]
+                  |
+                  v
+            [repeat]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Autoregressive generation loop: input tokens → KV cache → attention → feedforward → next token → append → repeat** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 2: KV cache memory anatomy: batch_size × num_heads × seq_len × head_dim × num_layers × 2 (K+V) × dtype_bytes
+
+```text
+LLM Serving: KV cache memory anatomy batch size num heads seq len head dim num layers 2 K V dtype bytes
+
+  [producer / request]
+           |
+           v
+      [tokenizer] ---- control, version, policy ----> [request scheduler]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [prefill workers] ---- measured result + trace -----> [decode workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **KV cache memory anatomy: batch_size × num_heads × seq_len × head_dim × num_layers × 2 (K+V) × dtype_bytes** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 3: Single-request serving path: API call → tokenizer → model forward pass → sampling → detokenizer → streaming response
+
+```text
+LLM Serving: Single request serving path API call tokenizer model forward pass sampling detokenizer streaming response
+
+[API call]
+        |
+        v
+  [tokenizer]
+          |
+          v
+    [model forward pass]
+            |
+            v
+      [sampling]
+              |
+              v
+        [detokenizer]
+                |
+                v
+          [streaming response]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Single-request serving path: API call → tokenizer → model forward pass → sampling → detokenizer → streaming response** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 4: Memory hierarchy: GPU HBM (fast, scarce) → CPU DRAM (slow, abundant) — where KV cache lives
+
+```text
+LLM Serving: Memory hierarchy GPU HBM fast scarce CPU DRAM slow abundant where KV cache lives
+
+[GPU HBM (fast, scarce)]
+        |
+        v
+  [CPU DRAM (slow, abundant) — where KV cache lives]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Memory hierarchy: GPU HBM (fast, scarce) → CPU DRAM (slow, abundant) — where KV cache lives** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+### Case Studies
+
+#### HuggingFace Text Generation Inference (TGI): the reference architecture for serving a single Llama-3 model — batching, KV cache, streaming
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**HuggingFace Text Generation Inference (TGI): the reference architecture for serving a single Llama-3 model — batching, KV cache, streaming**—creates pressure at the **API gateway** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Ollama: how they made local LLM serving accessible on consumer hardware — quantization defaults, memory mapping
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Ollama: how they made local LLM serving accessible on consumer hardware — quantization defaults, memory mapping**—creates pressure at the **tokenizer** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### OpenAI ChatGPT API: what's publicly known about request handling — batching, model routing, response streaming
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**OpenAI ChatGPT API: what's publicly known about request handling — batching, model routing, response streaming**—creates pressure at the **request scheduler** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: What is a KV cache? Why does it save compute?
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What's the difference between TTFT and TPS (tokens per second)?
+
+Time to first token includes queueing, tokenization, routing, and prefill. Tokens per second or inter-token latency describes decode after streaming begins. Optimizing one can harm the other, so report both by prompt and output length. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Why does LLM inference get slower as the sequence gets longer?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What is quantization and why does it matter for serving?
+
+Quantization stores weights or activations with fewer bits, reducing memory traffic and allowing larger models or batches. The benefit depends on hardware kernels and calibration; always measure quality by task and slice rather than trusting bit width alone. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **Systems: memory management, virtual memory concepts**, **ML: quantization awareness**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. An LLM serving system turns variable-length prompts into streamed tokens while sharing expensive accelerators across many users. The scheduler, memory manager, kernels, and model partitioning are as important as the model weights. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design an LLM serving system: batching strategy, concurrency control, memory management
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **API gateway** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand continuous batching (Orca) and why it outperforms static batching
+
+Naive batching waits for every sequence in a batch to finish, leaving slots idle when lengths differ. Continuous batching admits new work as sequences complete, improving utilization while requiring a scheduler that protects queueing latency and fairness. The capability described by this objective is practical, not a definition to memorize. Begin at the **tokenizer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Implement PagedAttention: why fragmentation destroys KV cache utilization without it
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **request scheduler** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about quantization: INT8, INT4, GPTQ, AWQ — quality vs throughput tradeoffs
+
+Quantization stores weights or activations with fewer bits, reducing memory traffic and allowing larger models or batches. The benefit depends on hardware kernels and calibration; always measure quality by task and slice rather than trusting bit width alone. The capability described by this objective is practical, not a definition to memorize. Begin at the **prefill workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Static batching waste: pad tokens wasted for short sequences in a fixed-length batch
+
+```text
+LLM Serving: Static batching waste pad tokens wasted for short sequences in a fixed length batch
+
+  [producer / request]
+           |
+           v
+      [API gateway] ---- control, version, policy ----> [tokenizer]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [request scheduler] ---- measured result + trace -----> [prefill workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Static batching waste: pad tokens wasted for short sequences in a fixed-length batch** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 2: Continuous batching: token-level scheduling — new requests enter mid-batch as old ones complete
+
+```text
+LLM Serving: Continuous batching token level scheduling new requests enter mid batch as old ones complete
+
+  [producer / request]
+           |
+           v
+      [tokenizer] ---- control, version, policy ----> [request scheduler]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [prefill workers] ---- measured result + trace -----> [decode workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Continuous batching: token-level scheduling — new requests enter mid-batch as old ones complete** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 3: PagedAttention: logical KV blocks → physical block table → non-contiguous physical memory → no fragmentation
+
+```text
+LLM Serving: PagedAttention logical KV blocks physical block table non contiguous physical memory no fragmentation
+
+[logical KV blocks]
+        |
+        v
+  [physical block table]
+          |
+          v
+    [non-contiguous physical memory]
+            |
+            v
+      [no fragmentation]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **PagedAttention: logical KV blocks → physical block table → non-contiguous physical memory → no fragmentation** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 4: vLLM architecture: request pool → scheduler → block manager → model executor → sampler → detokenizer → streamer
+
+```text
+LLM Serving: vLLM architecture request pool scheduler block manager model executor sampler detokenizer streamer
+
+[request pool]
+        |
+        v
+  [scheduler]
+          |
+          v
+    [block manager]
+            |
+            v
+      [model executor]
+              |
+              v
+        [sampler]
+                |
+                v
+          [detokenizer]
+                  |
+                  v
+            [streamer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **vLLM architecture: request pool → scheduler → block manager → model executor → sampler → detokenizer → streamer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 5: Quantization pipeline: FP16 weights → calibration dataset → INT4 quantization with scale factors → quantized inference
+
+```text
+LLM Serving: Quantization pipeline FP16 weights calibration dataset INT4 quantization with scale factors quantized inference
+
+[FP16 weights]
+        |
+        v
+  [calibration dataset]
+          |
+          v
+    [INT4 quantization with scale factors]
+            |
+            v
+      [quantized inference]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Quantization pipeline: FP16 weights → calibration dataset → INT4 quantization with scale factors → quantized inference** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+### Case Studies
+
+#### vLLM's PagedAttention paper: how they achieved 24× more throughput than Hugging Face TGI by solving KV cache fragmentation — the OS-inspired memory management approach
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**vLLM's PagedAttention paper: how they achieved 24× more throughput than Hugging Face TGI by solving KV cache fragmentation — the OS-inspired memory management approach**—creates pressure at the **API gateway** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Orca's continuous batching: the throughput improvement from iteration-level scheduling — 36.9× over static batching in their paper
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Orca's continuous batching: the throughput improvement from iteration-level scheduling — 36.9× over static batching in their paper**—creates pressure at the **tokenizer** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Anyscale (Ray Serve): how they serve multiple LLM models with different resource requirements on the same cluster using fractional GPU allocation
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Anyscale (Ray Serve): how they serve multiple LLM models with different resource requirements on the same cluster using fractional GPU allocation**—creates pressure at the **request scheduler** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Why does naive batching in LLM serving waste GPU compute? How does continuous batching fix it?
+
+Naive batching waits for every sequence in a batch to finish, leaving slots idle when lengths differ. Continuous batching admits new work as sequences complete, improving utilization while requiring a scheduler that protects queueing latency and fairness. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: Explain PagedAttention. What problem does it solve that a contiguous KV cache has?
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk me through the memory layout of a KV cache for a 70B model serving 100 concurrent requests.
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: What is AWQ and why does it outperform GPTQ at the same bit width?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: How does speculative decoding work? When does it help most?
+
+A draft mechanism proposes several tokens and the target model verifies them in parallel with an acceptance rule that preserves the target distribution. Speedup depends on acceptance rate, verification cost, draft cost, and workload; a poor draft can add overhead. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Distributed systems: NCCL, AllReduce, tensor parallelism**, **Production infra: Kubernetes, GPU cluster management**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. An LLM serving system turns variable-length prompts into streamed tokens while sharing expensive accelerators across many users. The scheduler, memory manager, kernels, and model partitioning are as important as the model weights. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a production LLM serving cluster: multi-GPU tensor parallelism, pipeline parallelism, disaggregated prefill/decode
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **API gateway** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement speculative decoding with a draft model — understand when it wins and when it loses
+
+A draft mechanism proposes several tokens and the target model verifies them in parallel with an acceptance rule that preserves the target distribution. Speedup depends on acceptance rate, verification cost, draft cost, and workload; a poor draft can add overhead. The capability described by this objective is practical, not a definition to memorize. Begin at the **tokenizer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design a multi-model serving platform: routing, SLO management, cost optimization
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **request scheduler** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Build serving observability: GPU utilization, KV cache hit rate, request queue depth, SLO compliance
+
+The KV cache stores attention keys and values from earlier tokens so decoding computes only the new token's projections. It removes repeated attention-prefix work, but memory grows with concurrent sequences, layers, token count, KV heads, head dimension, and numeric precision. The capability described by this objective is practical, not a definition to memorize. Begin at the **prefill workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Disaggregated prefill/decode: prefill cluster (large batch, compute-bound) + decode cluster (small batch, memory-bound) + KV migration between clusters
+
+```text
+LLM Serving: Disaggregated prefill decode prefill cluster large batch compute bound decode cluster small batch memory bound KV migration between clusters
+
+  [producer / request]
+           |
+           v
+      [API gateway] ---- control, version, policy ----> [tokenizer]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [request scheduler] ---- measured result + trace -----> [prefill workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Disaggregated prefill/decode: prefill cluster (large batch, compute-bound) + decode cluster (small batch, memory-bound) + KV migration between clusters** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 2: Speculative decoding: draft model generates k tokens → target model verifies in parallel → accept prefix, reject tail → net speedup analysis
+
+```text
+LLM Serving: Speculative decoding draft model generates k tokens target model verifies in parallel accept prefix reject tail net speedup analysis
+
+[draft model generates k tokens]
+        |
+        v
+  [target model verifies in parallel]
+          |
+          v
+    [accept prefix, reject tail]
+            |
+            v
+      [net speedup analysis]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Speculative decoding: draft model generates k tokens → target model verifies in parallel → accept prefix, reject tail → net speedup analysis** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 3: Multi-GPU tensor parallelism for serving: QKV split across GPUs, feedforward split, all-reduce between layers — latency modeling
+
+```text
+LLM Serving: Multi GPU tensor parallelism for serving QKV split across GPUs feedforward split all reduce between layers latency modeling
+
+  [producer / request]
+           |
+           v
+      [request scheduler] ---- control, version, policy ----> [prefill workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [decode workers] ---- measured result + trace -----> [KV-cache manager]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-GPU tensor parallelism for serving: QKV split across GPUs, feedforward split, all-reduce between layers — latency modeling** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 4: Production serving cluster: load balancer → router (latency-aware) → serving pods (with autoscaling) → GPU fleet → observability stack
+
+```text
+LLM Serving: Production serving cluster load balancer router latency aware serving pods with autoscaling GPU fleet observability stack
+
+[load balancer]
+        |
+        v
+  [router (latency-aware)]
+          |
+          v
+    [serving pods (with autoscaling)]
+            |
+            v
+      [GPU fleet]
+              |
+              v
+        [observability stack]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Production serving cluster: load balancer → router (latency-aware) → serving pods (with autoscaling) → GPU fleet → observability stack** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 5: Cost optimization architecture: spot instance tier (for non-latency-sensitive batch) + on-demand tier (for interactive) + reserved tier (for stable load)
+
+```text
+LLM Serving: Cost optimization architecture spot instance tier for non latency sensitive batch on demand tier for interactive reserved tier for stable load
+
+  [producer / request]
+           |
+           v
+      [decode workers] ---- control, version, policy ----> [KV-cache manager]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [streaming transport] ---- measured result + trace -----> [telemetry]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cost optimization architecture: spot instance tier (for non-latency-sensitive batch) + on-demand tier (for interactive) + reserved tier (for stable load)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+### Case Studies
+
+#### Google's SpecInfer (2024): how speculative decoding with tree verification achieves 2.5× throughput improvement for LLM serving at scale
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Google's SpecInfer (2024): how speculative decoding with tree verification achieves 2.5× throughput improvement for LLM serving at scale**—creates pressure at the **API gateway** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Anyscale's disaggregated serving: separating prefill and decode phases onto different hardware — why prefill and decode have fundamentally different hardware requirements (compute-bound vs memory-bound)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Anyscale's disaggregated serving: separating prefill and decode phases onto different hardware — why prefill and decode have fundamentally different hardware requirements (compute-bound vs memory-bound)**—creates pressure at the **tokenizer** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Together.ai's multi-tenant serving: how they serve 50+ models to thousands of concurrent users — the routing logic, model co-location, and preemption strategy
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Together.ai's multi-tenant serving: how they serve 50+ models to thousands of concurrent users — the routing logic, model co-location, and preemption strategy**—creates pressure at the **request scheduler** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design ChatGPT's serving infrastructure for 10M daily active users. How do you handle load spikes during viral moments?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is disaggregated prefill/decode and why does it improve utilization?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Walk through speculative decoding step by step. Why does the acceptance rate determine speedup? When does it degrade?
+
+A draft mechanism proposes several tokens and the target model verifies them in parallel with an acceptance rule that preserves the target distribution. Speedup depends on acceptance rate, verification cost, draft cost, and workload; a poor draft can add overhead. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: How do you decide between scaling vertically (bigger GPUs) vs horizontally (more GPUs) for your serving cluster?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: Your LLM serving costs are 3× higher than a competitor. Walk through a systematic approach to reducing them.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. For **LLM Serving**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: vLLM (2023), Orca (2022), Sarathi-Serve (2024), DistServe (2024), Mooncake (2024)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. An LLM serving system turns variable-length prompts into streamed tokens while sharing expensive accelerators across many users. The scheduler, memory manager, kernels, and model partitioning are as important as the model weights. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze frontier serving research: Sarathi-Serve, DistServe, MegaScale, Mooncake
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **API gateway** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design a serving system optimization for a novel hardware constraint
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **tokenizer** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Understand the emerging disaggregated inference paradigm and its limitations
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **request scheduler** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Propose a research contribution to improve LLM serving efficiency
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through API gateway, tokenizer, request scheduler, prefill workers. The governing quantitative model is: For batch $B$, sequence length $L$, layers $n_l$, KV heads $n_h$, head dimension $d_h$, and bytes $b$, KV memory is approximately $M_{KV}=2BLn_ln_hd_hb$; the factor two stores keys and values. Throughput improves only while batching gains exceed memory pressure and queueing delay. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **prefill workers** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In LLM Serving, that boundary interacts with time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Sarathi-Serve: chunked prefill — splitting long prefill across multiple iterations to prevent head-of-line blocking in decode
+
+```text
+LLM Serving: Sarathi Serve chunked prefill splitting long prefill across multiple iterations to prevent head of line blocking in decode
+
+  [producer / request]
+           |
+           v
+      [API gateway] ---- control, version, policy ----> [tokenizer]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [request scheduler] ---- measured result + trace -----> [prefill workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Sarathi-Serve: chunked prefill — splitting long prefill across multiple iterations to prevent head-of-line blocking in decode** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 2: DistServe: memory pool disaggregation — global KV pool accessible by any decode worker, eliminating the memory-compute coupling
+
+```text
+LLM Serving: DistServe memory pool disaggregation global KV pool accessible by any decode worker eliminating the memory compute coupling
+
+  [producer / request]
+           |
+           v
+      [tokenizer] ---- control, version, policy ----> [request scheduler]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [prefill workers] ---- measured result + trace -----> [decode workers]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **DistServe: memory pool disaggregation — global KV pool accessible by any decode worker, eliminating the memory-compute coupling** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 3: Mooncake: KV cache-centric scheduling across heterogeneous hardware (SSD + DRAM + HBM) — the prefetch pipeline
+
+```text
+LLM Serving: Mooncake KV cache centric scheduling across heterogeneous hardware SSD DRAM HBM the prefetch pipeline
+
+  [producer / request]
+           |
+           v
+      [request scheduler] ---- control, version, policy ----> [prefill workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [decode workers] ---- measured result + trace -----> [KV-cache manager]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Mooncake: KV cache-centric scheduling across heterogeneous hardware (SSD + DRAM + HBM) — the prefetch pipeline** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+#### Diagram 4: MegaScale architecture: ByteDance's LLM training/serving infrastructure at 10K+ GPU scale — the communication topology
+
+```text
+LLM Serving: MegaScale architecture ByteDance s LLM training serving infrastructure at 10K GPU scale the communication topology
+
+  [producer / request]
+           |
+           v
+      [prefill workers] ---- control, version, policy ----> [decode workers]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [KV-cache manager] ---- measured result + trace -----> [streaming transport]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **MegaScale architecture: ByteDance's LLM training/serving infrastructure at 10K+ GPU scale — the communication topology** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token.
+
+### Case Studies
+
+#### Chunked prefill in Sarathi-Serve: the head-of-line blocking problem in mixed workloads (long prompts + short prompts), how chunking solves it, the optimal chunk size selection
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Chunked prefill in Sarathi-Serve: the head-of-line blocking problem in mixed workloads (long prompts + short prompts), how chunking solves it, the optimal chunk size selection**—creates pressure at the **API gateway** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### DistServe's evaluation: under what workload distributions does disaggregated prefill/decode win? When does the KV migration cost exceed the benefit?
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**DistServe's evaluation: under what workload distributions does disaggregated prefill/decode win? When does the KV migration cost exceed the benefit?**—creates pressure at the **tokenizer** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### PD (Prefill-Decode) disaggregation in production at ByteDance: the engineering challenges of maintaining consistency when KV cache moves between machines
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**PD (Prefill-Decode) disaggregation in production at ByteDance: the engineering challenges of maintaining consistency when KV cache moves between machines**—creates pressure at the **request scheduler** layer of LLM Serving. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory. Instrument it for time to first token, inter-token latency, tokens per second, KV memory, fairness, availability, and cost per token, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable LLM Serving slice.** Implement one request path using API gateway, tokenizer, request scheduler. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable LLM Serving slice.** Implement one request path using API gateway, tokenizer, request scheduler. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable LLM Serving slice.** Implement one request path using API gateway, tokenizer, request scheduler. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable LLM Serving slice.** Implement one request path using API gateway, tokenizer, request scheduler. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build single-request eager inference with measured TTFT, inter-token latency, throughput, and peak memory, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [ChatGPT Architecture](/system-design/chatgpt-architecture)
+- [DeepSeek Architecture](/system-design/deepseek-architecture)
+- [Distributed LLM engineering](/learn/llm-engineering/tensor-parallelism-pipeline-parallelism-and-fsdp)
+- [Flash Attention curriculum](/learn/llm-engineering/flash-attention-and-memory-efficient-attention)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- Kwon et al., Efficient Memory Management for Large Language Model Serving with PagedAttention (2023)
+- vLLM documentation
+- Dao et al., FlashAttention papers
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

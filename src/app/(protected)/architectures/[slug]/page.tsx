@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowRight, ArrowLeft } from 'lucide-react';
 import { ARCHITECTURES } from '@/data/content/architectures';
 import { findTopic, dojoSlugFor, papersForArch, LIBRARY_TO_WORKSPACE_ID } from '@/lib/crosslinks';
@@ -9,6 +10,7 @@ import ArchDiagram from '@/components/arch/ArchDiagram';
 import { toDiagramSlug } from '@/components/arch/archFlows';
 import SectionGrid from '@/components/arch/SectionGrid';
 import ArchHeroBackground from '@/components/arch/ArchHeroBackground';
+import { ARCHITECTURE_ROUTE_ALIASES } from '@/data/content/routeAliases';
 
 const ARCH_SECTIONS = [
   "Motivation",
@@ -65,6 +67,9 @@ function extractHeadings(mdxSource: string): string[] {
 
 export default async function ArchitectureSlugPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+
+  const canonicalSlug = ARCHITECTURE_ROUTE_ALIASES[slug];
+  if (canonicalSlug) redirect(`/architectures/${canonicalSlug}`);
 
   const arch = ARCHITECTURES.find(a => a.slug === slug);
 

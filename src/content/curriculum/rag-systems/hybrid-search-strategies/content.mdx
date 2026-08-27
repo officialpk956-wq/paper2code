@@ -1,0 +1,141 @@
+# Hybrid Search Strategies
+
+## 1. Overview
+
+Classical keyword-based search (BM25) and dense neural retrieval each have complementary strengths: keyword search is fast, interpretable, and handles exact term matches well; dense retrieval captures semantic similarity and handles synonyms, paraphrases, and complex meaning. Rather than choosing one, hybrid search combines both, typically by running a classical retriever first (fast, recall-focused) and then re-ranking with dense embeddings (slow, precision-focused), or by combining their scores in a principled way. Hybrid search achieves the best of both worlds: nearly the semantic accuracy of pure dense retrieval with latency closer to keyword search, and interpretability of what contributed to a ranking (keyword overlap plus semantic similarity).
+
+## 2. Prerequisites in Context
+
+**Retrieval Fundamentals** is essential — you need to understand both classical IR (BM25) and dense retrieval as separate approaches before understanding how to combine them. **Ranking and Re-Ranking** is the key technical prerequisite — hybrid systems are fundamentally multi-stage ranking systems, first using one ranker, then using another. **Score Normalization** and **Fusion Methods** matter because combining scores from different retrievers (one bounded 0-1, another potentially unbounded) requires careful normalization to avoid one ranker dominating.
+
+## 3. Core Concept
+
+The simplest hybrid approach is **sequential ranking** or **multi-stage retrieval**: (1) **Stage 1 (Recall)**: use a fast retriever (BM25, lexical search) on the full corpus, returning top-1000 candidates; (2) **Stage 2 (Precision)**: use a more expensive retriever (dense embeddings, neural re-ranker) to re-rank those top-1000 candidates, returning top-10. This achieves high recall (BM25 gets relevant documents into top-1000, rare to miss) with high precision (re-ranker picks the best ones) while keeping latency reasonable (BM25 is fast at billion scale, re-ranker only processes 1000 candidates, not billions). An alternative is **score fusion** or **late fusion**: run both retrievers independently, combine their scores (e.g., via weighted average or reciprocal rank fusion), and rank the union. This requires careful score normalization since raw BM25 and embedding similarity scores are on different scales. **RRF (Reciprocal Rank Fusion)** is a principled fusion method: given rankings $r_1$ and $r_2$ from two retrievers, assign each document a fused score of $\frac{1}{60 + r_1} + \frac{1}{60 + r_2}$, avoiding the need to normalize raw scores.
+
+## 4. Theoretical Foundations
+
+The **Condorcet criterion** and **merge paradox** from voting theory inform fusion: different rankers may rank documents differently because they capture different relevance signals (keywords vs. semantics). Combining rankings via fusion can, counterintuitively, produce a better final ranking than either individual ranker because they disagree on different documents — a document ranked high by both BM25 and dense retrieval is likely to be highly relevant. **Information retrieval theory** shows that hybrid systems achieve higher **mean average precision (MAP)** and other metrics than individual rankers, especially when the rankers are somewhat independent (keyword-based and semantic-based are sufficiently different). The optimal fusion weight for combining BM25 and dense retrieval is typically around 0.5-0.7 for dense, 0.3-0.5 for BM25, though this depends on corpus and query distributions.
+
+## 5. Worked Example
+
+Searching a technical documentation corpus for "how do I configure a reverse proxy?" — BM25 search finds documents with "reverse," "proxy," "configure," ranking them by term overlap. Dense retrieval encodes the query semantically and ranks documents by semantic similarity, potentially finding a document about "setting up a load balancer in front of your server" because it's semantically similar to reverse proxying. Neither alone is perfect: BM25 might miss the load-balancer document (different terminology); dense retrieval might rank a document about "proxy servers" highly even if it's not about reverse proxying specifically (semantic false positive). Hybrid approach: BM25 returns top-100 candidates, dense re-ranker picks the best 5, combining the strengths: BM25 ensures relevant documents are in top-100 (recall), dense re-ranker picks the most semantically appropriate (precision).
+
+## 6. Code / Implementation
+
+```python
+import numpy as np
+from scipy.spatial.distance import cosine
+
+def reciprocal_rank_fusion(rankings, constant=60):
+    """
+    RRF combines multiple rankings using reciprocal rank formula.
+    rankings: list of ranking lists (each ranking is a list of doc_ids)
+    Returns: fused scores for all documents
+    """
+    scores = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking, 1):
+            if doc_id not in scores:
+                scores[doc_id] = 0
+            scores[doc_id] += 1.0 / (constant + rank)
+    
+    return scores
+
+def normalize_scores(scores_list):
+    """Normalize scores to [0, 1] range."""
+    normalized = []
+    for scores in scores_list:
+        min_score = min(scores)
+        max_score = max(scores)
+        if max_score == min_score:
+            normalized.append([0.5] * len(scores))
+        else:
+            normalized.append([(s - min_score) / (max_score - min_score) for s in scores])
+    return normalized
+
+def weighted_fusion(bm25_scores, dense_scores, alpha=0.6):
+    """
+    Weighted fusion: combine BM25 and dense retrieval scores.
+    alpha: weight for dense retrieval (1-alpha for BM25)
+    """
+    # Assume same number of documents and order
+    return [alpha * d + (1 - alpha) * b for b, d in zip(bm25_scores, dense_scores)]
+
+def multi_stage_retrieval(query, corpus, bm25_retriever, dense_retriever, stage1_k=100, stage2_k=10):
+    """
+    Two-stage retrieval: BM25 for recall, dense for precision.
+    """
+    # Stage 1: Fast BM25 retrieval
+    stage1_results = bm25_retriever.retrieve(query, top_k=stage1_k)
+    stage1_docs = [doc_id for doc_id, score in stage1_results]
+    stage1_corpus = [corpus[doc_id] for doc_id in stage1_docs]
+    
+    # Stage 2: Precise dense re-ranking on stage 1 results
+    stage2_results = dense_retriever.retrieve(query, stage1_corpus, top_k=stage2_k)
+    
+    return stage2_results
+
+if __name__ == "__main__":
+    # Simulate BM25 and dense retrieval rankings for 5 documents
+    bm25_ranking = [0, 2, 1, 4, 3]  # Document IDs in BM25 rank order
+    dense_ranking = [2, 0, 4, 1, 3]  # Document IDs in dense rank order
+    
+    # RRF Fusion
+    fused_scores = reciprocal_rank_fusion([bm25_ranking, dense_ranking])
+    sorted_docs = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    print("BM25 Ranking:", bm25_ranking)
+    print("Dense Ranking:", dense_ranking)
+    print("RRF Fused Ranking:", [doc_id for doc_id, score in sorted_docs])
+    print("Fused Scores:", {doc_id: f"{score:.4f}" for doc_id, score in sorted_docs})
+    
+    # Weighted Fusion (simulated scores)
+    bm25_scores = [0.9, 0.7, 0.8, 0.5, 0.6]
+    dense_scores = [0.8, 0.95, 0.7, 0.6, 0.5]
+    
+    weighted = weighted_fusion(bm25_scores, dense_scores, alpha=0.6)
+    print("\nWeighted Fusion (60% dense, 40% BM25):", [f"{s:.4f}" for s in weighted])
+```
+
+## 7. Real-World Applications
+
+Elasticsearch's hybrid search combines BM25 with dense retrieval (via vectors) in a single query pipeline. Google Search uses multi-stage ranking: BM25-style retrieval for candidate generation, then neural re-rankers (BERT-based models) for precision. Legal research platforms use hybrid search to combine keyword search (precise for case citations) with semantic search (to find similar legal reasoning). Recommender systems use hybrid approaches: collaborative filtering (keyword-like) combined with semantic similarity (dense embeddings) to recommend items.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that hybrid search is more complex without clear benefits — in practice, hybrid often outperforms individual rankers on standard metrics (MAP, NDCG), and the complexity (two rankers, fusion logic) is offset by better accuracy. Another pitfall is assuming score normalization is trivial — BM25 scores can be unbounded, dense scores typically [-1, 1], and naive combination (alpha * dense + (1-alpha) * BM25) can let BM25 dominate if BM25 scores are systematically higher. A third pitfall is ignoring latency in hybrid systems — while multi-stage retrieval is faster than pure dense retrieval at billion scale, it's still slower than pure BM25, so systems need careful optimization (parallelization, caching, approximate indexing).
+
+## 9. How This Connects
+
+This topic requires **Retrieval Fundamentals**, **Dense Retrieval**, and **Ranking & Re-Ranking** as prerequisites. It connects to **Re-Ranking and Fusion** (a deeper dive into fusion methods), **Production RAG at Scale** (deploying hybrid systems efficiently), **Learning to Rank** (optimizing fusion weights via ML), and applications to **Chatbots**, **Search Systems**, and **Question Answering**.
+
+## 10. Check Your Understanding
+
+**Q1: What is the key advantage of two-stage hybrid retrieval over single-stage?**
+Two-stage achieves recall (finding relevant documents) efficiently via a fast retriever (BM25), then achieves precision (picking the best) via a slower, more sophisticated re-ranker (dense embeddings). This balances latency and accuracy better than either alone.
+
+**Q2: Why is Reciprocal Rank Fusion (RRF) useful for combining rankings?**
+RRF avoids the need to normalize raw scores (which can have different scales and distributions). It combines rankings (not raw scores) using the formula 1/(constant+rank), automatically balancing the influence of different rankers regardless of their score distributions.
+
+**Q3: What is a common pitfall when combining BM25 and dense retrieval scores with a weighted average?**
+BM25 scores and dense similarity scores are on different scales — naive alpha-weighting can let one ranker dominate, especially if BM25 scores are systematically higher. Score normalization to a common range (like [0, 1]) is necessary before weighted fusion.
+
+**Q4: Why might different rankers (BM25 vs. dense) produce different rankings for the same query?**
+BM25 ranks by keyword overlap and term importance; dense retrieval ranks by semantic similarity. These are fundamentally different signals — a document with exact keyword matches (high BM25) might have low semantic similarity if it's not actually relevant, and vice versa.
+
+**Q5: How does hybrid retrieval maintain efficiency at billion-scale corpus sizes?**
+By using a fast retriever (BM25, inverted index) as stage 1 to filter to a smaller candidate set (top-1000), then applying a more expensive retriever (dense re-ranker) only to candidates, avoiding the need to run dense retrieval over billions of documents.
+
+## 11. Further Reading
+
+- Craswell, Mitra & Yilmaz, "Overview of the TREC 2020 Deep Learning Track" (2020) — hybrid retrieval evaluation
+- Gordon et al., "Simple Python Library for Hybrid Search" (Pinecone, 2023)
+- Zendel & Wolz, "Parameter Tuning for Hybrid Search" (2023)
+- Gordon et al., "Hybrid Search for RAG: Combining Dense and Sparse Retrieval" (2023)
+- See also: `retrieval-fundamentals` and `dense-retrieval-and-embedding-similarity` in this domain
+
+## Related Platform Content
+
+- [RAG SYSTEMS curriculum overview](/learn/rag-systems)
+- [Production system](/system-design/rag-systems)
+- [Browse all system designs](/system-design)

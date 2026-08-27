@@ -1,0 +1,124 @@
+# Segment Anything
+
+**Kirillov et al. · ICCV 2023 · arXiv:2304.02643 · Meta AI**
+
+---
+
+## 1. Overview
+
+The Segment Anything Model (SAM) brings the foundational model paradigm (seen in NLP with GPT-3 and in image classification with CLIP) to the task of image segmentation. It introduces a promptable segmentation task: given an image and a prompt (a point, a bounding box, a rough mask, or free text), the model predicts the corresponding segmentation mask.
+
+To train this model, Meta AI built the SA-1B dataset, containing over 1 billion masks on 11 million licensed and privacy-preserving images — 400x more masks than any existing dataset. SAM's zero-shot performance is so robust that it frequently outperforms fully supervised models on novel domains (like microscopy or underwater imagery) without any fine-tuning.
+
+---
+
+## 2. Historical Context
+
+Before SAM, segmentation models were highly specialized. A model trained to segment cars couldn't segment cells. Creating a new segmentation model required painstakingly drawing pixel-perfect polygons around thousands of examples in the new domain.
+
+The NLP world had solved this specialization problem with promptable foundation models. SAM aimed to replicate this success for vision by framing segmentation as a promptable task and scaling the training data massively.
+
+---
+
+## 3. Research Problem
+
+How do we build a single segmentation model that can accurately segment *any* object in *any* image, without requiring task-specific fine-tuning?
+
+---
+
+## 4. Prior Work
+
+| Model | Task | Generalization |
+|:---|:---|:---|
+| Mask R-CNN | Instance Segmentation | Closed-set categories |
+| U-Net | Semantic Segmentation | Domain-specific (e.g., medical) |
+| CLIP | Image-level classification | Zero-shot, but no spatial masks |
+
+---
+
+## 5. Why Previous Methods Failed
+
+Previous methods were trained on closed-set vocabularies (e.g., the 80 classes in COCO). They couldn't generalize to "segment this blob" if the blob wasn't in their training ontology. Furthermore, existing segmentation datasets were too small to learn truly universal visual features.
+
+---
+
+## 6. Core Innovation
+
+Three simultaneous innovations:
+
+1. **Promptable Task:** The model takes an image and a prompt (points, boxes, masks, text) and must return a valid segmentation mask.
+2. **Architecture:** A heavyweight image encoder computes an image embedding once. A lightweight, fast mask decoder runs in milliseconds to predict masks from prompts.
+3. **Data Engine:** A three-stage process to build the 1-Billion mask dataset (SA-1B): manual annotation, semi-automatic (model suggests, human refines), and fully automatic (model segments everything).
+
+---
+
+## 7. Architecture Breakdown
+
+SAM has three components:
+
+- **Image Encoder:** A Vision Transformer (ViT-H/16) pre-trained with MAE (Masked Autoencoders). It runs once per image.
+- **Prompt Encoder:** Encodes spatial prompts (points, boxes) via positional encodings, and text prompts via CLIP.
+- **Mask Decoder:** A lightweight Transformer decoder block that uses two-way cross-attention (prompts attend to image, image attends to prompts) to predict masks.
+
+---
+
+## 8. Mathematical Foundations
+
+The model is trained to resolve ambiguity. If a single point prompt is placed on a person's shirt, it's ambiguous whether the mask should be the shirt or the person. SAM predicts multiple masks (usually 3: whole, part, subpart) and a confidence score for each, minimizing the loss for the *best* predicted mask.
+
+---
+
+## 9. Key Experiments
+
+SAM was evaluated zero-shot on 23 diverse segmentation datasets spanning domains from autonomous driving to medical imaging to agriculture.
+
+---
+
+## 10. Benchmark Results
+
+On 23 zero-shot datasets, SAM outperformed the fully supervised RITM baseline on 16 datasets. Even on the datasets where it lost, it was highly competitive, proving its foundational capabilities.
+
+---
+
+## 11. Ablation Studies
+
+Ablations showed that the massive SA-1B dataset was the key driver of performance. Training SAM on smaller datasets like COCO drastically reduced its zero-shot transfer capabilities.
+
+---
+
+## 12. Implementation Details
+
+- **Image Encoder:** ViT-H (632M parameters)
+- **Mask Decoder:** Very small (~4M parameters), allowing realtime interactive prompting in the browser once the image embedding is computed.
+
+---
+
+## 13. Engineering Insights
+
+- **Separation of Compute:** By putting the heavy lifting in the image encoder and keeping the prompt decoder light, SAM enables real-time interactivity. The image is encoded once (taking ~1 second on a GPU), and then the user can click points to generate masks in ~50ms directly in the web browser.
+
+---
+
+## 14. Limitations
+
+- **Image Encoder Cost:** The ViT-H image encoder is computationally heavy.
+- **Semantic Labels:** SAM predicts *where* an object is (a mask), but it doesn't inherently predict *what* it is (a class label), though it can be combined with CLIP for this.
+
+---
+
+## 15. Influence on Later Research
+
+SAM immediately became a universal tool in computer vision pipelines. It is used to generate pseudo-labels, track objects in video (Track Anything), and assist in medical imaging.
+
+---
+
+## 16. Related Architectures
+
+- [Vision Transformer (ViT)](/papers/vision-transformer)
+- [CLIP](/papers/clip)
+
+---
+
+## 17. Related Problems
+
+- Cross-attention between image and prompt embeddings

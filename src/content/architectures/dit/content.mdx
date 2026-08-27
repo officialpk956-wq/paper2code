@@ -1,0 +1,276 @@
+# DiT
+
+## 1. Overview
+Diffusion Transformer (DiT), introduced in 2022 by William Peebles and Saining Xie (UC Berkeley & NYU), initiated a monumental architectural shift in generative AI by replacing the standard U-Net backbone in diffusion models with a pure **Vision Transformer (ViT)**. Prior to DiT, virtually all diffusion architectures (DDPM, LDM, Imagen) relied on U-Net backbones built from convolutional residual blocks and downsampling/upsampling bottlenecks. Peebles and Xie demonstrated that the U-Net architecture is not essential for diffusion performance; instead, transformer architectures scale predictably according to standard scaling laws. DiT patchifies latent feature maps and processes them through a sequence of Transformer blocks conditioned via **Adaptive Layer Normalization with Zero-Initialization (adaLN-Zero)**. DiT-XL/2 set new state-of-the-art FID benchmarks on ImageNet $512 \times 512$, laying the direct foundation for **Sora** (OpenAI's video generation model) and **Stable Diffusion 3**.
+
+:::note
+DiT's core insight: "Replace the convolutional U-Net backbone in latent diffusion with a pure Vision Transformer (ViT) conditioned via adaLN-Zero. Diffusion performance scales predictably with Gflops, following transformer scaling laws."
+:::
+
+## 2. Historical Context
+From 2020 to 2022, convolutional U-Nets were considered the undisputed backbone for diffusion models. While Vision Transformers (ViT) had replaced CNNs in image classification, object detection, and multimodal language models, generative diffusion research remained stuck on U-Nets.
+
+Peebles and Xie challenged this architectural dogma. They argued that U-Net's spatial downsampling/upsampling bottlenecks and convolutional inductive biases were historical artifacts borrowed from image segmentation. They designed DiT to test whether pure Transformers could scale generative diffusion models as effectively as they scaled Large Language Models (LLMs).
+
+By combining Latent Diffusion (operating in VAE latent space) with ViT blocks conditioned via **adaLN-Zero**, DiT proved that generative diffusion quality scales directly with compute (Gflops)—whether achieved by deepening the transformer, widening channels, or shrinking patch size.
+
+## 3. Problem It Solves
+DiT resolves three major architectural limitations of U-Net diffusion models:
+1. **Lack of Transformer Scaling Law Compatibility:** Convolutional U-Nets lack predictable scaling behavior. DiT inherits Transformer scaling laws, where increasing compute (higher GFLOPs via patch size reduction or model widening) yields predictable drops in FID.
+2. **Inflexible Conditioning Mechanisms:** U-Nets require complex skip-connection injections and spatial cross-attention layers. DiT introduces **adaLN-Zero**, a simple layer-norm conditioning block that injects timestep and class embeddings via affine scale and shift parameters.
+3. **Inductive Bias Bottlenecks:** Replaces spatial translation-invariance assumptions in CNNs with patchified sequence representations that process global self-attention across all spatial tokens at every layer.
+
+## 4. Architecture Diagram Data
+Below is the full architecture of DiT showing Latent Patchification, DiT Transformer Block with adaLN-Zero, and Final Unpatchification.
+
+```text
+                     [ Latent Image z: (B, 4, 32, 32) ]
+                                     |
+                                     v
+                  +=====================================+
+                  | 1. Patchify Layer                   |
+                  | - Patch size p = 2x2                |
+                  | - Flattens to sequence of tokens:   |
+                  |   (32/2)*(32/2) = 256 tokens        |
+                  | - Linear Projection to Hidden Dim d |
+                  |   Output: (B, 256, d)               |
+                  +=====================================+
+                                     |
+                                     v
+                     [ Token Sequence + Positional Embeddings ]
+                                     |
+    +--------------------------------+--------------------------------+
+    |                                                                 |
+    v                                                                 v
+[ Timestep t ]                                               [ Class Label c ]
+    |                                                                 |
+    +--------------------------------+--------------------------------+
+                                     |
+                                     v
+                    [ Combined Vector: t_emb + c_emb ]
+                                     |
+                                     v
+         +=======================================================+
+         | REPEATED DiT TRANSFORMER BLOCKS (N Layers)            |
+         |                                                       |
+         |  [ Input Tokens: (B, 256, d) ]                        |
+         |             |                                         |
+         |             v                                         |
+         |  +-------------------------------------------------+  |
+         |  | adaLN Modulation: Regulates scale gamma1,      |  |
+         |  | shift beta1, and gate alpha1                    |  |
+         |  +-------------------------------------------------+  |
+         |             |                                         |
+         |             v                                         |
+         |  [ LayerNorm(x) * (1 + gamma1) + beta1 ]             |
+         |             |                                         |
+         |             v                                         |
+         |  [ Multi-Head Self-Attention ]                        |
+         |             |                                         |
+         |             v                                         |
+         |  [ x = x + alpha1 * SelfAttention(x) ]                |
+         |             |                                         |
+         |             v                                         |
+         |  +-------------------------------------------------+  |
+         |  | adaLN Modulation: Regulates scale gamma2,      |  |
+         |  | shift beta2, and gate alpha2                    |  |
+         |  +-------------------------------------------------+  |
+         |             |                                         |
+         |             v                                         |
+         |  [ LayerNorm(x) * (1 + gamma2) + beta2 ]             |
+         |             |                                         |
+         |             v                                         |
+         |  [ Feed-Forward MLP ]                                 |
+         |             |                                         |
+         |             v                                         |
+         |  [ x = x + alpha2 * MLP(x) ]                          |
+         +=======================================================+
+                                     |
+                                     v
+                     [ Output Tokens: (B, 256, d) ]
+                                     |
+                                     v
+                  +=====================================+
+                  | 2. Linear Readout & Unpatchify      |
+                  | - Linear(d -> p * p * out_channels) |
+                  | - Reshape tokens back to 2D latent  |
+                  |   Output: (B, 4, 32, 32)            |
+                  +=====================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Patchification & Positional Encoding:**
+- Takes input latent code $z \in \mathbb{R}^{C \times H \times W}$ (e.g., $4 \times 32 \times 32$ for VAE $256 \times 256$ image).
+- Divides $z$ into non-overlapping patches of size $p \times p$ (e.g., $p=2$).
+- Flattens patches into a sequence of $T_{\text{tokens}} = (H/p) \times (W/p) = 16 \times 16 = 256$ tokens.
+- Projects patches to hidden dimension $d$ using a Linear layer and adds standard 2D sine-cosine positional embeddings.
+
+**2. Condition Embedding MLP:**
+- Embeds discrete timestep $t$ via sinusoidal embedding and class label $c$ via learned embedding matrix.
+- Vector sum $y = t_{\text{emb}} + c_{\text{emb}}$ is processed through a 2-layer MLP to produce conditioning vector $y \in \mathbb{R}^{d}$.
+
+**3. DiT Block with adaLN-Zero:**
+- **adaLN Modulation:** The conditioning vector $y$ is passed through a Linear layer to regress 6 dimension-wise parameters per block: $(\gamma_1, \beta_1, \alpha_1, \gamma_2, \beta_2, \alpha_2)$.
+- **Modulated Self-Attention:**
+  $$x' = x + \alpha_1 \cdot \text{SelfAttention}\left( \text{LayerNorm}(x) \cdot (1 + \gamma_1) + \beta_1 \right)$$
+- **Modulated MLP:**
+  $$x'' = x' + \alpha_2 \cdot \text{MLP}\left( \text{LayerNorm}(x') \cdot (1 + \gamma_2) + \beta_2 \right)$$
+
+**4. Linear Readout & Unpatchify:**
+- Passes final token embeddings through a LayerNorm (modulated by final adaLN scale/shift) and a Linear projection layer to output $p \times p \times C_{\text{out}}$ channels per token.
+- Reshapes tokens back into 2D spatial arrangement $(B, C_{\text{out}}, H, W)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DiT-XL/2 for input latent `(B, 4, 32, 32)`, hidden dim $d=1152$, patch size $p=2$.
+
+1. **Patchification:**
+   - Input Latent $z$: `(B, 4, 32, 32)`
+   - Extract $2 \times 2$ patches $\rightarrow 16 \times 16 = 256$ patches.
+   - Linear projection (patch $2 \times 2 \times 4 = 16 \to 1152$) $\rightarrow$ `(B, 256, 1152)`
+   - Add 2D Sine-Cosine Positional Embeddings $\rightarrow$ `(B, 256, 1152)`
+2. **Condition Embedding (Timestep + Class):**
+   - Timestep $t$ + Class $c \rightarrow$ MLP $\rightarrow y$: `(B, 1152)`
+3. **DiT Block Execution (28 Stacked Layers):**
+   - For each block:
+     - Linear($y$) projects 1152 $\to 6 \times 1152 = 6912$ parameters: $(\gamma_1, \beta_1, \alpha_1, \gamma_2, \beta_2, \alpha_2)$ each of shape `(B, 1152)`.
+     - Modulated Self-Attention over 256 tokens $\rightarrow$ `(B, 256, 1152)`
+     - Modulated Feed-Forward MLP $\rightarrow$ `(B, 256, 1152)`
+4. **Unpatchify Readout:**
+   - Linear(1152 $\to 2 \times 2 \times 8 = 32$) $\rightarrow$ `(B, 256, 32)` (predicts noise $\epsilon$ + variance $\gamma$)
+   - Unpatchify reshape $\rightarrow$ Output Noise Map: `(B, 8, 32, 32)`
+
+## 7. Mathematical Foundations
+
+### adaLN-Zero Modulation & Zero Initialization
+Standard Adaptive Layer Normalization (adaLN) regresses scale $\gamma$ and shift $\beta$ parameters from conditioning vector $y$:
+
+$$\text{adaLN}(x, y) = \text{LayerNorm}(x) \cdot (1 + \gamma(y)) + \beta(y)$$
+
+DiT introduces **adaLN-Zero**, which additionally regresses a dimension-wise gating scale $\alpha(y)$ applied to residual connections:
+
+$$x_{l+1} = x_l + \alpha_1(y) \cdot \text{SelfAttention}\left( \text{adaLN}(x_l, y) \right)$$
+
+$$x_{l+2} = x_{l+1} + \alpha_2(y) \cdot \text{MLP}\left( \text{adaLN}(x_{l+1}, y) \right)$$
+
+#### The Zero-Initialization Rule
+The linear layer predicting $(\gamma_1, \beta_1, \alpha_1, \gamma_2, \beta_2, \alpha_2)$ is **initialized to output ALL ZEROS** at step 0 of training:
+
+$$\gamma_1 = 0, \quad \beta_1 = 0, \quad \alpha_1 = 0, \quad \gamma_2 = 0, \quad \beta_2 = 0, \quad \alpha_2 = 0$$
+
+#### Why Zero-Initialization is Crucial:
+1. When $\alpha_1 = 0$ and $\alpha_2 = 0$, every DiT block acts as an **identity shortcut**: $x_{l+1} = x_l$.
+2. This allows signals to flow completely uninhibited through all 28 Transformer layers at step 0 of training, acting as an identity function.
+3. This eliminates training instability and gradient explosion, enabling deep 28-layer Vision Transformers to train stably from scratch without complex layer-scale initialization schemes.
+
+## 8. Training Procedure
+- **Model Configurations:** DiT scales across 4 configurations: S (Small), B (Base), L (Large), XL (Extra-Large) paired with patch sizes 2, 4, 8 (e.g., DiT-XL/2).
+- **Optimizer:** AdamW without weight decay on adaLN parameters, learning rate $1 \times 10^{-4}$.
+- **Loss:** Standard MSE loss on predicted noise and covariance $\Sigma_\theta$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **DiT Block with adaLN-Zero**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DiTBlock(nn.Module):
+    """ DiT Transformer Block with adaLN-Zero Modulation """
+    def __init__(self, hidden_dim=1152, num_heads=16):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
+        self.attn = nn.MultiheadAttention(hidden_dim, num_heads=num_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(hidden_dim * 4, hidden_dim)
+        )
+        
+        # adaLN Modulation Linear Layer: Regresses 6 parameters (gamma1, beta1, alpha1, gamma2, beta2, alpha2)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 6 * hidden_dim, bias=True)
+        )
+        
+        # ZERO INITIALIZATION FOR adaLN-Zero
+        nn.init.zeros_(self.adaLN_modulation[1].weight)
+        nn.init.zeros_(self.adaLN_modulation[1].bias)
+
+    def forward(self, x, c):
+        """
+        x: (B, N_tokens, hidden_dim)
+        c: (B, hidden_dim) - Timestep + Class conditioning vector
+        """
+        # Regress 6 modulation parameters
+        params = self.adaLN_modulation(c).chunk(6, dim=-1)
+        gamma1, beta1, alpha1, gamma2, beta2, alpha2 = params
+        
+        # Modulated Self-Attention with Gating (alpha1)
+        x_norm1 = self.norm1(x) * (1 + gamma1.unsqueeze(1)) + beta1.unsqueeze(1)
+        attn_out, _ = self.attn(x_norm1, x_norm1, x_norm1)
+        x = x + alpha1.unsqueeze(1) * attn_out
+        
+        # Modulated MLP with Gating (alpha2)
+        x_norm2 = self.norm2(x) * (1 + gamma2.unsqueeze(1)) + beta2.unsqueeze(1)
+        mlp_out = self.mlp(x_norm2)
+        x = x + alpha2.unsqueeze(1) * mlp_out
+        
+        return x
+
+if __name__ == "__main__":
+    B, N_tokens, d = 2, 256, 1152
+    dit_block = DiTBlock(hidden_dim=d, num_heads=16)
+    
+    x = torch.randn(B, N_tokens, d)
+    c = torch.randn(B, d)
+    
+    out = dit_block(x, c)
+    
+    print(f"Input Tokens Shape:  {x.shape}")
+    print(f"Output Tokens Shape: {out.shape}")
+    
+    # Verify zero-initialization identity behavior: out should equal x at step 0!
+    diff = torch.abs(out - x).max().item()
+    print(f"Max Difference from Input at Initialization (Identity Check): {diff:.6f}")
+    assert diff == 0.0, "adaLN-Zero identity check failed!"
+    print("DiT Block with adaLN-Zero verification successful!")
+```
+
+## 10. Strengths
+- **Predictable Compute Scaling:** Generative quality follows Transformer scaling laws ($E[FID] \propto \text{GFLOPs}^{-1}$).
+- **Clean Architectural Simplicity:** Eliminates U-Net downsampling bottlenecks, replaces spatial convs with pure Vision Transformer blocks.
+- **adaLN-Zero Stability:** Zero-initialization enables deep 28-layer Vision Transformers to train with perfect stability from scratch.
+
+## 11. Weaknesses
+- **High Computational Cost:** DiT-XL/2 ($p=2$) requires significant FLOPs per step due to large sequence length (256 tokens at $d=1152$).
+
+## 12. Research Evolution
+DiT proved Vision Transformers could replace U-Nets in diffusion models. It inspired **Stable Diffusion 3 (MMDiT)**, **PixArt-$\alpha$**, and **OpenAI Sora**.
+
+## 13. Interview Questions
+
+**Q1: What is adaLN-Zero in DiT, and why is zero-initialization essential?**
+**A1:** adaLN-Zero (Adaptive Layer Normalization with Zero-Initialization) regresses 6 dimension-wise scale, shift, and gating parameters $(\gamma_1, \beta_1, \alpha_1, \gamma_2, \beta_2, \alpha_2)$ from conditioning vector $y$. Zero-initialization sets the gating parameters $\alpha_1, \alpha_2 = 0$ at step 0 of training, causing every DiT block to act as an identity shortcut ($x_{\text{out}} = x_{\text{in}}$). This enables ultra-deep 28-layer Transformers to train stably from scratch without gradient explosion.
+
+**Q2: How does DiT patchify 2D latent image inputs?**
+**A2:** Given a $4 \times 32 \times 32$ latent code $z$, DiT extracts non-overlapping $p \times p$ patches (e.g., $p=2$). Each $2 \times 2 \times 4 = 16$ dimension patch is flattened and linearly projected into a $d$-dimensional token embedding, producing a sequence of $(32/2) \times (32/2) = 256$ tokens.
+
+**Q3: What relationship did the authors observe between DiT FLOPs and image generation quality (FID)?**
+**A3:** Image generation quality (measured by FID) scales inversely with GFLOPs. Reducing patch size $p$ from 8 to 4 to 2 increases sequence length and GFLOPs, producing consistent, predictable drops in FID following Transformer scaling laws.
+
+**Q4: Compare DiT with U-Net based Latent Diffusion.**
+**A4:** U-Net uses convolutional residual blocks with spatial downsampling/upsampling bottlenecks and skip connections. DiT processes latents as a sequence of patch tokens through standard Vision Transformer blocks conditioned via adaLN-Zero.
+
+**Q5: How are class labels and timesteps conditioned together in DiT?**
+**A5:** Timestep $t$ is embedded via a sinusoidal encoder, class label $c$ is embedded via a learned embedding matrix, and their vector sum $y = t_{\text{emb}} + c_{\text{emb}}$ is processed through an MLP to form conditioning vector $y$.
+
+## 14. Related Papers
+- **DiT Paper:** *Scalable Diffusion Models with Transformers* (Peebles & Xie, ICCV 2023)
+- **ViT Paper:** *An Image is Worth 16x16 Words* (Dosovitskiy et al., ICLR 2021)
+
+## 15. Further Reading
+- Official Facebook Research DiT GitHub Repository

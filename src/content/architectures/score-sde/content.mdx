@@ -1,0 +1,230 @@
+# Score SDE
+
+## 1. Overview
+Score-based Stochastic Differential Equations (Score SDE), introduced in 2020 by Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole (Stanford University & Google Brain), established a unified mathematical framework for diffusion models using continuous-time Stochastic Differential Equations (SDEs). Before Score SDE, diffusion models (DDPM) and score-based generative models (SGM / SDEdit) were viewed as distinct algorithms. Song et al. proved that both DDPM and SGM are discretization instances of a continuous-time SDE that gradually transforms a data distribution into noise. Furthermore, for every forward SDE, there exists a corresponding deterministic **Probability Flow ODE** that shares the exact same marginal probability distributions. This formulation enabled numerical SDE/ODE solvers (like Predictor-Corrector and RK45), exact likelihood computation via instantaneous change-of-variables, and high-fidelity image synthesis.
+
+:::note
+Score SDE's core unification: "Model noise corruption as a continuous-time Stochastic Differential Equation $dx = f(x,t)dt + g(t)dw$, and generate data by reversing the SDE using estimated score functions $\nabla_x \log p_t(x)$."
+:::
+
+## 2. Historical Context
+In 2020, two independent lines of generative modeling research converged:
+1. **Denoising Diffusion Probabilistic Models (DDPM - Ho et al.):** Modeled generation via discrete-time Markov chains adding Gaussian noise step-by-step.
+2. **Score-Based Generative Models (SGM - Song & Ermon, 2019):** Perturbed data with noise at multiple scales and trained a single Neural Network (Score Network) to estimate the score function $\nabla_x \log p_\sigma(x)$ via denoising score matching.
+
+Yang Song et al. unified both paradigms under continuous-time SDE calculus. They showed that as the number of timesteps $T \to \infty$, discrete noise addition becomes a continuous SDE $dx = f(x,t)dt + g(t)dw$. DDPM corresponds to the **Variance Preserving SDE (VP-SDE)**, while SGM corresponds to the **Variance Exploding SDE (VE-SDE)**. This mathematical bridge unlocked black-box adaptive differential equation solvers for diffusion models.
+
+## 3. Problem It Solves
+Score SDE addresses three fundamental mathematical limitations of discrete diffusion models:
+1. **Discrete Timestep Discretization Errors:** Eliminates fixed discrete step schedules ($T=1000$). Continuous-time formulation allows applying high-order adaptive numerical ODE/SDE solvers (e.g., Runge-Kutta 45) to trade off speed vs. precision dynamically.
+2. **Fractured Model Theories:** Unifies score matching (SGM) and denoising diffusion (DDPM) into a single theoretical framework.
+3. **Inability to Compute Exact Data Likelihoods:** Enables exact log-likelihood evaluation ($\log p(x)$) of generated images using the deterministic Probability Flow ODE and the Instantaneous Change-of-Variables formula.
+
+## 4. Architecture Diagram Data
+Below is the continuous-time Score SDE framework showing Forward SDE, Reverse-Time SDE, Probability Flow ODE, and Predictor-Corrector Samplers.
+
+```text
+       CONTINUOUS FORWARD SDE (Noise Addition over t in [0, T])
+       Data p_0(x) --------------------------------------------> Noise p_T(x) ~ N(0, I)
+       dx = f(x, t) dt + g(t) dw
+
+       ========================================================================
+
+       CONTINUOUS REVERSE-TIME SDE (Data Generation)
+       Noise p_T(x) -------------------------------------------> Data p_0(x)
+       dx = [ f(x, t) - g(t)^2 * grad_x log p_t(x) ] dt + g(t) d_w_bar
+
+                                       |
+                                       v
+                     +==================================+
+                     | Time-Conditioned Score Network   |
+                     | s_theta(x, t) approx grad_x log p|
+                     +==================================+
+                                       |
+         +-----------------------------+-----------------------------+
+         | (Stochastic Sampling)                                     | (Deterministic Sampling)
+         v                                                           v
+  +==================================+                +==================================+
+  | REVERSE SDE SAMPLER              |                | PROBABILITY FLOW ODE SAMPLER     |
+  | - Predictor-Corrector (PC)       |                | dx = [ f(x,t) - 0.5 g(t)^2 s_t ] |
+  |   - Predictor: Reverse SDE step  |                | - Deterministic Trajectory       |
+  |   - Corrector: Langevin MCMC     |                | - Exact Likelihood Evaluation    |
+  +==================================+                +==================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+Score SDE uses a time-conditioned score network $s_\theta(x, t)$ based on U-Net or NCSNpp (Noise Conditional Score Network):
+
+**1. Continuous Time Conditioning:**
+- Continuous time $t \in [\epsilon, T]$ is embedded using Gaussian Fourier Projection embeddings:
+  $$\text{Fourier}(t) = [\sin(2\pi \omega_i t), \cos(2\pi \omega_i t)]$$
+- Passed through dense linear layers to produce per-block scale and shift parameters.
+
+**2. NCSNpp / Refined U-Net Architecture:**
+- **Encoder:** Residual blocks with Deformable Convolutions, Multi-Head Self-Attention, and progressive downsampling.
+- **Decoder:** Residual blocks with skip connections and upsampling.
+- **Output:** Score prediction matching the spatial dimensions of input $x$, estimating $\nabla_x \log p_t(x)$.
+
+**3. Predictor-Corrector (PC) Sampler:**
+- **Predictor Step:** Advances time using a discretization of the Reverse SDE (e.g., Reverse Euler-Maruyama).
+- **Corrector Step:** Refines the sample at the current time $t$ using Langevin MCMC iterations guided by $s_\theta(x, t)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through the Score Network $s_\theta(x, t)$ for batch size $B=2$, resolution $64 \times 64$.
+
+1. **Input Generation:**
+   - Noisy Image $x(t)$: `(B, 3, 64, 64)`
+   - Continuous Timestep $t \in [0.001, 1.0]$: `(B,)`
+2. **Fourier Time Embedding:**
+   - Gaussian Fourier projection $\rightarrow$ MLP $\rightarrow t_{\text{emb}}$: `(B, 512)`
+3. **Score U-Net Processing:**
+   - Input Conv: `(B, 128, 64, 64)`
+   - Encoder Downsampling $\rightarrow$ `(B, 256, 32, 32)` $\rightarrow$ `(B, 512, 16, 16)`
+   - Middle Attention Block $\rightarrow$ `(B, 512, 16, 16)`
+   - Decoder Upsampling $\rightarrow$ `(B, 128, 64, 64)`
+   - Final Conv Output: `(B, 3, 64, 64)`
+4. **Score Scaling:**
+   - Scaled by noise standard deviation $\frac{s_\theta(x, t)}{\sigma(t)}$ to estimate score $\nabla_{x(t)} \log p_t(x(t)) \rightarrow$ `(B, 3, 64, 64)`
+
+## 7. Mathematical Foundations
+
+### 1. Continuous Forward SDE
+A continuous noise process is governed by the Ito SDE:
+
+$$dx = f(x, t) dt + g(t) dw$$
+
+where $f(x, t)$ is the drift coefficient, $g(t)$ is the diffusion coefficient, and $w$ is standard Brownian motion.
+
+- **Variance Exploding SDE (VE-SDE / SGM):** $dx = \sqrt{\frac{d[\sigma^2(t)]}{dt}} dw$  (Noise variance explodes to infinity).
+- **Variance Preserving SDE (VP-SDE / DDPM):** $dx = -\frac{1}{2} \beta(t) x dt + \sqrt{\beta(t)} dw$ (Variance is bounded to 1).
+
+### 2. Reverse-Time SDE & Score Function
+Anderson's theorem proves that the reverse of an Ito SDE is also an SDE running backward in time from $t=T$ to $t=0$:
+
+$$dx = \left[ f(x, t) - g(t)^2 \nabla_x \log p_t(x) \right] dt + g(t) d\bar{w}$$
+
+where $d\bar{w}$ is backward Brownian motion, and $\nabla_x \log p_t(x)$ is the **Score Function** (the gradient of log data density with respect to $x$).
+
+### 3. Probability Flow ODE
+For every forward SDE, there exists a deterministic Ordinary Differential Equation (Probability Flow ODE) whose trajectories share the exact same marginal probability densities $p_t(x)$ at all timesteps $t$:
+
+$$dx = \left[ f(x, t) - \frac{1}{2} g(t)^2 \nabla_x \log p_t(x) \right] dt$$
+
+### 4. Denoising Score Matching Loss Objective
+The score network $s_\theta(x, t)$ is trained using Continuous Denoising Score Matching:
+
+$$\mathcal{L}_{\text{ScoreSDE}}(\theta) = \mathbb{E}_{t \sim U(0, T)} \left[ \lambda(t) \, \mathbb{E}_{x_0, x_t} \left[ \left\| s_\theta(x_t, t) - \nabla_{x_t} \log q_{0t}(x_t \mid x_0) \right\|^2 \right] \right]$$
+
+## 8. Training Procedure
+- Sample continuous timesteps $t \sim \text{Uniform}(\epsilon, T)$.
+- Sample noise $x_t \sim q_{0t}(x_t \mid x_0)$ using SDE transition kernels.
+- Compute score target $\nabla_{x_t} \log q_{0t}(x_t \mid x_0) = -\frac{x_t - \mu_t}{\sigma_t^2}$.
+- Minimize weighted $\ell_2$ loss between predicted score $s_\theta(x_t, t)$ and true target.
+- Optimizer: Adam ($\text{lr} = 2 \times 10^{-4}$).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Score SDE Loss & VP-SDE Noise Sampler**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class VPSDE(nn.Module):
+    """ Variance Preserving SDE (Continuous DDPM) """
+    def __init__(self, beta_min=0.1, beta_max=20.0):
+        super().__init__()
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+
+    def sde(self, x, t):
+        # Drift f(x,t) and Diffusion g(t)
+        beta_t = self.beta_min + t * (self.beta_max - self.beta_min)
+        drift = -0.5 * beta_t[:, None, None, None] * x
+        diffusion = torch.sqrt(beta_t)
+        return drift, diffusion
+
+    def marginal_prob(self, x_0, t):
+        # Closed form mean and std at continuous time t
+        log_mean_coeff = -0.25 * t**2 * (self.beta_max - self.beta_min) - 0.5 * t * self.beta_min
+        mean = torch.exp(log_mean_coeff)[:, None, None, None] * x_0
+        std = torch.sqrt(1.0 - torch.exp(2.0 * log_mean_coeff))[:, None, None, None]
+        return mean, std
+
+class ScoreLoss(nn.Module):
+    def __init__(self, sde, score_model):
+        super().__init__()
+        self.sde = sde
+        self.score_model = score_model
+
+    def forward(self, x_0, eps=1e-5):
+        B = x_0.shape[0]
+        # Sample continuous time t ~ Uniform(eps, 1.0)
+        t = torch.rand(B, device=x_0.device) * (1.0 - eps) + eps
+        
+        noise = torch.randn_like(x_0)
+        mean, std = self.sde.marginal_prob(x_0, t)
+        x_t = mean + std * noise
+        
+        # Estimate score: grad_x log p_t(x) approx -noise / std
+        predicted_score = self.score_model(x_t, t)
+        target_score = -noise / std
+        
+        # Loss weighted by std^2
+        loss = torch.square(predicted_score * std - (-noise))
+        return loss.mean()
+
+if __name__ == "__main__":
+    from ddpm import MiniUNet
+    
+    B, C, H, W = 4, 3, 32, 32
+    sde = VPSDE(beta_min=0.1, beta_max=20.0)
+    score_net = MiniUNet(in_channels=C, time_dim=128)
+    loss_fn = ScoreLoss(sde, score_net)
+    
+    dummy_x0 = torch.randn(B, C, H, W)
+    loss = loss_fn(dummy_x0)
+    
+    print(f"Calculated Continuous Score SDE Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("Score SDE verification successful!")
+```
+
+## 10. Strengths
+- **Continuous-Time Unification:** Unifies DDPM and SGM under a single differential equation framework.
+- **Exact Likelihood Computation:** Probability Flow ODE allows calculating exact data log-likelihood $\log p(x)$ via instantaneous change-of-variables.
+- **Adaptive ODE/SDE Solvers:** Enables black-box numerical differential equation solvers (e.g., RK45) for sampling.
+
+## 11. Weaknesses
+- **Complex Stochastic Calculus:** Requires understanding Ito calculus, SDEs, and Langevin dynamics.
+- **High Computational Load:** Predictor-Corrector samplers require running multiple Langevin MCMC steps per time increment.
+
+## 12. Research Evolution
+Score SDE established continuous-time diffusion theory, leading directly to **Flow Matching**, **Rectified Flows**, and **Consistency Models**.
+
+## 13. Interview Questions
+
+**Q1: What is the Score Function in Score SDE?**
+**A1:** The Score Function is the spatial gradient of the log data probability density with respect to the data vector: $\nabla_x \log p_t(x)$. It points in the direction of steepest increase in data density.
+
+**Q2: What is the difference between VE-SDE and VP-SDE?**
+**A2:** 
+- **VE-SDE (Variance Exploding):** Keeps data unscaled ($f(x,t)=0$) and adds increasing noise variance ($\sigma(t) \to \infty$). Corresponds to Score-Based Generative Models (SGM).
+- **VP-SDE (Variance Preserving):** Scales data down ($f(x,t) = -\frac{1}{2}\beta(t)x$) while adding noise, preserving variance to 1. Corresponds to DDPM.
+
+**Q3: What is the Probability Flow ODE?**
+**A3:** A deterministic ODE whose trajectories share the exact same marginal probability densities $p_t(x)$ as the stochastic Reverse SDE. It allows deterministic sampling and exact likelihood computation.
+
+**Q4: What is a Predictor-Corrector (PC) Sampler in Score SDE?**
+**A4:** A hybrid sampler where each time step executes a **Predictor** step (numerical Reverse SDE step) followed by several **Corrector** steps (Langevin MCMC iterations) to refine sample quality.
+
+**Q5: How does Probability Flow ODE enable exact likelihood evaluation ($\log p(x)$)?**
+**A5:** By applying the Instantaneous Change-of-Variables formula to the deterministic ODE: $\log p_0(x_0) = \log p_T(x_T) + \int_0^T \text{Tr}\left(\frac{\partial f_{\text{ODE}}}{\partial x}\right) dt$.
+
+## 14. Related Papers
+- **Score SDE Paper:** *Score-Based Generative Modeling through Stochastic Differential Equations* (Song et al., ICLR 2021 - Outstanding Paper Award)
+- **SGM Paper:** *Generative Modeling by Estimating Gradients of the Data Distribution* (Song & Ermon, NeurIPS 2019)
+
+## 15. Further Reading
+- Yang Song's Blog: *Generative Modeling by Estimating Gradients of the Data Distribution*

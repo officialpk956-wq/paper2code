@@ -1,0 +1,228 @@
+# AlphaGo
+
+## 1. Overview
+AlphaGo, introduced in 2016 by David Silver, Aja Huang, Chris J. Maddison, Arthur Guez, Laurent Sifre, George van den Driessche, Julian Schrittwieser, Ioannis Antonoglou, Veda Panneershelvam, Marc Lanctot, Sander Dieleman, Dominik Grewe, John Nham, Nal Kalchbrenner, Ilya Sutskever, Timothy Lillicrap, Madeleine Leach, Koray Kavukcuoglu, Thore Graepel, and Demis Hassabis (Google DeepMind), achieved one of the most celebrated milestones in artificial intelligence history: defeating 18-time world champion Lee Sedol 4-1 at the ancient game of Go. Go had long been considered the ultimate grand challenge for AI due to its immense search space complexity ($10^{170}$ possible states, far exceeding the number of atoms in the observable universe) and the failure of traditional tree search algorithms. AlphaGo solved Go by combining **Deep Convolutional Neural Networks** with **Monte Carlo Tree Search (MCTS)**. AlphaGo employed two distinct deep networks: a **Policy Network** (which predicts promising move distributions $\pi(a \mid s)$ to narrow search breadth) and a **Value Network** (which evaluates position win probabilities $V(s)$ to prune search depth).
+
+:::note
+AlphaGo's historic breakthrough: "Combine Policy Networks (reducing search breadth) and Value Networks (reducing search depth) with Monte Carlo Tree Search (MCTS) trained on human expert games followed by RL self-play."
+:::
+
+## 2. Historical Context
+For decades, classical AI defeated human world champions in games like Checkers (Chinook, 1994) and Chess (IBM Deep Blue, 1997) using alpha-beta search trees and hand-crafted evaluation functions. However, Go defied classical techniques because:
+1. **Branching Factor:** Go's average branching factor is $b \approx 250$ (vs. Chess $b \approx 35$).
+2. **Evaluation Function Complexity:** Position evaluation in Go is non-linear; capturing subtle territory patterns defied hand-engineered rules.
+
+DeepMind combined deep convolutional networks with Monte Carlo Tree Search. AlphaGo first learned from 30 million expert human moves (Supervised Learning), refined itself through Reinforcement Learning Self-Play, and integrated these networks into an asynchronous MCTS search engine.
+
+## 3. Problem It Solves
+AlphaGo addresses two exponential search complexity bottlenecks in perfect-information games:
+1. **Search Breadth Explosion ($b^d$):** A branching factor of $b \approx 250$ makes full tree search impossible. The **Policy Network** predicts move probability distributions $\pi(a \mid s)$, restricting search width to high-probability candidate moves.
+2. **Search Depth Explosion:** Evaluating terminal game states requires searching $d \approx 150$ moves deep. The **Value Network** evaluates win probabilities $V(s)$ directly at intermediate positions, eliminating the need to roll out games to terminal states.
+
+## 4. Architecture Diagram Data
+Below is the pipeline of AlphaGo showing Supervised Learning (SL), Self-Play Reinforcement Learning (RL), Value Network training, and MCTS integration.
+
+```text
+       STAGE 1: SUPERVISED LEARNING (SL POLICY NETWORK)
+       [ 30M Human Expert Moves (KGS Data) ] ---> [ Train 13-Layer Conv SL Policy Net p_sigma ]
+
+       ========================================================================
+
+       STAGE 2: REINFORCEMENT LEARNING (RL POLICY NETWORK)
+       [ Initialize RL Policy p_rho = p_sigma ]
+                         |
+                         v
+       [ Self-Play Games: p_rho vs Random Historical p_rho ] ---> [ Policy Gradient Update ]
+
+       ========================================================================
+
+       STAGE 3: VALUE NETWORK TRAINING
+       [ Self-Play Dataset (s, z) ] ---> [ Train 13-Layer Conv Value Net v_theta(s) approx P(Win) ]
+
+       ========================================================================
+
+       STAGE 4: MONTE CARLO TREE SEARCH (MCTS INTEGRATION)
+
+       [ Current Board Position s ]
+                    |
+                    v
+       +==================================================================+
+       | MCTS SEARCH (Guided by Neural Networks)                          |
+       |                                                                  |
+       | 1. Selection: Choose action maximizing Q(s,a) + u(s,a)           |
+       |    where u(s,a) ~ P(s,a) / (1 + N(s,a))                           |
+       | 2. Expansion: Expand node using SL Policy Network P(s,a)          |
+       | 3. Evaluation: Evaluate leaf node using TWO sources:             |
+       |    V_eval = (1 - mix) * Value_Net(s) + mix * Fast_Rollout(s)     |
+       | 4. Backup: Update Visit Counts N(s,a) and Mean Q-Values Q(s,a)     |
+       +==================================================================+
+                    |
+                    v
+       [ Select Action with Maximum Visit Count N(s,a) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. SL & RL Policy Networks ($p_\sigma, p_\rho$):**
+- 13-layer deep Convolutional Neural Network (no pooling layers).
+- Input: $19 \times 19 \times 48$ feature planes (stone colors, liberties, capture history, legality rules).
+- Layers 1–12: $3 \times 3$ Convolutions (192 filters, BatchNorm, ReLU).
+- Layer 13: $1 \times 1$ Convolution mapping to $19 \times 19 = 361$ board positions + Softmax.
+
+**2. Fast Rollout Policy ($\pi_p$):**
+- A lightweight linear pattern matching model executing in $2 \ \mu\text{s}$ (used during fast MCTS simulations).
+
+**3. Value Network ($v_\theta$):**
+- Shares the 13-layer convolutional architecture of the policy network.
+- Replaces final softmax layer with a $1 \times 1$ Conv $\to$ Linear layer (256 units, ReLU) $\to$ **Tanh activation** outputting scalar win probability $v_\theta(s) \in [-1, +1]$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through AlphaGo's Policy and Value networks for a $19 \times 19$ Go board.
+
+1. **Board Representation Input:**
+   - Feature Planes: `(B, 48, 19, 19)`
+2. **13-Layer Convolutional Pass:**
+   - Conv1 ($5 \times 5$, 192 filters) $\to$ `(B, 192, 19, 19)`
+   - Conv2–12 ($3 \times 3$, 192 filters) $\to$ `(B, 192, 19, 19)`
+3. **Policy Head Output:**
+   - Conv13 ($1 \times 1$, 1 filter) $\to$ Softmax $\to$ Move Probabilities $\pi(a \mid s)$: `(B, 361)`.
+4. **Value Head Output:**
+   - Conv13 ($1 \times 1$, 1 filter) $\to$ FC(256) $\to$ Tanh $\to$ Win Value $v_\theta(s)$: `(B, 1)` ($\in [-1, 1]$).
+
+## 7. Mathematical Foundations
+
+### 1. MCTS Node Selection Formula
+During MCTS selection, actions are selected to maximize the Upper Confidence Bound for Trees (UCT):
+
+$$a_t = \arg\max_a \left( Q(s_t, a) + u(s_t, a) \right)$$
+
+$$u(s, a) = c_{\text{puct}} \cdot P(s, a) \cdot \frac{\sqrt{\sum_b N(s, b)}}{1 + N(s, a)}$$
+
+where $P(s, a) = p_\sigma(a \mid s)$ is prior move probability from the SL Policy Network, $N(s, a)$ is visit count, and $c_{\text{puct}}$ controls exploration.
+
+### 2. Mixed Leaf Evaluation Formula
+When MCTS reaches a leaf node $s_L$, its position value is evaluated by blending the Value Network $v_\theta(s_L)$ and a Fast Rollout outcome $z_L$:
+
+$$V(s_L) = (1 - \eta) \cdot v_\theta(s_L) + \eta \cdot z_L$$
+
+where $\eta = 0.5$ balances neural network evaluation and fast simulation.
+
+### 3. Reinforcement Learning Policy Gradient Loss
+The RL Policy Network $p_\rho$ is updated via policy gradient against self-play game outcomes $z \in \{-1, +1\}$:
+
+$$\Delta \rho \propto \frac{\partial \log p_\rho(a_t \mid s_t)}{\partial \rho} \cdot z_t$$
+
+## 8. Training Procedure
+1. **Supervised Learning (SL):** Train $p_\sigma$ on 30M human moves using cross-entropy loss.
+2. **RL Self-Play:** Initialize $p_\rho = p_\sigma$. Play $p_\rho$ against previous versions of itself; update $\rho$ via policy gradient based on win/loss outcome $z$.
+3. **Value Network Training:** Generate a dataset of 30M distinct self-play positions $(s, z)$. Train $v_\theta(s)$ using MSE loss $\|z - v_\theta(s)\|^2$.
+4. **Inference (MCTS):** Execute 100,000 MCTS simulations per move using 40 CPU threads and 8 GPUs.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **AlphaGo Dual Policy and Value Network Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class AlphaGoNet(nn.Module):
+    """ AlphaGo 13-Layer Dual Policy and Value Network """
+    def __init__(self, in_planes=48, board_size=19):
+        super().__init__()
+        self.board_size = board_size
+        
+        # 1. First Layer (5x5 Conv)
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_planes, 192, kernel_size=5, padding=2),
+            nn.BatchNorm2d(192),
+            nn.ReLU()
+        )
+        
+        # 2. Layers 2-12 (3x3 Convs)
+        res_layers = []
+        for _ in range(11):
+            res_layers.append(nn.Sequential(
+                nn.Conv2d(192, 192, kernel_size=3, padding=1),
+                nn.BatchNorm2d(192),
+                nn.ReLU()
+            ))
+        self.trunk = nn.Sequential(*res_layers)
+        
+        # 3. Policy Head
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(192, 1, kernel_size=1),
+            nn.Flatten(),
+            nn.Softmax(dim=-1)
+        )
+        
+        # 4. Value Head
+        self.value_head = nn.Sequential(
+            nn.Conv2d(192, 1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(board_size * board_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        # x: (B, 48, 19, 19)
+        feat = self.conv1(x)
+        feat = self.trunk(feat)
+        
+        policy = self.policy_head(feat) # (B, 361)
+        value = self.value_head(feat)   # (B, 1)
+        return policy, value
+
+if __name__ == "__main__":
+    B, in_planes, board_size = 2, 48, 19
+    model = AlphaGoNet(in_planes=in_planes, board_size=board_size)
+    
+    board_state = torch.randn(B, in_planes, board_size, board_size)
+    policy, value = model(board_state)
+    
+    print(f"Policy Output Shape (361 moves): {policy.shape}")
+    print(f"Value Output Shape (Win Prob):   {value.shape}")
+    assert policy.shape == (B, 361)
+    assert value.shape == (B, 1)
+    print("AlphaGo network verification successful!")
+```
+
+## 10. Strengths
+- **Mastered Go:** First program to defeat a 9-dan professional human world champion.
+- **Dramatically Pruned Search Trees:** Policy and Value networks cut search breadth and depth by orders of magnitude.
+- **Effective Human Bootstrapping:** Supervised pre-training provided strong human domain priors.
+
+## 11. Weaknesses
+- **Human Data Dependence:** Initial policy network relied on 30M human expert moves (overcome by AlphaZero).
+- **Complex Multi-Stage Training:** Required 4 separate training phases (SL Policy, Fast Rollout, RL Policy, Value Net).
+
+## 12. Research Evolution
+AlphaGo established deep network guided MCTS, leading directly to **AlphaGo Zero**, **AlphaZero**, and **MuZero**.
+
+## 13. Interview Questions
+
+**Q1: How did AlphaGo reduce the search breadth and depth of Monte Carlo Tree Search (MCTS)?**
+**A1:** The **Policy Network** $\pi(a|s)$ narrowed search breadth by predicting prior move probabilities, restricting search to high-likelihood human moves. The **Value Network** $V(s)$ reduced search depth by predicting win probabilities directly at intermediate positions, eliminating the need to simulate games to terminal states.
+
+**Q2: What were the 4 training stages of AlphaGo?**
+**A2:** (1) Supervised Learning (SL) Policy Network trained on 30M human expert moves; (2) Fast Rollout Policy trained for rapid MCTS simulation; (3) Reinforcement Learning (RL) Policy Network fine-tuned via self-play policy gradients; (4) Value Network trained on self-play game outcomes.
+
+**Q3: How are neural network predictions combined during MCTS leaf node evaluation?**
+**A3:** By blending the Value Network estimate $v_\theta(s_L)$ and a Fast Rollout game outcome $z_L$: $V(s_L) = (1 - \eta) v_\theta(s_L) + \eta z_L$ (with $\eta = 0.5$).
+
+**Q4: Write out the UCT action selection formula used in AlphaGo's MCTS.**
+**A4:** $a_t = \arg\max_a \left( Q(s_t, a) + c_{\text{puct}} P(s_t, a) \frac{\sqrt{\sum N(s_t, b)}}{1 + N(s_t, a)} \right)$.
+
+**Q5: Why did AlphaGo train the Value Network on a dataset of self-play games rather than human expert games?**
+**A5:** Consecutive positions from human games are strongly correlated, causing the Value Network to overfit. Generating a dataset of 30M distinct positions from self-play games ensured data independence and unbiased value estimation.
+
+## 14. Related Papers
+- **AlphaGo Paper:** *Mastering the game of Go with deep neural networks and tree search* (Silver et al., Nature 2016)
+- **AlphaGo Zero Paper:** *Mastering the game of Go without human knowledge* (Silver et al., Nature 2017)
+
+## 15. Further Reading
+- DeepMind AlphaGo Official Webpage

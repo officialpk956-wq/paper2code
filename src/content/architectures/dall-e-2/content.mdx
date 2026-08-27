@@ -1,0 +1,235 @@
+# DALL-E 2
+
+## 1. Overview
+DALL-E 2 (hierarchically named **unCLIP**), introduced in 2022 by Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu, and Mark Chen (OpenAI), was the landmark model that captured global public attention for AI-generated art. DALL-E 2 established a two-stage hierarchical text-to-image generation process built on top of **CLIP (Contrastive Language-Image Pre-training)** representation space:
+1. **Diffusion Prior:** Takes a text prompt $y$ and generates a continuous CLIP image embedding $z_i$ matching the prompt.
+2. **unCLIP Decoder:** A diffusion model conditioned on the generated CLIP image embedding $z_i$ that reconstructs a high-resolution RGB image $x$ ($1024 \times 1024$).
+
+By using joint CLIP embeddings as an intermediate representation, DALL-E 2 achieved extraordinary text alignment, image variations, and semantic image inpainting, proving that multimodal representation spaces provide optimal conditioning targets for generative models.
+
+:::note
+DALL-E 2's core innovation: "Decouple text-to-image synthesis into generating a CLIP image embedding from text via a Diffusion Prior, and reconstructing the image from the CLIP embedding via an unCLIP Diffusion Decoder."
+:::
+
+## 2. Historical Context
+In early 2021, OpenAI released the original DALL-E (Ramesh et al.), a 12-billion parameter discrete VAE + Autoregressive Transformer that generated images by predicting discrete visual tokens sequentially. While revolutionary, original DALL-E was computationally heavy, slow during inference, and produced images with low resolution ($256 \times 256$) and limited photorealism.
+
+Concurrently, OpenAI developed **CLIP** (Radford et al., 2021), establishing a joint embedding space where text and image vectors are aligned via contrastive learning.
+
+Ramesh et al. recognized that CLIP's image embedding space captures non-verbal visual properties (style, composition, atmosphere) that text prompts fail to articulate. DALL-E 2 (unCLIP) replaced the slow autoregressive generator with a fast diffusion prior that predicts CLIP image embeddings from text, paired with a cascaded pixel-space diffusion decoder. This architectural shift produced higher photorealism and lower sample latency.
+
+## 3. Problem It Solves
+DALL-E 2 addresses three key challenges in text-conditional image synthesis:
+1. **Text Prompt Ambiguity:** Pure text prompts often lack detail regarding lighting, camera angle, and artistic composition. CLIP image embeddings encode these non-textual visual priors, allowing the Diffusion Prior to generate rich visual representations before rendering pixels.
+2. **Semantically Consistent Image Variations:** Given an input image, DALL-E 2 encodes its CLIP image embedding, adds small noise, and passes it through the unCLIP decoder, producing infinite variations of an image while preserving its core semantics and style.
+3. **Complex Text-Image Alignment:** Using CLIP's joint multimodal space forces the generative process to align strictly with pre-trained visual-linguistic concepts.
+
+## 4. Architecture Diagram Data
+Below is the two-stage architecture of DALL-E 2 (unCLIP) showing the Diffusion Prior, unCLIP Diffusion Decoder, and Cascaded Super-Resolution pipeline.
+
+```text
+       TRAINING / INTERMEDIATE REPRESENTATION: CLIP SPACE
+       [ Text Prompt y ] ------------> CLIP Text Encoder -----> Text Embedding z_t
+       [ Input Image x ] ------------> CLIP Image Encoder ----> Image Embedding z_i
+
+       ========================================================================
+
+       INFERENCE STAGE 1: DIFFUSION PRIOR (Text Embed -> Image Embed)
+
+       [ Text Embedding z_t ]
+                 |
+                 v
+       +=======================================+
+       | Diffusion Prior (Transformer)         |
+       | - Generates CLIP Image Embedding z_i  |
+       |   from Text Embedding z_t             |
+       +=======================================+
+                 |
+                 v
+       [ Predicted CLIP Image Embedding: z_i ]
+
+       ========================================================================
+
+       INFERENCE STAGE 2: unCLIP DECODER & CASCADED SUPER-RESOLUTION
+
+       [ Predicted CLIP Image Embedding z_i ] + [ Text Prompt y ]
+                 |
+                 v
+       +=======================================+
+       | Base unCLIP Diffusion Decoder         |
+       | - Conditioned on z_i via Cross-Attn   |
+       | - Generates Low-Res Image: 64x64      |
+       +=======================================+
+                 |
+                 v
+       [ 64x64 Base Image ]
+                 |
+                 v
+       +=======================================+
+       | Super-Resolution Cascade 1 (64 -> 256)|
+       +=======================================+
+                 |
+                 v
+       +=======================================+
+       | Super-Resolution Cascade 2 (256->1024)|
+       +=======================================+
+                 |
+                 v
+       [ Final High-Res Output Image: 1024x1024 ]
+```
+
+## 5. Layer-by-Layer Breakdown
+DALL-E 2 organizes its pipeline into three core neural networks:
+
+**1. Frozen CLIP Encoders:**
+- **CLIP Text Encoder:** Encodes text prompt $y$ into a 1024-dimensional normalized text embedding $z_t$.
+- **CLIP Image Encoder:** Encodes image $x$ into a 1024-dimensional normalized image embedding $z_i$.
+
+**2. Diffusion Prior (Transformer):**
+- A decoder-only Transformer with causal attention.
+- Sequence consists of: encoded text $z_t$, continuous timestep $t$, noisy CLIP image embedding $z_i^t$, and a learned output token.
+- Predicts unnoised CLIP image embedding $z_i$ using a MSE loss.
+
+**3. unCLIP Diffusion Decoder & Super-Resolution Cascade:**
+- **Base Decoder ($64 \times 64$):** A modified U-Net conditioned on both the CLIP image embedding $z_i$ (injected via projected addition to time embeddings) and text prompt $y$ (injected via cross-attention).
+- **Super-Resolution Model 1 ($64 \to 256$):** A BSRGAN-augmented diffusion model that upsamples $64 \times 64$ images to $256 \times 256$.
+- **Super-Resolution Model 2 ($256 \to 1024$):** A lightweight diffusion model that further upsamples $256 \times 256$ images to $1024 \times 1024$ photorealistic outputs.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DALL-E 2 for a batch size $B=2$ and text prompt $y$.
+
+1. **Text Encoding:**
+   - Text Prompt $y$: `"An astronaut riding a horse in space"`
+   - CLIP Text Encoder $\rightarrow z_t$: `(2, 1024)`
+2. **Prior Diffusion (Generating CLIP Image Embedding):**
+   - Sample Noisy CLIP Image Embedding $z_i^t$: `(2, 1024)`
+   - Prior Transformer $\rightarrow$ Predicted Clean CLIP Image Embedding $z_i$: `(2, 1024)`
+3. **unCLIP Base Decoder ($64 \times 64$):**
+   - Input Noise Image $x_T$: `(2, 3, 64, 64)`
+   - Conditioned on $z_i$ `(2, 1024)` and $z_t$ `(2, 1024)`
+   - 1000 Denoising Steps $\rightarrow$ Base Image $x_0$: `(2, 3, 64, 64)`
+4. **Cascaded Super-Resolution:**
+   - SR Stage 1 ($64 \to 256$): `(2, 3, 256, 256)`
+   - SR Stage 2 ($256 \to 1024$): `(2, 3, 1024, 1024)` photorealistic image output!
+
+## 7. Mathematical Foundations
+
+### 1. Joint Distribution Factorization
+DALL-E 2 factorizes the conditional image distribution $P(x \mid y)$ using the intermediate CLIP image embedding $z_i$:
+
+$$P(x \mid y) = P(x, z_i \mid y) = P(x \mid z_i, y) \cdot P(z_i \mid y)$$
+
+where:
+- $P(z_i \mid y)$ is the **Prior** (generating CLIP image embedding $z_i$ given text $y$).
+- $P(x \mid z_i, y)$ is the **unCLIP Decoder** (generating image $x$ given CLIP embedding $z_i$ and text $y$).
+
+### 2. Prior Training Loss
+The Diffusion Prior trains a Transformer $f_\theta$ to predict clean CLIP image embedding $z_i$ from noisy embedding $z_i^t$:
+
+$$\mathcal{L}_{\text{prior}} = \mathbb{E}_{t, z_i, \epsilon} \left[ \left\| z_i - f_\theta(z_i^t, t, y) \right\|^2 \right]$$
+
+PCA analysis showed that directly predicting $z_i$ (rather than predicting noise $\epsilon$) yielded superior performance in the high-dimensional CLIP latent space.
+
+## 8. Training Procedure
+- **Prior:** Trained on 250M image-text pairs to predict CLIP image embeddings from text prompts using AdamW ($\text{lr} = 1 \times 10^{-4}$).
+- **Decoder:** Base $64 \times 64$ decoder trained on image-text pairs with 10% classifier-free guidance dropout (dropping $z_i$ and text embeddings to enable CFG sampling).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **DALL-E 2 Prior Conditioning Injection Head**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DALLE2PriorHead(nn.Module):
+    """ Prior network that projects CLIP text embeddings into CLIP image embeddings """
+    def __init__(self, clip_dim=1024, hidden_dim=2048, num_layers=4):
+        super().__init__()
+        self.clip_dim = clip_dim
+        
+        # Timestep Embedding
+        self.time_mlp = nn.Sequential(
+            nn.Linear(clip_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, clip_dim)
+        )
+        
+        # Transformer Blocks for Prior Prediction
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=clip_dim, nhead=8, dim_feedforward=hidden_dim, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output Projection to CLIP Image Embedding
+        self.proj_out = nn.Linear(clip_dim, clip_dim)
+
+    def forward(self, noisy_img_embed, text_embed, t_vec):
+        """
+        noisy_img_embed: (B, 1024)
+        text_embed: (B, 1024)
+        t_vec: (B, 1024) - Timestep embedding
+        """
+        B = noisy_img_embed.shape[0]
+        
+        # Sequence: [Text_Embed, Time_Embed, Noisy_Img_Embed]
+        t_emb = self.time_mlp(t_vec) # (B, 1024)
+        
+        seq = torch.stack([text_embed, t_emb, noisy_img_embed], dim=1) # (B, 3, 1024)
+        
+        feat = self.transformer(seq) # (B, 3, 1024)
+        
+        # Extract output token corresponding to noisy_img_embed position
+        predicted_img_embed = self.proj_out(feat[:, 2, :]) # (B, 1024)
+        return F.normalize(predicted_img_embed, dim=-1)
+
+if __name__ == "__main__":
+    B = 2
+    prior = DALLE2PriorHead(clip_dim=1024)
+    
+    noisy_img_emb = torch.randn(B, 1024)
+    text_emb = torch.randn(B, 1024)
+    t_vec = torch.randn(B, 1024)
+    
+    pred_img_emb = prior(noisy_img_emb, text_emb, t_vec)
+    
+    print(f"Predicted CLIP Image Embedding Shape: {pred_img_emb.shape}")
+    assert pred_img_emb.shape == (B, 1024)
+    print("DALL-E 2 Prior verification successful!")
+```
+
+## 10. Strengths
+- **Rich Non-Verbal Semantic Variations:** Generates semantically faithful variations of existing images by perturbing CLIP image embeddings.
+- **Superior Multimodal Alignment:** Using CLIP's pre-trained joint space guarantees strong text-image concept alignment.
+- **Inpainting & Outpainting Capabilities:** Smoothly blends edited regions with surrounding image content.
+
+## 11. Weaknesses
+- **Complex Multi-Model Pipeline:** Requires running CLIP, Diffusion Prior, Base Decoder, and two Super-Resolution models sequentially.
+- **Struggles with Text Rendering:** Fails to render legibly spelled text inside generated images (a flaw later fixed by Imagen and SD3).
+
+## 12. Research Evolution
+DALL-E 2 popularized text-to-image diffusion models. It directly led to **Imagen** (Google) and **Latent Diffusion Models (Stable Diffusion)**.
+
+## 13. Interview Questions
+
+**Q1: What is the main architectural difference between original DALL-E and DALL-E 2 (unCLIP)?**
+**A1:** Original DALL-E was a 12B parameter autoregressive Transformer that generated discrete VAE image tokens sequentially. DALL-E 2 (unCLIP) is a two-stage diffusion pipeline: a Diffusion Prior generates continuous CLIP image embeddings from text, and an unCLIP diffusion decoder renders high-resolution pixels from the CLIP embedding.
+
+**Q2: What is the Diffusion Prior in DALL-E 2?**
+**A2:** The Diffusion Prior is a Transformer that generates a CLIP image embedding $z_i$ from a given CLIP text embedding $z_t$, bridging the modality gap before rendering pixels.
+
+**Q3: How does DALL-E 2 generate image variations?**
+**A3:** An input image $x$ is passed through the CLIP Image Encoder to obtain embedding $z_i$. Small Gaussian noise is added to $z_i$, and the resulting vector is passed directly into the unCLIP decoder, yielding new images with identical semantic content but different compositions.
+
+**Q4: Why did DALL-E 2 use a cascaded super-resolution pipeline ($64 \to 256 \to 1024$)?**
+**A4:** Generating $1024 \times 1024$ images directly in a single diffusion model is computationally prohibitive. DALL-E 2 uses a base decoder to generate $64 \times 64$ images, followed by two lightweight super-resolution diffusion models to upscale features to $1024 \times 1024$.
+
+**Q5: What objective function is used to train the DALL-E 2 Diffusion Prior?**
+**A5:** The prior is trained using MSE loss predicting the clean CLIP image embedding directly: $\mathcal{L}_{\text{prior}} = \mathbb{E}\left[ \|z_i - f_\theta(z_i^t, t, y)\|^2 \right]$.
+
+## 14. Related Papers
+- **DALL-E 2 Paper:** *Hierarchical Text-Conditional Image Generation with CLIP Latents* (Ramesh et al., arXiv 2022)
+- **CLIP Paper:** *Learning Transferable Visual Models From Natural Language Supervision* (Radford et al., ICML 2021)
+
+## 15. Further Reading
+- OpenAI DALL-E 2 Blog Post & Interactive Gallery

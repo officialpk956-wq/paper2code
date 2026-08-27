@@ -1,0 +1,222 @@
+# R-GCN
+
+## 1. Overview
+Relational Graph Convolutional Network (R-GCN), introduced in 2017 by Michael Schlichtkrull, Thomas N. Kipf, Peter Bloem, Rianne van den Berg, Ivan Titov, and Max Welling (University of Amsterdam & Vrije Universiteit Amsterdam), extended Graph Convolutional Networks (GCNs) to **Relational Multi-Graph Datasets and Knowledge Graphs**. Standard GCNs operate on simple homogeneous graphs containing a single edge type. However, real-world Knowledge Graphs (e.g., Wikidata, DBpedia, Freebase) contain multi-relational directed edges where nodes (entities) are connected by hundreds of distinct relation types $r \in \mathcal{R}$ (e.g., `(BornIn)`, `(DirectedBy)`, `(IsA)`). R-GCN introduced **Relation-Specific Transformation Matrices** $W_r^{(l)}$ for each relation type $r$, allowing GNN message passing over complex knowledge graphs. To prevent parameter explosion caused by having hundreds of weight matrices $W_r$, R-GCN introduced **Basis-Decomposition** and **Block-Diagonal Decomposition** regularization techniques.
+
+:::note
+R-GCN concept: "Extends GCN to Multi-Relational Knowledge Graphs using relation-specific weight matrices: $h_i^{(l+1)} = \sigma\left( W_0^{(l)} h_i^{(l)} + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_i^r} \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)} \right)$."
+:::
+
+## 2. Historical Context
+In 2017, Knowledge Graph Embedding (KGE) models (like TransE, DistMult, ComplEx) optimized entity embeddings using shallow lookup tables. However, KGE models could not perform multi-hop message passing or incorporate node side-features.
+
+Schlichtkrull et al. adapted Kipf & Welling's GCN to multi-relational graphs. By assigning distinct transformation matrices $W_r$ to each edge relation $r \in \mathcal{R}$, R-GCN enabled deep neural message passing over Knowledge Graphs for entity classification and link prediction.
+
+## 3. Problem It Solves
+R-GCN resolves three fundamental limits of standard GNNs and Knowledge Graph models:
+1. **Single-Relation Edge Assumption:** Standard GCN cannot differentiate between different edge types. R-GCN parameterizes separate message matrices $W_r$ per relation $r$.
+2. **Parameter Explosion Over Many Relations:** Knowledge Graphs contain hundreds of relation types ($|\mathcal{R}| > 500$), causing parameters to explode. R-GCN introduces **Basis Decomposition** to regularize parameters.
+3. **Multi-Hop Relational Reasoning:** Combines deep GNN message passing with Knowledge Graph completion.
+
+## 4. Architecture Diagram Data
+Below is the R-GCN relation-specific message passing and parameter regularization architecture.
+
+```text
+       MULTI-RELATIONAL KNOWLEDGE GRAPH G = (V, E, R)
+       Target Entity i connected by multiple relations:
+       - Relation r1 (BornIn): Entity j1
+       - Relation r2 (GraduatedFrom): Entity j2
+       - Relation r3 (EmployedBy): Entity j3
+                                   |
+                                   v
+       +===================================================================+
+       | RELATION-SPECIFIC TRANSFORMATIONS & REGULARIZATION                |
+       | Weight matrices W_r for each relation r in R                      |
+       | Parameterized via Basis Decomposition: W_r = sum_{b=1}^B a_{rb} V_b|
+       +===================================================================+
+                                   |
+                                   v
+       +===================================================================+
+       | R-GCN LAYER PROPAGATION                                           |
+       |                                                                   |
+       |  Self-Loop Message:        W_0 * h_i^(l)                          |
+       |  Relation r1 Neighbors:    sum_{j in N^{r1}} (1/c_{i,r1}) W_{r1} h_j|
+       |  Relation r2 Neighbors:    sum_{j in N^{r2}} (1/c_{i,r2}) W_{r2} h_j|
+       |                                                                   |
+       | Sum All Messages -> Apply ReLU Activation                         |
+       +===================================================================+
+                                   |
+                                   v
+       [ Updated Entity Embedding h_i^(l+1) in R^d ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Relation-Specific Message Aggregation:**
+- For target node $i$ and relation $r \in \mathcal{R}$, aggregate neighbor messages using relation weight matrix $W_r^{(l)} \in \mathbb{R}^{d_{l+1} \times d_l}$:
+  $$m_{i,r} = \sum_{j \in \mathcal{N}_i^r} \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)}$$
+  where $c_{i,r} = |\mathcal{N}_i^r|$ is a normalization constant (or $c_{i,r} = \sqrt{|\mathcal{N}_i^r| |\mathcal{N}_j^r|}$).
+
+**2. Self-Loop Integration:**
+- Adds self-loop transformation using dedicated self-weight matrix $W_0^{(l)}$:
+  $$h_i^{(l+1)} = \sigma\left( W_0^{(l)} h_i^{(l)} + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_i^r} \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)} \right)$$
+
+**3. Basis Decomposition Regularization:**
+- Decomposes weight matrix $W_r^{(l)}$ as a linear combination of $B$ basis matrices $V_b^{(l)}$:
+  $$W_r^{(l)} = \sum_{b=1}^B a_{r,b}^{(l)} V_b^{(l)}$$
+  where $V_b^{(l)} \in \mathbb{R}^{d_{l+1} \times d_l}$ are shared basis matrices, and $a_{r,b}^{(l)}$ are relation-specific coefficients.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through an R-GCN layer for $N=5000$ entities, $|\mathcal{R}|=50$ relation types, initial dim $d_0=64$, output dim $d_1=128$, basis count $B=10$.
+
+1. **Basis Weight Reconstruction:**
+   - Basis Matrices $V_b$: `(10, 128, 64)`, Coefficients $a_{r,b}$: `(50, 10)`
+   - Reconstruct $50$ Relation Matrices $W_r = \sum a_{r,b} V_b \to$ `(50, 128, 64)`
+2. **Relation-Specific Message Passing:**
+   - For each relation $r \in \{1 \dots 50\}$:
+   - Extract edge triples $(i, r, j)$. Multiply neighbor features $h_j$ by $W_r \to$ Message: `(E_r, 128)`
+   - Accumulate messages into target entities $\to H_{\text{rel}}$: `(5000, 128)`
+3. **Self-Loop Addition & Activation:**
+   - Add $W_0 h_i \to(5000, 128) \xrightarrow{\text{ReLU}} H^{(1)}$: `(5000, 128)`.
+
+## 7. Mathematical Foundations
+
+### 1. R-GCN Layer Propagation Formula
+For node $i$ at layer $l+1$:
+
+$$h_i^{(l+1)} = \sigma \left( W_0^{(l)} h_i^{(l)} + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_i^r} \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)} \right)$$
+
+where $\mathcal{N}_i^r$ is the set of neighbors of node $i$ under relation $r$, and $c_{i,r}$ is a normalization factor (e.g., $c_{i,r} = |\mathcal{N}_i^r|$).
+
+### 2. Parameter Regularization Techniques
+Without regularization, the number of parameters grows as $O(|\mathcal{R}| \cdot d_{l+1} \cdot d_l)$, leading to severe overfitting on sparse relations.
+
+#### Basis Decomposition:
+$$W_r^{(l)} = \sum_{b=1}^B a_{r,b}^{(l)} V_b^{(l)}$$
+
+Reduces parameters by sharing $B$ basis matrices $V_b$ across all relations.
+
+#### Block-Diagonal Decomposition:
+$W_r^{(l)}$ is defined as a block-diagonal matrix of $B$ smaller matrices:
+
+$$W_r^{(l)} = \text{diag}\left( Q_{r,1}^{(l)}, Q_{r,2}^{(l)}, \dots, Q_{r,B}^{(l)} \right)$$
+
+where $Q_{r,b}^{(l)} \in \mathbb{R}^{(d_{l+1}/B) \times (d_l/B)}$.
+
+## 8. Training Procedure
+- **Entity Classification Task:** Minimize Cross-Entropy loss over labeled entities using softmax output head.
+- **Link Prediction Task (DistMult Decoder):** Predict truth value of triples $(s, r, o)$ using score $f(s, r, o) = e_s^T R_r e_o$. Minimize Negative Log-Likelihood with negative sampling.
+- Update weights using Adam optimizer.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **R-GCN Layer with Basis Decomposition**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RGCNLayer(nn.Module):
+    """ Relational GCN (R-GCN) Layer with Basis Decomposition """
+    def __init__(self, in_features, out_features, num_relations, num_bases=4):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.num_relations = num_relations
+        self.num_bases = num_bases
+        
+        # Self-Loop Weight Matrix
+        self.w_self = nn.Linear(in_features, out_features, bias=False)
+        
+        # Basis Decomposition Matrices: (B, in_features, out_features)
+        self.bases = nn.Parameter(torch.empty(num_bases, in_features, out_features))
+        # Relation Coefficients: (num_relations, B)
+        self.rel_coeffs = nn.Parameter(torch.empty(num_relations, num_bases))
+        
+        nn.init.xor_normal_(self.bases, gain=1.414)
+        nn.init.xor_normal_(self.rel_coeffs, gain=1.414)
+
+    def forward(self, x, edge_index, edge_type):
+        """
+        x:          (N, in_features) Entity features
+        edge_index: (2, E) Edge indices [src, dst]
+        edge_type:  (E,) Relation type integer ID for each edge
+        """
+        N = x.shape[0]
+        
+        # 1. Reconstruct Relation Weight Matrices W_r = sum_{b=1}^B a_{r,b} V_b
+        # (num_relations, B) x (B, in_features, out_features) -> (num_relations, in_features, out_features)
+        W_r = torch.einsum('rb,bif->rif', self.rel_coeffs, self.bases)
+        
+        # 2. Self-Loop Message
+        out = self.w_self(x) # (N, out_features)
+        
+        # 3. Relation-Specific Message Aggregation
+        src_nodes, dst_nodes = edge_index[0], edge_index[1]
+        
+        for r in range(self.num_relations):
+            mask = (edge_type == r)
+            if not mask.any():
+                continue
+                
+            r_src = src_nodes[mask]
+            r_dst = dst_nodes[mask]
+            
+            # Multiply source node features by W_r
+            h_src = x[r_src] # (E_r, in_features)
+            msg = torch.matmul(h_src, W_r[r]) # (E_r, out_features)
+            
+            # Scatter add messages to destination nodes
+            out.index_add_(0, r_dst, msg)
+            
+        return F.relu(out)
+
+if __name__ == "__main__":
+    N, E, num_relations, in_dim, out_dim = 100, 500, 10, 64, 128
+    rgcn_layer = RGCNLayer(in_features=in_dim, out_features=out_dim, num_relations=num_relations, num_bases=4)
+    
+    x = torch.randn(N, in_dim)
+    edge_index = torch.stack([torch.randint(0, N, (E,)), torch.randint(0, N, (E,))])
+    edge_type = torch.randint(0, num_relations, (E,))
+    
+    out = rgcn_layer(x, edge_index, edge_type)
+    
+    print(f"R-GCN Output Tensor Shape: {out.shape}")
+    assert out.shape == (N, out_dim)
+    print("R-GCN verification successful!")
+```
+
+## 10. Strengths
+- **Multi-Relational Graph Support:** Handles multi-edge Knowledge Graphs containing hundreds of relation types natively.
+- **Basis Regularization:** Basis decomposition prevents parameter explosion and overfitting on sparse relations.
+- **Effective Knowledge Graph Completion:** Outperforms shallow KGE models by enabling multi-hop message passing.
+
+## 11. Weaknesses
+- **High Memory Demand:** Maintaining multiple relation matrices $W_r$ consumes significant GPU VRAM.
+
+## 12. Research Evolution
+R-GCN pioneered relational graph neural networks, directly inspiring **CompGCN**, **KGCN**, and **HetGNN**.
+
+## 13. Interview Questions
+
+**Q1: What is the main difference between standard GCN and R-GCN?**
+**A1:** Standard GCN operates on homogeneous graphs with a single edge type using a single weight matrix $W$. R-GCN operates on multi-relational Knowledge Graphs ($G=(V, E, R)$) using separate relation-specific transformation matrices $W_r$ for each edge type $r \in \mathcal{R}$.
+
+**Q2: Write out the R-GCN layer propagation formula.**
+**A2:** $h_i^{(l+1)} = \sigma \left( W_0^{(l)} h_i^{(l)} + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_i^r} \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)} \right)$.
+
+**Q3: How does Basis Decomposition solve the parameter explosion problem in R-GCN?**
+**A3:** Having separate matrices $W_r$ for hundreds of relations causes parameter explosion. Basis decomposition expresses each $W_r$ as a linear combination of $B$ shared basis matrices: $W_r = \sum_{b=1}^B a_{r,b} V_b$, drastically reducing parameters.
+
+**Q4: How does Block-Diagonal Decomposition work in R-GCN?**
+**A4:** Block-Diagonal Decomposition constrains $W_r$ to be a block-diagonal matrix of $B$ smaller low-dimensional matrices, enforcing sparsity and independence between latent subspace dimensions.
+
+**Q5: How is R-GCN used for Link Prediction in Knowledge Graphs?**
+**A5:** R-GCN acts as an encoder generating entity embeddings $e_s, e_o$. A decoder (like DistMult $f(s, r, o) = e_s^T R_r e_o$) scores candidate triples $(s, r, o)$, optimized via negative sampling.
+
+## 14. Related Papers
+- **R-GCN Paper:** *Modeling Relational Data with Graph Convolutional Networks* (Schlichtkrull et al., ESWC 2018)
+- **GCN Paper:** *Semi-Supervised Classification with Graph Convolutional Networks* (Kipf & Welling, ICLR 2017)
+
+## 15. Further Reading
+- PyTorch Geometric `RGCNConv` Documentation

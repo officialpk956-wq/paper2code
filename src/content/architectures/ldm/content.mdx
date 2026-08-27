@@ -1,0 +1,249 @@
+# Latent Diffusion Models (LDM)
+
+## 1. Overview
+Latent Diffusion Models (LDM), introduced in 2021 by Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer (LMU Munich & Runway), unlocked democratic, high-resolution text-to-image generation on consumer GPUs. Before LDM, diffusion models (like DDPM and Imagen) operated directly in high-dimensional pixel space ($512 \times 512 \times 3$), consuming massive memory and GPU compute to diffuse imperceptible pixel noise. LDM decoupled the generation process into two separate stages:
+1. **Perceptual Compression Stage (Autoencoder):** An autoencoder (VQ-GAN or KL-regularized VAE) is trained separately to compress high-resolution images into a lower-dimensional latent space ($8\times$ downsampled, e.g., $64 \times 64 \times 4$).
+2. **Latent Diffusion Stage:** The diffusion model operates exclusively in this compressed, semantically rich latent space.
+
+By adding **Cross-Attention Conditioning Mechanism** inside the latent U-Net, LDM enables flexible multimodal conditioning (text prompts via CLIP, bounding boxes, segmentation masks, depth maps). LDM formed the exact architectural backbone of **Stable Diffusion**.
+
+:::note
+LDM's core architecture: "Compress raw pixel images into a $4\times$ to $8\times$ spatially reduced latent space via a pre-trained VAE, run diffusion exclusively in latent space, and inject conditioning vectors via Cross-Attention."
+:::
+
+## 2. Historical Context
+By 2021, diffusion models had proven superior to GANs in visual quality and distribution coverage. However, pixel-space diffusion suffered from extreme computational inefficiency. In a $512 \times 512$ image, most FLOPs are wasted diffusing imperceptible high-frequency noise details (imperceptible pixel jitter), while semantic content occupies a much smaller dimensional manifold.
+
+OpenAI's GLIDE and Google's Imagen attempted to fix this using cascaded super-resolution pipelines (training a base $64 \times 64$ model, followed by $64 \to 256$ and $256 \to 1024$ super-resolution models). However, this required training 3 separate pixel-space diffusion models.
+
+Rombach et al. took a different approach. They observed that image representation can be split into two perceptual realms: **Perceptual Compression** (which removes high-frequency details while preserving semantic structure) and **Semantic Composition** (the generative process). By pre-training a Autoencoder (VAE) to handle perceptual compression, LDM allowed the diffusion U-Net to focus 100% of its capacity on semantic composition in a $64 \times 64$ latent space, reducing training FLOPs by $10\times$ and allowing Stable Diffusion to run on an 8GB consumer GPU.
+
+## 3. Problem It Solves
+LDM addresses three major engineering barriers:
+1. **Pixel-Space Memory Explosion:** Diffusion in $512 \times 512 \times 3$ space requires massive VRAM and thousands of A100 GPU hours. Latent diffusion in $64 \times 64 \times 4$ space cuts computational cost by over $10\times$ while preserving visual fidelity.
+2. **Multimodal Conditioning Integration:** Introduces a general **Cross-Attention Mechanism** into the U-Net intermediate blocks, allowing text embeddings (CLIP), layout boxes, depth maps, or segmentations to modulate image generation seamlessly.
+3. **Cascaded Model Complexity:** Replaces multi-stage pixel super-resolution cascades with a single latent U-Net + VAE decoder pipeline.
+
+## 4. Architecture Diagram Data
+Below is the two-stage architecture of LDM showing the Perceptual Compression Stage (trained separately) and the Latent Diffusion Stage.
+
+```text
+       STAGE 1: PERCEPTUAL COMPRESSION (Trained Separately First)
+
+       [ Pixel Image x: (B, 3, 512, 512) ]
+                        |
+                        v
+       +==================================+
+       | Pre-Trained VAE / VQ-GAN Encoder |
+       | - Spatial Downsampling Factor f=8|
+       +==================================+
+                        |
+                        v
+       [ Latent Representation z = E(x): (B, 4, 64, 64) ]
+                        |
+                        v
+       +==================================+
+       | Pre-Trained VAE Decoder D(z)     |
+       | - Reconstructs Image x_rec       |
+       +==================================+
+                        |
+                        v
+       [ Reconstructed Image: (B, 3, 512, 512) ]
+
+
+       ========================================================================
+
+       STAGE 2: LATENT DIFFUSION & CROSS-ATTENTION CONDITIONING
+
+       [ Clean Latent z_0: (B, 4, 64, 64) ]
+                        |
+                        v
+       [ Forward Noise Addition: z_t = sqrt(alpha_bar_t)*z_0 + sqrt(1-alpha_bar_t)*eps ]
+                        |
+                        v
+       [ Noisy Latent z_t: (B, 4, 64, 64) ]
+                        |
+                        +-----------------------+
+                        |                       |
+                        v                       v
+               +=======================================+  [ Conditioning y ]
+               | Latent U-Net (Denoising Model)        |  (Text / Image / Depth)
+               |                                       |          |
+               | - ResBlocks + Spatial Self-Attention  |          v
+               | - CROSS-ATTENTION BLOCKS               |  +====================+
+               |   Q = W_Q * Feature_Map               |  | Domain Encoder tau |
+               |   K = W_K * tau(y), V = W_V * tau(y)  |  | (CLIP Text Encoder)|
+               +=======================================+  +====================+
+                                       |                            |
+                                       +<---------------------------+
+                                       |
+                                       v
+                       [ Predicted Latent Noise: eps_theta(z_t, t, tau(y)) ]
+                                       |
+                                       v
+                       [ Sampled Clean Latent z_0 ]
+                                       |
+                                       v
+                       [ VAE Decoder D(z_0): (B, 3, 512, 512) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+LDM separates image generation into two distinct components:
+
+### 1. Perceptual Autoencoder ($E, D$)
+- **Encoder $E$:** Takes image $x \in \mathbb{R}^{3 \times H \times W}$ and downsamples spatially by factor $f=8$ to latent code $z = E(x) \in \mathbb{R}^{4 \times H/8 \times W/8}$. Uses KL-divergence or VQ-quantization regularizers to prevent arbitrary latent variance scaling.
+- **Decoder $D$:** Reconstructs latent code back to pixel space $\hat{x} = D(z) \in \mathbb{R}^{3 \times H \times W}$.
+
+### 2. Denoising Latent U-Net
+Operates exclusively on $4 \times 64 \times 64$ latent codes. It consists of:
+- **Encoder Path:** 4 downsampling stages (channels 320, 640, 1280, 1280).
+- **Spatial Self-Attention & Cross-Attention Blocks:** Each stage contains Spatial Transformer blocks consisting of:
+  1. LayerNorm + Self-Attention (queries, keys, values from latent feature map).
+  2. LayerNorm + **Cross-Attention** (queries from latent map; keys/values from conditioning embedding $\tau_\theta(y)$).
+  3. Feed-Forward MLP Block.
+- **Decoder Path:** 4 upsampling stages with skip connections from the encoder path.
+
+## 6. Tensor Flow Walkthrough
+Let me trace tensors through LDM (Stable Diffusion settings) for a text prompt $y$, batch size $B=2$, image resolution $512 \times 512$.
+
+1. **Perceptual Compression (Image to Latent):**
+   - Input Image $x$: `(2, 3, 512, 512)`
+   - VAE Encoder $E(x) \rightarrow$ Latent $z_0$: `(2, 4, 64, 64)`
+2. **Text Conditioning Encoding:**
+   - Text Prompt $y$: `"A photograph of an astronaut riding a horse"`
+   - CLIP Text Encoder $\tau_\theta(y) \rightarrow$ Text Embeddings: `(2, 77, 768)` (77 tokens, 768 dim)
+3. **Forward Noise Addition in Latent Space:**
+   - Sample Noise $\epsilon \sim \mathcal{N}(0, \mathbf{I})$: `(2, 4, 64, 64)`
+   - Noisy Latent $z_t$: `(2, 4, 64, 64)`
+4. **Latent U-Net Execution:**
+   - Time Embedding $t_{\text{emb}}$: `(2, 1280)`
+   - Cross-Attention at $16 \times 16$ layer:
+     - Query $Q = W_Q \cdot \text{Latent}$: `(2, 256, 1280)` ($16 \times 16 = 256$)
+     - Key $K = W_K \cdot \text{Text}$, Value $V = W_V \cdot \text{Text}$: `(2, 77, 1280)`
+     - Cross-Attention Score $\text{Softmax}(Q K^T / \sqrt{d}) V \rightarrow$ `(2, 256, 1280)`
+   - Output Predicted Latent Noise $\hat{\epsilon}$: `(2, 4, 64, 64)`
+5. **Image Reconstruction (Inference):**
+   - Denoised Sampled Latent $z_0$: `(2, 4, 64, 64)`
+   - VAE Decoder $D(z_0) \rightarrow$ Generated Image: `(2, 3, 512, 512)`
+
+## 7. Mathematical Foundations
+
+### 1. Cross-Attention Conditioning Mechanism
+To inject condition $y$ (e.g., text, depth, segmentation) into the U-Net, LDM uses Cross-Attention:
+
+$$\text{Attention}(Q, K, V) = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} \right) V$$
+
+where:
+- $Q = W_Q^{(i)} \cdot \phi_i(z_t) \in \mathbb{R}^{N \times d}$ is the projected intermediate feature map of the U-Net ($\phi_i(z_t)$ flattened spatially to $N = H_i \cdot W_i$).
+- $K = W_K^{(i)} \cdot \tau_\theta(y) \in \mathbb{R}^{M \times d}$ is the projected conditioning sequence from domain encoder $\tau_\theta$.
+- $V = W_V^{(i)} \cdot \tau_\theta(y) \in \mathbb{R}^{M \times d}$ is the value matrix from domain encoder $\tau_\theta$.
+- $W_Q, W_K, W_V$ are learnable projection matrices.
+
+### 2. Latent Diffusion Training Loss Objective
+LDM minimizes the simplified $\ell_2$ denoising loss in latent space:
+
+$$\mathcal{L}_{\text{LDM}}(\theta) = \mathbb{E}_{x_0, \epsilon \sim \mathcal{N}(0,\mathbf{I}), t, y} \left[ \left\| \epsilon - \epsilon_\theta\left( z_t, t, \tau_\theta(y) \right) \right\|^2 \right]$$
+
+where $z_0 = E(x_0)$ and $z_t = \sqrt{\bar{\alpha}_t} z_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon$. The autoencoder weights ($E, D$) and domain encoder weights $\tau_\theta$ are frozen or updated separately.
+
+## 8. Training Procedure
+- **Stage 1 (Autoencoder Training):** Pre-train VAE on ImageNet / LAION using a combination of Perceptual Loss (LPIPS), pixel L1 loss, and GAN adversarial loss (VQ-GAN / KL-regularized VAE). Freeze $E$ and $D$.
+- **Stage 2 (Latent Diffusion Training):** Encode training images $x_0$ to latents $z_0 = E(x_0)$. Train U-Net to predict noise added to $z_t$ conditioned on CLIP text embeddings $\tau_\theta(y)$ using AdamW ($\text{lr} = 1 \times 10^{-4}$).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **LDM Cross-Attention Block**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CrossAttention(nn.Module):
+    def __init__(self, query_dim=1280, context_dim=768, heads=8, dim_head=64):
+        super().__init__()
+        inner_dim = dim_head * heads
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+        
+        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_out = nn.Linear(inner_dim, query_dim)
+
+    def forward(self, x, context=None):
+        """
+        x: (B, N_spatial, query_dim) - Latent feature map tokens
+        context: (B, M_tokens, context_dim) - Text condition tokens (e.g. CLIP 77x768)
+        """
+        if context is None:
+            context = x
+            
+        B, N, _ = x.shape
+        M = context.shape[1]
+        
+        q = self.to_q(x).view(B, N, self.heads, -1).permute(0, 2, 1, 3)       # (B, heads, N, dim_head)
+        k = self.to_k(context).view(B, M, self.heads, -1).permute(0, 2, 1, 3) # (B, heads, M, dim_head)
+        v = self.to_v(context).view(B, M, self.heads, -1).permute(0, 2, 1, 3) # (B, heads, M, dim_head)
+        
+        # Calculate Cross-Attention scores
+        sim = torch.matmul(q, k.transpose(-1, -2)) * self.scale # (B, heads, N, M)
+        attn = F.softmax(sim, dim=-1)
+        
+        out = torch.matmul(attn, v) # (B, heads, N, dim_head)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, N, -1)
+        return self.to_out(out)
+
+if __name__ == "__main__":
+    B = 2
+    N_spatial = 16 * 16 # 256 spatial tokens from 16x16 feature map
+    M_tokens = 77      # 77 text tokens from CLIP
+    
+    cross_attn = CrossAttention(query_dim=512, context_dim=768, heads=8, dim_head=64)
+    
+    latent_feats = torch.randn(B, N_spatial, 512)
+    text_embeds = torch.randn(B, M_tokens, 768)
+    
+    out = cross_attn(latent_feats, context=text_embeds)
+    
+    print(f"Latent Query Shape:      {latent_feats.shape}")
+    print(f"Text Context Shape:      {text_embeds.shape}")
+    print(f"Cross-Attention Output:  {out.shape}")
+    assert out.shape == (B, N_spatial, 512)
+    print("LDM Cross-Attention verification successful!")
+```
+
+## 10. Strengths
+- **Massive Computational Efficiency:** Running diffusion in an $8\times$ downsampled latent space cuts training and inference FLOPs by over $10\times$.
+- **Consumer GPU Accessibility:** Enabled high-resolution text-to-image models (Stable Diffusion) to run on single 8GB consumer GPUs.
+- **Flexible Multimodal Conditioning:** Cross-attention seamlessly integrates text prompts, segmentation masks, depth maps, and structural poses into image generation.
+
+## 11. Weaknesses
+- **Two-Stage Dependency:** Quality is bounded by VAE reconstruction limits; fine text (e.g., small signs) or tiny human faces can suffer from VAE compression artifacts.
+
+## 12. Research Evolution
+LDM served as the direct foundation for **Stable Diffusion (v1.4, v1.5, v2.1)**, **ControlNet**, **SDXL**, and modern latent diffusion models.
+
+## 13. Interview Questions
+
+**Q1: Why does Latent Diffusion Model (LDM) perform diffusion in latent space rather than raw pixel space?**
+**A1:** Raw pixel space ($512 \times 512 \times 3$) contains high-frequency imperceptible noise that consumes over 90% of GPU compute during diffusion. Pre-training an autoencoder compresses pixels into a semantically rich $64 \times 64 \times 4$ latent space ($8\times$ spatial reduction), allowing the diffusion U-Net to focus 100% of its parameters on semantic composition, reducing training FLOPs by $>10\times$.
+
+**Q2: How does Cross-Attention inject text prompts into LDM's U-Net?**
+**A2:** In Cross-Attention, the Query matrix $Q = W_Q \cdot \phi(z_t)$ is projected from the U-Net's spatial latent feature map, while Key $K = W_K \cdot \tau(y)$ and Value $V = W_V \cdot \tau(y)$ are projected from the text embedding $\tau(y)$ (e.g., CLIP text encoder outputs). Softmax attention allows every spatial pixel location in the latent map to attend to relevant text tokens.
+
+**Q3: What are the two distinct training stages of LDM?**
+**A3:** Stage 1 trains an Autoencoder (VQ-GAN / VAE) to compress images into a low-dimensional latent space using perceptual loss (LPIPS) and GAN loss. Stage 2 freezes the VAE and trains the latent U-Net to perform denoising diffusion in latent space.
+
+**Q4: What spatial downsampling factor $f$ is used in Stable Diffusion, and why?**
+**A4:** $f=8$ (compressing $512 \times 512$ images to $64 \times 64$ latents with 4 channels). Authors found $f=4$ to $8$ achieved the optimal trade-off between perceptual reconstruction quality and diffusion computational speed.
+
+**Q5: What happens during LDM inference?**
+**A5:** (1) Text prompt is encoded via CLIP $\rightarrow \tau(y)$; (2) Pure Gaussian noise latent $z_T \sim \mathcal{N}(0, \mathbf{I})$ is sampled; (3) Latent U-Net denoises $z_T \rightarrow z_0$ over $S$ steps using DDIM/DPM-Solver; (4) VAE Decoder reconstructs clean image $x_0 = D(z_0)$.
+
+## 14. Related Papers
+- **LDM Paper:** *High-Resolution Image Synthesis with Latent Diffusion Models* (Rombach et al., CVPR 2022)
+- **VQ-GAN Paper:** *Taming Transformers for High-Resolution Image Synthesis* (Esser et al., CVPR 2021)
+
+## 15. Further Reading
+- CompVis Latent Diffusion Official GitHub Repository
+- Hugging Face Diffusers `StableDiffusionPipeline` Documentation

@@ -1,0 +1,232 @@
+# Deep Q-Network (DQN)
+
+## 1. Overview
+Deep Q-Network (DQN), introduced in 2013 and published in *Nature* in 2015 by Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Alex Graves, Antonoglou, Wierstra, and Riedmiller (Google DeepMind), was the historic breakthrough that demonstrated for the first time that a single deep neural network could learn to master complex control tasks directly from **raw sensory pixels** without hand-engineered features. Applied to 49 Atari 2600 arcade games, DQN achieved human-level or superhuman performance across a majority of the suite using the exact same hyperparameter configuration and architecture. DQN solved the longstanding instability and divergence of deep Q-learning by combining two crucial mechanisms: an **Experience Replay Buffer** (which breaks temporal data correlations) and a **Separate Target Network** (which stabilizes the non-stationary Q-learning target).
+
+:::note
+DQN's historic breakthrough: "First algorithm to learn control directly from raw 84x84 pixel screens across 49 Atari games, stabilized by Experience Replay and a separate Target Network."
+:::
+
+## 2. Historical Context
+Before 2013, Reinforcement Learning (RL) relied heavily on linear function approximation or tabular Q-learning with hand-crafted state features (e.g., measuring precise ball coordinates or paddle velocities). While Q-learning had proven convergence with linear features, combining non-linear deep neural networks with off-policy Q-learning (the "Deadly Triad": Function Approximation, Off-Policy Learning, and Bootstrapping) inevitably caused training divergence.
+
+Mnih et al. recognized that deep convolutional neural networks (AlexNet era) could extract spatial visual representations from raw Atari screen pixels ($84 \times 84 \times 4$). By introducing Experience Replay and Target Networks, DeepMind stabilized deep Q-learning, birthing modern Deep Reinforcement Learning.
+
+## 3. Problem It Solves
+DQN resolves two core causes of training divergence in Deep Q-Learning:
+1. **Sequential Data Correlations:** Sequential environment transitions $(s_t, a_t, r_t, s_{t+1})$ are heavily auto-correlated, violating the i.i.d. (independent and identically distributed) assumption of stochastic gradient descent. **Experience Replay** randomly samples past transitions, breaking temporal correlations.
+2. **Moving Target Instability (Non-Stationary Targets):** In standard Q-learning, updating $Q(s, a; \theta)$ simultaneously updates the target value $r + \gamma \max_{a'} Q(s', a'; \theta)$. This causes policy oscillations. **Target Network** ($\theta^-$) holds target Q-values fixed for $C$ steps, stabilizing regression targets.
+
+## 4. Architecture Diagram Data
+Below is the full architecture of DQN showing the 4-frame stacked input, Convolutional feature extractor, Q-value output layer, Experience Replay Buffer, and Target Network.
+
+```text
+       [ Environment State: 4 Stacked Frames (B, 4, 84, 84) ]
+                                   |
+                                   v
+             +============================================+
+             | Conv2d (32 filters, 8x8, Stride 4, ReLU)   |
+             | Output: (B, 32, 20, 20)                   |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             | Conv2d (64 filters, 4x4, Stride 2, ReLU)   |
+             | Output: (B, 64, 9, 9)                     |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             | Conv2d (64 filters, 3x3, Stride 1, ReLU)   |
+             | Output: (B, 64, 7, 7)                     |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             | Linear Layer (512 units, ReLU)             |
+             | Output: (B, 512)                           |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             | Linear Output Layer (num_actions outputs)  |
+             | Output Q-values Q(s, a; theta): (B, |A|)   |
+             +============================================+
+
+       ========================================================================
+
+       EXPERIENCE REPLAY & TARGET NETWORK DYNAMICS
+
+       [ Env Transition (s, a, r, s', done) ] ---> Insert into Replay Buffer (Cap: 1M)
+                                                           |
+                                                           v
+       [ Sample Random Mini-batch (B=32) ] <---------------+
+                       |
+         +-------------+-----------------------+
+         |                                     |
+         v (Online Network theta)              v (Target Network theta^-)
+       [ Q(s, a; theta) ]            [ r + gamma * max_a' Q(s', a'; theta^-) ]
+         |                                     |
+         +------------------+------------------+
+                            |
+                            v
+             [ Loss = MSE( Q(s,a), Target ) ]
+                            |
+                            v (Periodically copy theta -> theta^- every C steps)
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Input Pre-processing Stage:**
+- Converts raw Atari RGB screens to grayscale, resizes to $84 \times 84$, and stacks 4 consecutive frames to capture temporal motion (ball trajectory, velocity). Shape: $(B, 4, 84, 84)$.
+
+**2. Convolutional Feature Extractor:**
+- **Conv 1:** 32 filters of $8 \times 8$, stride 4, ReLU activation $\to (B, 32, 20, 20)$.
+- **Conv 2:** 64 filters of $4 \times 4$, stride 2, ReLU activation $\to (B, 64, 9, 9)$.
+- **Conv 3:** 64 filters of $3 \times 3$, stride 1, ReLU activation $\to (B, 64, 7, 7)$.
+
+**3. Value Estimation Head:**
+- **Linear Layer:** Fully connected layer mapping $64 \times 7 \times 7 = 3136$ features to 512 units with ReLU.
+- **Output Layer:** Linear layer with $|A|$ outputs, producing $Q(s, a_i)$ for all valid actions in state $s$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DQN for batch size $B=32$ and $|A|=4$ discrete actions (e.g., Breakout).
+
+1. **Input Frame Stack:** `(32, 4, 84, 84)`
+2. **Conv1 (Stride 4):** `(32, 32, 20, 20)`
+3. **Conv2 (Stride 2):** `(32, 64, 9, 9)`
+4. **Conv3 (Stride 1):** `(32, 64, 7, 7)`
+5. **Flatten:** `(32, 3136)`
+6. **FC Hidden:** `(32, 512)`
+7. **Q-Value Output:** `(32, 4)` $\to$ Evaluates $Q(s, a_0), Q(s, a_1), Q(s, a_2), Q(s, a_3)$.
+
+## 7. Mathematical Foundations
+
+### 1. Bellman Optimality Equation
+Q-learning estimates the optimal action-value function $Q^*(s, a)$, representing the maximum expected discounted cumulative reward achievable from state $s$ taking action $a$:
+
+$$Q^*(s, a) = \mathbb{E}_{s'} \left[ r + \gamma \max_{a'} Q^*(s', a') \;\middle|\; s, a \right]$$
+
+### 2. DQN Loss Function & Target Network Mechanics
+The online Q-network $Q(s, a; \theta)$ is updated by minimizing the Mean Squared Error against TD target $y_i$:
+
+$$\mathcal{L}_i(\theta_i) = \mathbb{E}_{(s, a, r, s', d) \sim \mathcal{D}} \left[ \left( y_i^{\text{DQN}} - Q(s, a; \theta_i) \right)^2 \right]$$
+
+where the target $y_i^{\text{DQN}}$ is computed using the **separate target network parameters $\theta_i^-$**:
+
+$$y_i^{\text{DQN}} = r + \gamma (1 - d) \max_{a'} Q\left(s', a'; \; \theta_i^-\right)$$
+
+Target parameters $\theta_i^-$ are updated by copying $\theta_i \to \theta_i^-$ every $C$ steps (e.g., $C = 10,000$).
+
+### 3. Why Experience Replay & Target Network Are Essential
+- **Without Experience Replay:** Highly correlated sequential transitions $(s_t, s_{t+1}, s_{t+2})$ cause SGD updates to overfit to local state spaces, leading to catastrophic parameter divergence.
+- **Without Target Network:** Updating $\theta$ moves both $Q(s, a; \theta)$ and the target $r + \gamma \max_{a'} Q(s', a'; \theta)$ simultaneously. This creates a moving target problem ("chasing its own tail"), causing policy oscillations.
+
+## 8. Training Procedure
+- Maintain Experience Replay Buffer $\mathcal{D}$ of capacity $1,000,000$ transitions.
+- Collect environment steps using $\epsilon$-greedy policy ($\epsilon$ decays linearly from $1.0 \to 0.1$ over 1M steps).
+- Sample mini-batch of 32 transitions $(s, a, r, s', d) \sim \mathcal{D}$.
+- Compute TD loss $\mathcal{L}(\theta)$ using target network $\theta^-$.
+- Optimizer: RMSprop ($\text{lr} = 0.00025, \text{momentum} = 0.95$). Update target network $\theta^- \leftarrow \theta$ every 10,000 steps.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **DQN Architecture and TD Loss**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DQN(nn.Module):
+    def __init__(self, in_channels=4, num_actions=4):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU()
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(64 * 7 * 7, 512),
+            nn.ReLU(),
+            nn.Linear(512, num_actions)
+        )
+
+    def forward(self, x):
+        # x: (B, 4, 84, 84)
+        feat = self.conv(x).view(x.shape[0], -1)
+        return self.fc(feat)
+
+def compute_dqn_loss(online_net, target_net, states, actions, rewards, next_states, dones, gamma=0.99):
+    # 1. Compute current Q(s, a)
+    q_values = online_net(states) # (B, num_actions)
+    state_action_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1) # (B,)
+    
+    # 2. Compute Target Q-value using Target Network: r + gamma * max_a' Q_target(s', a')
+    with torch.no_grad():
+        next_q_values = target_net(next_states) # (B, num_actions)
+        max_next_q = next_q_values.max(dim=1)[0] # (B,)
+        target_values = rewards + (1.0 - dones) * gamma * max_next_q
+        
+    # 3. Huber / MSE Loss
+    loss = F.smooth_l1_loss(state_action_values, target_values)
+    return loss
+
+if __name__ == "__main__":
+    B, C, H, W = 32, 4, 84, 84
+    num_actions = 4
+    
+    online_net = DQN(in_channels=C, num_actions=num_actions)
+    target_net = DQN(in_channels=C, num_actions=num_actions)
+    target_net.load_state_dict(online_net.state_dict())
+    
+    states = torch.randn(B, C, H, W)
+    actions = torch.randint(0, num_actions, (B,))
+    rewards = torch.randn(B)
+    next_states = torch.randn(B, C, H, W)
+    dones = torch.zeros(B)
+    
+    loss = compute_dqn_loss(online_net, target_net, states, actions, rewards, next_states, dones)
+    
+    print(f"Computed DQN TD Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("DQN verification successful!")
+```
+
+## 10. Strengths
+- **Raw Pixel Control:** First deep RL algorithm to learn directly from high-dimensional visual screens.
+- **End-to-End Stability:** Experience Replay and Target Networks stabilize off-policy deep Q-learning.
+- **Cross-Domain Generalization:** Single network architecture mastered 49 different Atari games.
+
+## 11. Weaknesses
+- **Q-Value Overestimation Bias:** Max operator $\max_{a'} Q(s', a')$ overestimates action values (solved by Double DQN).
+- **Off-Policy Sample Efficiency:** Requires tens of millions of environment steps.
+
+## 12. Research Evolution
+DQN birthed modern deep RL, leading directly to **Double DQN**, **Dueling DQN**, **Rainbow**, and **PPO**.
+
+## 13. Interview Questions
+
+**Q1: Why are both Experience Replay and Target Networks required to stabilize DQN?**
+**A1:** Experience Replay breaks temporal data correlations in sequential transitions, supplying i.i.d. mini-batches to SGD. Target Networks freeze the regression targets $r + \gamma \max_{a'} Q(s', a'; \theta^-)$ for $C$ steps, preventing policy oscillations and non-stationary target divergence.
+
+**Q2: What is the "Deadly Triad" in Reinforcement Learning?**
+**A2:** The combination of (1) Function Approximation (deep neural networks), (2) Off-Policy Learning (learning from replay buffer data), and (3) Bootstrapping (updating Q-estimates using next-state Q-estimates). DQN stabilizes this triad.
+
+**Q3: Why are 4 consecutive Atari frames stacked together as input to DQN?**
+**A3:** A single static Atari image lacks velocity and motion trajectory information (e.g., whether the Pong ball is moving left or right). Stacking 4 frames converts the partially observable system into a fully observable Markov Decision Process (MDP).
+
+**Q4: Write out the DQN TD Target equation.**
+**A4:** $y_i = r + \gamma (1 - d) \max_{a'} Q(s', a'; \theta^-)$.
+
+**Q5: Why is Huber Loss (Smooth L1 Loss) preferred over MSE Loss in DQN?**
+**A5:** Huber loss acts as quadratic MSE for small TD errors ($|e| \le 1$) and linear L1 for large TD errors ($|e| > 1$), clipping extreme gradients and preventing exploding updates when rewards fluctuate.
+
+## 14. Related Papers
+- **DQN Nature Paper:** *Human-level control through deep reinforcement learning* (Mnih et al., Nature 2015)
+- **DQN NIPS Paper:** *Playing Atari with Deep Reinforcement Learning* (Mnih et al., NIPS Workshop 2013)
+
+## 15. Further Reading
+- DeepMind Open Source CleanRL DQN Implementation

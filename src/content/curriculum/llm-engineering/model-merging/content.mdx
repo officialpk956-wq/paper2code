@@ -1,0 +1,138 @@
+# Model Merging
+
+## 1. Overview
+
+Training specialized models for each new task or domain is expensive — requiring compute, data collection, and maintenance overhead for dozens of separate model versions. Model merging is the observation that fine-tuned models, when represented in weight space, live close to each other and to their base model, suggesting that their knowledge can be **combined or interpolated** without retraining. Instead of maintaining separate models for customer-support tasks, code-generation tasks, and creative-writing tasks, you can merge them into a single model that's reasonable at all three — or selectively merge subsets, trading some capability in each task for a single deployable model. It's a lightweight alternative to either multi-task training (expensive) or model ensemble (expensive inference) when you're willing to accept some performance loss in exchange for simplicity.
+
+## 2. Prerequisites in Context
+
+**Fine-Tuning** is the direct prerequisite — you need to understand what fine-tuning is (updating a pretrained model on a specific task) before understanding how to combine fine-tuned models. **Transfer Learning** and **Loss Landscape** concepts matter because merging is fundamentally about understanding whether fine-tuned models lie in a shared loss valley or separate, incompatible basins — if they're in the same basin, interpolation works; if not, merging causes severe performance loss. **Vector Space Properties of Neural Networks** is useful conceptual background: thinking of model weights as points in high-dimensional space, where distance and angles matter.
+
+## 3. Core Concept
+
+The simplest merging technique is **parameter-space linear interpolation**: given two fine-tuned models $\theta_A$ and $\theta_B$ (both derived from base model $\theta_0$), compute a merged model $\theta_{\text{merge}} = \alpha \theta_A + (1-\alpha) \theta_B$ for some $\alpha \in [0, 1]$. This works surprisingly well — the merged model often retains most of the performance on both tasks, suggesting that the fine-tuned models lie in a connected loss valley. Empirically, this works better when $\alpha$ is chosen to weight tasks by importance (or equally if tasks are equally important), and works better when the fine-tuning learning rates and amounts are similar (so both models are "equally fine-tuned" from the base). A key insight is that **layer-wise merging** can improve results: different layers often specialize in different ways, so allowing different $\alpha$ values for different layers often yields better results than a single global $\alpha$. **DARE** (Dropping And Rescaling Einsums) and **Task Arithmetic** extend this further by subtracting the base model first ($\Delta_A = \theta_A - \theta_0$), interpolating in **difference space** ($\Delta_{\text{merge}} = \alpha \Delta_A + (1-\alpha) \Delta_B$), and adding back to the base ($\theta_{\text{merge}} = \theta_0 + \Delta_{\text{merge}}$), which often yields better results because it focuses on what changed during fine-tuning rather than interpolating absolute weights.
+
+## 4. Theoretical Foundations
+
+From a loss landscape perspective, if two fine-tuned models $\theta_A$ and $\theta_B$ descend from the same base $\theta_0$ by similar gradient paths (similar learning rates, similar amounts of data, similar task difficulty), they often inhabit a **shared loss valley** — a region of low loss for both tasks. In this regime, linear interpolation in weight space preserves low loss: a path from $\theta_A$ to $\theta_B$ stays in low-loss territory. However, if the two models diverge significantly (very different task domains, very different fine-tuning amounts), they may inhabit separate valleys with a high-loss ridge between them, in which case naive interpolation crosses the ridge, incurring high loss. **Mode connectivity** research (finding low-loss paths between models in weight space) shows that linear paths work well for similar models but fail for very different ones; **task arithmetic** — working in difference space — is empirically more robust because the differences $\Delta_A$ and $\Delta_B$ capture "what changed for task A" and "what changed for task B," and interpolating these changes is less sensitive to the absolute starting point $\theta_0$ than interpolating absolute weights.
+
+## 5. Worked Example
+
+A base model is fine-tuned on task A (customer support) producing $\theta_A$, and separately fine-tuned on task B (code generation) producing $\theta_B$. Simple linear interpolation $\theta_{\text{merge}} = 0.5 \theta_A + 0.5 \theta_B$ retains ~90% of task A performance and ~85% of task B performance — reasonable if you value a single model over two separate ones. Task arithmetic does better: compute $\Delta_A = \theta_A - \theta_0$ and $\Delta_B = \theta_B - \theta_0$, then $\theta_{\text{merge}} = \theta_0 + 0.5 \Delta_A + 0.5 \Delta_B$ often achieves ~95% on both tasks, because interpolating the differences (what changed) is more robust than interpolating absolute weights. Layer-wise merging does even better: allowing different $\alpha$ values for embedding layers (typically $\alpha_{\text{embed}} = 0.5$) versus middle transformer layers (often higher, like $\alpha_{\text{mid}} = 0.7$) versus output layers (often lower, like $\alpha_{\text{out}} = 0.3$) can push performance further. The tradeoff is that finding layer-wise $\alpha$ values requires validation on held-out tasks, adding hyperparameter search cost.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def linear_interpolation_merge(theta_a, theta_b, alpha=0.5):
+    """
+    Simple linear interpolation in weight space.
+    theta_a, theta_b: state_dicts or parameter lists
+    alpha: weight for theta_a (1-alpha weight for theta_b)
+    """
+    merged = {}
+    for key in theta_a:
+        merged[key] = alpha * theta_a[key] + (1 - alpha) * theta_b[key]
+    return merged
+
+def task_arithmetic_merge(theta_base, theta_a, theta_b, alpha=0.5):
+    """
+    Task arithmetic: work in difference space.
+    Compute: merged = base + alpha * (theta_a - base) + (1-alpha) * (theta_b - base)
+    """
+    merged = {}
+    for key in theta_base:
+        delta_a = theta_a[key] - theta_base[key]
+        delta_b = theta_b[key] - theta_base[key]
+        merged[key] = theta_base[key] + alpha * delta_a + (1 - alpha) * delta_b
+    return merged
+
+def layer_wise_merge(theta_base, theta_a, theta_b, alphas_by_layer):
+    """
+    Layer-wise merging: different alpha for different layer types.
+    alphas_by_layer: dict mapping layer name patterns to alpha values
+    """
+    merged = {}
+    for key in theta_base:
+        # Determine layer type and its alpha
+        alpha = 0.5  # default
+        for pattern, alpha_val in alphas_by_layer.items():
+            if pattern in key:
+                alpha = alpha_val
+                break
+        
+        delta_a = theta_a[key] - theta_base[key]
+        delta_b = theta_b[key] - theta_base[key]
+        merged[key] = theta_base[key] + alpha * delta_a + (1 - alpha) * delta_b
+    
+    return merged
+
+if __name__ == "__main__":
+    # Load three models: base, task-A fine-tuned, task-B fine-tuned
+    base = nn.Linear(10, 2)
+    task_a = nn.Linear(10, 2)
+    task_b = nn.Linear(10, 2)
+    
+    # Copy base to task models (simulating fine-tuning by small perturbations)
+    task_a.load_state_dict(base.state_dict())
+    task_b.load_state_dict(base.state_dict())
+    with torch.no_grad():
+        task_a.weight.data += torch.randn_like(task_a.weight) * 0.1
+        task_b.weight.data += torch.randn_like(task_b.weight) * 0.1
+    
+    # Merge
+    merged_simple = linear_interpolation_merge(
+        task_a.state_dict(), task_b.state_dict(), alpha=0.5
+    )
+    merged_task_arith = task_arithmetic_merge(
+        base.state_dict(), task_a.state_dict(), task_b.state_dict(), alpha=0.5
+    )
+    
+    print("Merging complete. Task arithmetic typically outperforms linear interpolation.")
+    print("Layer-wise merging can further improve results with validation-based alpha tuning.")
+```
+
+## 7. Real-World Applications
+
+Model merging is increasingly used in the open-source LLM community: community members fine-tune base models (like Mistral or Llama) for specialized tasks (medical QA, code, legal analysis), then merge them to create domain-specific variants that are competent across multiple specialized tasks without maintaining separate deployed models. Commercial applications include creating multi-task models for customer support (handling billing, technical, product questions from a single model) and creating models competent across multiple languages by merging language-specific fine-tunes. Robotics and embodied AI use model merging to combine models trained on different environments or tasks without full retraining.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that merging works equally well for all task pairs — it depends heavily on task similarity. Merging a math-specialist model with a writing-specialist model often yields mediocre performance on both; merging similar tasks (e.g., two code-generation domains) works much better. Another pitfall is ignoring the importance of working in difference space — naive linear interpolation of absolute weights often underperforms task arithmetic because it's sensitive to initialization and doesn't focus on "what changed." A third pitfall is expecting merged models to outperform the individual models — they generally don't, they're a compromise trading some per-task performance for model simplicity and inference efficiency.
+
+## 9. How This Connects
+
+This topic requires understanding **Fine-Tuning** and **Transfer Learning**, and conceptually benefits from understanding **Loss Landscape** geometry. It connects to **Model Distillation** (if you want to compress a merged model), **Ensemble Methods** (merging is a lightweight alternative to ensemble inference), **Retrieval Augmentation** (if you want task-specific behavior without merging), and **Prompt Engineering** (prompt-based adaptation as an alternative to merging).
+
+## 10. Check Your Understanding
+
+**Q1: Why does simple linear interpolation of fine-tuned models often work, and what does this suggest about the loss landscape?**
+It works because fine-tuned models often descend from the same base model by similar gradient paths, inhabiting a shared loss valley where interpolation preserves low loss. This suggests the loss landscape for multi-task learning has connected valleys rather than isolated peaks.
+
+**Q2: What is task arithmetic, and why does it often outperform simple linear interpolation?**
+Task arithmetic works in difference space: merge = base + alpha * (theta_A - base) + (1-alpha) * (theta_B - base). It outperforms linear interpolation because it focuses on "what changed during fine-tuning" rather than interpolating absolute weights, making it more robust to different starting points.
+
+**Q3: Why might layer-wise merging outperform global interpolation, and what is the tradeoff?**
+Different layers often specialize differently during fine-tuning: embedding layers may benefit from equal weighting, middle layers from task-specific emphasis. Layer-wise merging allows this specialization. The tradeoff is that finding layer-wise alpha values requires validation on held-out data, adding computational cost.
+
+**Q4: When does model merging fail or perform poorly?**
+When tasks are very different (e.g., math reasoning vs. creative writing), or when fine-tuning amounts are very different (one model only slightly fine-tuned, another substantially), the models inhabit different loss regions and interpolation crosses high-loss territory, causing degradation.
+
+**Q5: What is the fundamental tradeoff that model merging makes?**
+Merging trades per-task performance for model simplicity — a merged model is typically 5-15% worse on each task than task-specific models, but you deploy one model instead of two, simplifying serving and maintenance.
+
+## 11. Further Reading
+
+- Matena & Raffel, "Merging Models with Fisher-Weighted Averaging" (2022)
+- Ilharco et al., "Editing Models with Task Arithmetic" (2023)
+- Yu et al., "Towards Unified Multi-Dimensional Evaluator for Text Generation" (2023) — includes model merging analysis
+- Daheim et al., "Model Merging by Uncertainty" (2023)
+- See also: `fine-tuning-strategies` in this domain and `ensemble-methods` in the ML curriculum
+
+## Related Platform Content
+
+- [LLM ENGINEERING curriculum overview](/learn/llm-engineering)
+- [Production system](/system-design/llm-serving)
+- [Browse all system designs](/system-design)

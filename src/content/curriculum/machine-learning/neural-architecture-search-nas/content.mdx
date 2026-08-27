@@ -1,0 +1,106 @@
+# Neural Architecture Search (NAS)
+
+## 1. Overview
+
+Neural Architecture Search automates the process of designing a neural network's structure — instead of a human deciding how many layers, what kernel sizes, and which connections to use, a search algorithm explores a space of possible architectures and finds one that performs well on a target task and hardware budget. This might sound like a nice-to-have automation trick, but some of the most efficient, widely-deployed CNN architectures in production — EfficientNet, MobileNet variants, and the original NASNet — were literally discovered by a search algorithm, not hand-designed by researchers, and they consistently beat hand-designed architectures at matched compute budgets.
+
+## 2. Prerequisites in Context
+
+**Deep Learning** fluency is required simply because NAS operates over a space of deep learning architectures — you need to understand what layers, skip connections, and cells actually do before a search algorithm's output architecture makes any sense to evaluate or interpret. **Meta-Learning** matters because NAS is structurally a meta-optimization problem: you're optimizing over the space of architectures (an "outer loop"), where evaluating each candidate typically requires training it (an "inner loop") — the same nested-optimization structure that appears in meta-learning, and many NAS methods borrow techniques directly from that field. **Optimization** more broadly is needed because the search itself — whether via reinforcement learning, evolutionary algorithms, or gradient-based relaxation — is fundamentally an optimization procedure over a space that is not naturally differentiable (architectures are discrete, combinatorial objects).
+
+## 3. Core Concept
+
+The classic (and extremely expensive) NAS approach treats architecture search as a reinforcement learning problem: a controller RNN generates architecture descriptions (as sequences of discrete choices — layer type, kernel size, number of filters), each generated architecture is fully trained and evaluated, and the resulting accuracy is used as a reward signal to update the controller via policy gradients. This requires training thousands of candidate networks from scratch, costing thousands of GPU-days. NASNet's key innovation was restricting the search to two small, repeatable building blocks — a **Normal Cell** (preserves spatial dimensions) and a **Reduction Cell** (halves them) — searched on a small proxy dataset and then stacked many times to build the final network at full scale, dramatically reducing search cost compared to searching the entire network topology directly. DARTS later replaced this expensive discrete search entirely with a continuous relaxation, making architecture search solvable with ordinary gradient descent instead of reinforcement learning (see Section 4).
+
+## 4. Theoretical Foundations
+
+DARTS's core trick is to relax the discrete choice of "which operation to use on this edge of the architecture graph" into a continuous, differentiable mixture. For each edge $(i,j)$ in the architecture's computation graph, instead of picking one operation $o \in \mathcal{O}$ (convolution, pooling, skip-connection, etc.), DARTS computes a weighted sum over *all* candidate operations:
+$$\bar{o}^{(i,j)}(x) = \sum_{o \in \mathcal{O}} \frac{\exp(\alpha_o^{(i,j)})}{\sum_{o' \in \mathcal{O}} \exp(\alpha_{o'}^{(i,j)})} \, o(x)$$
+The architecture parameters $\alpha$ (one softmax-weighted mixture per edge) are now continuous and differentiable, so they can be optimized jointly with the network's regular weights $w$ using standard gradient descent — via a bi-level optimization that alternates updating $w$ on the training set and $\alpha$ on a held-out validation set. After search, the final discrete architecture is recovered by keeping, on each edge, the operation with the highest $\alpha$ weight (and discarding the rest) — turning the soft, differentiable mixture back into a genuine, hard architecture ready for standard training from scratch.
+
+## 5. Worked Example
+
+Suppose a single edge in the search space can be one of three operations: a $3\times3$ convolution, a $5\times5$ convolution, or a skip connection (identity). Early in DARTS training, the softmax weights $\alpha$ might be roughly uniform (each around 0.33), so the edge's output is a blend of all three operations — a genuinely mixed computation that no real discrete architecture performs, but one that's fully differentiable end to end. As training proceeds, gradient descent on the validation loss pushes $\alpha$ toward favoring whichever operation actually reduces validation loss most — say, the $3\times3$ convolution turns out most useful for this position, and its weight climbs toward 1.0 while the others decay toward 0. At the end of search, this edge is "hardened" into a plain $3\times3$ convolution, discarding the (never separately trained) $5\times5$ and skip-connection branches entirely.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MixedOp(nn.Module):
+    """DARTS-style differentiable mixture over candidate operations for one edge."""
+    def __init__(self, channels, ops):
+        super().__init__()
+        self.ops = nn.ModuleList(ops)  # e.g. [Conv3x3, Conv5x5, Identity]
+
+    def forward(self, x, alpha):
+        # alpha: raw (unnormalized) architecture logits for this edge, shape (num_ops,)
+        weights = F.softmax(alpha, dim=0)
+        return sum(w * op(x) for w, op in zip(weights, self.ops))
+
+def harden_architecture(alpha_per_edge):
+    """After search: pick the single highest-weight operation per edge (discretization)."""
+    return [torch.argmax(F.softmax(alpha, dim=0)).item() for alpha in alpha_per_edge]
+
+if __name__ == "__main__":
+    channels = 8
+    ops = [nn.Conv2d(channels, channels, 3, padding=1),
+           nn.Conv2d(channels, channels, 5, padding=2),
+           nn.Identity()]
+    mixed_op = MixedOp(channels, ops)
+    alpha = torch.zeros(3, requires_grad=True)  # start uniform (all logits equal)
+
+    x = torch.randn(2, channels, 16, 16)
+    out = mixed_op(x, alpha)
+    loss = out.pow(2).mean()
+    loss.backward()
+
+    assert alpha.grad is not None, "architecture parameters must receive gradients (the DARTS relaxation point)"
+    print(f"Architecture parameter gradients: {alpha.grad.tolist()}")
+    print(f"Hardened choice (before any real training): op index {harden_architecture([alpha])[0]}")
+```
+
+## 7. Real-World Applications
+
+EfficientNet's base architecture (see `efficientnetv2` and `efficientnet` on this platform) was discovered via NAS combined with a compound scaling rule, and its family of models sets accuracy-per-FLOP records that hand-designed architectures of the same era didn't match. MobileNetV3 (see `mobilenet-v3`) used a NAS-derived search (via a platform-aware reward function that directly penalizes real on-device latency, not just FLOPs) to find its core building blocks, then applied manual refinements — a hybrid "search plus human polish" approach now common in production NAS pipelines. Hardware-aware NAS more broadly is used whenever a model must be deployed on constrained edge hardware (phones, IoT devices), where the search directly optimizes for measured latency on the target chip rather than a proxy metric like parameter count.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misunderstanding is thinking DARTS discovers "the" optimal architecture in some absolute sense — it discovers a good architecture *for the specific search space and proxy task it was run on*, and DARTS-found architectures are well documented to sometimes transfer poorly when the target task, dataset scale, or hardware differs meaningfully from the search conditions. Another pitfall is underestimating how much the *search space design itself* (which operations are even candidates, how cells connect) constrains and biases the outcome — NAS doesn't invent genuinely novel operation types, it only recombines and weights the operations you gave it a priori, so a poorly designed search space produces disappointing results no matter how good the search algorithm is.
+
+## 9. How This Connects
+
+This topic requires **Deep Learning**, **Meta-Learning**, and **Optimization** — without understanding standard architectures, the nested search-and-train optimization structure, and how to reason about optimizing over non-differentiable, discrete design spaces, NAS's methods (RL-based search, evolutionary search, DARTS's continuous relaxation) look like unrelated ad hoc tricks rather than variations on a shared theme. It directly unlocks **Efficient Architecture Design** (the broader discipline of building compute- and memory-efficient models, whether via NAS or informed manual design guided by NAS's empirical findings) and **AutoML Systems** (production systems that automate the entire ML pipeline — architecture, hyperparameters, and sometimes even feature engineering — of which NAS is the architecture-focused component).
+
+## 10. Check Your Understanding
+
+**Q1: Why was the original RL-based NAS approach so computationally expensive, and how did NASNet reduce that cost?**
+The original approach required fully training thousands of candidate architectures from scratch to get a reward signal, costing thousands of GPU-days. NASNet reduced this by restricting the search to two small, repeatable cell structures (Normal and Reduction) searched on a smaller proxy dataset, then stacking the found cells to build the final full-scale network — searching a much smaller space and transferring the result, rather than searching the entire network topology directly at full scale.
+
+**Q2: What problem does DARTS's continuous relaxation solve that RL-based NAS could not solve efficiently?**
+It replaces the discrete, non-differentiable choice of operations with a continuous, softmax-weighted mixture over all candidate operations, making the entire architecture search differentiable and solvable with standard gradient descent — eliminating the need for reinforcement learning's expensive, low-sample-efficiency policy gradient updates and the requirement to fully train each candidate architecture separately.
+
+**Q3: What happens to the "unused" operations in a DARTS mixture at the end of search?**
+They are discarded. The final architecture keeps only the highest-weighted operation on each edge (a discretization step), and everything else that was part of the differentiable mixture during search — including operations that received substantial weight but not the maximum — is thrown away and never appears in the final trained architecture.
+
+**Q4: Why did MobileNetV3's NAS process optimize for measured on-device latency instead of FLOP count?**
+Because FLOP count is only a rough proxy for actual inference speed on real hardware — memory access patterns, hardware-specific operation support, and parallelism characteristics mean two architectures with identical FLOP counts can have very different real-world latency. Directly measuring latency on the target device as the reward signal ensures the discovered architecture is actually fast where it will be deployed, not just theoretically efficient.
+
+**Q5: Why can a NAS-discovered architecture transfer poorly to a different task or hardware target than the one it was searched on?**
+Because the search process optimizes specifically for the proxy task, dataset scale, and (in hardware-aware variants) hardware target used during the search itself — the resulting architecture reflects biases and tradeoffs specific to those search conditions, and there's no guarantee those same design choices remain optimal (or even good) when the deployment conditions genuinely differ.
+
+## 11. Further Reading
+
+- Zoph & Le, "Neural Architecture Search with Reinforcement Learning" (2017)
+- Zoph et al., "Learning Transferable Architectures for Scalable Image Recognition" (NASNet, 2018)
+- Liu, Simonyan & Yang, "DARTS: Differentiable Architecture Search" (2018)
+- Tan & Le, "EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks" (2019)
+- See also: `nasnet`, `darts`, `efficientnetv2`, and `mobilenet-v3` on this platform for the direct architectural results of NAS
+
+## Related Platform Content
+
+- [MACHINE LEARNING curriculum overview](/learn/machine-learning)
+- [DARTS](/architectures/darts)
+- [Browse all system designs](/system-design)

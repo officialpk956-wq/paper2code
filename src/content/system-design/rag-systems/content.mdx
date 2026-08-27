@@ -1,0 +1,761 @@
+# RAG Systems
+
+A RAG system finds external evidence at request time and gives that evidence to a generator. Its value is not merely adding text to a prompt: it creates an inspectable path from source material to answer, with retrieval and generation evaluated separately.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Know what an LLM is and how prompting works**, **Know what vector databases are (System 1 Beginner)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. A RAG system finds external evidence at request time and gives that evidence to a generator. Its value is not merely adding text to a prompt: it creates an inspectable path from source material to answer, with retrieval and generation evaluated separately. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Explain why RAG exists: LLMs hallucinate facts they don't have in weights; retrieval grounds answers in evidence
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **source connectors** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Describe the basic RAG pipeline: ingest documents → chunk → embed → store → retrieve → augment prompt → generate
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser/chunker** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what a chunk is, why chunk size matters, and what overlap does
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **embedding/index pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Understand why RAG + citations is more trustworthy than parametric generation alone
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **retriever** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Basic RAG pipeline: document → chunker → embedding model → vector store → query → retrieve top-K → prompt template → LLM → answer
+
+```text
+RAG Systems: Basic RAG pipeline document chunker embedding model vector store query retrieve top K prompt template LLM answer
+
+[document]
+        |
+        v
+  [chunker]
+          |
+          v
+    [embedding model]
+            |
+            v
+      [vector store]
+              |
+              v
+        [query]
+                |
+                v
+          [retrieve top-K]
+                  |
+                  v
+            [prompt template]
+                    |
+                    v
+              [LLM]
+                      |
+                      v
+                [answer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Basic RAG pipeline: document → chunker → embedding model → vector store → query → retrieve top-K → prompt template → LLM → answer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 2: Chunking strategies: fixed-size, sentence-based, paragraph-based, semantic chunking — visual comparison
+
+```text
+RAG Systems: Chunking strategies fixed size sentence based paragraph based semantic chunking visual comparison
+
+  [producer / request]
+           |
+           v
+      [parser/chunker] ---- control, version, policy ----> [embedding/index pipeline]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [retriever] ---- measured result + trace -----> [reranker]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Chunking strategies: fixed-size, sentence-based, paragraph-based, semantic chunking — visual comparison** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 3: Retrieval quality spectrum: BM25 only / dense only / hybrid — Venn diagram of what each finds
+
+```text
+RAG Systems: Retrieval quality spectrum BM25 only dense only hybrid Venn diagram of what each finds
+
+  [producer / request]
+           |
+           v
+      [embedding/index pipeline] ---- control, version, policy ----> [retriever]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [reranker] ---- measured result + trace -----> [context builder]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Retrieval quality spectrum: BM25 only / dense only / hybrid — Venn diagram of what each finds** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 4: Prompt augmentation template: [System prompt] + [Retrieved context chunks] + [User question] → [LLM answer with citations]
+
+```text
+RAG Systems: Prompt augmentation template System prompt Retrieved context chunks User question LLM answer with citations
+
+[[System prompt] + [Retrieved context chunks] + [User question]]
+        |
+        v
+  [[LLM answer with citations]]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Prompt augmentation template: [System prompt] + [Retrieved context chunks] + [User question] → [LLM answer with citations]** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+### Case Studies
+
+#### Notion AI Q&A: how they built a document Q&A system over user workspaces — chunk strategy, why they chose semantic chunking over fixed-size
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Notion AI Q&A: how they built a document Q&A system over user workspaces — chunk strategy, why they chose semantic chunking over fixed-size**—creates pressure at the **source connectors** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Perplexity.ai: basic architecture of their retrieval-then-generate pipeline — how web search results become LLM context
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Perplexity.ai: basic architecture of their retrieval-then-generate pipeline — how web search results become LLM context**—creates pressure at the **parser/chunker** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### GitHub Copilot Chat: how they retrieve relevant code context from the open repository to answer questions about a codebase
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**GitHub Copilot Chat: how they retrieve relevant code context from the open repository to answer questions about a codebase**—creates pressure at the **embedding/index pipeline** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: What is RAG and why does it reduce hallucination?
+
+RAG retrieves external evidence and conditions generation on it. It can reduce unsupported claims by supplying current, attributable context, but only if retrieval finds the right evidence and the generator follows it; RAG reduces rather than eliminates hallucination. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is chunk overlap and why do we use it?
+
+Overlap preserves facts or references that cross an arbitrary chunk boundary. Too little loses context; too much duplicates evidence, inflates the index, and crowds the prompt. Tune it against retrieval and answer metrics on representative documents. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: What's the difference between retrieval precision and retrieval recall?
+
+Retrieval precision asks what fraction of retrieved items are useful; recall asks what fraction of all needed evidence was retrieved. High recall supplies coverage, while high precision protects the limited context window from distraction. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: When would RAG fail even with perfect retrieval?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **Vector Databases Intermediate**, **Basic understanding of transformer models**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. A RAG system finds external evidence at request time and gives that evidence to a generator. Its value is not merely adding text to a prompt: it creates an inspectable path from source material to answer, with retrieval and generation evaluated separately. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a production RAG system: ingestion pipeline, retrieval pipeline, generation pipeline, evaluation pipeline
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **source connectors** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement advanced retrieval: HyDE, multi-query retrieval, RAG-Fusion, query rewriting
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser/chunker** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Build a RAG evaluation framework: RAGAS, context precision, context recall, faithfulness, answer relevancy
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **embedding/index pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about chunking strategy choices: document-type awareness, semantic chunking, parent-child chunks
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **retriever** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Production RAG architecture: document ingestion (async, queue-based) → chunk pipeline → embedding service → vector store + BM25 index → hybrid retrieval → re-ranker → LLM → response + citations
+
+```text
+RAG Systems: Production RAG architecture document ingestion async queue based chunk pipeline embedding service vector store BM25 index hybrid retrieval re ranker LLM response citations
+
+[document ingestion (async, queue-based)]
+        |
+        v
+  [chunk pipeline]
+          |
+          v
+    [embedding service]
+            |
+            v
+      [vector store + BM25 index]
+              |
+              v
+        [hybrid retrieval]
+                |
+                v
+          [re-ranker]
+                  |
+                  v
+            [LLM]
+                    |
+                    v
+              [response + citations]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Production RAG architecture: document ingestion (async, queue-based) → chunk pipeline → embedding service → vector store + BM25 index → hybrid retrieval → re-ranker → LLM → response + citations** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 2: HyDE pipeline: user query → LLM → hypothetical document → embed hypothetical doc → retrieve real docs similar to hypothetical
+
+```text
+RAG Systems: HyDE pipeline user query LLM hypothetical document embed hypothetical doc retrieve real docs similar to hypothetical
+
+[user query]
+        |
+        v
+  [LLM]
+          |
+          v
+    [hypothetical document]
+            |
+            v
+      [embed hypothetical doc]
+              |
+              v
+        [retrieve real docs similar to hypothetical]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **HyDE pipeline: user query → LLM → hypothetical document → embed hypothetical doc → retrieve real docs similar to hypothetical** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 3: Multi-query retrieval: query → LLM generates 5 query variations → retrieve for each → RRF merge → top-K unique
+
+```text
+RAG Systems: Multi query retrieval query LLM generates 5 query variations retrieve for each RRF merge top K unique
+
+[query]
+        |
+        v
+  [LLM generates 5 query variations]
+          |
+          v
+    [retrieve for each]
+            |
+            v
+      [RRF merge]
+              |
+              v
+        [top-K unique]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-query retrieval: query → LLM generates 5 query variations → retrieve for each → RRF merge → top-K unique** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 4: Parent-child chunking: large parent chunks (512 tokens) stored for context; small child chunks (128 tokens) embedded for retrieval — retrieve child, return parent
+
+```text
+RAG Systems: Parent child chunking large parent chunks 512 tokens stored for context small child chunks 128 tokens embedded for retrieval retrieve child return parent
+
+  [producer / request]
+           |
+           v
+      [retriever] ---- control, version, policy ----> [reranker]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [context builder] ---- measured result + trace -----> [grounded generator]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Parent-child chunking: large parent chunks (512 tokens) stored for context; small child chunks (128 tokens) embedded for retrieval — retrieve child, return parent** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 5: RAGAS evaluation pipeline: question + ground truth → retrieved context (context precision, context recall) + generated answer (faithfulness, relevancy) → composite RAGAS score
+
+```text
+RAG Systems: RAGAS evaluation pipeline question ground truth retrieved context context precision context recall generated answer faithfulness relevancy composite RAGAS score
+
+[question + ground truth]
+        |
+        v
+  [retrieved context (context precision, context recall) + generated answer]
+          |
+          v
+    [composite RAGAS score]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **RAGAS evaluation pipeline: question + ground truth → retrieved context (context precision, context recall) + generated answer (faithfulness, relevancy) → composite RAGAS score** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+### Case Studies
+
+#### Anthropic's Contextual Retrieval: how adding a contextual header to each chunk before embedding reduced retrieval failure rate by 49% — the implementation and the results
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Anthropic's Contextual Retrieval: how adding a contextual header to each chunk before embedding reduced retrieval failure rate by 49% — the implementation and the results**—creates pressure at the **source connectors** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### LangChain's production RAG patterns: the ensemble retriever (BM25 + vector), multi-query retriever, and document compressor — when each is appropriate
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**LangChain's production RAG patterns: the ensemble retriever (BM25 + vector), multi-query retriever, and document compressor — when each is appropriate**—creates pressure at the **parser/chunker** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Financial services RAG at JPMorgan: compliance challenges (document access control, audit trails), how they implemented per-user retrieval filtering to prevent document leakage
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Financial services RAG at JPMorgan: compliance challenges (document access control, audit trails), how they implemented per-user retrieval filtering to prevent document leakage**—creates pressure at the **embedding/index pipeline** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Walk me through how you'd design a RAG system for a 10,000-page legal document corpus.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is RAGAS? What does each score measure?
+
+RAG retrieves external evidence and conditions generation on it. It can reduce unsupported claims by supplying current, attributable context, but only if retrieval finds the right evidence and the generator follows it; RAG reduces rather than eliminates hallucination. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Why does HyDE improve retrieval for domain-specific queries?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: A user asks a question and the answer spans 3 different documents. How does your RAG system handle this?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: What are the failure modes of RAG? Give 5 specific scenarios where RAG fails.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Agent Systems Intermediate**, **Production infra: async processing, message queues**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. A RAG system finds external evidence at request time and gives that evidence to a generator. Its value is not merely adding text to a prompt: it creates an inspectable path from source material to answer, with retrieval and generation evaluated separately. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design a production RAG system handling 100K documents, multi-tenancy, 10K QPS
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **source connectors** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement agentic RAG: multi-hop retrieval, tool use within RAG, self-correction loops
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser/chunker** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Build a RAG observability stack: hallucination detection, retrieval quality monitoring, latency tracing
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **embedding/index pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Handle long documents: late chunking, summary hierarchies, LLM-based document maps
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **retriever** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Agentic RAG: query → planner agent → (decompose into sub-queries) → retrieval per sub-query → context synthesis → generator → critique agent → (if low confidence: retrieve more) → final answer
+
+```text
+RAG Systems: Agentic RAG query planner agent decompose into sub queries retrieval per sub query context synthesis generator critique agent if low confidence retrieve more final answer
+
+[query]
+        |
+        v
+  [planner agent]
+          |
+          v
+    [(decompose into sub-queries)]
+            |
+            v
+      [retrieval per sub-query]
+              |
+              v
+        [context synthesis]
+                |
+                v
+          [generator]
+                  |
+                  v
+            [critique agent]
+                    |
+                    v
+              [(if low confidence: retrieve more)]
+                      |
+                      v
+                [final answer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Agentic RAG: query → planner agent → (decompose into sub-queries) → retrieval per sub-query → context synthesis → generator → critique agent → (if low confidence: retrieve more) → final answer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 2: Multi-hop retrieval: question → first retrieval → answer entity extraction → second retrieval on entity → combine → final answer
+
+```text
+RAG Systems: Multi hop retrieval question first retrieval answer entity extraction second retrieval on entity combine final answer
+
+[question]
+        |
+        v
+  [first retrieval]
+          |
+          v
+    [answer entity extraction]
+            |
+            v
+      [second retrieval on entity]
+              |
+              v
+        [combine]
+                |
+                v
+          [final answer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-hop retrieval: question → first retrieval → answer entity extraction → second retrieval on entity → combine → final answer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 3: GraphRAG: document → entity extraction → relationship extraction → knowledge graph construction → community detection → hierarchy-aware retrieval
+
+```text
+RAG Systems: GraphRAG document entity extraction relationship extraction knowledge graph construction community detection hierarchy aware retrieval
+
+[document]
+        |
+        v
+  [entity extraction]
+          |
+          v
+    [relationship extraction]
+            |
+            v
+      [knowledge graph construction]
+              |
+              v
+        [community detection]
+                |
+                v
+          [hierarchy-aware retrieval]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **GraphRAG: document → entity extraction → relationship extraction → knowledge graph construction → community detection → hierarchy-aware retrieval** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 4: RAG observability: query log → retrieval trace (which chunks, what scores) → generation trace (prompt tokens, output tokens) → faithfulness check (LLM-as-judge) → dashboard
+
+```text
+RAG Systems: RAG observability query log retrieval trace which chunks what scores generation trace prompt tokens output tokens faithfulness check LLM as judge dashboard
+
+[query log]
+        |
+        v
+  [retrieval trace (which chunks, what scores)]
+          |
+          v
+    [generation trace (prompt tokens, output tokens)]
+            |
+            v
+      [faithfulness check (LLM-as-judge)]
+              |
+              v
+        [dashboard]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **RAG observability: query log → retrieval trace (which chunks, what scores) → generation trace (prompt tokens, output tokens) → faithfulness check (LLM-as-judge) → dashboard** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 5: Cache layer: query embedding → semantic cache (find similar past queries) → cache hit → return cached answer (no LLM call)
+
+```text
+RAG Systems: Cache layer query embedding semantic cache find similar past queries cache hit return cached answer no LLM call
+
+[query embedding]
+        |
+        v
+  [semantic cache (find similar past queries)]
+          |
+          v
+    [cache hit]
+            |
+            v
+      [return cached answer (no LLM call)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Cache layer: query embedding → semantic cache (find similar past queries) → cache hit → return cached answer (no LLM call)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+### Case Studies
+
+#### Microsoft GraphRAG: how they built community-level summarization on top of a knowledge graph — why flat vector retrieval fails for "what are the main themes of this corpus" questions
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Microsoft GraphRAG: how they built community-level summarization on top of a knowledge graph — why flat vector retrieval fails for "what are the main themes of this corpus" questions**—creates pressure at the **source connectors** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Perplexity Pro: multi-step reasoning with tool use — how they combine web search, code execution, and calculator within a RAG generation loop
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Perplexity Pro: multi-step reasoning with tool use — how they combine web search, code execution, and calculator within a RAG generation loop**—creates pressure at the **parser/chunker** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Cohere's enterprise RAG platform: document access control at retrieval time, per-user filtering, compliance audit trails in financial services
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Cohere's enterprise RAG platform: document access control at retrieval time, per-user filtering, compliance audit trails in financial services**—creates pressure at the **embedding/index pipeline** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design a RAG system for a law firm: 50M documents, strict access control (attorneys can only retrieve documents relevant to their cases), audit requirements. Walk through the full architecture.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is multi-hop retrieval? When is it necessary, and what are its failure modes?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: How do you detect when your RAG system is hallucinating? What signals can you use without ground truth?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Your RAG system works well on questions within a single document but fails on cross-document synthesis. What's the root cause and how do you fix it?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. For **RAG Systems**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: RAG (Lewis 2020), Self-RAG (Asai 2023), FLARE (Jiang 2023), GraphRAG (Edge 2024), Contextual Retrieval (Anthropic 2024)**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. A RAG system finds external evidence at request time and gives that evidence to a generator. Its value is not merely adding text to a prompt: it creates an inspectable path from source material to answer, with retrieval and generation evaluated separately. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze frontier RAG: Self-RAG, CRAG, Adaptive RAG, Multi-Vector RAG
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **source connectors** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design a research experiment comparing retrieval strategies on a specific domain
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **parser/chunker** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Propose a novel contribution to RAG evaluation or retrieval quality
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **embedding/index pipeline** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Understand the open problem of long-context LLMs vs RAG
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through source connectors, parser/chunker, embedding/index pipeline, retriever. The governing quantitative model is: For a judged relevant set $R$ and retrieved set $K$, $\operatorname{Recall@k}=|R\cap K|/|R|$ and $\operatorname{Precision@k}=|R\cap K|/|K|$. End-to-end answer quality cannot identify which stage failed, so retrieval, context, faithfulness, and task success need separate metrics. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is a small lexical retriever plus a prompt that requires citations and permits abstention; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **retriever** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In RAG Systems, that boundary interacts with retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (a small lexical retriever plus a prompt that requires citations and permits abstention), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Self-RAG: training pipeline (SFT on special reflection tokens) → inference (adaptive retrieval + critique) — compare to naive always-retrieve
+
+```text
+RAG Systems: Self RAG training pipeline SFT on special reflection tokens inference adaptive retrieval critique compare to naive always retrieve
+
+[training pipeline (SFT on special reflection tokens)]
+        |
+        v
+  [inference (adaptive retrieval + critique) — compare to naive always-retr]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Self-RAG: training pipeline (SFT on special reflection tokens) → inference (adaptive retrieval + critique) — compare to naive always-retrieve** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 2: FLARE: active retrieval — generate until confidence drops below threshold → retrieve → continue generation — the confidence signal and retrieval trigger
+
+```text
+RAG Systems: FLARE active retrieval generate until confidence drops below threshold retrieve continue generation the confidence signal and retrieval trigger
+
+[active retrieval — generate until confidence drops below threshold]
+        |
+        v
+  [retrieve]
+          |
+          v
+    [continue generation — the confidence signal and retrieval trigger]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **FLARE: active retrieval — generate until confidence drops below threshold → retrieve → continue generation — the confidence signal and retrieval trigger** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 3: Long-context vs RAG comparison: 1M-token context model directly vs hierarchical RAG — accuracy, cost, and latency comparison
+
+```text
+RAG Systems: Long context vs RAG comparison 1M token context model directly vs hierarchical RAG accuracy cost and latency comparison
+
+  [producer / request]
+           |
+           v
+      [embedding/index pipeline] ---- control, version, policy ----> [retriever]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [reranker] ---- measured result + trace -----> [context builder]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Long-context vs RAG comparison: 1M-token context model directly vs hierarchical RAG — accuracy, cost, and latency comparison** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+#### Diagram 4: Speculative RAG: draft answer → retrieve supporting evidence → verify draft → revise if unsupported
+
+```text
+RAG Systems: Speculative RAG draft answer retrieve supporting evidence verify draft revise if unsupported
+
+[draft answer]
+        |
+        v
+  [retrieve supporting evidence]
+          |
+          v
+    [verify draft]
+            |
+            v
+      [revise if unsupported]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Speculative RAG: draft answer → retrieve supporting evidence → verify draft → revise if unsupported** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability.
+
+### Case Studies
+
+#### CRAG (Corrective RAG): the retrieval evaluator that triggers web search fallback — how they trained the evaluator and what the threshold should be
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**CRAG (Corrective RAG): the retrieval evaluator that triggers web search fallback — how they trained the evaluator and what the threshold should be**—creates pressure at the **source connectors** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Atlas (Izacard 2022): end-to-end jointly trained retriever + FiD generator — how training the retriever jointly with generation beats frozen DPR
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Atlas (Izacard 2022): end-to-end jointly trained retriever + FiD generator — how training the retriever jointly with generation beats frozen DPR**—creates pressure at the **parser/chunker** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Lost in the Middle (Liu 2023): the finding that LLMs perform poorly when relevant context is in the middle of a long context window — implications for chunk ordering in RAG
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Lost in the Middle (Liu 2023): the finding that LLMs perform poorly when relevant context is in the middle of a long context window — implications for chunk ordering in RAG**—creates pressure at the **embedding/index pipeline** layer of RAG Systems. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use a small lexical retriever plus a prompt that requires citations and permits abstention. Instrument it for retrieval recall, context precision, faithfulness, freshness, authorization, latency, and auditability, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable RAG Systems slice.** Implement one request path using source connectors, parser/chunker, embedding/index pipeline. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build a small lexical retriever plus a prompt that requires citations and permits abstention, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable RAG Systems slice.** Implement one request path using source connectors, parser/chunker, embedding/index pipeline. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build a small lexical retriever plus a prompt that requires citations and permits abstention, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable RAG Systems slice.** Implement one request path using source connectors, parser/chunker, embedding/index pipeline. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build a small lexical retriever plus a prompt that requires citations and permits abstention, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable RAG Systems slice.** Implement one request path using source connectors, parser/chunker, embedding/index pipeline. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build a small lexical retriever plus a prompt that requires citations and permits abstention, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [Vector Databases](/system-design/vector-databases)
+- [Search Engines](/system-design/search-engines)
+- [Agent Systems](/system-design/agent-systems)
+- [Factuality and grounding curriculum](/learn/natural-language-processing/factuality-grounding-and-hallucination)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- Lewis et al., Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (2020)
+- Gao et al., Retrieval-Augmented Generation for Large Language Models: A Survey
+- RAGAS documentation and paper
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

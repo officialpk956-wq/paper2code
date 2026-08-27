@@ -1,0 +1,198 @@
+# DeepWalk
+
+## 1. Overview
+DeepWalk, introduced in 2014 by Bryan Perozzi, Rami Al-Rfou, and Steven Skiena (Stony Brook University), established the field of **Unsupervised Graph Representation Learning** by connecting graph structures with natural language processing (Word2Vec). Before DeepWalk, node classification and link prediction relied on hand-crafted graph statistics (such as degree centrality, PageRank, or shortest path distances). Perozzi et al. discovered a fundamental empirical analogy: **the frequency of nodes occurring in random walks on a graph follows a power-law frequency distribution identical to the frequency of words in natural language text (Zipf's Law)**. DeepWalk exploits this analogy by sampling short **Truncated Random Walks** from every node in the graph, treating each random walk as a "sentence" and each node as a "word". By training a **Skip-Gram Word2Vec Model** with Hierarchical Softmax over these random walk sequences, DeepWalk learns continuous, low-dimensional dense node embeddings $\Phi(v) \in \mathbb{R}^d$ that preserve neighborhood topology and structural similarity without requiring labeled supervision.
+
+:::note
+DeepWalk's core breakthrough: "Treat truncated random walks on graphs as sentences, and nodes as words. Train Skip-Gram (Word2Vec) with Hierarchical Softmax to learn low-dimensional continuous node embeddings $\Phi(v) \in \mathbb{R}^d$."
+:::
+
+## 2. Historical Context
+In 2014, graph machine learning was constrained by feature engineering. Graph metrics like Adamic-Adar, Katz Index, or Spectral Clustering were computationally expensive ($O(|V|^3)$ matrix decompositions) and failed to generalize across different tasks.
+
+Concurrently, Mikolov et al. (2013) published Word2Vec (Skip-Gram), proving that neural word embeddings could capture semantic analogies from word sequences. Bryan Perozzi et al. realized that graphs could be converted into "textual corpora" by simulating random walk trajectories. DeepWalk introduced linear-time unsupervised node embedding learning ($O(|V|)$), birthing modern Graph Representation Learning.
+
+## 3. Problem It Solves
+DeepWalk resolves three major computational and representation limits of classical graph algorithms:
+1. **Manual Graph Feature Engineering:** Eliminates hand-crafted graph statistics by automatically learning continuous latent node features $\Phi \in \mathbb{R}^{|V| \times d}$.
+2. **Computational Scalability Bottlenecks:** Replaces $O(|V|^3)$ full-matrix eigen-decompositions with fast $O(|V|)$ stochastic gradient descent (SGD) sampling.
+3. **Sparsity & Non-Linear Structural Modeling:** Projects discrete graph nodes into a dense vector space where geometric distance correlates with graph topological proximity.
+
+## 4. Architecture Diagram Data
+Below is the DeepWalk pipeline showing Truncated Random Walk Generation, Sentence Construction, and Skip-Gram Hierarchical Softmax Training.
+
+```text
+       GRAPH NETWORK TOPOLOGY G = (V, E)
+             (Node 1) ----- (Node 2) ----- (Node 3)
+                |             |               |
+             (Node 4) ----- (Node 5) ----- (Node 6)
+                               |
+                               v
+       +===================================================================+
+       | TRUNCATED RANDOM WALK GENERATOR                                   |
+       | - Start at Node v_0 (e.g., Node 5)                                |
+       | - Uniformly sample next neighbor at random: v_0 -> v_1 -> v_2...  |
+       | - Generate gamma walks of length t per node                      |
+       +===================================================================+
+                               |
+                               v
+       [ Generated Walk Sequences (Corpus of "Sentences"): ]
+       Walk 1: [ Node 5, Node 2, Node 3, Node 6 ]
+       Walk 2: [ Node 5, Node 4, Node 1, Node 2 ]
+                               |
+                               v
+       +===================================================================+
+       | SKIP-GRAM (WORD2VEC) MODEL + HIERARCHICAL SOFTMAX                 |
+       | Input: Center Node v_i                                            |
+       | Objective: Maximize probability of context nodes within window w |
+       |            P( {v_{i-w} ... v_{i+w}} \ {v_i} | Phi(v_i) )           |
+       +===================================================================+
+                               |
+                               v
+       [ Continuous Node Embedding Matrix Phi in R^(|V| x d) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Truncated Random Walk Generator:**
+- For each node $v \in V$, generate $\gamma$ independent random walks of fixed length $t$.
+- At step $k$, transition from current node $v_k$ to a neighbor $v_{k+1} \in \mathcal{N}(v_k)$ chosen uniformly at random with probability $P(v_{k+1} \mid v_k) = \frac{1}{\text{deg}(v_k)}$.
+
+**2. Skip-Gram Architecture:**
+- Represents embedding map as a lookup matrix $\Phi \in \mathbb{R}^{|V| \times d}$.
+- Maps center node ID $v_i$ to latent vector $\Phi(v_i) \in \mathbb{R}^d$.
+
+**3. Hierarchical Softmax Projection Head:**
+- Assigns nodes to leaves of a Binary Huffman Tree to reduce output Softmax complexity from $O(|V|)$ to $O(\log |V|)$.
+- Predicts path probability from root to target context leaf node.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DeepWalk for $|V|=10,000$ nodes, embedding dimension $d=128$, window size $w=5$, mini-batch size $B=256$.
+
+1. **Random Walk Sequence Generation:**
+   - Sample batch of center nodes: `(256,)`
+   - Extract context window nodes within $\pm w$ steps $\to$ Context Targets: `(256, 10)`
+2. **Embedding Lookup:**
+   - Center Nodes $v_i$: `(256,)` $\xrightarrow{\text{Lookup Matrix } \Phi} \Phi(v_i)$: `(256, 128)`
+3. **Hierarchical Softmax Pass:**
+   - For each context node, evaluate path of length $H \approx \log_2(10000) \approx 14$ binary decisions.
+   - Output Logits $\to$ Cross-Entropy Loss over binary path decisions $\to$ Scalar loss.
+
+## 7. Mathematical Foundations
+
+### 1. Skip-Gram Graph Objective Function
+Given a sequence of nodes from a random walk $W = (v_1, v_2, \dots, v_t)$, DeepWalk maximizes the log-probability of observing context nodes within window size $w$:
+
+$$\max_\Phi \sum_{i=1}^t \log P\left( \{v_{i-w}, \dots, v_{i+w}\} \setminus \{v_i\} \;\middle|\; \Phi(v_i) \right)$$
+
+Assuming conditional independence of context nodes given center representation $\Phi(v_i)$:
+
+$$P\left( \{v_{i-w}, \dots, v_{i+w}\} \setminus \{v_i\} \;\middle|\; \Phi(v_i) \right) = \prod_{-w \le j \le w, j \neq 0} P\left(v_{i+j} \;\middle|\; \Phi(v_i)\right)$$
+
+### 2. Hierarchical Softmax Formulation
+The conditional probability $P(u \mid \Phi(v_i))$ is evaluated over a Binary Huffman Tree decomposition:
+
+$$P(u \mid \Phi(v_i)) = \prod_{l=1}^{\lceil \log |V| \rceil} \sigma\left( \text{sign}(u, l) \cdot \Phi(v_i)^T \Psi_{n(u, l)} \right)$$
+
+where $n(u, l)$ is the $l$-th ancestor node along the path from root to leaf node $u$, and $\Psi_{n}$ is the vector representation of internal tree node $n$.
+
+## 8. Training Procedure
+- **Walk Generation:** Loop $r = 1 \dots \gamma$: Shuffle nodes $V$; for each node $v$, simulate random walk of length $t$.
+- **Skip-Gram SGD:** Iterate over generated walk sequences. For each window $[v_{i-w} \dots v_{i+w}]$, compute gradients with respect to $\Phi(v_i)$ and internal tree parameters $\Psi$.
+- Update parameters using Asynchronous SGD (Hogwild!) with learning rate $\alpha = 0.025 \to 0.001$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **DeepWalk Skip-Gram with Negative Sampling**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DeepWalkSkipGram(nn.Module):
+    """ DeepWalk Skip-Gram Module for Learning Node Embeddings """
+    def __init__(self, num_nodes, embed_dim=128):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.embed_dim = embed_dim
+        
+        # Target Center Node Embeddings
+        self.target_embeddings = nn.Embedding(num_nodes, embed_dim)
+        # Context Neighbor Node Embeddings
+        self.context_embeddings = nn.Embedding(num_nodes, embed_dim)
+        
+        # Initialization
+        nn.init.uniform_(self.target_embeddings.weight, -0.5 / embed_dim, 0.5 / embed_dim)
+        nn.init.zeros_(self.context_embeddings.weight)
+
+    def forward(self, center_nodes, context_nodes, neg_nodes):
+        """
+        center_nodes:  (B,)
+        context_nodes: (B,)
+        neg_nodes:     (B, K) K negative samples
+        """
+        # Lookup Embeddings
+        v_center = self.target_embeddings(center_nodes)   # (B, d)
+        v_context = self.context_embeddings(context_nodes) # (B, d)
+        v_neg = self.context_embeddings(neg_nodes)         # (B, K, d)
+        
+        # Positive Logits: log sigmoid( v_center . v_context )
+        pos_score = (v_center * v_context).sum(dim=-1)     # (B,)
+        pos_loss = -F.logsigmoid(pos_score).mean()
+        
+        # Negative Logits: log sigmoid( -v_center . v_neg )
+        neg_score = torch.bmm(v_neg, v_center.unsqueeze(-1)).squeeze(-1) # (B, K)
+        neg_loss = -F.logsigmoid(-neg_score).sum(dim=-1).mean()
+        
+        return pos_loss + neg_loss
+
+if __name__ == "__main__":
+    B, K, num_nodes, d = 256, 5, 10000, 128
+    model = DeepWalkSkipGram(num_nodes=num_nodes, embed_dim=d)
+    
+    center_nodes = torch.randint(0, num_nodes, (B,))
+    context_nodes = torch.randint(0, num_nodes, (B,))
+    neg_nodes = torch.randint(0, num_nodes, (B, K))
+    
+    loss = model(center_nodes, context_nodes, neg_nodes)
+    
+    print(f"DeepWalk Skip-Gram Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("DeepWalk verification successful!")
+```
+
+## 10. Strengths
+- **Unsupervised Node Representations:** Learns node embeddings directly from graph topology without labels.
+- **Scalable $O(|V|)$ Compute:** Random walk sampling eliminates full-graph matrix computations.
+- **Transductive Geometric Embedding:** Preserves local community structure and node proximity.
+
+## 11. Weaknesses
+- **Transductive Only:** Cannot generate embeddings for newly added nodes without re-running random walks (addressed by GraphSAGE).
+- **Uniform Random Walk Bias:** Lacks control to balance local structural equivalence (BFS) vs. global community membership (DFS) (addressed by Node2Vec).
+
+## 12. Research Evolution
+DeepWalk created the random-walk graph embedding paradigm, leading directly to **Node2Vec**, **LINE**, and **GCN**.
+
+## 13. Interview Questions
+
+**Q1: What is the core analogy that inspired DeepWalk?**
+**A1:** DeepWalk discovered that the frequency of nodes occurring in random walks on a graph follows a power-law frequency distribution identical to word frequencies in natural language text (Zipf's Law). Thus, random walks can be treated as "sentences" and nodes as "words" trained via Word2Vec.
+
+**Q2: How does Hierarchical Softmax reduce computational complexity in DeepWalk?**
+**A2:** Standard Softmax requires evaluating $\sum_{u \in V} \exp(\Phi(v)^T \Psi_u)$ over all $|V|$ nodes, which is $O(|V|)$. Hierarchical Softmax organizes nodes into the leaves of a Binary Huffman Tree, reducing evaluation complexity to $O(\log_2 |V|)$.
+
+**Q3: Is DeepWalk an Inductive or Transductive algorithm?**
+**A3:** DeepWalk is **Transductive**. It optimizes a fixed lookup embedding matrix $\Phi \in \mathbb{R}^{|V| \times d}$ for a fixed set of graph nodes. It cannot compute embeddings for new, unseen nodes added after training.
+
+**Q4: Write out the Skip-Gram graph objective function.**
+**A4:** $\max_\Phi \sum_{i=1}^t \sum_{-w \le j \le w, j \neq 0} \log P(v_{i+j} \mid \Phi(v_i))$.
+
+**Q5: Compare DeepWalk with Node2Vec.**
+**A5:** DeepWalk uses uniform random walks ($P(v_{k+1} \mid v_k) = 1 / \text{deg}(v_k)$). Node2Vec introduces 2-parameter biased random walks ($p, q$) to explicitly interpolate between BFS (homophily/community) and DFS (structural roles).
+
+## 14. Related Papers
+- **DeepWalk Paper:** *DeepWalk: Online Learning of Social Representations* (Perozzi, Al-Rfou, Skiena, KDD 2014)
+- **Word2Vec Paper:** *Efficient Estimation of Word Representations in Vector Space* (Mikolov et al., ICLR 2013)
+
+## 15. Further Reading
+- Bryan Perozzi Official DeepWalk Python Repository

@@ -1,0 +1,202 @@
+# Node2Vec
+
+## 1. Overview
+Node2Vec, introduced in 2016 by Aditya Grover and Jure Leskovec (Stanford University), extended DeepWalk's random-walk representation framework by introducing **Flexible Biased Random Walks**. Real-world networks display two fundamental node similarity patterns: **Homophily** (nodes belonging to the same local community should have similar embeddings) and **Structural Equivalence** (nodes occupying similar structural roles in the graph, such as central hubs or peripheral leaf nodes, should have similar embeddings regardless of distance). DeepWalk used simple uniform random walks, failing to control the trade-off between these two competing geometric properties. Grover and Leskovec introduced a **2-Parameter Biased Random Walk** controlled by return parameter $p$ and in-out parameter $q$. By interpolating smoothly between Breadth-First Search (BFS) and Depth-First Search (DFS), Node2Vec allows users to tailor node embeddings specifically for community detection or structural role discovery.
+
+:::tip
+Node2Vec core contribution: "2-parameter biased random walk ($p, q$) interpolating between BFS (local homophily) and DFS (global structural equivalence) trained via Skip-Gram."
+:::
+
+## 2. Historical Context
+In 2014, DeepWalk demonstrated that Word2Vec could be applied to uniform random walks. However, DeepWalk treated all graph edges identically.
+
+Aditya Grover and Jure Leskovec recognized that network nodes play different functional roles. For example, two hub routers in a telecommunications network might be separated by hundreds of miles (low homophily), yet perform identical structural roles (high structural equivalence). Node2Vec introduced a flexible second-order biased random walk sampling strategy that dynamically balances local micro-neighborhood exploration (BFS) with global macro-structure discovery (DFS).
+
+## 3. Problem It Solves
+Node2Vec resolves three core limitations of uniform graph embedding algorithms:
+1. **Inability to Balance Homophily vs. Structural Equivalence:** Uniform random walks cannot separate community membership from structural roles. Node2Vec parameterizes this balance via $p$ and $q$.
+2. **Fixed Random Walk Trajectories:** Provides a flexible, parameterizable search space for network sampling without increasing $O(|V|)$ computational complexity.
+3. **Task-Specific Embedding Customization:** Allows tuning $p$ and $q$ to optimize embeddings for downstream tasks (e.g., community classification vs. role identification).
+
+## 4. Architecture Diagram Data
+Below is the Node2Vec 2-parameter biased random walk transition probability mechanism.
+
+```text
+       NODE2VEC 2ND-ORDER BIASED RANDOM WALK MECHANISM
+       Walk previously traversed edge from node t to node v: (t -> v).
+       Now evaluating unnormalized transition probabilities pi_{v,x} to neighbor x of v.
+
+                                    +--------+
+                                    | Node t | (Previous Node)
+                                    +--------+
+                                     /      \
+               d_{tx} = 0 (Return)  /        \ d_{tx} = 1 (Local)
+                        p          /          \ 1.0
+                                  v            v
+                            +--------+      +--------+
+                            | Node v |----->| Node x1| (Distance d_{tx} = 1)
+                            +--------+      +--------+
+                                 |
+                                 | d_{tx} = 2 (Outward)
+                                 v 1/q
+                            +--------+
+                            | Node x2| (Distance d_{tx} = 2)
+                            +--------+
+
+       ========================================================================
+
+       UNNORMALIZED TRANSITION PROBABILITY FORMULA:
+       pi_{v,x} = alpha_{p,q}(t, x) * w_{v,x}
+
+       where alpha_{p,q}(t, x) =
+         - 1/p   if d_{tx} = 0  (Return to previous node t: BFS preference)
+         - 1     if d_{tx} = 1  (Local neighborhood node: Neutral)
+         - 1/q   if d_{tx} = 2  (Outward exploration node: DFS preference)
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. 2nd-Order Biased Transition Probability Setup:**
+- Given a walk that just traversed edge $(t, v)$ and is currently at node $v$.
+- Computes unnormalized transition probability $\pi_{v,x} = \alpha_{p,q}(t, x) \cdot w_{v,x}$ for every neighbor $x \in \mathcal{N}(v)$, where $d_{tx}$ is the shortest path distance between previous node $t$ and candidate node $x$.
+
+**2. Bias Factor $\alpha_{p,q}(t, x)$ Definition:**
+- $d_{tx} = 0$: Candidate $x$ is the previous node $t$. $\alpha_{p,q} = 1/p$.
+- $d_{tx} = 1$: Candidate $x$ is a shared neighbor of both $t$ and $v$. $\alpha_{p,q} = 1.0$.
+- $d_{tx} = 2$: Candidate $x$ has no direct edge to $t$ (moving outward). $\alpha_{p,q} = 1/q$.
+
+**3. Skip-Gram Objective Layer:**
+- Generates walk sequences using $\pi_{v,x}$.
+- Trains lookup embedding matrix $\Phi \in \mathbb{R}^{|V| \times d}$ using Negative Sampling.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Node2Vec for batch size $B=256$, window size $w=5$, negative samples $K=5$, embedding dimension $d=128$.
+
+1. **2nd-Order Biased Walk Generation:**
+   - Sample center node $v$: `(256,)`
+   - Sample context window nodes $\mathcal{N}_S(v)$ using $(p, q)$ biased walks $\to$ Context Targets: `(256, 10)`
+2. **Embedding Lookup:**
+   - Center Embeddings $\Phi(v)$: `(256, 128)`
+   - Context Embeddings $\Phi(u_{\text{pos}})$: `(256, 128)`
+   - Negative Samples $\Phi(u_{\text{neg}})$: `(256, 5, 128)`
+3. **Loss Computation:**
+   - Positive Dot Product: $(256,) \xrightarrow{\text{LogSigmoid}} \mathcal{L}_{\text{pos}}$
+   - Negative Dot Product: $(256, 5) \xrightarrow{\text{LogSigmoid}} \mathcal{L}_{\text{neg}}$
+   - Total Loss $\mathcal{L} = \mathcal{L}_{\text{pos}} + \mathcal{L}_{\text{neg}} \to$ Scalar gradient update.
+
+## 7. Mathematical Foundations
+
+### 1. 2nd-Order Biased Random Walk Bias Function
+The unnormalized transition probability $\pi_{v,x}$ on edge $(v, x)$ given previous node $t$ is:
+
+$$\pi_{v,x} = \alpha_{p,q}(t, x) \cdot w_{v,x}$$
+
+$$\alpha_{p,q}(t, x) = \begin{cases} \frac{1}{p} & \text{if } d_{tx} = 0 \\ 1 & \text{if } d_{tx} = 1 \\ \frac{1}{q} & \text{if } d_{tx} = 2 \end{cases}$$
+
+### 2. Intuition for Parameters $p$ and $q$
+- **Return Parameter $p$ (Controls local revisit likelihood):**
+  - **High $p > \max(1, q)$:** Discourages returning to previous node $t$, encouraging sampling unvisited nodes.
+  - **Low $p < \min(1, q)$:** Forces walk to backtrack locally, micro-inspecting local neighborhoods (**BFS behavior $\implies$ Homophily**).
+- **In-Out Parameter $q$ (Controls outward vs. inward exploration):**
+  - **High $q > 1$:** Biases walk toward nodes close to $t$ (**BFS behavior**).
+  - **Low $q < 1$:** Biases walk outward to nodes far from $t$ (**DFS behavior $\implies$ Structural Equivalence**).
+
+```text
+  Behavior Summary:
+  Low p  ===> BFS (Breadth-First Search)  ===> Captures Local Homophily (Communities)
+  Low q  ===> DFS (Depth-First Search)    ===> Captures Structural Equivalence (Roles)
+```
+
+## 8. Training Procedure
+- Compute 2nd-order transition probabilities $\pi_{v,x}$ for all edge pairs $(t, v)$ and store alias tables for fast $O(1)$ sampling (Alias Sampling).
+- Generate $\gamma$ random walks of length $l$ per node using Alias Sampling.
+- Optimize Skip-Gram loss using SGD with Negative Sampling.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Node2Vec Alias Sampling Transition Mechanism**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Node2VecSampler:
+    """ Computes Node2Vec 2nd-Order Biased Transition Probabilities """
+    def __init__(self, p=1.0, q=1.0):
+        self.p = p
+        self.q = q
+
+    def get_alias_edge(self, t, v, neighbors_v, neighbors_t):
+        """
+        t: Previous node
+        v: Current node
+        neighbors_v: List of neighbors of v
+        neighbors_t: Set of neighbors of t
+        """
+        unnormalized_probs = []
+        for x in neighbors_v:
+            if x == t:
+                # d_tx = 0 (Return node)
+                prob = 1.0 / self.p
+            elif x in neighbors_t:
+                # d_tx = 1 (Shared neighbor)
+                prob = 1.0
+            else:
+                # d_tx = 2 (Outward node)
+                prob = 1.0 / self.q
+            unnormalized_probs.append(prob)
+            
+        probs = torch.tensor(unnormalized_probs)
+        probs = probs / probs.sum() # Normalize
+        return probs
+
+if __name__ == "__main__":
+    sampler = Node2VecSampler(p=0.25, q=2.0) # Low p -> BFS preference
+    
+    t = 0
+    v = 1
+    neighbors_v = [0, 2, 3, 4]
+    neighbors_t = {0, 1, 2} # Node 2 is a shared neighbor!
+    
+    probs = sampler.get_alias_edge(t, v, neighbors_v, neighbors_t)
+    
+    print(f"Candidate Neighbors [0, 2, 3, 4] Probabilities: {probs}")
+    assert torch.isclose(probs.sum(), torch.tensor(1.0))
+    assert probs[0] > probs[3], "Low p should prioritize returning to previous node t!"
+    print("Node2Vec sampler verification successful!")
+```
+
+## 10. Strengths
+- **Flexible Neighborhood Control:** Parameters $p$ and $q$ explicitly control the balance between local homophily and global structural equivalence.
+- **Fast Alias Sampling:** Alias method enables $O(1)$ random-walk node transitions.
+- **Superior Downstream Performance:** Consistently outperforms DeepWalk on node classification and link prediction.
+
+## 11. Weaknesses
+- **High Memory Footprint for Alias Tables:** Storing 2nd-order transition probabilities for every directed edge pair requires $O(|E| \cdot d_{\text{avg}})$ memory.
+
+## 12. Research Evolution
+Node2Vec established second-order biased graph sampling, inspiring **LINE**, **Struct2Vec**, and **HARP**.
+
+## 13. Interview Questions
+
+**Q1: What are the roles of parameters $p$ and $q$ in Node2Vec?**
+**A1:** $p$ is the **Return Parameter** (controls likelihood of returning immediately to the previous node $t$). $q$ is the **In-Out Parameter** (controls likelihood of moving outward to nodes unattached to $t$).
+
+**Q2: How do BFS and DFS random walks correlate with Homophily and Structural Equivalence?**
+**A2:** BFS walks (low $p$, high $q$) sample local micro-neighborhoods, capturing **Homophily** (nodes in the same community get similar embeddings). DFS walks (low $q$) explore outward macro-structures, capturing **Structural Equivalence** (nodes playing identical roles, like hubs, get similar embeddings).
+
+**Q3: What distance $d_{tx}$ determines the bias factor $\alpha_{p,q}(t, x)$?**
+**A3:** $d_{tx}$ is the shortest path distance between previous node $t$ and candidate neighbor $x$: $d_{tx}=0$ (return, $\alpha=1/p$), $d_{tx}=1$ (local shared neighbor, $\alpha=1$), $d_{tx}=2$ (outward neighbor, $\alpha=1/q$).
+
+**Q4: How does Node2Vec achieve $O(1)$ time complexity per random-walk step during simulation?**
+**A4:** By precomputing unnormalized transition probabilities for all directed edge pairs $(t, v)$ and constructing **Alias Tables** (Walker's Alias Method), enabling $O(1)$ random sampling per step.
+
+**Q5: Compare DeepWalk and Node2Vec.**
+**A5:** DeepWalk is a special case of Node2Vec where $p = 1.0$ and $q = 1.0$ (unbiased uniform random walk).
+
+## 14. Related Papers
+- **Node2Vec Paper:** *node2vec: Scalable Feature Learning for Networks* (Grover & Leskovec, KDD 2016)
+- **DeepWalk Paper:** *DeepWalk: Online Learning of Social Representations* (Perozzi et al., KDD 2014)
+
+## 15. Further Reading
+- Stanford SNAP Node2Vec Official Implementation

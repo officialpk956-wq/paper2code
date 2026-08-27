@@ -1,0 +1,696 @@
+# Uber Architecture
+
+Uber coordinates a real-time two-sided marketplace under uncertain location, travel time, demand, and supply. The system must make fast assignments while preserving payment correctness and recovering safely from regional failures.
+
+This article progresses from first principles to research questions. At every level, trace a request, state assumptions, quantify tradeoffs, and preserve a simple baseline. The recurring design pressures are dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one.
+
+## Beginner: Foundations
+
+:::note
+**Prerequisites:** **Basic networking, databases**, **Basic probability: supply/demand**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **build the vocabulary and trace one request end to end**. Uber coordinates a real-time two-sided marketplace under uncertain location, travel time, demand, and supply. The system must make fast assignments while preserving payment correctness and recovering safely from regional failures. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Identify Uber's core systems: dispatch, routing, pricing, driver/rider apps, payments, fraud detection
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **rider/driver apps** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand the two-sided marketplace problem: matching supply (drivers) to demand (riders) in real time
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **location stream** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Know what geospatial indexing means and why it's fundamental to Uber
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **geospatial index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Describe the trip lifecycle from a systems perspective: request → match → route → complete → settle
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **ETA service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the beginner level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Trip lifecycle: rider requests → dispatcher finds nearby drivers → driver accepts → route computed → navigation updates → trip completes → payment processes
+
+```text
+Uber Architecture: Trip lifecycle rider requests dispatcher finds nearby drivers driver accepts route computed navigation updates trip completes payment processes
+
+[rider requests]
+        |
+        v
+  [dispatcher finds nearby drivers]
+          |
+          v
+    [driver accepts]
+            |
+            v
+      [route computed]
+              |
+              v
+        [navigation updates]
+                |
+                v
+          [trip completes]
+                  |
+                  v
+            [payment processes]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Trip lifecycle: rider requests → dispatcher finds nearby drivers → driver accepts → route computed → navigation updates → trip completes → payment processes** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 2: Geospatial index: city divided into H3 hexagonal cells → driver positions indexed by cell → radius search = query nearby cells
+
+```text
+Uber Architecture: Geospatial index city divided into H3 hexagonal cells driver positions indexed by cell radius search query nearby cells
+
+[city divided into H3 hexagonal cells]
+        |
+        v
+  [driver positions indexed by cell]
+          |
+          v
+    [radius search = query nearby cells]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Geospatial index: city divided into H3 hexagonal cells → driver positions indexed by cell → radius search = query nearby cells** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 3: Supply-demand matching: rider request arrives → find available drivers within 5km → rank by ETA + rating → offer to best driver → accept/decline logic
+
+```text
+Uber Architecture: Supply demand matching rider request arrives find available drivers within 5km rank by ETA rating offer to best driver accept decline logic
+
+[rider request arrives]
+        |
+        v
+  [find available drivers within 5km]
+          |
+          v
+    [rank by ETA + rating]
+            |
+            v
+      [offer to best driver]
+              |
+              v
+        [accept/decline logic]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Supply-demand matching: rider request arrives → find available drivers within 5km → rank by ETA + rating → offer to best driver → accept/decline logic** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 4: Surge pricing logic: demand/supply ratio per cell → dynamic multiplier → ride price = base × surge multiplier
+
+```text
+Uber Architecture: Surge pricing logic demand supply ratio per cell dynamic multiplier ride price base surge multiplier
+
+[demand/supply ratio per cell]
+        |
+        v
+  [dynamic multiplier]
+          |
+          v
+    [ride price = base × surge multiplier]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Surge pricing logic: demand/supply ratio per cell → dynamic multiplier → ride price = base × surge multiplier** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+### Case Studies
+
+#### Uber's migration from monolith to microservices (2014–2018): the original architecture (Python monolith, MySQL) → the business logic that drove decomposition (separate domains: dispatch, pricing, payments, driver)
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's migration from monolith to microservices (2014–2018): the original architecture (Python monolith, MySQL) → the business logic that drove decomposition (separate domains: dispatch, pricing, payments, driver)**—creates pressure at the **rider/driver apps** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber's surge pricing PR crisis: the technical reality of dynamic pricing vs the public perception — how the algorithm actually works vs how it was explained
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's surge pricing PR crisis: the technical reality of dynamic pricing vs the public perception — how the algorithm actually works vs how it was explained**—creates pressure at the **location stream** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber's H3 geospatial library: why they open-sourced their hexagonal hierarchical grid system and how it's now used by Airbnb, Safegraph, and others
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's H3 geospatial library: why they open-sourced their hexagonal hierarchical grid system and how it's now used by Airbnb, Safegraph, and others**—creates pressure at the **geospatial index** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: How does Uber find nearby drivers efficiently? Why not just check all drivers?
+
+Maintain moving drivers in a geospatial index such as hierarchical hexagonal cells, query nearby cells, then compute network-aware ETA for a shortlist. Scanning all drivers wastes work and cannot meet a short dispatch deadline. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: What is surge pricing and how does it actually work technically?
+
+Surge pricing estimates local supply-demand imbalance and adjusts price or incentives to improve marketplace balance. Production design needs smoothing, geographic boundaries, caps, transparency, anti-gaming controls, and evaluation of rider and driver outcomes. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Design the Uber dispatch system. What happens in the 3 seconds between a rider requesting and a driver being matched?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Why is GPS accuracy a fundamental constraint on Uber's accuracy?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Intermediate: Design Deep Dive
+
+:::note
+**Prerequisites:** **Beginner module complete**, **Algorithms: Dijkstra, A*, shortest path**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **make design choices and quantify their tradeoffs**. Uber coordinates a real-time two-sided marketplace under uncertain location, travel time, demand, and supply. The system must make fast assignments while preserving payment correctness and recovering safely from regional failures. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design Uber's dispatch system at city scale: latency requirements, matching algorithms, optimization objectives
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **rider/driver apps** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Understand Uber's ETA prediction: traffic-aware routing, ML models for historical travel time
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **location stream** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design the payments system: ride payment, driver payout, refunds, fraud detection
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **geospatial index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Reason about the driver experience: location updates, earnings visibility, trip requests
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **ETA service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the intermediate level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Dispatch system: rider request → supply service (driver locations in Redis, indexed by H3) → demand service → matching service (rank drivers by ETA) → offer service (driver notification) → trip service
+
+```text
+Uber Architecture: Dispatch system rider request supply service driver locations in Redis indexed by H3 demand service matching service rank drivers by ETA offer service driver notification trip service
+
+[rider request]
+        |
+        v
+  [supply service (driver locations in Redis, indexed by H3)]
+          |
+          v
+    [demand service]
+            |
+            v
+      [matching service (rank drivers by ETA)]
+              |
+              v
+        [offer service (driver notification)]
+                |
+                v
+          [trip service]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Dispatch system: rider request → supply service (driver locations in Redis, indexed by H3) → demand service → matching service (rank drivers by ETA) → offer service (driver notification) → trip service** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 2: ETA prediction: road graph (pre-computed, updated hourly) + real-time traffic (probe data from driver GPS) → graph edge weight update → Dijkstra on live graph → ETA = path cost
+
+```text
+Uber Architecture: ETA prediction road graph pre computed updated hourly real time traffic probe data from driver GPS graph edge weight update Dijkstra on live graph ETA path cost
+
+[road graph (pre-computed, updated hourly) + real-time traffic (probe dat]
+        |
+        v
+  [graph edge weight update]
+          |
+          v
+    [Dijkstra on live graph]
+            |
+            v
+      [ETA = path cost]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **ETA prediction: road graph (pre-computed, updated hourly) + real-time traffic (probe data from driver GPS) → graph edge weight update → Dijkstra on live graph → ETA = path cost** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 3: Driver location pipeline: driver sends GPS every 4 seconds → Kafka → stream processor → Redis geo-index update (&lt; 100ms) → dispatch service reads fresh positions
+
+```text
+Uber Architecture: Driver location pipeline driver sends GPS every 4 seconds Kafka stream processor Redis geo index update 100ms dispatch service reads fresh positions
+
+[driver sends GPS every 4 seconds]
+        |
+        v
+  [Kafka]
+          |
+          v
+    [stream processor]
+            |
+            v
+      [Redis geo-index update (< 100ms)]
+              |
+              v
+        [dispatch service reads fresh positions]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Driver location pipeline: driver sends GPS every 4 seconds → Kafka → stream processor → Redis geo-index update (&lt; 100ms) → dispatch service reads fresh positions** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 4: Payments pipeline: trip ends → fare calculation → rider payment (Stripe) → platform fee deduction → driver earnings update → weekly settlement → bank transfer
+
+```text
+Uber Architecture: Payments pipeline trip ends fare calculation rider payment Stripe platform fee deduction driver earnings update weekly settlement bank transfer
+
+[trip ends]
+        |
+        v
+  [fare calculation]
+          |
+          v
+    [rider payment (Stripe)]
+            |
+            v
+      [platform fee deduction]
+              |
+              v
+        [driver earnings update]
+                |
+                v
+          [weekly settlement]
+                  |
+                  v
+            [bank transfer]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Payments pipeline: trip ends → fare calculation → rider payment (Stripe) → platform fee deduction → driver earnings update → weekly settlement → bank transfer** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 5: Fraud detection: GPS trace analysis (impossible speed detection) → device fingerprinting → velocity checks (same card used in 2 cities simultaneously) → rules engine + ML model
+
+```text
+Uber Architecture: Fraud detection GPS trace analysis impossible speed detection device fingerprinting velocity checks same card used in 2 cities simultaneously rules engine ML model
+
+[GPS trace analysis (impossible speed detection)]
+        |
+        v
+  [device fingerprinting]
+          |
+          v
+    [velocity checks (same card used in 2 cities simultaneously)]
+            |
+            v
+      [rules engine + ML model]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Fraud detection: GPS trace analysis (impossible speed detection) → device fingerprinting → velocity checks (same card used in 2 cities simultaneously) → rules engine + ML model** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+### Case Studies
+
+#### Uber's DISCO (2017): the matchmaking system that optimized for batch matching instead of greedy matching — 20% improvement in ETA by considering global optimal assignments within 500ms
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's DISCO (2017): the matchmaking system that optimized for batch matching instead of greedy matching — 20% improvement in ETA by considering global optimal assignments within 500ms**—creates pressure at the **rider/driver apps** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber's Michelangelo ML platform: how they built the ML infrastructure to serve 1M+ predictions/second for surge, ETA, fraud, and demand forecasting on a unified platform
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's Michelangelo ML platform: how they built the ML infrastructure to serve 1M+ predictions/second for surge, ETA, fraud, and demand forecasting on a unified platform**—creates pressure at the **location stream** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber Eats architecture: how the same dispatch and routing infrastructure was adapted for food delivery — restaurant wait time as additional ETA component, multi-stop delivery
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber Eats architecture: how the same dispatch and routing infrastructure was adapted for food delivery — restaurant wait time as additional ETA component, multi-stop delivery**—creates pressure at the **geospatial index** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Walk me through Uber's dispatch system. How does a driver get selected for a trip?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: How does Uber predict arrival time accurately when traffic changes minute by minute?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: Design the Uber payments system. How does money flow from rider to driver?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Your ETA predictions are consistently 3 minutes too short on Friday evenings. How do you diagnose and fix this?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: How does Uber detect GPS spoofing (a driver falsifying their location to appear near airport)?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Advanced: Production at Scale
+
+:::note
+**Prerequisites:** **Intermediate module complete**, **Time series forecasting: ARIMA, Prophet, LSTM for time series**, **Distributed systems: fault tolerance, circuit breakers**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **operate the system under scale, failure, security, and cost pressure**. Uber coordinates a real-time two-sided marketplace under uncertain location, travel time, demand, and supply. The system must make fast assignments while preserving payment correctness and recovering safely from regional failures. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Design Uber's real-time city-level supply/demand forecasting: predict demand 5 minutes ahead at H3-cell level
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **rider/driver apps** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Implement dynamic pricing optimization: not just surge, but personalized pricing, promotional discounts, driver incentives
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **location stream** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Design Uber's global architecture: 70+ countries, local regulatory compliance, localized payment methods
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **geospatial index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 4: Handle disaster scenarios: what happens when the dispatch service goes down mid-city?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **ETA service** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the advanced level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Demand forecasting pipeline: historical trip data → feature engineering (weather, events, time) → Prophet + deep learning ensemble → 5-minute demand forecast per H3 cell → dispatch system uses forecast for proactive driver positioning
+
+```text
+Uber Architecture: Demand forecasting pipeline historical trip data feature engineering weather events time Prophet deep learning ensemble 5 minute demand forecast per H3 cell dispatch system uses forecast for proactive driver positioning
+
+[historical trip data]
+        |
+        v
+  [feature engineering (weather, events, time)]
+          |
+          v
+    [Prophet + deep learning ensemble]
+            |
+            v
+      [5-minute demand forecast per H3 cell]
+              |
+              v
+        [dispatch system uses forecast for proactive driver positioning]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Demand forecasting pipeline: historical trip data → feature engineering (weather, events, time) → Prophet + deep learning ensemble → 5-minute demand forecast per H3 cell → dispatch system uses forecast for proactive driver positioning** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 2: Driver incentive engine: real-time earnings gap analysis → identify underserved zones → incentive calculation (surge bonus) → push notification to nearest off-duty drivers → acceptance rate monitoring
+
+```text
+Uber Architecture: Driver incentive engine real time earnings gap analysis identify underserved zones incentive calculation surge bonus push notification to nearest off duty drivers acceptance rate monitoring
+
+[real-time earnings gap analysis]
+        |
+        v
+  [identify underserved zones]
+          |
+          v
+    [incentive calculation (surge bonus)]
+            |
+            v
+      [push notification to nearest off-duty drivers]
+              |
+              v
+        [acceptance rate monitoring]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Driver incentive engine: real-time earnings gap analysis → identify underserved zones → incentive calculation (surge bonus) → push notification to nearest off-duty drivers → acceptance rate monitoring** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 3: Global regulatory compliance layer: routing engine → country-specific rules (surge caps, minimum fares, accessibility requirements) → localized payment methods (WeChat Pay, Paytm, M-Pesa)
+
+```text
+Uber Architecture: Global regulatory compliance layer routing engine country specific rules surge caps minimum fares accessibility requirements localized payment methods WeChat Pay Paytm M Pesa
+
+[routing engine]
+        |
+        v
+  [country-specific rules (surge caps, minimum fares, accessibility require]
+          |
+          v
+    [localized payment methods (WeChat Pay, Paytm, M-Pesa)]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Global regulatory compliance layer: routing engine → country-specific rules (surge caps, minimum fares, accessibility requirements) → localized payment methods (WeChat Pay, Paytm, M-Pesa)** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 4: Disaster recovery: primary dispatch cluster fails → health check fails → traffic failover to secondary region → driver location state reconstructed from Kafka replay → &lt; 60 second recovery
+
+```text
+Uber Architecture: Disaster recovery primary dispatch cluster fails health check fails traffic failover to secondary region driver location state reconstructed from Kafka replay 60 second recovery
+
+[primary dispatch cluster fails]
+        |
+        v
+  [health check fails]
+          |
+          v
+    [traffic failover to secondary region]
+            |
+            v
+      [driver location state reconstructed from Kafka replay]
+              |
+              v
+        [< 60 second recovery]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Disaster recovery: primary dispatch cluster fails → health check fails → traffic failover to secondary region → driver location state reconstructed from Kafka replay → &lt; 60 second recovery** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+### Case Studies
+
+#### Uber's demand forecasting with Prophet: how they predict city-wide demand 5 minutes ahead — the feature importance (concerts, sports events, weather, historical patterns) and accuracy metrics
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's demand forecasting with Prophet: how they predict city-wide demand 5 minutes ahead — the feature importance (concerts, sports events, weather, historical patterns) and accuracy metrics**—creates pressure at the **rider/driver apps** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber's driver positioning: proactive driving incentives that position drivers near predicted demand before it materializes — 15% reduction in rider wait time
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's driver positioning: proactive driving incentives that position drivers near predicted demand before it materializes — 15% reduction in rider wait time**—creates pressure at the **location stream** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Uber's India launch: custom architecture for 2G network reliability — SMS-based fallback, reduced GPS accuracy handling, cash payment integration
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's India launch: custom architecture for 2G network reliability — SMS-based fallback, reduced GPS accuracy handling, cash payment integration**—creates pressure at the **geospatial index** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+#### Q1: Design Uber's demand forecasting system. How do you predict ride demand 15 minutes ahead at a city-block level?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q2: The dispatch service goes down in a major city. Walk through the failure cascade and recovery procedure.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q3: How does Uber decide where to send driver incentive notifications to maximize coverage of demand?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q4: Design Uber's international payment architecture: 70 countries, 50 local payment methods, multiple currencies.
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+#### Q5: How does Uber prevent a race condition where 2 drivers are assigned to the same rider?
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. For **Uber Architecture**, make the answer operational: draw the critical path, put a budget on each stage, and say what happens when a dependency is slow, stale, unauthorized, or unavailable. Distinguish measured facts from assumptions and avoid invented company internals.
+
+Then close with validation. Use an offline quality set for repeatability, a load or failure test for system behavior, and a guarded online rollout for user impact. Track an end-to-end outcome plus the stage-level metrics needed to localize regressions. This structure answers both halves of a system-design interview: why the mechanism works and how you would operate it responsibly.
+
+## Research: Frontiers
+
+:::note
+**Prerequisites:** **Advanced module complete**, **Read: Uber DISCO (2017), Uber DeepETA (2022), Uber Michelangelo (2017), two-sided market theory papers**. Before continuing, explain each item in your own words and identify where it appears in the request path below.
+:::
+
+At this level, the goal is to **identify open assumptions, evaluate frontier ideas, and design falsifiable experiments**. Uber coordinates a real-time two-sided marketplace under uncertain location, travel time, demand, and supply. The system must make fast assignments while preserving payment correctness and recovering safely from regional failures. Keep one principle visible: a system is not the boxes in its diagram. It is the contracts, queues, ownership boundaries, measurements, and recovery behavior between those boxes.
+
+#### Objective 1: Analyze the frontier of marketplace optimization: multi-objective matching, counterfactual demand estimation, equilibrium pricing
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **rider/driver apps** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 2: Design a research experiment measuring the social welfare effects of ride-hailing algorithms
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **location stream** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+#### Objective 3: Understand the open problem of autonomous vehicle dispatch: how Uber's architecture changes when vehicles drive themselves
+
+A strong answer begins by fixing the workload and success criterion, then traces the request through rider/driver apps, location stream, geospatial index, ETA service. The governing quantitative model is: Dispatch can be framed as minimum-cost matching: $\min_x\sum_{r,d}c_{rd}x_{rd}$ subject to each rider and driver being assigned at most once. Cost $c_{rd}$ may combine pickup ETA, cancellation risk, fairness, and marketplace effects; a fast approximate solution is often better than a late exact one. Use it to estimate an order of magnitude before selecting infrastructure. Then quantify dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, state which data is authoritative, and name the failure and fallback paths. The simplest credible baseline is nearest available driver by straight-line distance with a simple state machine; compare against it before adding complexity. The capability described by this objective is practical, not a definition to memorize. Begin at the **geospatial index** boundary and trace the data entering it, the state it reads, the output contract, and the owner of failures. In Uber Architecture, that boundary interacts with dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency. A design is incomplete if it names a component but cannot say how it is measured, versioned, isolated, and recovered.
+
+At the research level, the useful question is: *what decision can you make after learning this?* Write assumptions before selecting technology. Use a representative workload, identify the cheapest credible baseline (nearest available driver by straight-line distance with a simple state machine), and measure quality and operational cost together. Separate control-plane work—configuration, policy, placement, and metadata—from data-plane work on the live request. This prevents slow management operations from entering the latency-critical path. Finally, test one normal case, one boundary case, and one dependency failure. That small discipline turns the objective into an engineering skill and exposes where an apparently elegant diagram hides queues, stale state, or unsafe fallback behavior.
+
+### Diagrams
+
+#### Diagram 1: Multi-objective matching: rider ETA + driver idle time + platform revenue + environmental cost (routing to minimize emissions) → Pareto optimal matching
+
+```text
+Uber Architecture: Multi objective matching rider ETA driver idle time platform revenue environmental cost routing to minimize emissions Pareto optimal matching
+
+[rider ETA + driver idle time + platform revenue + environmental cost (ro]
+        |
+        v
+  [Pareto optimal matching]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Multi-objective matching: rider ETA + driver idle time + platform revenue + environmental cost (routing to minimize emissions) → Pareto optimal matching** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 2: AV dispatch architecture: AV fleet management (charge level, maintenance status) + ride demand + routing → dispatch with vehicle state constraints
+
+```text
+Uber Architecture: AV dispatch architecture AV fleet management charge level maintenance status ride demand routing dispatch with vehicle state constraints
+
+[AV fleet management (charge level, maintenance status) + ride demand + r]
+        |
+        v
+  [dispatch with vehicle state constraints]
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **AV dispatch architecture: AV fleet management (charge level, maintenance status) + ride demand + routing → dispatch with vehicle state constraints** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+#### Diagram 3: Counterfactual demand estimation: in a surge scenario, what would demand have been without the surge (price elasticity measurement) — instrumental variable approach using weather as instrument
+
+```text
+Uber Architecture: Counterfactual demand estimation in a surge scenario what would demand have been without the surge price elasticity measurement instrumental variable approach using weather as instrument
+
+  [producer / request]
+           |
+           v
+      [geospatial index] ---- control, version, policy ----> [ETA service]
+           |                                         |
+           | data / candidate / event                | state / cache
+           v                                         v
+      [dispatch optimizer] ---- measured result + trace -----> [pricing]
+           |                                         |
+           +-------- retry / fallback / audit <------+
+```
+
+Read the diagram from left to right for the normal path and from the bottom back toward the top for recovery. The label **Counterfactual demand estimation: in a surge scenario, what would demand have been without the surge (price elasticity measurement) — instrumental variable approach using weather as instrument** determines what each arrow carries; record its schema, freshness requirement, and failure behavior. In an interview, redraw this small path first, then add partitions, replicas, queues, and security boundaries only when the requirements demand them. That order keeps the explanation understandable while still exposing dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency.
+
+### Case Studies
+
+#### Uber's DeepETA (2022): a graph neural network that models road network as a graph, achieved 15% MAPE improvement over gradient boosting — the architecture and training setup
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Uber's DeepETA (2022): a graph neural network that models road network as a graph, achieved 15% MAPE improvement over gradient boosting — the architecture and training setup**—creates pressure at the **rider/driver apps** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Lyft's RL-based dispatch: how they framed matching as a reinforcement learning problem, with reward = driver earnings + rider satisfaction — the training environment setup
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Lyft's RL-based dispatch: how they framed matching as a reinforcement learning problem, with reward = driver earnings + rider satisfaction — the training environment setup**—creates pressure at the **location stream** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+#### Shared rides (Uber Pool / UberX Share): the matching algorithm for grouping riders — the NP-hard nature of the problem, the approximation algorithms used, why shared rides remain a hard product problem
+
+Treat this case as a design investigation rather than a claim that every internal detail is public. The stated scenario—**Shared rides (Uber Pool / UberX Share): the matching algorithm for grouping riders — the NP-hard nature of the problem, the approximation algorithms used, why shared rides remain a hard product problem**—creates pressure at the **geospatial index** layer of Uber Architecture. Start by writing the actor, workload, user-visible success condition, and failure cost. Preserve any numbers given in the prompt as requirements; where numbers are absent, label estimates explicitly rather than presenting them as company facts.
+
+The first design should use nearest available driver by straight-line distance with a simple state machine. Instrument it for dispatch latency, pickup ETA, GPS error, market balance, fraud, regional availability, and financial consistency, then locate the first bottleneck with evidence. Introduce one mechanism at a time: partitioning for capacity, caching for repeated work, asynchronous processing for non-critical tasks, and a fallback for dependency failure. Keep authorization and tenant boundaries on the data path rather than filtering after retrieval or generation. For rollout, shadow real traffic, compare against the baseline, inspect important slices, and define a rollback threshold before exposure.
+
+The lesson is the decision process. A successful case study explains why one resource became scarce, why the chosen mechanism addresses that scarcity, and what new failure mode it creates. It closes with a measurement plan: one quality metric, one tail-latency or freshness metric, one cost metric, and one safety or correctness invariant. That makes the story reusable instead of a list of brand-name components.
+
+### Interview Questions & Answers
+
+This frontier module has no fixed interview-question list. Turn each learning objective into a research-defense question: state the hypothesis, strongest alternative explanation, decisive experiment, and evidence that would make you abandon the idea.
+
+## Hands-On Projects
+
+### Beginner
+
+- **Beginner project (proposed): Traceable Uber Architecture slice.** Implement one request path using rider/driver apps, location stream, geospatial index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Beginner project (proposed): Baseline-to-design evaluation.** Build nearest available driver by straight-line distance with a simple state machine, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Intermediate
+
+- **Intermediate project (proposed): Traceable Uber Architecture slice.** Implement one request path using rider/driver apps, location stream, geospatial index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Intermediate project (proposed): Baseline-to-design evaluation.** Build nearest available driver by straight-line distance with a simple state machine, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Advanced
+
+- **Advanced project (proposed): Traceable Uber Architecture slice.** Implement one request path using rider/driver apps, location stream, geospatial index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Advanced project (proposed): Baseline-to-design evaluation.** Build nearest available driver by straight-line distance with a simple state machine, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+### Research
+
+- **Research project (proposed): Traceable Uber Architecture slice.** Implement one request path using rider/driver apps, location stream, geospatial index. Log correlation IDs and stage latency, inject one dependency failure, and demonstrate a safe fallback. Deliver a diagram, runnable code, load-test result, and one-page decision record.
+- **Research project (proposed): Baseline-to-design evaluation.** Build nearest available driver by straight-line distance with a simple state machine, add one mechanism from this module, and compare quality, p95/p99 latency, resource cost, and a safety or correctness invariant. Include assumptions, raw results, failure examples, and a rollback threshold.
+
+## Related Platform Content
+
+- [ML Platform Engineering curriculum](/learn/mlops/ml-platform-engineering)
+- [Recommendation Systems](/system-design/recommendation-systems)
+- [Real-Time Inference curriculum](/learn/mlops/real-time-inference-at-scale)
+- [GraphSAGE](/architectures/graphsage)
+
+## Further Reading
+
+Prefer primary papers, standards, official engineering publications, and maintained documentation. Start with:
+
+- Uber Engineering publications on H3, Michelangelo, dispatch, and forecasting
+- H3 geospatial indexing documentation
+- Literature on online bipartite matching and marketplace design
+
+Use sources as evidence, not authority. Record the workload, date, hardware or data setting, and limitations behind every performance claim before transferring it to a different system.

@@ -1,0 +1,98 @@
+# ChebNet
+
+## 1. Overview
+
+ChebNet turns spectral graph convolution into a localized polynomial of the graph Laplacian. Chebyshev recurrence avoids an expensive eigendecomposition and controls how many graph hops influence each output. Introduced in 2016 by Defferrard et al., its key innovation is Chebyshev polynomial filters — efficient spectral graph convolution. The practical reason to study it is not historical trivia: the design exposes a reusable tradeoff between representation quality, computation, memory, and the structure of the input data.
+
+## 2. Historical Context
+
+ChebNet follows Spectral GNN. Earlier systems established the basic task, but left a concrete limitation in expressivity, efficiency, scale, or supervision. ChebNet changes the computation rather than merely increasing parameter count. Its ideas influenced GCN. When comparing papers, keep training data, evaluation protocol, and compute budget separate from the architecture itself; otherwise an apparent architectural gain may actually come from a stronger recipe.
+
+## 3. Problem It Solves
+
+The architecture addresses this problem: Chebyshev polynomial filters — efficient spectral graph convolution. In production it has been associated with Graph signal processing. Define the input contract, target output, training signal, and resource budget before implementation. A useful baseline should be simpler, use the same data split, and expose whether the innovation improves quality enough to justify additional complexity.
+
+## 4. Architecture Diagram Data
+
+```text
+node features + adjacency -> normalized Laplacian -> Chebyshev polynomial messages -> weighted sum -> node representation
+       |                    |                    |
+       +-- shapes/logs -----+-- validation ------+-- output
+```
+
+Every arrow carries a tensor or structured record with a known shape, version, and owner. The forward path explains inference; the validation path explains how silent shape, routing, masking, or data errors are detected.
+
+## 5. Layer-by-Layer Breakdown
+
+Start with the input representation and identify what information is preserved. The middle transformation implements the architecture's defining operation. Normalization, residual paths, recurrent state, routing, or feature crossing stabilize information flow. The final head converts the shared representation into a task score. Inspect each boundary independently before tuning the full model.
+
+## 6. Tensor Flow Walkthrough
+
+Let batch size be $B$, sequence/history/node count be $L$, and hidden width be $D$. A typical path is **Input (B, L, D_in) -> projection (B, L, D) -> architecture core (B, L, D) -> pooling/head (B, D_out)**. Exact axes vary by domain, but no implementation should leave them implicit. Assert shapes at runtime and test empty, padded, and maximum-sized inputs.
+
+## 7. Mathematical Foundations
+
+With rescaled Laplacian $\tilde L$, the filter is $g_\theta*x=\sum_{k=0}^{K}\theta_kT_k(\tilde L)x$, where $T_0=1$, $T_1=z$, and $T_k(z)=2zT_{k-1}(z)-T_{k-2}(z)$.
+
+The equation identifies the model's inductive bias. Define every trainable object, normalization term, and sampled set before coding. Then test the formula on a hand-computable example; this catches sign, scaling, and broadcasting mistakes earlier than end-to-end training.
+
+## 8. Training Procedure
+
+Use a versioned dataset, deterministic evaluation split, and a baseline trained with the same budget. Log the main task metric, calibration or ranking quality where relevant, throughput, peak memory, and several failure slices. Begin with a tiny overfitting test, then a small representative run, and only then scale. Save optimizer state and configuration beside checkpoints so a result can be reproduced rather than merely demonstrated once.
+
+## 9. PyTorch Implementation
+
+```python
+import torch
+
+def chebyshev_features(x, scaled_laplacian, order):
+    terms = [x]
+    if order == 0:
+        return terms
+    terms.append(scaled_laplacian @ x)
+    for _ in range(2, order + 1):
+        terms.append(2 * scaled_laplacian @ terms[-1] - terms[-2])
+    return terms
+
+nodes, features = 5, 3
+x = torch.randn(nodes, features)
+laplacian = torch.eye(nodes)  # Replace with a properly rescaled graph Laplacian.
+terms = chebyshev_features(x, laplacian, order=3)
+weights = torch.randn(4, features, 8)
+output = sum(term @ weight for term, weight in zip(terms, weights))
+assert output.shape == (nodes, 8)
+```
+
+The snippet isolates the tensor contract. A full reproduction must add the architecture-specific loss, batching, negative sampling or masking, metrics, and data validation described by the original paper.
+
+## 10. Strengths
+
+The main strength is a clear inductive bias aligned with the task: Chebyshev polynomial filters — efficient spectral graph convolution. This can improve data efficiency or make an otherwise expensive interaction tractable. The architecture also provides a useful conceptual unit that can be reused in larger systems and tested independently.
+
+## 11. Weaknesses
+
+The same inductive bias can become a limitation when the data or workload violates its assumptions. Additional state, routing, history, graph structure, or long-context computation increases implementation and serving complexity. Report sensitivity to sequence length, sparsity, cold-start cases, distribution shift, and hardware rather than relying on one aggregate benchmark.
+
+## 12. Research Evolution
+
+The direct lineage runs from Spectral GNN through ChebNet toward GCN. Later work typically improves optimization, scales the central operation, introduces sparsity or compression, or combines it with a stronger pretrained representation. Separate faithful extensions from architectures that merely reuse the name.
+
+## 13. Interview Questions
+
+**Q1: What is the defining innovation?** Chebyshev polynomial filters — efficient spectral graph convolution. Explain the baseline first, then identify exactly which computation changes.
+
+**Q2: What tensor contract is most important?** The core input and output shapes, including sequence, history, node, or field axes. Shape errors often produce valid-looking but incorrect computation.
+
+**Q3: How would you evaluate it fairly?** Use the same data, budget, and metrics as a simple baseline, then add ablations and operational measurements.
+
+**Q4: What is the main scaling risk?** The state or interaction dimension can increase memory, communication, or latency faster than expected. Estimate it before training.
+
+**Q5: When should you avoid it?** Avoid it when a simpler baseline meets requirements or when the architecture's assumptions do not match the available data and serving constraints.
+
+## 14. Related Papers
+
+- Defferrard, Bresson, and Vandergheynst, Convolutional Neural Networks on Graphs with Fast Localized Spectral Filtering (2016)
+
+## 15. Further Reading
+
+Read the primary paper first, then a maintained implementation and an independent reproduction. Compare equations with source code and write down every implementation choice not specified in the paper. Finally, inspect descendants listed in the architecture registry to understand which limitations later work attempted to remove.

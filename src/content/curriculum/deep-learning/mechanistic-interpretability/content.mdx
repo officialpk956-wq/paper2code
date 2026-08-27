@@ -1,0 +1,124 @@
+# Mechanistic Interpretability
+
+## 1. Overview
+
+Mechanistic interpretability is the attempt to reverse-engineer what's actually happening inside a trained neural network — not just measuring what it does from the outside (its inputs and outputs), but figuring out the actual algorithm, made of specific neurons, attention heads, and weight patterns, that the network has learned to implement. It treats a trained transformer the way a security researcher treats a compiled binary with no source code: something that can, in principle, be fully understood by patient, systematic reverse engineering, down to the level of "this specific attention head is implementing this specific sub-routine." This matters because understanding the internal circuits of a model is currently the most promising path toward reliably detecting deception, predicting dangerous capabilities before deployment, and debugging failures that black-box behavioral testing alone cannot explain.
+
+## 2. Prerequisites in Context
+
+**Transformer** architecture knowledge is the baseline requirement — you cannot reverse-engineer circuits inside a system whose basic components (attention heads, MLP layers, residual stream) you don't already understand structurally. **Attention Patterns** specifically matter beyond general transformer knowledge because a huge fraction of interpretability findings are discovered by directly visualizing and analyzing what specific attention heads attend to across many inputs — recognizing recurring, meaningful attention patterns is often the first empirical clue that leads to identifying a genuine circuit. **Probing Methods** are needed because much of interpretability's evidence comes from training small auxiliary classifiers ("probes") on a network's internal activations to test whether specific information (like part-of-speech, or a fact the model "knows") is linearly represented at a given layer — understanding what a probe can and cannot prove is essential to interpreting interpretability results correctly.
+
+## 3. Core Concept
+
+The central discovery that launched much of modern mechanistic interpretability is the **induction head** — a specific, identifiable circuit made of two attention heads working together across two layers, which implements a simple but surprisingly powerful pattern: "if the current token previously appeared somewhere earlier in the context, predict that whatever token followed it last time will follow again now." Concretely, a "previous token head" in an early layer copies information about the token immediately before each position into that position's representation; a later "induction head" then searches the context for earlier positions whose "previous token" information matches the current token, and copies forward whatever came after that earlier match. This two-head circuit, discovered by directly analyzing attention patterns and validated with targeted ablation experiments (removing or modifying specific heads and observing the causal effect on model behavior), explains a substantial fraction of in-context learning behavior in transformers — the model isn't doing anything mystical, it's running an identifiable, mechanistic pattern-completion algorithm built from ordinary attention operations.
+
+## 4. Theoretical Foundations
+
+**Activation patching** (also called causal tracing) is the core experimental technique used to establish that a specific component is causally responsible for a specific behavior, rather than merely correlated with it. The procedure: run the model on a "clean" input and a "corrupted" input (differing in exactly one meaningful way, e.g., a name swapped), cache the clean run's internal activations at every layer and position, then run the corrupted input again but "patch in" (substitute) the clean activation at one specific component (say, one attention head's output at one layer) — if this single patch flips the model's output back toward the clean answer, that component is causally implicated in producing the behavior. Formally, if $M(x)$ denotes the model's output and $a^{(l)}_c$ is a cached clean activation at layer/component $l$, the patched output is $M(x_{\text{corrupt}} ; a^{(l)} \leftarrow a^{(l)}_c)$, and the causal effect of that component is measured as the difference between this patched output and the fully corrupted output. Chaining many such patching experiments across layers and components is how researchers systematically localize and validate entire multi-component circuits like the induction head or the "indirect object identification" circuit found in GPT-2.
+
+## 5. Worked Example
+
+Consider the sentence "When Mary and John went to the store, John gave a drink to ___" — GPT-2 correctly predicts "Mary." Researchers found this behavior is implemented by a specific circuit spanning multiple attention heads across several layers: "duplicate token heads" identify that "John" appears twice in the sentence, "S-inhibition heads" suppress attention to the duplicated (subject) name, and "name mover heads" then copy forward the *other* name ("Mary") to the output position. Activation patching confirmed this causal chain precisely: patching in clean activations at just the identified name-mover heads (while leaving everything else corrupted) was sufficient to restore correct behavior, while patching unrelated heads had no effect — demonstrating that this seemingly sophisticated "grammatical reasoning" behavior is actually implemented by a specific, fully identifiable, and surprisingly small set of attention heads working in a precise sequence.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def activation_patching_effect(model, clean_input, corrupt_input, layer_idx, get_activation_hook, metric_fn):
+    """
+    Measures the causal effect of one layer's activation on model output,
+    using the core mechanistic-interpretability activation-patching technique.
+    get_activation_hook: registers a forward hook, returns (handle, activation_holder)
+    metric_fn: model_output -> scalar (e.g. logit difference between two candidate tokens)
+    """
+    # 1. Run clean input, cache its activation at layer_idx
+    handle, holder = get_activation_hook(model, layer_idx)
+    with torch.no_grad():
+        _ = model(clean_input)
+    clean_activation = holder["value"].clone()
+    handle.remove()
+
+    # 2. Run corrupted input normally (baseline, no patch)
+    with torch.no_grad():
+        corrupt_output = model(corrupt_input)
+    baseline_metric = metric_fn(corrupt_output)
+
+    # 3. Run corrupted input again, but patch in the clean activation at layer_idx
+    def patch_hook(module, inp, out):
+        return clean_activation
+    patch_handle = model.layers[layer_idx].register_forward_hook(patch_hook)
+    with torch.no_grad():
+        patched_output = model(corrupt_input)
+    patch_handle.remove()
+    patched_metric = metric_fn(patched_output)
+
+    return patched_metric - baseline_metric  # causal effect of this layer's activation
+
+if __name__ == "__main__":
+    # Toy model: two "layers" that are just linear transforms of a hidden state
+    class ToyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList([nn.Linear(8, 8), nn.Linear(8, 8)])
+        def forward(self, x):
+            for layer in self.layers:
+                x = torch.relu(layer(x))
+            return x
+
+    model = ToyModel()
+    def hook_factory(m, idx):
+        holder = {}
+        def hook(module, inp, out):
+            holder["value"] = out
+        return m.layers[idx].register_forward_hook(hook), holder
+
+    clean = torch.randn(1, 8)
+    corrupt = torch.randn(1, 8)
+    effect = activation_patching_effect(model, clean, corrupt, 0, hook_factory, lambda o: o.sum())
+    print(f"Causal effect of layer 0's activation on output metric: {effect.item():.4f}")
+```
+
+## 7. Real-World Applications
+
+Anthropic and other frontier labs use mechanistic interpretability research directly for AI safety work: identifying circuits responsible for potentially dangerous capabilities (deception, situational awareness) before deployment, and building tools like sparse autoencoders to decompose superposed features (where a single neuron represents multiple unrelated concepts) into cleaner, more interpretable units. Interpretability findings are also used practically for model debugging — when a production model exhibits a specific, reproducible failure mode, activation patching can localize which specific component is responsible, turning "the model is wrong somehow" into "this specific attention head at this specific layer is misfiring," which is directly actionable for targeted fixes or fine-tuning interventions.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common mistake is treating a probing classifier's success (finding that some property is linearly decodable from a layer's activations) as proof that the model *uses* that information causally in its computation — a probe can succeed purely because the information happens to be linearly present, without the model's own forward computation ever actually reading or using it; only causal intervention techniques like activation patching can establish genuine causal (not merely correlational) involvement. Another pitfall is over-generalizing findings from small models (like GPT-2, where most circuit-level interpretability work has been done) to much larger frontier models — circuits discovered in small models are a useful existence proof and methodology, but there's no guarantee the same specific circuits, or even the same general strategy, is what a 100x larger model actually implements for a superficially similar behavior.
+
+## 9. How This Connects
+
+This topic requires **Transformer** architecture fluency, familiarity with **Attention Patterns**, and knowledge of **Probing Methods** — without them, the specific claims of circuit-based interpretability (like the induction-head mechanism) read as unverifiable just-so stories rather than empirically validated, causally-tested findings. It directly unlocks **AI Safety Research** (where interpretability is a primary tool for detecting and preventing dangerous or deceptive model behavior before deployment), **Circuit Analysis** (the deeper, more systematic study of identifying and cataloging the specific computational sub-routines transformers learn), and **Sparse Autoencoders** (a specific technical tool built to address the "superposition" problem — the fact that individual neurons often represent multiple unrelated features simultaneously, making direct neuron-level interpretation misleading without this additional decomposition step).
+
+## 10. Check Your Understanding
+
+**Q1: What is an induction head, and why was its discovery significant?**
+It's a two-head circuit spanning two layers that implements "if this token appeared earlier in context, predict whatever followed it last time will follow again now." Its discovery was significant because it demonstrated, with causal validation via activation patching, that a substantial fraction of in-context learning behavior in transformers is implemented by a specific, identifiable, mechanistic algorithm — not an inscrutable emergent property, but an ordinary (if clever) circuit built from attention operations that researchers could fully specify.
+
+**Q2: What does activation patching establish that simply observing a correlation between an internal activation and model behavior cannot?**
+Activation patching establishes causation: by substituting a "clean" activation into an otherwise "corrupted" run and observing whether the output changes as a result, it directly tests whether that specific component's activation is actually responsible for producing a given behavior, rather than merely being correlated with (but not causally involved in) that behavior.
+
+**Q3: Why can a successful probing classifier be misleading evidence about how a model actually computes its output?**
+Because a probe is trained separately from the model and can succeed at decoding some property from an activation purely because that information happens to be linearly present in the representation — this doesn't prove the model's own forward computation ever reads or causally uses that information in producing its output. Only causal intervention (like activation patching) can distinguish "the information is present" from "the model actually uses this information."
+
+**Q4: What problem do sparse autoencoders address in mechanistic interpretability?**
+They address "superposition" — the phenomenon where individual neurons in a network often represent a mixture of multiple, semantically unrelated features rather than one clean, interpretable concept each. Sparse autoencoders learn to decompose a layer's activations into a larger set of sparse, more monosemantic (single-concept) features, making direct interpretation of what's represented far more tractable than looking at raw neuron activations.
+
+**Q5: Why is it risky to assume a circuit discovered in a small model like GPT-2 generalizes unchanged to a much larger frontier model?**
+Because larger models have dramatically more capacity and are trained on more data, and there's no guarantee they implement the same specific circuit (or even the same general algorithmic strategy) for a superficially similar behavior — a larger model might solve the same task with an entirely different, more sophisticated internal mechanism. Small-model circuits are a valuable methodology and existence proof, but their specific findings don't automatically transfer without independent verification at larger scale.
+
+## 11. Further Reading
+
+- Olsson et al., "In-context Learning and Induction Heads" (Anthropic, 2022)
+- Wang et al., "Interpretability in the Wild: A Circuit for Indirect Object Identification in GPT-2 Small" (2022)
+- Bricken et al., "Towards Monosemanticity: Decomposing Language Models With Dictionary Learning" (Anthropic, 2023) — the sparse autoencoder paper
+- Elhage et al., "A Mathematical Framework for Transformer Circuits" (Anthropic, 2021)
+- See also: `transformer` and `gpt-2` on this platform for the architectural substrate these circuits are found within
+
+## Related Platform Content
+
+- [DEEP LEARNING curriculum overview](/learn/deep-learning)
+- [Transformer](/architectures/transformer)
+- [Browse all system designs](/system-design)

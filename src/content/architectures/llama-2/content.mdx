@@ -1,230 +1,261 @@
 # LLaMA 2
 
 ## 1. Overview
-LLaMA 2 (Large Language Model Meta AI 2), released by Meta in July 2023, was the catalyst for the open-source generative AI explosion. Following the massive, closed-source models from OpenAI (GPT-4) and Google (PaLM 2), the broader developer community was starved for a foundation model they could run locally and modify without paying API fees. While Meta's original LLaMA 1 was a powerful proof-of-concept for Chinchilla scaling laws, its license explicitly forbid commercial use, and its safety alignment was minimal. LLaMA 2 changed everything by releasing weights for 7B, 13B, and 70B parameter models under a highly permissive license that allowed widespread commercial use. Furthermore, Meta didn't just release raw base models; they released Llama-2-Chat, models rigorously fine-tuned using RLHF (Reinforcement Learning from Human Feedback) specifically for dialogue. By combining Grouped Query Attention (GQA) for incredibly fast inference with massive data scaling (2 Trillion tokens), LLaMA 2 proved that open-source, commercially viable models could compete directly with proprietary corporate APIs, permanently altering the economics of the AI industry.
+LLaMA 2 (Large Language Model Meta AI) is an open-access foundational model released by Meta in July 2023. It builds upon the success of the original LLaMA model, offering significant improvements in scale, safety, and performance. Ranging from 7 billion to 70 billion parameters, LLaMA 2 was designed to democratize access to highly capable large language models for both research and commercial applications. The model boasts a context window of 4096 tokens—double that of its predecessor—and was trained on 2 trillion tokens of data, representing a 40% increase over the original dataset. A standout feature of the LLaMA 2 release is the introduction of Llama-2-Chat, a family of models specifically fine-tuned for dialogue use cases using Reinforcement Learning from Human Feedback (RLHF) and Ghost Attention (GAtt). Architecturally, LLaMA 2 incorporates Grouped-Query Attention (GQA) in its larger configurations to improve inference scalability. LLaMA 2 quickly became the gold standard base model for the open-source community, driving an explosion of downstream fine-tunes and specialized applications.
 
-:::tip
-If you want to run a chatbot on a single consumer GPU (like an RTX 4090 or Mac M2), LLaMA 2 7B or 13B (often quantized to 4-bit) is the historical baseline. It demonstrated that state-of-the-art AI could be fully decentralized.
+:::note
+While LLaMA 2 is often referred to as "open source," its license does include restrictions (e.g., users with >700 million monthly active users must request a special license), making it "open weights" or "open access" rather than strictly open source under OSI definitions.
 :::
 
 ## 2. Historical Context
-In early 2023, the open-source AI community was fractured. The leak of the original LLaMA weights spawned a massive hacking movement (e.g., Alpaca, Vicuna), proving that if the community had access to a strong foundation model, they could fine-tune it rapidly on cheap hardware. However, because LLaMA 1 was strictly non-commercial, businesses couldn't use these innovations. Meta, led by Yann LeCun's philosophy of open science, recognized that commoditizing the foundation model layer would break the monopolies of OpenAI and Google while crowd-sourcing innovation back to Meta's ecosystem. They trained LLaMA 2 on 40% more data than its predecessor and doubled the context window to 4096 tokens. Crucially, they invested heavily in safety, employing thousands of human annotators to execute the RLHF pipeline. When Mark Zuckerberg announced the release of LLaMA 2 in partnership with Microsoft (Azure), completely free for research and commercial use, it triggered a tsunami of startups building specialized, fine-tuned applications that previously would have required millions of dollars to bootstrap.
+The release of the original LLaMA in early 2023 was a watershed moment. Its weights were leaked via BitTorrent, igniting an open-source AI revolution. Researchers realized that relatively small, highly trained models (like the LLaMA 7B and 13B) could rival much larger closed models like GPT-3 if fine-tuned correctly (e.g., Alpaca, Vicuna). However, the original LLaMA had a restrictive non-commercial license and a short 2048 token context window. Meta capitalized on this community momentum by releasing LLaMA 2. This time, they intentionally opened it for commercial use, aiming to establish LLaMA as the foundational operating system of generative AI. Crucially, in a post-ChatGPT world, releasing a raw pre-trained model wasn't enough; safety and alignment were paramount. Therefore, Meta invested heavily in the RLHF pipeline, releasing the Llama-2-Chat models alongside the base models, proving that open-access models could be both highly capable and rigorously safe for public deployment.
 
 ## 3. Problem It Solves
-LLaMA 2 solves the **Foundation Model Monopoly** and the **Inference Memory Bottleneck**. Prior to its release, if a startup wanted to build a medical chatbot, their only viable option was sending patient data to OpenAI via an API, raising massive privacy and cost concerns. LLaMA 2 solved this by giving away a 70B parameter model that was smart enough to act as the core reasoning engine for enterprise applications, allowing companies to host their AI locally on secure servers. Secondly, running a 70B parameter model autoregressively is incredibly memory-intensive because the KV-cache (storing the past tokens' keys and values) grows massively with long contexts. LLaMA 2 (specifically the 70B version) solved this by implementing Grouped Query Attention (GQA). By forcing multiple query heads to share a single key/value head, GQA drastically shrinks the size of the KV-cache. This optimization allows the 70B model to serve much larger batch sizes and process much longer documents without running out of GPU memory, making enterprise deployment economically viable.
+LLaMA 2 addresses several critical bottlenecks in the AI ecosystem. Foremost is the **accessibility and commercialization barrier**. By providing a commercially permissible license, LLaMA 2 allowed startups and enterprises to build AI products without relying on expensive, proprietary APIs (like OpenAI's) or worrying about data privacy when sending queries to the cloud. Secondly, it solves the **inference bottleneck** for large models. The 70B parameter model incorporates Grouped-Query Attention (GQA), drastically reducing the memory bandwidth required for the Key-Value (KV) cache during autoregressive generation, allowing a 70B model to be served efficiently on fewer GPUs. Thirdly, the Llama-2-Chat models address the **alignment problem**. Raw LLMs are difficult to use as assistants because they don't inherently follow instructions or adhere to safety guidelines. Through extensive RLHF and safety mitigation techniques, Meta provided an out-of-the-box model that acts as a helpful, harmless conversational agent.
 
 ## 4. Architecture Diagram Data
-```text
-           [ LLaMA 2 Architecture & Alignment Pipeline ]
+Below is a conceptual representation of the LLaMA 2 70B architecture, highlighting the use of Grouped-Query Attention (GQA) and RMSNorm.
 
-   Input: "Write a poem about the ocean."
-                               ^
+```text
+                     [ Input Text Tokens ]
                                |
-             +-----------------+-----------------+
-             |        LLaMA 2 Decoder Model      |
-             |  (7B, 13B, 70B parameter sizes)   |
-             |                                   |
-             |  +-----------------------------+  |
-             |  | Grouped Query Attention     |  | <-- (70B only)
-             |  | RoPE Positional Embeds      |  | <-- (Long Context)
-             |  | SwiGLU FFN + RMSNorm        |  |
-             |  +-----------------------------+  |
-             +-----------------+-----------------+
-                               ^
-                               | (RLHF Alignment)
+                               v
+                  +---------------------------+
+                  |      Token Embedding      |
+                  +---------------------------+
                                |
-             +-----------------+-----------------+
-             |       Llama-2-Chat Pipeline       |
-             |  1. Supervised Fine-Tuning        |
-             |  2. Rejection Sampling            |
-             |  3. Reward Modeling (PPO)         |
-             |  4. Safety Reward Margins         |
-             +-----------------------------------+
+                               v
+    +===========================================================+
+    |                 LLaMA 2 Transformer Block (x N)           |
+    |                                                           |
+    |  +-----------------------------------------------------+  |
+    |  |               RMS Normalization                     |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |     Grouped-Query Attention (GQA)                   |  |
+    |  |   (with Rotary Position Embeddings - RoPE)          |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |               RMS Normalization                     |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |                  SwiGLU FFN                         |  |
+    |  |        (Gated Feed-Forward Network)                 |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    +===========================================================+
+                               |
+                               v
+                  +---------------------------+
+                  |      Final RMS Norm       |
+                  +---------------------------+
+                               |
+                               v
+                  +---------------------------+
+                  |       Linear Head         |
+                  |     (Vocabulary)          |
+                  +---------------------------+
+                               |
+                               v
+                      [ Output Probabilities ]
 ```
-**Components:**
-- `LLaMA 2 Decoder`: Based on the Chinchilla-optimal dense transformer structure, heavily utilizing RMSNorm and SwiGLU.
-- `Grouped Query Attention (GQA)`: Used in the 70B model to optimize memory bandwidth by grouping query heads.
-- `RoPE`: Rotary Position Embeddings allow the model to scale its 4096 context window (which was later extended via interpolation techniques by the open-source community).
-- `Llama-2-Chat Pipeline`: Meta didn't just release the base model. They released a dialogue-tuned version utilizing multiple stages of RLHF, specifically introducing two separate reward models (one for Helpfulness, one for Safety) to ensure the model wouldn't generate toxic outputs.
 
 ## 5. Layer-by-Layer Breakdown
-LLaMA 2 uses a highly modernized, hyper-efficient Transformer decoder architecture.
-1. **Tokenizer**: Uses Byte-Pair Encoding (BPE) based on SentencePiece with a vocabulary of 32,000 tokens.
-2. **Context Window**: 4096 tokens, double the capacity of LLaMA 1. The community rapidly discovered that by mathematically scaling the frequencies of the RoPE embeddings (Positional Interpolation), the context could be extended to 100K+ tokens without retraining from scratch.
-3. **RMSNorm**: Standard LayerNorm is completely replaced by RMSNorm (pre-norm architecture) to speed up training.
-4. **RoPE**: Absolute positional embeddings are replaced by Rotary Position Embeddings applied during the attention mechanism.
-5. **Grouped Query Attention (GQA)**: In the 70B model, standard Multi-Head Attention (MHA) is replaced with GQA. This balances the high performance of MHA with the low memory footprint of Multi-Query Attention (MQA).
-6. **SwiGLU FFN**: The feed-forward network uses the SwiGLU activation function instead of ReLU, operating on a hidden dimension scaled by $\frac{2}{3} \times 4d$.
+LLaMA 2 is a decoder-only Transformer building on the architecture of LLaMA 1. The input sequence passes through a **Token Embedding** layer. 
 
-:::warning
-Only the 70B parameter version of LLaMA 2 natively uses Grouped Query Attention (GQA). The 7B and 13B versions use standard Multi-Head Attention (MHA).
-:::
+Inside the **Transformer Blocks**, LLaMA 2 applies pre-normalization using **RMSNorm** (Root Mean Square Normalization), which improves training stability and speed compared to standard LayerNorm. The core sequence processing is handled by the Attention mechanism. For the 34B and 70B models, LLaMA 2 uses **Grouped-Query Attention (GQA)** instead of standard Multi-Head Attention (MHA). This involves multiple query heads sharing a single Key and Value projection head, significantly reducing the memory footprint of the KV cache during generation. Positional information is injected into the attention calculation using **Rotary Position Embeddings (RoPE)**, which encode absolute position with a rotation matrix, allowing for better extrapolation to longer sequences.
+
+Following a residual connection and another RMSNorm, the data enters the Feed-Forward Network. LLaMA 2 uses a **SwiGLU** activation function (Swish-Gated Linear Unit). This replaces the standard ReLU/GELU with a gating mechanism that requires three weight matrices instead of two, but offers enhanced representational capacity. After iterating through all blocks, a **Final RMSNorm** and a **Linear Projection Head** yield the token probabilities.
 
 ## 6. Tensor Flow Walkthrough
-Let's trace the shapes for Grouped Query Attention in LLaMA-2 70B.
-- `B`: Batch size
-- `T`: Sequence length
-- `D`: Hidden dimension
-- `H`: Number of Query heads (64)
-- `G`: Number of Key/Value heads (8)
-- `D_h`: Head dimension (128)
+Let's trace the tensor shapes for the LLaMA 2 70B model's Grouped-Query Attention. Assume Batch `B=2`, Sequence `T=4096`, `D_model=8192`, Query Heads `H_q=64`, KV Heads `H_kv=8`. Group size is `H_q / H_kv = 8`.
 
-1. **Input Tensors (`x`)**: Shape `(B, T, D)`.
-2. **Projections**:
-   - `Q_proj`: Shape `(B, T, H * D_h)`.
-   - `K_proj, V_proj`: Shape `(B, T, G * D_h)`. Notice there are 8 times fewer KV heads than Q heads!
-3. **Reshape & Grouping**:
-   - `Q`: `(B, T, H, D_h)`.
-   - `K, V`: `(B, T, G, D_h)`.
-   - To perform dot product, `K` and `V` must be repeated. Each KV head serves a "group" of 8 Query heads ($64 / 8 = 8$).
-   - `K_repeated = repeat_interleave(K, repeats=8, dim=2)`: Shape becomes `(B, T, H, D_h)`.
-4. **Attention**:
-   - `Scores = Q @ K_repeated.transpose() / sqrt(D_h)`.
-   - Apply RoPE, mask, and Softmax.
-   - `Context = Softmax(Scores) @ V_repeated`.
-5. **Output**: Shape `(B, T, D)`.
+1.  **Input to Block:** `X`
+    *   Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
+2.  **RMSNorm 1:** `X_norm = RMSNorm(X)`
+    *   Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
+3.  **GQA Projections:**
+    *   Head dimension `D_head = D_model / H_q = 8192 / 64 = 128`.
+    *   `Q` projection: `(B, T, H_q, D_head)` -> `(2, 4096, 64, 128)`
+    *   `K, V` projections: `(B, T, H_kv, D_head)` -> `(2, 4096, 8, 128)`
+4.  **RoPE Application:**
+    *   Rotary embeddings are applied element-wise to `Q` and `K` based on sequence position. Shapes remain identical.
+5.  **Attention Calculation:**
+    *   `K` and `V` are conceptually expanded/repeated 8 times to match the 64 `Q` heads.
+    *   `Attention = Softmax(Q * K_expanded^T) * V_expanded`
+    *   Output before projection: `(B, T, H_q, D_head)` -> `(2, 4096, 64, 128)`
+6.  **GQA Output Projection:**
+    *   Flatten heads and project back to `D_model`.
+    *   `Attn_out` Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
+7.  **Residual Add 1:** `X = X + Attn_out`
+    *   Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
+8.  **SwiGLU FFN:**
+    *   `D_ff` is scaled up (e.g., ~28672).
+    *   `FFN_out = (Swish(X * W1) * (X * W3)) * W2`
+    *   Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
+9.  **Residual Add 2:** `X_out = X + FFN_out`
+    *   Shape: `(B, T, D_model)` -> `(2, 4096, 8192)`
 
 ## 7. Mathematical Foundations
-The 70B version of LLaMA-2 solves the memory bottleneck of autoregressive generation by formally implementing Grouped Query Attention (GQA), which sits mathematically between Multi-Head Attention (MHA) and Multi-Query Attention (MQA).
+A critical architectural decision in LLaMA 2 (70B) is the transition to **Grouped-Query Attention (GQA)** to alleviate the memory bandwidth bottleneck of the KV cache during inference.
 
-**The Memory Bottleneck:**
-During generation, the model must cache past Keys and Values (KV-cache).
-For sequence length $L$, batch size $B$, layers $N$, head dimension $d$, and KV heads $g$, the cache size is $2 \times B \times L \times N \times g \times d$.
-In standard MHA, $g = h$ (where $h$ is the number of Query heads). For a 70B model, this memory requirement grows so fast that it severely limits the maximum batch size $B$.
-In MQA (used by PaLM), $g = 1$. All Query heads share exactly one KV head. This shrinks memory drastically, but significantly degrades the model's ability to attend to distinct, nuanced features, harming performance.
+Let's compare the three attention paradigms, assuming $h$ total query heads and $d$ head dimension.
 
-**Grouped Query Attention (GQA):**
-GQA introduces a mathematical compromise. Let the number of Query heads be $h$, and the number of KV heads be $g$, such that:
-$$ 1 < g < h $$
-And $h$ is perfectly divisible by $g$. This creates $\frac{h}{g}$ groups.
-Inside each group, $\frac{h}{g}$ Query heads attend to exactly 1 shared Key head and 1 shared Value head.
-For LLaMA-2 70B, $h = 64$ and $g = 8$. This creates 8 groups of 8.
-Mathematically, the attention output for a specific query head $q_i$ belonging to group $j$ (where $j = \lfloor \frac{i}{8} \rfloor$) is:
-$$ \text{head}_i = \text{Attention}(q_i, k_j, v_j) $$
-This reduces the size of the KV-cache by a factor of 8 (compared to MHA), dramatically accelerating inference speed and batch capacity, while empirically retaining 99% of the predictive accuracy of full MHA, decisively proving that $g=1$ (MQA) is too restrictive, and $g=h$ (MHA) is too wasteful.
+**1. Multi-Head Attention (MHA):** (Used in LLaMA 1 and LLaMA 2 7B/13B)
+Every query head has its own unique Key and Value head.
+*   Number of KV heads = $h$.
+*   KV Cache size per token $\propto 2 \times h \times d$.
+*   *Pros:* Highest theoretical quality. *Cons:* Massive memory footprint during generation.
+
+**2. Multi-Query Attention (MQA):** (Used in Falcon)
+All $h$ query heads share exactly **one** Key head and **one** Value head.
+*   Number of KV heads = $1$.
+*   KV Cache size per token $\propto 2 \times 1 \times d$.
+*   *Pros:* Extremely fast generation, tiny memory footprint. *Cons:* Can lead to capacity degradation and training instability.
+
+**3. Grouped-Query Attention (GQA):** (Used in LLaMA 2 70B)
+Query heads are divided into $g$ groups. Each group shares one Key and Value head. Let $1 < g < h$.
+*   Number of KV heads = $g$ (e.g., 8 KV heads for 64 Query heads).
+*   KV Cache size per token $\propto 2 \times g \times d$.
+
+Mathematically, for a query head $i$ in group $j$ (where $j = \lfloor i \times \frac{g}{h} \rfloor$):
+$$ Q_i = X \cdot W_Q^{(i)} $$
+$$ K_j = X \cdot W_K^{(j)} $$
+$$ V_j = X \cdot W_V^{(j)} $$
+$$ \text{head}_i = \text{Attention}(Q_i, K_j, V_j) = \text{softmax}\left(\frac{Q_i K_j^T}{\sqrt{d}}\right)V_j $$
+
+GQA acts as an interpolation between MHA and MQA. It provides nearly the same inference speedups and memory reductions as MQA while preserving the higher generation quality of MHA.
 
 ## 8. Training Procedure
-1. **Pre-Training Data**: Meta trained LLaMA 2 on a massive 2 Trillion token dataset, an increase of 40% over LLaMA 1. They aggressively filtered out data from sites known to contain high volumes of personal information (PII).
-2. **Compute**: The model was trained using Meta's massive GPU clusters (Nvidia A100s). Because they utilized highly optimized architectures (RMSNorm, RoPE, SwiGLU), the training was remarkably stable, requiring no mid-run restarts due to gradient spikes.
-3. **Llama-2-Chat (Alignment)**: This was the most intensive phase. Meta utilized a multi-stage RLHF pipeline.
-   - **SFT**: They collected tens of thousands of high-quality supervised dialog demonstrations.
-   - **Rejection Sampling**: The SFT model generated multiple answers, a reward model scored them, and only the best were kept to further fine-tune the model, iteratively raising the baseline.
-   - **PPO with Dual Reward Models**: Meta uniquely trained *two* separate reward models: one optimized for Helpfulness, and one optimized for Safety. During the PPO phase, the model was mathematically penalized if it failed *either* metric, creating a highly safe, production-ready chatbot.
+LLaMA 2's training was an evolution in scale and safety methodology.
+
+**Pre-training:** The base models were trained on 2 Trillion tokens from a new mix of publicly available online data (excluding Meta's user data). They utilized an optimized causal language modeling objective. Training the 70B model required massive compute (approximately 1.7M GPU hours on A100s). They doubled the context length to 4096 tokens compared to LLaMA 1, allowing the model to process larger documents natively.
+
+**Supervised Fine-Tuning (SFT):** For Llama-2-Chat, they started with SFT using high-quality, human-annotated dialogue data. They discovered that fewer, extremely high-quality examples (tens of thousands) yielded better results than millions of low-quality examples.
+
+**Reinforcement Learning from Human Feedback (RLHF):** This is where Meta invested heavily. They collected over 1 million binary comparisons from humans (ranking which of two model responses was better). They trained two separate reward models: one optimized for **Helpfulness** and one optimized for **Safety**. The chat models were then optimized using Proximal Policy Optimization (PPO) against these reward models. Furthermore, they introduced **Ghost Attention (GAtt)** to help the model remember system instructions (e.g., "Act as a pirate") over multi-turn conversations, preventing character break after a few interactions.
 
 ## 9. PyTorch Implementation
-Here is a conceptual implementation of Grouped Query Attention (GQA), demonstrating the mathematically optimal grouping of Query heads to shared Key/Value heads.
+Below is a minimal PyTorch implementation demonstrating RoPE (Rotary Position Embedding) and Grouped-Query Attention (GQA), which are key features of LLaMA 2.
 
 ```python
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
-class GroupedQueryAttention(nn.Module):
-    def __init__(self, d_model: int, n_query_heads: int, n_kv_heads: int):
+def apply_rotary_emb(x, freqs_cos, freqs_sin):
+    # x: (B, Seq_Len, Heads, D_head)
+    # Split features in half for rotation
+    x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
+    # Rotate
+    rotated = torch.cat((-x2, x1), dim=-1)
+    return (x * freqs_cos) + (rotated * freqs_sin)
+
+class LLaMA2_GQA(nn.Module):
+    def __init__(self, d_model, n_heads, n_kv_heads):
         super().__init__()
-        assert n_query_heads % n_kv_heads == 0, "Query heads must be divisible by KV heads"
-        self.d_model = d_model
-        self.n_query_heads = n_query_heads
+        self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads
-        self.head_dim = d_model // n_query_heads
-        self.n_rep = n_query_heads // n_kv_heads # How many Q heads share one KV head
-        
+        self.n_rep = n_heads // n_kv_heads
+        self.head_dim = d_model // n_heads
+
+        self.wq = nn.Linear(d_model, n_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=False)
+        self.wo = nn.Linear(n_heads * self.head_dim, d_model, bias=False)
+
+    def forward(self, x, freqs_cos, freqs_sin):
+        B, Seq_Len, _ = x.shape
+
         # Projections
-        self.q_proj = nn.Linear(d_model, n_query_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(d_model, d_model, bias=False)
+        xq = self.wq(x).view(B, Seq_Len, self.n_heads, self.head_dim)
+        xk = self.wk(x).view(B, Seq_Len, self.n_kv_heads, self.head_dim)
+        xv = self.wv(x).view(B, Seq_Len, self.n_kv_heads, self.head_dim)
 
-    def repeat_kv(self, x: torch.Tensor, n_rep: int) -> torch.Tensor:
-        """
-        Repeats the KV heads to match the number of Query heads.
-        x shape: (Batch, Seq, KV_heads, Head_dim)
-        Returns: (Batch, Seq, Query_heads, Head_dim)
-        """
-        B, T, n_kv_heads, head_dim = x.shape
-        if n_rep == 1:
-            return x
-        # Expand and reshape to duplicate the heads
-        x = x[:, :, :, None, :].expand(B, T, n_kv_heads, n_rep, head_dim)
-        return x.reshape(B, T, n_kv_heads * n_rep, head_dim)
+        # Apply RoPE
+        xq = apply_rotary_emb(xq, freqs_cos, freqs_sin)
+        xk = apply_rotary_emb(xk, freqs_cos, freqs_sin)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, D = x.shape
-        
-        # 1. Project Q, K, V
-        q = self.q_proj(x).view(B, T, self.n_query_heads, self.head_dim)
-        k = self.k_proj(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(B, T, self.n_kv_heads, self.head_dim)
-        
-        # 2. Repeat K and V to match Q's heads
-        # k, v become (B, T, n_query_heads, head_dim)
-        k = self.repeat_kv(k, self.n_rep)
-        v = self.repeat_kv(v, self.n_rep)
-        
-        # 3. Transpose for attention dot-product: (B, H, T, Head_dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-        
-        # 4. Standard Attention
-        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        
-        mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-        scores.masked_fill_(mask, float('-inf'))
-        
-        attn = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, T, D)
-        
-        return self.o_proj(context)
+        # Transpose for attention: (B, Heads, Seq_Len, Head_Dim)
+        xq = xq.transpose(1, 2)
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
 
-# --- Shape Verification Test ---
+        # Expand KV heads to match Q heads (GQA logic)
+        # (B, n_kv_heads, Seq_Len, Head_Dim) -> (B, n_kv_heads * n_rep, Seq_Len, Head_Dim)
+        xk = torch.repeat_interleave(xk, self.n_rep, dim=1)
+        xv = torch.repeat_interleave(xv, self.n_rep, dim=1)
+
+        # Attention
+        scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+        scores = F.softmax(scores, dim=-1)
+        output = torch.matmul(scores, xv)
+
+        # Recombine heads: (B, Seq_Len, D_model)
+        output = output.transpose(1, 2).contiguous().view(B, Seq_Len, -1)
+        return self.wo(output)
+
+# --- Test ---
 if __name__ == "__main__":
-    BATCH_SIZE, SEQ_LEN = 2, 64
-    D_MODEL = 1024
-    N_QUERY_HEADS = 16
-    N_KV_HEADS = 4  # GQA: 4 groups, meaning 4 Q heads share 1 KV head
+    B, Seq_Len, D_model = 2, 64, 128
+    n_heads, n_kv_heads = 8, 2 # GQA: 4 query heads share 1 KV head
+    head_dim = D_model // n_heads
     
-    gqa = GroupedQueryAttention(D_MODEL, N_QUERY_HEADS, N_KV_HEADS)
-    x = torch.randn(BATCH_SIZE, SEQ_LEN, D_MODEL)
-    
-    output = gqa(x)
-    
-    expected_shape = (BATCH_SIZE, SEQ_LEN, D_MODEL)
-    assert output.shape == expected_shape, f"Shape mismatch! Expected {expected_shape}, got {output.shape}"
-    print(f"Test passed! GQA successfully matched {N_QUERY_HEADS} Q heads to {N_KV_HEADS} KV heads.")
+    # Dummy RoPE frequencies
+    freqs_cos = torch.ones(1, Seq_Len, 1, head_dim)
+    freqs_sin = torch.zeros(1, Seq_Len, 1, head_dim)
+
+    attn = LLaMA2_GQA(D_model, n_heads, n_kv_heads)
+    x = torch.randn(B, Seq_Len, D_model)
+    out = attn(x, freqs_cos, freqs_sin)
+
+    print(f"Input shape: {x.shape}")
+    print(f"Output shape: {out.shape}")
+    assert out.shape == (B, Seq_Len, D_model), "Shape mismatch!"
+    print("Test passed: GQA with RoPE evaluated successfully.")
 ```
 
 ## 10. Strengths
-LLaMA 2's primary strength was its disruptive license and open weights. By allowing commercial use, Meta created an entire ecosystem of thousands of specialized fine-tunes (for coding, medicine, roleplay) hosted on HuggingFace, driving innovation at a grassroots level. Technically, its adoption of GQA in the 70B model was a masterclass in optimization; it allowed a massive, highly capable model to be served in production with drastically lower VRAM requirements for the KV-cache than standard MHA models. Furthermore, the Llama-2-Chat alignment pipeline set a new standard for open-source safety. Meta's use of dual reward models (Helpful vs Safety) and iterative rejection sampling created a model that was remarkably resistant to jailbreaks and toxic generation, matching or exceeding closed-source models on safety benchmarks right out of the box.
+LLaMA 2's primary strength is its status as a highly capable, commercially permissible open-weights model, which solidified it as the foundation for the open-source AI ecosystem. The 70B parameter model rivals closed-source models of its era (like GPT-3.5) while being entirely runnable on local hardware or private clouds. The architectural choice to use Grouped-Query Attention (GQA) in the 70B model drastically improved inference scalability, making it viable to serve to massive user bases without prohibitive memory costs. Furthermore, the Llama-2-Chat models demonstrated that robust safety and alignment (RLHF) could be achieved in open models, mitigating risks of toxicity and harmful outputs out-of-the-box.
 
 ## 11. Weaknesses
-Because of its extreme focus on safety, Llama-2-Chat was heavily criticized for being overly cautious. It suffered from extreme "refusal bias," frequently lecturing users or refusing to answer completely harmless questions (like asking how to kill a computer process) because the safety reward model was over-optimized. Secondly, while its performance was excellent, it struggled significantly with coding and complex mathematical reasoning compared to GPT-4, primarily because its 2 Trillion token training set, while large, did not contain the highly curated, synthetic mathematical data that later models relied upon. Finally, its context window of 4096 tokens, while double its predecessor, was quickly rendered obsolete by competitors like Anthropic and OpenAI offering 128K context windows, forcing the open-source community to hack the model via RoPE scaling to keep it competitive for document analysis.
+Despite its success, LLaMA 2 has limitations. Its 4096 token context window, while double that of LLaMA 1, quickly became a bottleneck as competitors released models with 32K, 128K, or even 1M token contexts, limiting LLaMA 2's ability to process large documents or long conversations natively. While safe, the Llama-2-Chat models were sometimes criticized for being overly cautious or "lobotomized," frequently refusing benign prompts due to aggressive safety tuning. Finally, as an older model (July 2023), its reasoning, coding, and mathematical capabilities lag significantly behind newer open models like LLaMA 3 or specialized coding models, highlighting the rapid pace of base model evolution.
 
 ## 12. Research Evolution
-LLaMA 2 was the tipping point that proved open-source AI could permanently rival proprietary APIs. It cemented Meta as the champion of the open-weight movement, forcing competitors like Google (who later released Gemma) and Mistral to release open weights just to stay relevant in the developer ecosystem. The architectural choices in LLaMA 2—RMSNorm, RoPE, SwiGLU, and GQA—became the absolute, undisputed standard for almost every major open-source transformer built in the subsequent years. However, its struggles with coding and reasoning, combined with its restrictive 4K context window, clearly identified the next frontiers of research. Meta immediately began working on its successor, heavily focusing on a much larger vocabulary, massive context windows, and a drastic increase in training data (scaling from 2T to 15T tokens) to create LLaMA 3.
+LLaMA 2 represents the transition of open-source AI from academic novelties to enterprise-ready infrastructure. LLaMA 1 proved that smaller, over-trained models were highly capable but was legally restricted. LLaMA 2 solved the legal barrier and introduced rigorous safety (RLHF) to the open-source paradigm, proving that alignment wasn't exclusively the domain of OpenAI or Anthropic. It also popularized architectural efficiency techniques like SwiGLU, RMSNorm, and GQA, establishing them as industry standards. The community's response to LLaMA 2's 4K context window directly fueled research into positional interpolation techniques (like YaRN or RoPE scaling) to artificially extend the context window post-training. Ultimately, LLaMA 2 set the baseline for what a foundation model should be, directly paving the way for the massive improvements in capability and scale seen in LLaMA 3.
 
 ## 13. Interview Questions
-**Q1: What was the primary difference in licensing between LLaMA 1 and LLaMA 2, and why did it matter?**
-**A1:** LLaMA 1 was strictly for non-commercial research use. LLaMA 2 was released under a highly permissive license allowing widespread commercial use (with a few restrictions for massive companies). This mattered because it allowed startups and enterprises to actually build and sell products based on LLaMA 2 without fear of litigation, birthing the commercial open-source AI ecosystem.
 
-**Q2: What is Grouped Query Attention (GQA), and how does it differ from MHA and MQA?**
-**A2:** In Multi-Head Attention (MHA), every Query head has 1 Key and 1 Value head. In Multi-Query Attention (MQA), ALL Query heads share exactly 1 Key and 1 Value head. GQA is the middle ground: Query heads are divided into groups (e.g., 8 groups). Inside a group, the Query heads share 1 Key and 1 Value head. It saves massive memory compared to MHA, but retains better intelligence than MQA.
+**Q1: Why does LLaMA 2 use Grouped-Query Attention (GQA) specifically for its 70B model, but standard Multi-Head Attention (MHA) for the 7B and 13B models?**
+**A1:** The primary bottleneck in autoregressive LLM inference is memory bandwidth, specifically loading the KV cache for every generated token. In a 70B model, an MHA KV cache becomes massively large, severely limiting batch sizes and throughput on GPUs. GQA reduces the number of KV heads (e.g., 8 KV heads instead of 64), drastically shrinking the KV cache size and memory bandwidth requirements. For the 7B and 13B models, the KV cache is naturally much smaller, so the memory bandwidth bottleneck is less severe, allowing them to use standard MHA for maximum theoretical generation quality.
 
-**Q3: How did Meta handle the tension between making Llama-2-Chat helpful but also safe during RLHF?**
-**A3:** They trained two entirely separate Reward Models during Phase 2 of RLHF: one optimized solely to judge "Helpfulness," and one optimized solely to judge "Safety." During the PPO phase, they balanced the rewards from both models. This ensured the model learned to be helpful without accidentally learning to be helpful at generating dangerous content.
+**Q2: How do Rotary Position Embeddings (RoPE) differ from absolute positional embeddings used in the original Transformer?**
+**A2:** Absolute positional embeddings (like the sine/cosine waves in Vaswani et al.) add a positional vector directly to the token embedding at the input. RoPE is a relative positional encoding scheme applied *inside* the attention mechanism. It encodes absolute position with a rotation matrix and applies it to the Query and Key vectors. Because of the properties of rotation matrices, the dot product of a Query and Key in the attention mechanism becomes dependent only on their *relative* distance. This helps the model generalize better to sequence lengths longer than what it was trained on.
 
-**Q4: What is Rejection Sampling, as used in the Llama-2-Chat pipeline?**
-**A4:** Instead of just using supervised fine-tuning, the model is prompted and generates multiple different responses. The Reward Model scores them, and only the highest-scoring response is kept. These high-scoring responses are then added back into the training dataset for the next round of fine-tuning, iteratively forcing the model to learn from its own best behavior.
+**Q3: What is "Ghost Attention" (GAtt) introduced in the Llama-2-Chat models?**
+**A3:** A common problem in dialogue models is that they forget the initial system prompt (e.g., "Always answer in French") after a few turns of conversation. Ghost Attention is an RLHF technique to solve this. During fine-tuning, the system prompt is synthetically appended to all user messages in a multi-turn dialogue dataset, but the loss is only calculated on the later turns. This forces the model to heavily associate its responses across the entire conversation history with the initial system prompt, ensuring consistent persona adherence.
 
-**Q5: Why did the community have to use "Positional Interpolation" on LLaMA 2?**
-**A5:** LLaMA 2 was trained with a context window of 4096 tokens. Users wanted to process entire books (100K+ tokens). Because LLaMA uses RoPE (Rotary Position Embeddings), researchers mathematically proved you could artificially scale the rotation frequencies down, tricking the model into fitting 100K tokens into the 4K positional space, effectively unlocking massive context windows without retraining.
+**Q4: Why does LLaMA 2 use RMSNorm instead of standard LayerNorm?**
+**A4:** Standard LayerNorm computes both the mean and the variance of the activations to center and scale them, respectively. Researchers found that the mean-centering step is computationally expensive and provides negligible benefits to training stability or model performance. RMSNorm (Root Mean Square Normalization) simplifies this by skipping the mean calculation and only scaling by the root mean square. This makes the normalization step strictly faster, saving significant compute over a massive 2-trillion token pre-training run.
+
+**Q5: Describe the dual reward model approach used in LLaMA 2's RLHF pipeline.**
+**A5:** Meta found that helpfulness and safety are often inversely correlated (e.g., the most "safe" response is to refuse everything, which is unhelpful). To balance this, they trained two separate reward models: one optimized to score responses based on how helpful they were to the user's prompt, and another optimized to score based on safety guidelines. During the PPO reinforcement learning phase, the final reward signal was a combination of these two models, allowing fine-grained control over the trade-off between being an obedient assistant and refusing harmful requests.
 
 ## 14. Related Papers
-- **Llama 2: Open Foundation and Fine-Tuned Chat Models (Touvron et al., 2023)**: The massive 70-page foundational paper detailing the safety and training pipeline.
-- **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (Ainslie et al., 2023)**: The Google paper that formalized GQA to solve the memory/performance tradeoff.
-- **RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)**: The foundational mathematics of RoPE, which powers LLaMA's context window.
+*   **Llama 2: Open Foundation and Fine-Tuned Chat Models (Touvron et al., 2023):** The comprehensive technical report detailing the model, pre-training, and RLHF.
+*   **LLaMA: Open and Efficient Foundation Language Models (Touvron et al., 2023):** The predecessor paper.
+*   **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (Ainslie et al., 2023):** The paper defining Grouped-Query Attention.
+*   **RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021):** The foundational paper for RoPE.
 
 ## 15. Further Reading
-- [Meta AI Blog: Llama 2 is here](https://ai.meta.com/llama/) - The official release announcement and partnership details with Microsoft.
-- [HuggingFace Blog: GQA Explained](https://huggingface.co/blog/gqa) - A highly visual explanation of the memory savings achieved by Grouped Query Attention.
-- [Extending Context Window of Large Language Models via Positional Interpolation (Chen et al., 2023)](https://arxiv.org/abs/2306.15595) - How the community hacked LLaMA's RoPE embeddings to support 100K token contexts.
+*   Analyses on the impact of open-weights models on the AI startup ecosystem.
+*   Deep dives into the math and implementation of RoPE scaling to extend context windows.
+*   Discussions on the philosophical and practical challenges of AI safety alignment and the "alignment tax."
+*   Hardware optimization guides for serving LLaMA 70B efficiently using quantization (e.g., GGUF/llama.cpp).

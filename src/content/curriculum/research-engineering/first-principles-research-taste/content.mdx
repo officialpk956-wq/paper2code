@@ -1,0 +1,153 @@
+# First-Principles Research Taste
+
+## 1. Overview
+
+Research taste is disciplined problem selection: important enough to matter, specific enough to test, neglected for a reason you understand, and tractable with available evidence and resources. In plain language, this topic is about making one difficult part of research engineering explicit enough to reason about, test, and improve. The curriculum marks it as **Expert** because competent work requires more than recognizing terminology: you must connect mechanisms to measurements and know when the method's assumptions stop holding.
+
+Why does this deserve approximately Ongoing of study? Knowing which problems are important, tractable, and neglected is the rarest and highest-value skill in AI. It cannot be taught directly — only cultivated. That motivation becomes practical when a system behaves unexpectedly. Instead of treating the outcome as magic, you can identify the relevant inputs, state, algorithm, resource limit, and evaluation signal. Throughout this lesson, use reproducibility, evidence, iteration speed, and honest communication as the organizing lens. The aim is not memorizing one fashionable implementation. It is developing a durable mental model that transfers to new models, datasets, tools, and production constraints.
+
+:::note
+You have understood this lesson when you can explain the mechanism without jargon, sketch its data flow, name a useful metric, and design a small experiment that could prove your explanation wrong.
+:::
+
+## 2. Prerequisites in Context
+
+The listed prerequisites are **All prior domains**, **2+ years of research practice**. They are not ceremonial checkboxes. **All prior domains** supplies the vocabulary needed to follow the main transformation in this lesson. The remaining prerequisites contribute complementary views: algorithmic prerequisites explain what computation is performed; statistical prerequisites explain what evidence supports a conclusion; and systems prerequisites explain what changes when the method meets finite memory, latency, data, or human-attention budgets.
+
+Do a short readiness check before proceeding. For each prerequisite, write one sentence defining it and one sentence connecting it to First-Principles Research Taste. If a prerequisite is a tool, reproduce a minimal workflow. If it is mathematical, explain the objects and assumptions in an equation. If it is architectural, trace one request or batch through the components. You do not need perfect mastery, but you should be able to notice when a later argument depends on it. That habit prevents a common advanced-learning failure: copying a technique while missing the condition that made it work.
+
+## 3. Core Concept
+
+Research engineering converts a question into trustworthy evidence through a traceable chain of assumptions, code, data, experiments, analysis, and communication. For **First-Principles Research Taste**, the specific focus is this: Research taste is disciplined problem selection: important enough to matter, specific enough to test, neglected for a reason you understand, and tractable with available evidence and resources.
+
+A useful way to reason about the topic is to separate four layers. First, define the **contract**: inputs, outputs, permitted behavior, and success criteria. Second, identify the **mechanism** that transforms input into output. Third, expose the **feedback signal** used to learn, select, or operate the mechanism. Fourth, map the **constraints**—data quality, compute, latency, memory, safety, and human review. Most confusing explanations mix these layers. Most brittle implementations optimize one layer while silently violating another.
+
+The practical question is therefore not “Does this technique work?” but “Under which workload, assumptions, metric, and failure budget does it improve the complete system?” Keep a baseline nearby. A complex approach earns its place only when a controlled comparison shows a meaningful benefit and its operational cost remains acceptable.
+
+## 4. Theoretical Foundations
+
+The architecture can be summarized as:
+
+```text
+question -> hypothesis -> implementation -> experiment -> analysis -> claim
+                 ^              artifacts + logs              |
+                 +-------------- revision ---------------------+
+```
+
+Two simple equations keep the discussion honest. For an evaluated outcome, define improvement over a baseline as
+
+$$
+\Delta = M_{\text{new}} - M_{\text{base}},
+$$
+
+where $M$ is a clearly specified quality metric measured on the same examples and protocol. Report uncertainty, not just $\Delta$. For a service or experimental pipeline, Little's Law provides a capacity check:
+
+$$
+C \approx \lambda W,
+$$
+
+where $\lambda$ is arrival rate, $W$ is average time in the system, and $C$ is average concurrent work. The formula is simple, but it catches impossible designs: if work arrives faster than available capacity can complete it, queues grow and tail latency eventually dominates.
+
+These equations do not replace topic-specific analysis. They create guardrails. Research taste is disciplined problem selection: important enough to matter, specific enough to test, neglected for a reason you understand, and tractable with available evidence and resources. A complete theory states what is held fixed, which random variables or workloads are sampled, and what observation would falsify the proposed mechanism.
+
+## 5. Worked Example
+
+Imagine a team considering First-Principles Research Taste for a service that processes 100 representative cases per hour. Begin with a deliberately boring baseline and record quality, median latency, 95th-percentile latency, resource use, and failure categories. Next, change only the mechanism central to this topic. Keep the dataset, split, prompt or configuration, hardware, and evaluator fixed. Suppose quality moves from 0.72 to 0.79, while average service time moves from 0.40 seconds to 0.55 seconds. The quality delta is $0.07$, and estimated concurrent work rises from $100 \times 0.40 / 3600$ to $100 \times 0.55 / 3600$.
+
+The arithmetic is not the conclusion. Inspect which examples improved and which regressed. Determine whether the gain came from the intended mechanism or from leakage, extra information, a changed evaluator, or retry behavior. Then repeat across seeds, slices, or traffic windows. This example models the essential discipline: pair a causal story with controlled evidence and operational accounting.
+
+## 6. Code / Implementation
+
+The following small implementation is intentionally transparent. It exposes inputs and outputs, includes an assertion, and can be extended into a topic-specific experiment. Run it before adding frameworks or distributed infrastructure.
+
+```python
+from dataclasses import dataclass, asdict
+from hashlib import sha256
+import json
+
+@dataclass(frozen=True)
+class Experiment:
+    question: str
+    code_revision: str
+    data_version: str
+    seed: int
+    learning_rate: float
+
+    @property
+    def run_id(self):
+        payload = json.dumps(asdict(self), sort_keys=True).encode()
+        return sha256(payload).hexdigest()[:12]
+
+def record_result(experiment, metrics):
+    record = {"run_id": experiment.run_id, **asdict(experiment), "metrics": metrics}
+    print(json.dumps(record, indent=2, sort_keys=True))
+    return record
+
+run = Experiment(
+    question="Does the proposed change improve validation loss?",
+    code_revision="abc1234",
+    data_version="dataset-v3",
+    seed=7,
+    learning_rate=3e-4,
+)
+record = record_result(run, {"validation_loss": 1.82})
+assert record["run_id"] == run.run_id
+```
+
+Treat this as a scaffold, not a production implementation. Add structured logs around every boundary, validate shapes and schemas, fix random seeds where appropriate, and persist the configuration beside results. Then make one topic-specific modification suggested by the core concept and predict the result before running it. Prediction turns coding into an experiment: a mismatch between prediction and observation reveals a gap in the mental model.
+
+## 7. Real-World Applications
+
+First-Principles Research Taste matters wherever decisions must remain dependable beyond a clean benchmark. In a small prototype, the mechanism can be inspected manually. At production or research scale, it must survive noisy inputs, distribution shift, partial failures, changing dependencies, limited budgets, and users who do not behave like curated test data. Keep the question, configuration, code revision, data version, environment, metrics, and conclusion together. If one link is missing, a result becomes difficult to reproduce or interpret.
+
+Three application patterns recur. **Assistive systems** use the method while keeping a person responsible for consequential decisions. **Automated pipelines** use it behind explicit validation, rollback, and alerting boundaries. **Research platforms** use it to make experiments faster without weakening evidence quality. The correct architecture differs across these contexts because the cost of a false result, slow response, or unavailable component differs. Before adoption, write a one-page decision record with the workload, baseline, expected gain, safety boundary, owner, and rollback trigger. That document is often more valuable than another layer of abstraction.
+
+## 8. Common Pitfalls & Misconceptions
+
+The first misconception is that a sophisticated name guarantees a sophisticated result. It does not; implementation details, data, and evaluation usually dominate. Second, teams often compare a tuned new method against an untuned baseline, which measures effort rather than merit. Third, an average metric can hide catastrophic behavior on a rare but important slice. Fourth, offline success may not survive queueing, stale state, user feedback loops, or domain shift. Fifth, observability added after launch rarely exposes the intermediate state needed to diagnose failures.
+
+For First-Principles Research Taste, pay special attention to this mechanism: Research taste is disciplined problem selection: important enough to matter, specific enough to test, neglected for a reason you understand, and tractable with available evidence and resources. Turn that statement into a test. Create an adversarial or boundary case, state the expected behavior, and capture enough intermediate output to explain the result. Use a fallback when confidence or evidence is insufficient. Complexity should be introduced one reversible step at a time; otherwise, when quality changes, you will not know which component caused it.
+
+:::warning
+Never infer safety, fairness, or factual reliability from a single aggregate benchmark. Test the actual deployment slices and define escalation paths before automating consequential decisions.
+:::
+
+## 9. How This Connects
+
+The learning path into this lesson comes through **All prior domains**, **2+ years of research practice**. In particular, All prior domains gives you the first handle on the mechanism; the other prerequisites make the analysis more realistic by adding implementation, measurement, or operational constraints. Revisit them whenever an explanation relies on a term you can name but cannot derive, implement, or test.
+
+From here, the curriculum identifies **Independent research agenda**, **novel contributions to the field**. **Independent research agenda** is the most immediate next step because it uses the mechanism developed here as a building block rather than an isolated trick. Build one small artifact before moving on: a notebook, trace viewer, benchmark, design document, or reproducible run. Then read the next topic while asking which assumptions carry forward and which change. If the unlock list is empty, treat this lesson as a synthesis point: connect it backward to prerequisites and outward to a real project where its constraints become concrete.
+
+## 10. Check Your Understanding
+
+**Q1: Explain First-Principles Research Taste in one paragraph without using its name.**
+
+A strong answer describes the input, transformation, output, and reason for using it. It should also mention the main constraint or failure mode. If the answer is only a list of products or acronyms, revisit the core concept.
+
+**Q2: Why is All prior domains a real prerequisite?**
+
+It provides a concept or mechanism used directly by this lesson. The important connection is not chronological; it is explanatory. You should be able to point to a step in the diagram or implementation that becomes unclear without it.
+
+**Q3: What comparison would demonstrate that the method helps?**
+
+Use the simplest credible baseline, hold the evaluation protocol fixed, and measure both target quality and operational cost. Report uncertainty and inspect slices. The test should distinguish the proposed mechanism from extra data, compute, retries, or evaluator leakage.
+
+**Q4: What is the most dangerous deployment mistake?**
+
+Deploying without observable intermediate state and a rollback boundary is especially dangerous. When a failure appears, the team cannot localize it or safely reduce impact. Aggregate success metrics do not substitute for traceability.
+
+**Q5: When should you avoid this technique?**
+
+Avoid it when the baseline already meets requirements, assumptions do not match the workload, required evidence is unavailable, or added complexity costs more than the measured gain. A justified non-adoption decision demonstrates understanding, not lack of ambition.
+
+## 11. Further Reading
+
+Start with primary sources and official documentation rather than summaries. Search for the original paper or specification that introduced **First-Principles Research Taste**, then compare it with at least one careful reproduction or systems report. Read claims alongside experimental tables, ablations, and limitations. For implementation details, prefer maintained project documentation and source code at a pinned release.
+
+A productive reading sequence is: (1) one survey for vocabulary, (2) the primary paper for mechanism and assumptions, (3) a reproduction for hidden implementation details, (4) a production or safety report for operational failures, and (5) the next curriculum topic, Independent research agenda. Keep a claim-evidence notebook. For every important statement, record the source, experimental setting, and whether the evidence is causal, correlational, theoretical, or anecdotal. That practice makes further reading cumulative rather than a collection of disconnected facts.
+
+## Related Platform Content
+
+- [Research Engineering curriculum overview](/learn/research-engineering)
+- [Research architecture library](/architectures/transformer)
+- [Browse all system designs](/system-design)

@@ -1,0 +1,240 @@
+# Decision Transformer
+
+## 1. Overview
+Decision Transformer (DT), introduced in 2021 by Lili Chen, Kevin Lu, Aravind Rajeswaran, Kimin Lee, Aditya Grover, Michael Laskin, Pieter Abbeel, Aravind Srinivas, and Igor Mordatch (UC Berkeley, Facebook AI Research, Google Brain), fundamentally altered the paradigm of reinforcement learning by **framing RL as a conditional sequence modeling problem**. Instead of using traditional RL primitives (Bellman equations, Q-learning updates, TD error backpropagation, or policy gradients), Decision Transformer treats trajectory histories as token sequences and trains a standard **Autoregressive GPT Transformer Architecture**. By tokenizing trajectories into repeating triples of **(Return-to-Go, State, Action)** $(\hat{R}_t, s_t, a_t)$, Decision Transformer autoregressively predicts the optimal action $a_t$ conditioned on a desired target return $\hat{R}_1$. At test time, simply specifying a high desired return-to-go (e.g., $\hat{R}_1 = 1000$) prompts the Transformer to generate actions that achieve that target return.
+
+:::tip
+Decision Transformer's paradigm: "Ditch Bellman updates and Q-learning. Frame RL as autoregressive sequence prediction using GPT over triples of $(\text{Return-to-Go } \hat{R}_t, \text{State } s_t, \text{Action } a_t)$."
+:::
+
+## 2. Historical Context
+For decades, RL was built on the Markov Decision Process (MDP) formalism, using Bellman updates ($Q(s,a) = r + \gamma \max Q(s',a')$) or policy gradients ($\nabla_\theta \log \pi \cdot A$). However, in **Offline RL** (learning from fixed pre-collected datasets without environment interaction), traditional Temporal Difference (TD) algorithms suffer from extreme out-of-distribution value overestimation and training instability.
+
+Chen et al. realized that standard Transformer architectures (GPT-2, GPT-3) excel at modeling complex sequence distributions. By casting RL as sequence prediction over offline dataset rollouts, Decision Transformer eliminated Bellman backups entirely, avoiding TD instability while matching or exceeding state-of-the-art offline RL baselines (D权, CQL).
+
+## 3. Problem It Solves & Why Framing RL as Sequence Prediction is Powerful
+
+**Why Framing RL as Sequence Prediction is Powerful:**
+Traditional RL algorithms suffer from severe optimization vulnerabilities: Bellman updates suffer from moving target instability, off-policy overestimation, and credit assignment bottlenecks over long horizons. Framing RL as sequence modeling replaces unstable Bellman backups with **stable, standard supervised cross-entropy / MSE loss**. 
+
+Key powers of sequence prediction RL:
+1. **Elimination of Bellman Backups & Value Overestimation:** Avoids non-stationary target bootstrapping completely. Training is standard supervised learning over trajectory sequences.
+2. **Long-Range Credit Assignment via Self-Attention:** Self-attention layers connect rewards received hundreds of steps in the future directly to past actions, bypassing exponential decay issues in TD learning.
+3. **Conditioned Behavior Steering:** At test time, conditioning on different Return-to-Go tokens $\hat{R}_1$ allows a single model to act as a weak, average, or expert agent on demand without retraining.
+4. **Seamless Multimodal Integration:** Inherits scaling laws and architecture from NLP/Vision Transformers, enabling unified multimodal agents (text, visual screens, physical controls).
+
+## 4. Architecture Diagram Data
+Below is the sequence modeling architecture of Decision Transformer showing the tokenization of (Return-to-Go, State, Action) triples and causal self-attention.
+
+```text
+       TRAJECTORY TOKENIZATION & CAUSAL TRANSFORMER PIPELINE
+
+       [ Desired Return-to-Go R_1 ]   [ Initial State s_1 ]   [ Past Action a_0 ]
+                    |                           |                       |
+                    v                           v                       v
+       +========================+  +========================+  +========================+
+       | Linear Embedding R_1   |  | Linear / Conv Embed s_1|  | Linear Embedding a_0   |
+       +========================+  +========================+  +========================+
+                    |                           |                       |
+                    +---------------------------+-----------------------+
+                                                |
+                                                v
+                     [ Add Positional Embeddings for Timestep t=1 ]
+                                                |
+                                                v
+       +========================================================================+
+       | GPT CAUSAL TRANSFORMER BACKBONE (Causal Masking)                       |
+       | Token Sequence: [ R_1, s_1, a_1,  R_2, s_2, a_2, ... R_t, s_t ]        |
+       +========================================================================+
+                                                |
+                                                v
+       [ Predict Current Action a_t from Token Node s_t via Linear Head ]
+                                                |
+                                                v
+                    [ Environment Executes Action a_t -> Recvs r_t ]
+                                                |
+                                                v
+                     [ Update Return-to-Go: R_{t+1} = R_t - r_t ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Modal Token Embeddings:**
+- **Return-to-Go ($\hat{R}_t = \sum_{t'=t}^T r_{t'}$):** Linear layer mapping scalar return $\hat{R}_t \in \mathbb{R}^1 \to \mathbb{R}^D$.
+- **State ($s_t$):** Linear projection $\mathbb{R}^{\text{state\_dim}} \to \mathbb{R}^D$ (or ConvNet for image states).
+- **Action ($a_t$):** Linear projection $\mathbb{R}^{\text{action\_dim}} \to \mathbb{R}^D$.
+
+**2. Timestep Positional Embedding:**
+- A learned embedding matrix mapping integer timestep $t \in [1, T_{\max}] \to \mathbb{R}^D$. Added to all three token embeddings at step $t$.
+
+**3. GPT Causal Transformer Backbone:**
+- $L$ stacked Transformer blocks (Multi-Head Self-Attention + MLP + LayerNorm) with causal masking ensuring token at position $i$ only attends to tokens at positions $j \le i$.
+- Context length $K$: Stores $K$ past timesteps (total token context length $3K$).
+
+**4. Action Prediction Head:**
+- Linear projection from state token output representation $s_t \to \mathbb{R}^{\text{action\_dim}}$ (MSE loss for continuous actions; Cross-Entropy for discrete actions).
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Decision Transformer for batch size $B=32$, context window $K=20$ timesteps, state dim 17, continuous action dim 6, embedding dim $D=128$.
+
+1. **Input Sequence Preparation:**
+   - Returns-to-Go $\hat{R}_{1:K}$: `(32, 20, 1)`, States $s_{1:K}$: `(32, 20, 17)`, Actions $a_{1:K}$: `(32, 20, 6)`
+2. **Linear Projections to Embedding Dimension $D=128$:**
+   - Embed $\hat{R} \to$ `(32, 20, 128)`, Embed $s \to$ `(32, 20, 128)`, Embed $a \to$ `(32, 20, 128)`
+3. **Interleave Tokens & Add Positional Embeddings:**
+   - Interleave into sequence of length $3K = 60$: `(32, 60, 128)`
+   - Tokens ordered as: $[\hat{R}_1, s_1, a_1, \hat{R}_2, s_2, a_2, \dots, \hat{R}_K, s_K, a_K]$.
+4. **Causal GPT Transformer Pass:**
+   - Causal Multi-Head Attention over 60 tokens $\to$ `(32, 60, 128)`
+5. **Action Prediction Extraction:**
+   - Extract representations corresponding to state token positions $s_t \to$ `(32, 20, 128)`
+   - Action Head Linear $\to$ Predicted Actions $\hat{a}_{1:K}$: `(32, 20, 6)`.
+
+## 7. Mathematical Foundations
+
+### 1. Autoregressive Sequence Formulation
+Let a trajectory rollout be represented as:
+
+$$\tau = \left( \hat{R}_1, s_1, a_1, \hat{R}_2, s_2, a_2, \dots, \hat{R}_T, s_T, a_T \right)$$
+
+where $\hat{R}_t = \sum_{t'=t}^T r_{t'}$ is the empirical Return-to-Go.
+
+Decision Transformer models the conditional probability of action $a_t$ given past trajectory tokens:
+
+$$P(a_t \mid \hat{R}_{1:t}, s_{1:t}, a_{1:t-1})$$
+
+### 2. Decision Transformer Training Loss Objective
+For continuous actions, the network parameters $\theta$ are trained using Mean Squared Error (MSE) over offline dataset transitions:
+
+$$\mathcal{L}_{\text{DT}}(\theta) = \frac{1}{B \cdot K} \sum_{i=1}^B \sum_{t=1}^K \left\| a_t^{(i)} - \hat{a}_t^{(i)}(\theta) \right\|_2^2$$
+
+where $\hat{a}_t(\theta) = \text{DT}\left(\hat{R}_{1:t}, s_{1:t}, a_{1:t-1} \;\middle|\; \theta\right)$.
+
+## 8. Training Procedure
+- **Offline Dataset Processing:** Given dataset of trajectories, compute Return-to-Go $\hat{R}_t = \sum_{t'=t}^T r_{t'}$ for every step.
+- **Batch Sampling:** Sample random trajectory sub-sequences of length $K=20$.
+- **Supervised Training:** Pass $(\hat{R}, s, a)$ tokens through Decision Transformer with causal mask. Minimize MSE loss $\|a_t - \hat{a}_t\|^2$ using AdamW ($\text{lr} = 10^{-4}$).
+- **Test-Time Evaluation:** Initialize $\hat{R}_1 = R_{\text{target}}$ (e.g., maximum possible domain return). At step $t$, feed history into DT, sample action $a_t = \text{DT}(s_t)$, execute in environment to receive reward $r_t$, and decrement return target: $\hat{R}_{t+1} = \hat{R}_t - r_t$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Decision Transformer Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+
+class DecisionTransformer(nn.Module):
+    def __init__(self, state_dim=17, action_dim=6, hidden_dim=128, max_ep_len=1000, n_heads=4, n_layers=3):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        
+        # 1. Modality Embeddings
+        self.embed_return = nn.Linear(1, hidden_dim)
+        self.embed_state = nn.Linear(state_dim, hidden_dim)
+        self.embed_action = nn.Linear(action_dim, hidden_dim)
+        
+        # Timestep Positional Embedding
+        self.embed_timestep = nn.Embedding(max_ep_len, hidden_dim)
+        
+        # Layer Normalization
+        self.embed_ln = nn.LayerNorm(hidden_dim)
+        
+        # 2. GPT Transformer Decoder Backbone
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=n_heads, dim_feedforward=4*hidden_dim, activation='gelu', batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        
+        # 3. Action Prediction Head
+        self.predict_action = nn.Sequential(
+            nn.Linear(hidden_dim, action_dim),
+            nn.Tanh()
+        )
+
+    def forward(self, returns, states, actions, timesteps):
+        """
+        returns:   (B, K, 1)
+        states:    (B, K, state_dim)
+        actions:   (B, K, action_dim)
+        timesteps: (B, K)
+        """
+        B, K, _ = states.shape
+        
+        # 1. Compute Embeddings
+        r_emb = self.embed_return(returns)   # (B, K, D)
+        s_emb = self.embed_state(states)     # (B, K, D)
+        a_emb = self.embed_action(actions)   # (B, K, D)
+        t_emb = self.embed_timestep(timesteps) # (B, K, D)
+        
+        # Add Timestep Embedding
+        r_emb = r_emb + t_emb
+        s_emb = s_emb + t_emb
+        a_emb = a_emb + t_emb
+        
+        # 2. Interleave Tokens: [R_1, s_1, a_1, R_2, s_2, a_2, ...]
+        stacked_tokens = torch.stack([r_emb, s_emb, a_emb], dim=2).view(B, 3 * K, self.hidden_dim)
+        stacked_tokens = self.embed_ln(stacked_tokens)
+        
+        # 3. Create Causal Mask
+        mask = torch.triu(torch.full((3 * K, 3 * K), float('-inf')), diagonal=1).to(states.device)
+        
+        # 4. Pass through Causal Transformer
+        h = self.transformer(stacked_tokens, mask=mask) # (B, 3K, D)
+        
+        # 5. Extract State Representation Tokens (Indices 1, 4, 7, ... 3K-2)
+        s_rep = h[:, 1::3, :] # (B, K, D)
+        
+        # Predict Actions
+        action_preds = self.predict_action(s_rep) # (B, K, action_dim)
+        return action_preds
+
+if __name__ == "__main__":
+    B, K, state_dim, action_dim = 32, 20, 17, 6
+    dt = DecisionTransformer(state_dim=state_dim, action_dim=action_dim, hidden_dim=128)
+    
+    returns = torch.randn(B, K, 1)
+    states = torch.randn(B, K, state_dim)
+    actions = torch.randn(B, K, action_dim)
+    timesteps = torch.randint(0, 500, (B, K))
+    
+    action_preds = dt(returns, states, actions, timesteps)
+    
+    print(f"Predicted Actions Shape: {action_preds.shape}")
+    assert action_preds.shape == (B, K, action_dim)
+    print("Decision Transformer verification successful!")
+```
+
+## 10. Strengths
+- **No Bellman Backups:** Supervised optimization eliminates TD value overestimation and training divergence.
+- **Conditioned Target Return Steering:** Generates expert or average trajectories dynamically based on desired return prompt $\hat{R}_1$.
+- **Transformer Scaling & Pretraining:** Seamlessly leverages standard GPT Transformer scaling laws and pretrained backbones.
+
+## 11. Weaknesses
+- **Cannot Synthesize Sub-Optimal Trajectories:** If the offline dataset contains zero high-return trajectories, DT struggles to stitch sub-optimal trajectories together (unlike Q-learning).
+
+## 12. Research Evolution
+Decision Transformer pioneered sequence-modeling RL, leading directly to **Trajectory Transformer**, **Multi-Game Decision Transformer**, and **Gato**.
+
+## 13. Interview Questions
+
+**Q1: Why is framing RL as sequence modeling powerful compared to traditional RL?**
+**A1:** Sequence modeling replaces unstable Bellman backups and Q-learning updates with stable, standard supervised MSE/cross-entropy loss. It leverages self-attention for long-range credit assignment, avoids out-of-distribution value overestimation, and enables conditioned behavior steering via Return-to-Go prompts.
+
+**Q2: What three tokens comprise a trajectory step in Decision Transformer?**
+**A2:** (1) Return-to-Go $\hat{R}_t = \sum_{t'=t}^T r_{t'}$, (2) State $s_t$, and (3) Action $a_t$.
+
+**Q3: How does Decision Transformer steer agent behavior at test time?**
+**A3:** At step $t=1$, the user feeds a high target Return-to-Go token $\hat{R}_1 = R_{\text{target}}$ into the model. The causal self-attention layers condition action generation on achieving that target return. As rewards $r_t$ are collected, $\hat{R}_{t+1} = \hat{R}_t - r_t$ is updated dynamically.
+
+**Q4: Compare Decision Transformer with Trajectory Transformer.**
+**A4:** Decision Transformer embeds states and actions as vector tokens and predicts continuous action vectors. Trajectory Transformer discretizes states, actions, and rewards into individual scalar tokens, modeling complete joint probability distributions using beam search.
+
+**Q5: What is a major limitation of Decision Transformer in offline RL datasets?**
+**A5:** DT relies on conditional trajectory imitation. If the offline dataset contains no expert trajectories achieving return $R_{\text{target}}$, DT cannot easily "stitch" fragments of different sub-optimal trajectories together to discover a new optimal policy, whereas Q-learning can via dynamic programming.
+
+## 14. Related Papers
+- **Decision Transformer Paper:** *Decision Transformer: Reinforcement Learning via Sequence Modeling* (Chen et al., NeurIPS 2021)
+- **Trajectory Transformer Paper:** *Offline Reinforcement Learning as One Big Sequence Modeling Problem* (Janner et al., ICML 2021)
+
+## 15. Further Reading
+- Hugging Face Official Decision Transformer Tutorial

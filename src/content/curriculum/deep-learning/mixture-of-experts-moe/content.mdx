@@ -1,0 +1,115 @@
+# Mixture of Experts (MoE)
+
+## 1. Overview
+
+Mixture of Experts is an architectural trick that lets a model have an enormous number of parameters — hundreds of billions — while only using a small fraction of them for any single input. Instead of every input passing through the entire feed-forward network of every layer, an MoE layer contains many separate "expert" sub-networks and a lightweight router that decides which few experts should process each token. The result is a model with the *capacity* (total parameter count, and correspondingly the amount of "knowledge" it can store) of a huge dense model, but the *inference cost* (actual FLOPs per token, and correspondingly the latency and hardware needed to run it) of a much smaller one. This is exactly the trick behind Mixtral, GPT-4 (widely believed), and Gemini Ultra.
+
+## 2. Prerequisites in Context
+
+**Transformer** architecture fluency is required because MoE is almost always applied by replacing the dense feed-forward network sub-layer inside a standard transformer block with a mixture-of-experts version — you need to know what that feed-forward sub-layer normally does before understanding what's being replaced and why. **Load Balancing** is a genuinely distinct prerequisite here because MoE's practical success hinges entirely on solving a specific, non-obvious optimization problem: without careful load-balancing mechanisms, the router collapses to using only a handful of experts, wasting most of the model's capacity — this is not a minor implementation detail, it's the central engineering challenge of making MoE work at all. **Distributed Training** matters because experts are typically sharded across different accelerators (expert parallelism), and understanding how gradients and activations move across a distributed training cluster is necessary to understand the real systems cost of routing tokens to physically distant experts.
+
+## 3. Core Concept
+
+An MoE layer replaces a single dense feed-forward network with $E$ separate expert networks (each usually the same architecture as the original FFN, but with independent weights) and a small **router** network that, for each input token, computes a probability distribution over the $E$ experts and selects the top-$k$ (commonly $k=1$ or $k=2$) to actually process that token. The layer's output is a weighted combination of only those selected experts' outputs — the rest of the experts do zero work for that particular token. Crucially, *which* experts are selected varies token by token, so across a full batch, all experts get used roughly equally (assuming load balancing works), but any single token only activates a small fraction of the total expert capacity. This is what decouples total parameter count from per-token compute cost: doubling the number of experts doubles the model's total parameters and its capacity to store distinct, specialized knowledge, but (with top-$k$ routing held fixed) doesn't change the compute cost of processing any single token at all.
+
+## 4. Theoretical Foundations
+
+The router computes $g(x) = \text{softmax}(W_g x)$, a probability over the $E$ experts for input token $x$, and (for top-$k$ routing) selects the $k$ experts with highest probability, using $g_i(x)$ as a weight for combining their outputs: $y = \sum_{i \in \text{top-}k} g_i(x) \cdot E_i(x)$. Without intervention, this router tends to collapse: a small random advantage for one expert early in training causes it to receive slightly more gradient signal, making it slightly better, causing the router to favor it even more — a rich-get-richer dynamic that, left unchecked, causes most experts to go completely unused. The standard fix is an **auxiliary load-balancing loss** that explicitly penalizes uneven expert utilization across a batch, typically of the form $\mathcal{L}_{\text{aux}} = \alpha \cdot E \cdot \sum_i f_i \cdot P_i$, where $f_i$ is the fraction of tokens routed to expert $i$ and $P_i$ is the router's average probability assigned to expert $i$ — this term is minimized when tokens are spread evenly across experts, directly counteracting the collapse dynamic. For an 8-expert, top-2 layer, active parameters in the feed-forward sub-layers are exactly $2/8 = 25\%$ of the total feed-forward parameter count — the rest exists but is skipped for any given token.
+
+## 5. Worked Example
+
+Consider a Mixtral-style layer with 8 experts and top-2 routing. Total feed-forward parameters across all 8 experts might be, say, 8 billion. For any single token, only 2 experts (roughly 2 billion parameters' worth) actually run — the other 6 experts (6 billion parameters) sit idle for that token, contributing nothing to its forward pass and receiving no gradient from it. Over a full training batch of many different tokens, however, the load-balancing loss ensures that across the whole batch, all 8 experts get roughly equal total usage — expert 3 might specialize in code-like tokens, expert 6 in numerical reasoning, and so on, each accumulating useful gradient signal from the subset of tokens it happens to receive. This is precisely how the model ends up with 8 billion feed-forward parameters' worth of specialized capacity while only ever running 2 billion parameters' worth of compute per token.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MoELayer(nn.Module):
+    """Minimal top-k Mixture-of-Experts feed-forward layer with a load-balancing loss."""
+    def __init__(self, d_model, d_ff, num_experts=8, top_k=2):
+        super().__init__()
+        self.num_experts, self.top_k = num_experts, top_k
+        self.router = nn.Linear(d_model, num_experts)
+        self.experts = nn.ModuleList([
+            nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
+            for _ in range(num_experts)
+        ])
+
+    def forward(self, x):
+        # x: (batch, d_model)
+        logits = self.router(x)                          # (batch, num_experts)
+        probs = F.softmax(logits, dim=-1)
+        topk_probs, topk_idx = probs.topk(self.top_k, dim=-1)
+        topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)  # renormalize
+
+        output = torch.zeros_like(x)
+        for slot in range(self.top_k):
+            expert_ids = topk_idx[:, slot]
+            weight = topk_probs[:, slot].unsqueeze(-1)
+            for e in range(self.num_experts):
+                mask = (expert_ids == e)
+                if mask.any():
+                    output[mask] += weight[mask] * self.experts[e](x[mask])
+
+        # Load-balancing auxiliary loss: penalizes uneven expert usage
+        frac_routed = torch.zeros(self.num_experts, device=x.device)
+        for slot in range(self.top_k):
+            frac_routed += F.one_hot(topk_idx[:, slot], self.num_experts).float().mean(0)
+        avg_router_prob = probs.mean(0)
+        aux_loss = self.num_experts * (frac_routed * avg_router_prob).sum()
+        return output, aux_loss
+
+if __name__ == "__main__":
+    layer = MoELayer(d_model=16, d_ff=32, num_experts=8, top_k=2)
+    x = torch.randn(64, 16)
+    out, aux_loss = layer(x)
+    assert out.shape == x.shape
+    print(f"Output shape: {out.shape}, load-balancing aux loss: {aux_loss.item():.4f}")
+    print(f"Active params per token: {2}/{8} experts = 25% of total FFN capacity used per token")
+```
+
+## 7. Real-World Applications
+
+Mixtral 8x7B (see `mixtral-8x7b` on this platform) is the clearest open documentation of this technique: 46.7 billion total parameters, but only 12.9 billion active per token, giving it inference cost comparable to a much smaller dense model while matching or beating larger dense models on many benchmarks. DeepSeek-V2 (see `deepseek-v2`) pushes this further with an even more aggressive sparsity ratio (236B total, 21B active) combined with Multi-head Latent Attention. GPT-4 and Gemini Ultra are both widely believed (though not officially confirmed by their creators) to use MoE architectures internally, based on inference cost and latency characteristics that are hard to explain with a purely dense architecture at their reported quality level.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is thinking MoE makes a model "free" in the sense of unlimited scaling — total parameter count still costs real memory (all experts must be loaded, even if only a fraction run per token) and real training compute (every expert still needs enough gradient signal to train well, requiring careful load balancing and often more total training tokens than a dense model of the active-parameter size would need). Another pitfall is underestimating the systems complexity of expert parallelism: in a distributed training setup, tokens must be physically routed to whichever accelerator hosts their selected expert, and this all-to-all communication pattern is a genuine engineering bottleneck that dense models simply don't have to deal with — MoE trades some training/inference systems complexity for capacity efficiency, it doesn't eliminate cost, it relocates it.
+
+## 9. How This Connects
+
+This topic requires **Transformer** fluency, an understanding of **Load Balancing** as a real optimization problem (not an afterthought), and **Distributed Training** knowledge for the systems side of expert parallelism. It directly unlocks **Routing Algorithms** (research into better, more efficient, or more specialized ways to assign tokens to experts beyond simple top-$k$ softmax routing), **Expert Specialization** (the study of what different experts actually learn to specialize in, and whether that specialization is interpretable or exploitable), and **Sparse Training** (the broader research area of training models where only a subset of parameters are active for any given input, of which MoE is the most production-proven instance).
+
+## 10. Check Your Understanding
+
+**Q1: What does an MoE layer decouple that a standard dense feed-forward layer cannot?**
+It decouples total model capacity (parameter count, and the amount of distinct knowledge the model can store) from per-token inference compute cost. A dense layer's compute cost scales directly with its parameter count; an MoE layer's compute cost only scales with the number of *active* experts per token (top-$k$), regardless of how many total experts (and total parameters) exist.
+
+**Q2: Why does an MoE router tend to collapse to using only a few experts without intervention?**
+Because of a rich-get-richer feedback loop: an expert that receives slightly more tokens early in training gets slightly more gradient signal, becomes slightly better at its assigned tokens, which makes the router favor it even more strongly in subsequent steps — a self-reinforcing cycle that, left unchecked, drives most experts toward near-zero utilization while a small subset absorbs almost all tokens.
+
+**Q3: What does the load-balancing auxiliary loss actually penalize?**
+It penalizes the combination of how many tokens are routed to each expert and how much probability the router assigns to each expert, in a way that's minimized exactly when both quantities are spread evenly across all experts — directly counteracting the rich-get-richer collapse dynamic by making uneven utilization costly to the overall training objective.
+
+**Q4: If Mixtral 8x7B has 46.7B total parameters but only 12.9B active per token, why isn't its inference cost simply that of a 12.9B dense model?**
+Because all 46.7B parameters must still be loaded into memory (even though only a fraction compute per token, which expert is selected varies token-by-token, so over a batch, most or all experts get used), and the routing/all-to-all communication overhead in a distributed serving setup adds real systems cost beyond a simple parameter-count comparison. Inference cost is closer to, but not identical to, a 12.9B dense model — memory footprint remains closer to the full 46.7B.
+
+**Q5: Why does MoE require more total training tokens than a dense model with the same active-parameter count, in practice?**
+Because each expert only sees the subset of tokens routed to it, not the full training corpus — for each individual expert to receive enough gradient signal to train well, the overall training run typically needs proportionally more total tokens processed than a dense model of the same active size would need, since a dense model's every parameter sees every token.
+
+## 11. Further Reading
+
+- Shazeer et al., "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer" (2017) — the foundational modern MoE paper
+- Fedus, Zoph & Shazeer, "Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity" (2021)
+- Jiang et al., "Mixtral of Experts" (2024)
+- DeepSeek-AI, "DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model" (2024)
+- See also: `mixtral-8x7b` and `deepseek-v2` on this platform for full architectural deep-dives
+
+## Related Platform Content
+
+- [DEEP LEARNING curriculum overview](/learn/deep-learning)
+- [Mixtral 8x7B](/architectures/mixtral-8x7b)
+- [Browse all system designs](/system-design)

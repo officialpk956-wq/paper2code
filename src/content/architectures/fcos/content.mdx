@@ -1,0 +1,232 @@
+# FCOS
+
+## 1. Overview
+FCOS (Fully Convolutional One-Stage Object Detection), introduced in 2019 by Zhi Tian, Chunhua Shen, Hao Chen, and Tong He (University of Adelaide), is a landmark paper that brought **Fully Convolutional, Anchor-Free Detection** to standard feature pyramid networks. Before FCOS, most anchor-free methods relied on keypoint heatmaps (like CornerNet and CenterNet) or relied on heavy anchor box grids. FCOS reformulated object detection by making predictions **per-pixel directly on feature maps**, solving object detection in the exact same manner as semantic segmentation (like FCN). At each feature map cell $(x, y)$ that falls inside a ground-truth bounding box, FCOS directly predicts 4 distance values $(l, t, r, b)$ to the 4 edges of the bounding box, along with class probabilities. To suppress low-quality bounding boxes predicted by cells far from an object's center, FCOS introduced a novel **Centerness** branch that predicts how close a cell is to the center of its object, achieving 44.7% AP on MS COCO.
+
+:::note
+FCOS's breakthrough idea: "Eliminate anchor boxes completely by solving object detection per-pixel on feature maps (like FCN for segmentation), predicting 4 edge distances $(l, t, r, b)$ and a Centerness score at every positive location."
+:::
+
+## 2. Historical Context
+By 2019, object detection had become overly reliant on anchor boxes (Faster R-CNN, SSD, YOLO v2/v3, RetinaNet). Anchors introduced severe drawbacks:
+- Thousands of anchor box hyperparameters (scales, aspect ratios, IoU assignment thresholds).
+- Severe class imbalance (99.9% of anchors are negative background).
+- Heavy GPU memory usage and complex C++/CUDA anchor assigner code.
+
+While keypoint detectors (CornerNet, CenterNet) eliminated anchors, they required special keypoint heatmaps or DLA/Hourglass backbones. The authors of FCOS asked: *Can we make a standard FPN-based detector completely anchor-free using standard per-pixel convolutions, just like Fully Convolutional Networks (FCN) for semantic segmentation?* FCOS proved this was possible, achieving higher accuracy than RetinaNet while being simpler, faster, and completely anchor-free.
+
+## 3. Problem It Solves
+### Why Removing Anchors Simplifies the Object Detection Pipeline
+FCOS eliminates anchor boxes to streamline single-stage object detection:
+1. **Eliminating Anchor Box Hyperparameters:** Removes anchor scale ratios, aspect ratios, and manual AutoAnchor tuning scripts. Coordinates are predicted directly as 4 continuous distances $(l, t, r, b)$ relative to spatial cell centers.
+2. **Eliminating Negative Anchor Domination:** Replaces IoU anchor matching rules with spatial inclusion: any cell $(x, y)$ falling inside a ground-truth box is a positive sample, eliminating extreme negative anchor imbalance.
+3. **Low-Quality Off-Center Bounding Boxes:** Cells near the boundary of an object predict inaccurate box edges. FCOS solves this by introducing **Centerness**—a single-channel branch that down-weights off-center bounding boxes during NMS post-processing.
+
+## 4. Architecture Diagram Data
+Below is the full FCOS architecture featuring the ResNet + FPN backbone and Decoupled Head with Centerness Branch.
+
+```text
+                     [ Input Image: (B, 3, H, W) ]
+                                   |
+                                   v
+             +============================================+
+             | Backbone: ResNet + FPN (P3, P4, P5, P6, P7)|
+             | Strides: {8, 16, 32, 64, 128}              |
+             +============================================+
+                                   |
+         +-------------------------+-------------------------+
+         | (Multi-scale Pyramids)                            | (Multi-scale Pyramids)
+         v                                                   v
+  +==========================+                       +==========================+
+  | CLASSIFICATION HEAD      |                       | REGRESSION HEAD          |
+  | - 4x Conv 3x3 (256, ReLU)|                       | - 4x Conv 3x3 (256, ReLU)|
+  | - Conv 3x3 (C classes)   |                       |                          |
+  | - Parallel Centerness    |                       | - Conv 3x3 (4 channels)  |
+  |   Branch: Conv 3x3 (1 ch)|                       |   Predicts (l, t, r, b)  |
+  +==========================+                       +==========================+
+         |             |                                         |
+         v             v                                         v
+  [ Class Logits ] [ Centerness Logits ]                     [ Box Distances ]
+  (B, C, H_i, W_i) (B, 1, H_i, W_i)                          (B, 4, H_i, W_i)
+         |             |                                         |
+         +-------------+-------------------x---------------------+
+                                           |
+                                           v
+             +===================================================+
+             |  FINAL SCORE FOR NMS POST-PROCESSING              |
+             |  Final Score = sqrt( Classification * Centerness )|
+             +===================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+FCOS consists of an FPN backbone and two parallel task heads attached to all levels $\{P_3, P_4, P_5, P_6, P_7\}$:
+
+**1. ResNet + FPN Backbone:**
+- Generates 5 multi-scale feature maps $\{P_3, P_4, P_5, P_6, P_7\}$ with strides $\{8, 16, 32, 64, 128\}$. All levels have 256 channels.
+
+**2. Decoupled Classification & Centerness Head:**
+- **Classification Branch:** Four $3 \times 3$ convolutions (256 filters, GroupNorm, ReLU) followed by a $3 \times 3$ convolution projecting to $C$ class logits.
+- **Centerness Branch:** A single-channel $3 \times 3$ convolution branching off from the classification head, outputting a scalar centerness score in $(0, 1)$.
+
+**3. Distance Regression Head:**
+- Four $3 \times 3$ convolutions (256 filters, GroupNorm, ReLU) followed by a $3 \times 3$ convolution projecting to 4 output channels representing $(l, t, r, b)$.
+- Applies a scale layer ($\exp(s_i \cdot x)$) to dynamically adjust regression range per pyramid level.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors for input `(B, 3, 800, 1024)` and $C=80$ COCO classes.
+
+1. **Backbone Pyramid Maps:**
+   - $P_3$ ($1/8$ scale): `(B, 256, 100, 128)`
+   - $P_4$ ($1/16$ scale): `(B, 256, 50, 64)`
+   - $P_5$ ($1/32$ scale): `(B, 256, 25, 32)`
+   - $P_6$ ($1/64$ scale): `(B, 256, 13, 16)`
+   - $P_7$ ($1/128$ scale): `(B, 256, 7, 8)`
+
+2. **Head Predictions (e.g., Level $P_3$):**
+   - **Classification:** 4x Conv3x3 $\rightarrow$ Conv3x3(256 $\rightarrow 80$) $\rightarrow$ `(B, 80, 100, 128)`
+   - **Centerness:** Conv3x3(256 $\rightarrow 1$) $\rightarrow$ Sigmoid $\rightarrow$ `(B, 1, 100, 128)`
+   - **Box Distances:** 4x Conv3x3 $\rightarrow$ Conv3x3(256 $\rightarrow 4$) $\rightarrow$ Exp $\rightarrow$ `(B, 4, 100, 128)`
+
+3. **Box Coordinate Decoding:**
+   - At location $(x, y)$ mapped to original image coordinates $(x_s, y_s)$:
+   - $x_1 = x_s - l, \quad y_1 = y_s - t, \quad x_2 = x_s + r, \quad y_2 = y_s + b$.
+
+## 7. Mathematical Foundations
+
+### 1. Per-Pixel Distance Regression Target
+Let a ground-truth box be $B^* = (x_1^*, y_1^*, x_2^*, y_2^*)$ with class label $c^*$.
+A cell location $(x, y)$ on feature map level $P_i$ (stride $s$) corresponds to image location $(x_s, y_s) = \left( (x + 0.5)s, (y + 0.5)s \right)$.
+
+If $(x_s, y_s)$ falls inside box $B^*$, the regression target tuple $\mathbf{t}^* = (l^*, t^*, r^*, b^*)$ is:
+
+$$l^* = x_s - x_1^*, \quad t^* = y_s - y_1^*, \quad r^* = x_2^* - x_s, \quad b^* = y_2^* - y_s$$
+
+### 2. Multi-Scale Target Assignment Across FPN
+To handle overlapping ground-truth boxes, FCOS assigns target box sizes across pyramid levels using explicit distance limits $m_i$:
+- $P_3$: $0 \le \max(l^*, t^*, r^*, b^*) < 64$
+- $P_4$: $64 \le \max(l^*, t^*, r^*, b^*) < 128$
+- $P_5$: $128 \le \max(l^*, t^*, r^*, b^*) < 256$
+- $P_6$: $256 \le \max(l^*, t^*, r^*, b^*) < 512$
+- $P_7$: $512 \le \max(l^*, t^*, r^*, b^*) < \infty$
+
+If a cell matches multiple boxes, the box with the smallest area is assigned.
+
+### 3. Centerness Formulation
+Cells near the boundary of an object produce low-quality bounding boxes. Centerness measures the normalized radial distance from cell $(x_s, y_s)$ to the center of its ground-truth object:
+
+$$\text{Centerness}^* = \sqrt{\frac{\min(l^*, r^*)}{\max(l^*, r^*)} \times \frac{\min(t^*, b^*)}{\max(t^*, b^*)}}$$
+
+Centerness is $1.0$ at the exact center of an object and decays smoothly to $0.0$ at the boundary edges. During NMS post-processing, final confidence score is computed as:
+$$\text{Score}_{\text{final}} = \sqrt{P(\text{Class}) \times \text{Centerness}}$$
+
+Down-weighting off-center boxes suppresses low-quality predictions before NMS.
+
+## 8. Training Procedure
+- **Loss Function:** Combined Focal Loss for classification, IoU/GIoU Loss for regression, and Binary Cross-Entropy Loss for centerness:
+  $$\mathcal{L} = \frac{1}{N_{\text{pos}}} \sum_{x,y} \mathcal{L}_{\text{cls}} + \frac{\lambda}{N_{\text{pos}}} \sum_{x,y} \mathbb{I}_{\text{pos}} \mathcal{L}_{\text{reg}} + \frac{1}{N_{\text{pos}}} \sum_{x,y} \mathbb{I}_{\text{pos}} \mathcal{L}_{\text{center}}$$
+- **Group Normalization:** Uses GroupNorm in head convs for stable training with batch size 2 per GPU.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **FCOS Centerness Target & Module**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def compute_centerness_targets(left, top, right, bottom):
+    """
+    left, top, right, bottom: Tensors of shape (N,)
+    """
+    centerness_lr = torch.min(left, right) / torch.max(left, right)
+    centerness_tb = torch.min(top, bottom) / torch.max(top, bottom)
+    centerness = torch.sqrt(centerness_lr * centerness_tb)
+    return centerness
+
+class FCOSHead(nn.Module):
+    def __init__(self, in_channels=256, num_classes=80):
+        super().__init__()
+        # Classification Branch
+        self.cls_convs = nn.Sequential(*[
+            nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, 3, padding=1, bias=False),
+                nn.GroupNorm(32, in_channels),
+                nn.ReLU(inplace=True)
+            ) for _ in range(4)
+        ])
+        self.cls_logits = nn.Conv2d(in_channels, num_classes, kernel_size=3, padding=1)
+        self.centerness = nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)
+        
+        # Regression Branch
+        self.reg_convs = nn.Sequential(*[
+            nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, 3, padding=1, bias=False),
+                nn.GroupNorm(32, in_channels),
+                nn.ReLU(inplace=True)
+            ) for _ in range(4)
+        ])
+        self.reg_pred = nn.Conv2d(in_channels, 4, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        cls_feat = self.cls_convs(x)
+        cls_logits = self.cls_logits(cls_feat)
+        centerness = torch.sigmoid(self.centerness(cls_feat))
+        
+        reg_feat = self.reg_convs(x)
+        # Apply exp to ensure positive distances
+        bbox_reg = torch.exp(self.reg_pred(reg_feat))
+        
+        return cls_logits, centerness, bbox_reg
+
+if __name__ == "__main__":
+    B, C, H, W = 2, 256, 50, 64
+    head = FCOSHead(in_channels=C, num_classes=80)
+    
+    dummy_feat = torch.randn(B, C, H, W)
+    cls_logits, centerness, bbox_reg = head(dummy_feat)
+    
+    print(f"Classification Logits: {cls_logits.shape}")
+    print(f"Centerness Shape:      {centerness.shape}")
+    print(f"Bounding Box Distances:{bbox_reg.shape}")
+    
+    assert cls_logits.shape == (B, 80, H, W)
+    assert centerness.shape == (B, 1, H, W)
+    assert bbox_reg.shape == (B, 4, H, W)
+    print("FCOS Head verification successful!")
+```
+
+## 10. Strengths
+- **Fully Anchor-Free:** Completely removes anchor box parameters and anchor matching rules.
+- **Centerness Innovation:** Effectively down-weights low-quality off-center predictions, raising mAP without adding heavy computational overhead.
+- **FCN Simplicity:** Solves detection in the exact same manner as FCN semantic segmentation.
+
+## 11. Weaknesses
+- **Ambiguous Cell Overlaps:** If two small objects heavily overlap within the same FPN level, FCOS assigns the cell to the smaller object, occasionally missing the larger object.
+- **NMS Dependency:** Still requires NMS post-processing (unlike DETR or CenterNet).
+
+## 12. Research Evolution
+FCOS demonstrated that standard FPN architectures could be made anchor-free cleanly. It inspired **ATSS (Adaptive Training Sample Selection)**, **TOOD**, and **YOLOv8**.
+
+## 13. Interview Questions
+
+**Q1: How does FCOS parameterize bounding box predictions at each positive cell $(x, y)$?**
+**A1:** FCOS predicts 4 distance values $\mathbf{t} = (l, t, r, b)$ representing distances from the cell's spatial position $(x_s, y_s)$ to the left, top, right, and bottom boundaries of the bounding box: $x_1 = x_s - l, y_1 = y_s - t, x_2 = x_s + r, y_2 = y_s + b$.
+
+**Q2: What is the purpose of the Centerness branch in FCOS?**
+**A2:** Cells located near the outer edges of an object tend to predict inaccurate bounding box distances. Centerness predicts a scalar value $\sqrt{\frac{\min(l, r)}{\max(l, r)} \times \frac{\min(t, b)}{\max(t, b)}}$ that measures how close a cell is to the object's center. Multiplying classification scores by centerness down-weights off-center boxes during NMS.
+
+**Q3: How does FCOS resolve overlapping ground-truth boxes?**
+**A3:** FCOS uses FPN's multi-scale levels $\{P_3 \dots P_7\}$ to assign objects of different sizes to different levels based on max distance $\max(l, t, r, b)$. If two objects still overlap on the same level, the cell is assigned to the object with the smaller area.
+
+**Q4: Compare FCOS with RetinaNet.**
+**A4:** Both use ResNet-FPN backbones and Focal Loss. RetinaNet is anchor-based (evaluating 9 anchors per cell with hand-tuned scales and aspect ratios). FCOS is completely anchor-free, predicting per-pixel distance tuples $(l, t, r, b)$ and a centerness score, achieving higher accuracy with fewer hyperparameters.
+
+**Q5: Why does FCOS use Group Normalization instead of Batch Normalization in its detection head?**
+**A5:** Batch Normalization performance degrades with small per-GPU batch sizes (e.g., 2 images/GPU). Group Normalization computes statistics across channel groups per sample independently of batch size, stabilizing head optimization.
+
+## 14. Related Papers
+- **FCOS Paper:** *FCOS: Fully Convolutional One-Stage Object Detection* (Tian et al., ICCV 2019)
+- **ATSS Paper:** *Bridging the Gap Between Anchor-based and Anchor-free Detection via Adaptive Training Sample Selection* (Zhang et al., CVPR 2020)
+
+## 15. Further Reading
+- Official FCOS Caffe2 / PyTorch Implementation (`open-mmlab/mmdetection`)

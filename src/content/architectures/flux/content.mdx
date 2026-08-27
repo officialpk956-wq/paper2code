@@ -1,0 +1,222 @@
+# Flux
+
+## 1. Overview
+Flux (specifically **Flux.1**), introduced in 2024 by Black Forest Labs (founded by the original creators of Stable Diffusion: Robin Rombach, Andreas Blattmann, Patrick Esser, Dominik Lorenz, and Dustin Podell), redefined open-weights state-of-the-art text-to-image synthesis. Flux combined **Flow Matching with Rectified Flows** and a massive **12-Billion Parameter Multimodal Diffusion Transformer (MMDiT)** architecture. By replacing traditional score-based diffusion with straight-line velocity field trajectories (Flow Matching) and replacing U-Net cross-attention with parallel joint attention streams for text and image tokens, Flux achieved unprecedented text alignment, photorealistic human anatomy (correct hands, fingers, and faces), and exact in-image typography rendering at native 1024px+ resolutions.
+
+:::note
+Flux's innovation: "Combine 12B parameter MMDiT transformer backbones with Rectified Flow Matching, generating straight-line ODE transport paths between noise and images for faster, higher-fidelity synthesis."
+:::
+
+## 2. Historical Context
+In 2024, text-to-image generation faced two main challenges:
+- **Complex Curved Sampling Trajectories:** Traditional SDE/ODE diffusion models (DDPM, SDXL) generate curved trajectories in latent space, requiring 30–50 steps to sample accurately without trajectory discretization errors.
+- **Asymmetric Modality Conditioning:** Injecting text embeddings into image feature maps via 1-way Cross-Attention (where image tokens attend to text, but text tokens remain fixed) limited complex prompt understanding.
+
+The original creators of Stable Diffusion departed Stability AI to form **Black Forest Labs**. They designed Flux.1 around **Rectified Flow Matching**, which reshapes the transport trajectories between noise distribution $p_1$ and data distribution $p_0$ into straight lines. Paired with a 12B parameter dual-stream MMDiT backbone, Flux established new quality benchmarks across open-source (Flux.1 Schnell, Flux.1 Dev) and commercial models (Flux.1 Pro).
+
+## 3. Problem It Solves
+Flux resolves three critical bottlenecks in deep generative modeling:
+1. **Curved Sampling Trajectories & Step Count:** Traditional diffusion trajectories curve in high-dimensional space, causing accumulation of integration errors. Flow Matching flattens trajectories into straight lines $d x_t = v_\theta(x_t, t) dt$, enabling high-quality sampling in as few as 4 steps (Schnell) to 20 steps (Dev).
+2. **Text Rendering & Anatomical Failure:** Solves finger/hand deformities and misspelled text by processing text and image tokens through symmetric joint attention blocks.
+3. **High Resolution Scale:** Handles arbitrary aspect ratios and ultra-high resolutions ($1024 \times 1024$ to $2048 \times 2048$) using rotary positional embeddings (RoPE) adapted for 2D spatial dimensions.
+
+## 4. Architecture Diagram Data
+Below is the 12B Multimodal Diffusion Transformer (MMDiT) architecture of Flux showing the Dual-Stream Joint Attention blocks and Flow Matching vector field prediction.
+
+```text
+       [ Image Latent z_t: (B, 16, 64, 64) ]        [ Text Prompt y: T5-XXL + CLIP-L ]
+                     |                                              |
+                     v                                              v
+       [ Patchify: (B, 1024, 64) ]                   [ Text Tokens: (B, 512, 4096) ]
+                     |                                              |
+         +-----------+----------------------------------------------+-----------+
+         |                                                                      |
+         v                                                                      v
+  +===================================================================================+
+  | DUAL-STREAM MMDiT BLOCKS (12B Parameters, N=19 Layers)                           |
+  |                                                                                   |
+  |  Image Stream (1024 tokens)                       Text Stream (512 tokens)        |
+  |  - Self-Attention Q_img, K_img, V_img             - Self-Attention Q_txt, K_txt   |
+  |                        \                                 /                        |
+  |                         +--- JOINT ATTENTION BLOCK -----+                         |
+  |                         | Q = [Q_img, Q_txt]            |                         |
+  |                         | K = [K_img, K_txt]            |                         |
+  |                         | V = [V_img, V_txt]            |                         |
+  |                         +-------------------------------+                         |
+  |                        /                                 \                        |
+  |  - Parallel Image MLP Block                       - Parallel Text MLP Block       |
+  +===================================================================================+
+                                           |
+                                           v
+  +===================================================================================+
+  | SINGLE-STREAM MMDiT BLOCKS (N=38 Layers)                                          |
+  | - Concatenates Image & Text Tokens into single unified sequence (1536 tokens)     |
+  | - Unified Self-Attention & MLP across all modalities                              |
+  +===================================================================================+
+                                           |
+                                           v
+                     [ Velocity Vector Output v_theta(x_t, t) ]
+                                           |
+                                           v
+                     [ Euler Flow Integration: x_{t-dt} = x_t - v_theta * dt ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Dual-Stream MMDiT Blocks (19 Layers):**
+- Processes image tokens and text tokens in separate parallel streams.
+- **Joint Attention:** Computes queries, keys, and values separately, then concatenates them into unified matrices $Q, K, V$. Attention is evaluated across the combined image + text sequence, allowing text to adapt to image context and vice versa.
+- Image and text features pass through independent MLP feed-forward blocks.
+
+**2. Single-Stream MMDiT Blocks (38 Layers):**
+- Concatenates image tokens and text tokens into a single unified sequence of length $1024 + 512 = 1536$ tokens.
+- Evaluates standard self-attention and shared MLP blocks over the unified multimodal sequence.
+
+**3. 2D Rotary Position Embeddings (2D-RoPE):**
+- Replaces absolute 2D positional embeddings with 2D Rotary Position Embeddings (RoPE) applied to query and key matrices.
+- Enables seamless generalization to arbitrary aspect ratios and resolutions up to $2048 \times 2048$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Flux.1 for batch size $B=2$, image resolution $1024 \times 1024$ ($16\times$ VAE compression to $64 \times 64 \times 16$ latent).
+
+1. **Input Encoding:**
+   - Latent Noise $x_t$: `(2, 16, 64, 64)` $\xrightarrow{\text{Patchify (2x2)}} Z_{\text{img}}$: `(2, 1024, 64)`
+   - Text Tokens $Y_{\text{txt}}$ (T5-XXL 4096-d + CLIP-L 768-d): `(2, 512, 4096)`
+2. **Dual-Stream Stage (19 Layers):**
+   - Image Stream: `(2, 1024, 3072)`, Text Stream: `(2, 512, 3072)`
+   - Joint Attention over 1536 tokens $\rightarrow$ Separate MLPs $\rightarrow$ Output `(2, 1024, 3072)` and `(2, 512, 3072)`
+3. **Single-Stream Stage (38 Layers):**
+   - Concatenate Streams $\rightarrow$ Unified Tokens: `(2, 1536, 3072)`
+   - 38 Unified Transformer Layers $\rightarrow$ `(2, 1536, 3072)`
+4. **Velocity Prediction Output:**
+   - Unpatchify Image Tokens $\rightarrow$ Predicted Velocity Field $v_\theta(x_t, t)$: `(2, 16, 64, 64)`
+
+## 7. Mathematical Foundations
+
+### 1. Rectified Flow Matching Objective
+Instead of predicting Gaussian noise $\epsilon$, Flow Matching models a time-dependent velocity vector field $v_\theta(x_t, t)$ that transports pure noise $x_1 \sim p_1$ to clean data $x_0 \sim p_0$ along straight lines:
+
+$$x_t = (1 - t) x_1 + t x_0 \quad \text{for } t \in [0, 1]$$
+
+The true vector field velocity along this straight trajectory is constant:
+
+$$u_t(x_t \mid x_0, x_1) = \frac{d x_t}{d t} = x_0 - x_1$$
+
+The **Flow Matching Loss** trains the transformer $v_\theta(x_t, t)$ to regress this straight-line velocity field:
+
+$$\mathcal{L}_{\text{FlowMatch}}(\theta) = \mathbb{E}_{t \sim U(0,1), x_0 \sim p_0, x_1 \sim p_1} \left[ \left\| v_\theta((1-t)x_1 + t x_0, \; t) - (x_0 - x_1) \right\|^2 \right]$$
+
+### 2. Sampling via Straight ODE Integration
+Because Rectified Flow produces straight-line trajectories, sampling can be integrated efficiently using simple Euler steps:
+
+$$x_{t + \Delta t} = x_t + \Delta t \cdot v_\theta(x_t, t)$$
+
+This straight-line dynamics reduces sampling discretization errors, enabling photorealistic generation in 4 to 20 steps.
+
+## 8. Training Procedure
+- **Model Sizes:** Flux.1 Pro (Commercial API), Flux.1 Dev (12B non-commercial open-weights), Flux.1 Schnell (4-step distilled open-weights).
+- **Optimizer:** AdamW with 2D-RoPE positional embeddings trained on millions of high-resolution images.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **Flow Matching Vector Field Loss**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FlowMatchingLoss(nn.Module):
+    """ Rectified Flow Matching Loss for Straight-Line ODE Trajectories """
+    def __init__(self, velocity_model):
+        super().__init__()
+        self.model = velocity_model
+
+    def forward(self, x_0, text_cond):
+        """
+        x_0: (B, C, H, W) - Clean image latent
+        text_cond: (B, L, D) - Text embedding
+        """
+        B = x_0.shape[0]
+        device = x_0.device
+        
+        # 1. Sample pure noise x_1 ~ N(0, I)
+        x_1 = torch.randn_like(x_0)
+        
+        # 2. Sample continuous time t ~ Uniform(0, 1)
+        t = torch.rand(B, device=device)
+        t_expand = t[:, None, None, None]
+        
+        # 3. Compute straight-line interpolation x_t = (1 - t)*x_1 + t*x_0
+        x_t = (1.0 - t_expand) * x_1 + t_expand * x_0
+        
+        # 4. Target Velocity Vector Field: u_t = x_0 - x_1
+        target_velocity = x_0 - x_1
+        
+        # 5. Predict Velocity Vector Field using Transformer
+        pred_velocity = self.model(x_t, t, text_cond)
+        
+        # 6. Compute MSE Loss
+        loss = F.mse_loss(pred_velocity, target_velocity)
+        return loss
+
+if __name__ == "__main__":
+    from ddpm import MiniUNet
+    
+    B, C, H, W = 2, 16, 32, 32
+    unet = MiniUNet(in_channels=C, time_dim=128)
+    
+    # Simple Wrapper to mimic vector field predictor v_theta(x_t, t, cond)
+    class DummyVelocityModel(nn.Module):
+        def __init__(self, net):
+            super().__init__()
+            self.net = net
+        def forward(self, x_t, t, cond):
+            return self.net(x_t, (t * 1000).long())
+            
+    vel_model = DummyVelocityModel(unet)
+    flow_loss_fn = FlowMatchingLoss(vel_model)
+    
+    x_0 = torch.randn(B, C, H, W)
+    text_cond = torch.randn(B, 77, 768)
+    
+    loss = flow_loss_fn(x_0, text_cond)
+    
+    print(f"Computed Flow Matching Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("Flow Matching loss verification successful!")
+```
+
+## 10. Strengths
+- **Straight-Line ODE Dynamics:** Flow Matching flattens trajectories, enabling high-quality sampling in 4 steps (Schnell) to 20 steps (Dev).
+- **Flawless In-Image Typography:** Renders correctly spelled text, cursive logos, and multi-word sentences inside images.
+- **Symmetric Multimodal MMDiT:** Joint attention allows bidirectional text-image context interaction.
+
+## 11. Weaknesses
+- **Massive 12B Parameter Scale:** Requires 24GB+ VRAM for native FP16 execution (requires quantization for consumer GPUs).
+
+## 12. Research Evolution
+Flux redefined state-of-the-art text-to-image synthesis in 2024, setting the benchmark for Rectified Flow Transformers.
+
+## 13. Interview Questions
+
+**Q1: What is Flow Matching in Flux, and how does it differ from standard diffusion noise prediction?**
+**A1:** Standard diffusion predicts added Gaussian noise $\epsilon$ along curved stochastic SDE trajectories. Flow Matching predicts a continuous velocity vector field $v_\theta(x_t, t)$ that transports noise $x_1$ to clean data $x_0$ along straight lines $x_t = (1-t)x_1 + t x_0$. The straight trajectories minimize integration error and allow faster sampling.
+
+**Q2: What is the MMDiT architecture in Flux, and what are its two stages?**
+**A2:** MMDiT (Multimodal Diffusion Transformer) processes text and image tokens via symmetric joint attention. Stage 1 (Dual-Stream) processes image and text tokens through parallel streams with joint attention across 19 layers. Stage 2 (Single-Stream) concatenates text and image tokens into a single unified sequence across 38 layers.
+
+**Q3: How does 2D Rotary Position Embedding (2D-RoPE) benefit Flux?**
+**A3:** 2D-RoPE encodes spatial relative distances directly into attention query-key inner products along both horizontal and vertical axes, enabling Flux to generate images at arbitrary aspect ratios and resolutions up to $2048 \times 2048$ without spatial distortion.
+
+**Q4: Write out the straight-line interpolation equation $x_t$ used in Rectified Flow Matching.**
+**A4:** $x_t = (1 - t) x_1 + t x_0$ where $t \in [0, 1]$, $x_1 \sim \mathcal{N}(0, \mathbf{I})$ is noise, and $x_0$ is clean data.
+
+**Q5: Compare Flux.1 Schnell and Flux.1 Dev.**
+**A5:** Flux.1 Schnell is a distilled 4-step real-time model licensed under Apache 2.0. Flux.1 Dev is a 20-step guidance-distilled model designed for non-commercial research with higher visual fidelity.
+
+## 14. Related Papers
+- **Flow Matching Paper:** *Flow Matching for Generative Modeling* (Lipman et al., ICLR 2023)
+- **Rectified Flow Paper:** *Flow Straight and Fast: Learning Rectified Flow with Reflow* (Liu et al., ICLR 2023)
+
+## 15. Further Reading
+- Black Forest Labs Official Website & GitHub Repository

@@ -1,0 +1,213 @@
+# Wide & Deep
+
+## 1. Overview
+Wide & Deep Learning, introduced in 2016 by Heng-Tze Cheng et al. (Google Inc.), solved a fundamental trade-off in production recommendation systems: **Memorization versus Generalization**. Memorization (achieved via linear models over sparse cross-product feature transformations) learns historical rules from past user interactions (e.g., "user installed Netflix AND query is 'movies' $\implies$ recommend Netflix app"). Generalization (achieved via deep neural networks over dense embeddings) explores new, unseen feature combinations (e.g., "user likes sci-fi $\implies$ recommend Star Wars app"). Before Wide & Deep, recommendation systems used either purely linear models (lacking generalization) or purely deep MLPs (tending to over-recommend unrelated items). Heng-Tze Cheng et al. combined both paradigms into a **Jointly Trained Dual-Branch Architecture**: a **Wide Linear Component** (memorization) and a **Deep Feed-Forward Component** (generalization), serving over 1 Billion users on the Google Play Store.
+
+:::note
+Wide & Deep concept: "Combine a Wide Linear Model (memorizing specific feature interactions) and a Deep MLP (generalizing via dense embeddings) jointly trained using a single combined loss function."
+:::
+
+## 2. Historical Context
+In 2016, large-scale industrial recommendation engines (such as Google Play App Store) relied heavily on generalized linear models (logistic regression) over sparse one-hot features. Engineers manually created thousands of cross-product feature transformations (e.g., `user_installed_app="Netflix" AND item_app="Hulu"`). While effective, manual feature engineering required massive human effort and failed to generalize to unobserved feature pairs.
+
+Conversely, deep neural networks (MLPs) mapped sparse features to dense continuous embeddings. However, deep networks suffered when user intent was hyper-specific (e.g., searching for a specific niche app title)—the deep embedding layers smoothed out niche signals, causing irrelevant recommendations.
+
+Cheng et al. proved that combining a Wide linear model and a Deep MLP trained jointly via backpropagation provided the ideal production solution.
+
+## 3. Problem It Solves
+Wide & Deep resolves two opposing failure modes in recommendation algorithms:
+1. **Lack of Generalization in Linear Models:** Linear models cannot recommend items that do not appear together in the training dataset. Deep embeddings generalize to unseen item pairs based on latent similarity.
+2. **Over-Generalization (Smoothing Out Niche Intent) in Deep MLPs:** Deep MLPs struggle to memorize exact, highly specific user-query associations. The Wide branch acts as a fast-path direct memory lookup.
+3. **Manual Feature Engineering Overhead:** Reduces the need to hand-craft millions of higher-order feature combinations by allowing the Deep branch to automatically learn non-linear feature interactions.
+
+## 4. Architecture Diagram Data
+Below is the dual-branch architecture of Wide & Deep showing Sparse Features passing to the Wide Linear model and Dense/Sparse Embeddings passing to the Deep MLP.
+
+```text
+       USER & ITEM FEATURES (Sparse Categoricals & Continuous Dense)
+                                   |
+         +-------------------------+-------------------------+
+         | (Sparse & Cross-Product Features)                 | (Sparse & Continuous Features)
+         v                                                   v
+  +==========================+                       +==========================+
+  | WIDE COMPONENT           |                       | DEEP COMPONENT           |
+  | - Generalized Linear     |                       | - Categorical Embeddings |
+  |   Model                  |                       | - Continuous Densities   |
+  | - Cross-Product Trans-   |                       | - Concatenation Layer    |
+  |   formation Features     |                       | - 3-Layer Dense MLP      |
+  |   y_wide = W^T * x + b   |                       |   y_deep = MLP(Concat)   |
+  +==========================+                       +==========================+
+         |                                                   |
+         +-------------------------+-------------------------+
+                                   |
+                                   v
+             +============================================+
+             | JOINT COMBINING LAYER                      |
+             | P(Y=1 | x) = Sigmoid( y_wide + y_deep )    |
+             +============================================+
+                                   |
+                                   v
+             [ Prediction Output: Click / Conversion Probability ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Wide Component (Linear Model Branch):**
+- Inputs: Raw sparse categorical features and cross-product transformations $\phi_k(x) = \prod_{j=1}^d x_j^{c_{kj}}, c_{kj} \in \{0, 1\}$.
+- Output: Single linear projection scalar $y_{\text{wide}} = \mathbf{w}_{\text{wide}}^T [\mathbf{x}, \phi(\mathbf{x})] + b_{\text{wide}}$.
+
+**2. Deep Component (Neural Network Branch):**
+- **Embedding Layer:** Categorical sparse IDs map to dense continuous embeddings $e_i \in \mathbb{R}^k$.
+- **Concatenation Layer:** Concatenates dense numerical features $x_{\text{dense}}$ with categorical embeddings:
+  $$a^{(0)} = \left[ e_1^T, e_2^T, \dots, e_m^T, x_{\text{dense}}^T \right]^T$$
+- **Deep MLP Stack:** 3 Fully Connected layers ($1024 \to 512 \to 256$ units) with ReLU activations.
+- Output: Single linear scalar $y_{\text{deep}} = \mathbf{w}_{\text{deep}}^T a^{(L)} + b_{\text{deep}}$.
+
+**3. Joint Prediction Layer:**
+- Combines Wide and Deep scalar logits:
+  $$P(Y=1 \mid \mathbf{x}) = \sigma\left( \mathbf{w}_{\text{wide}}^T [\mathbf{x}, \phi(\mathbf{x})] + \mathbf{w}_{\text{deep}}^T a^{(L)} + b \right)$$
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through Wide & Deep for mini-batch $B=512$, 4 categorical features (Embedding dim $k=32$), 5 continuous numerical features, 10 cross-product wide features.
+
+1. **Wide Branch Input:**
+   - Wide Sparse/Cross Features: `(512, 10)` $\xrightarrow{\text{Linear Projection}} y_{\text{wide}}$: `(512, 1)`
+2. **Deep Branch Input & Embedding:**
+   - 4 Categoricals $\xrightarrow{\text{Embedding Lookup}} 4 \times (512, 32) \to$ Concat Embeddings: `(512, 128)`
+   - Concat 5 Continuous Features $\to a^{(0)}$: `(512, 133)`
+3. **Deep MLP Forward Pass:**
+   - Layer 1 (1024): `(512, 1024)` $\to$ Layer 2 (512): `(512, 512)` $\to$ Layer 3 (256): `(512, 256)`
+   - Output Projection $\to y_{\text{deep}}$: `(512, 1)`
+4. **Joint Combined Output:**
+   - Logits $= y_{\text{wide}} + y_{\text{deep}} \to (512, 1) \xrightarrow{\text{Sigmoid}} P(\text{Click})$: `(512, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Cross-Product Transformation Formula
+Let $x_j \in \{0, 1\}$ be the $j$-th feature indicator. The $k$-th cross-product transformation $\phi_k(x)$ is defined as:
+
+$$\phi_k(x) = \prod_{j=1}^d x_j^{c_{kj}}, \quad c_{kj} \in \{0, 1\}$$
+
+For example, if the feature is `gender="female"` and `impression_app="Netflix"`, $\phi_k(x) = 1$ if and only if both conditions are true simultaneously.
+
+### 2. Joint Wide & Deep Prediction Equation
+The combined logistic regression objective function is:
+
+$$P(Y = 1 \mid \mathbf{x}) = \sigma \left( \mathbf{w}_{\text{wide}}^T [\mathbf{x}, \phi(\mathbf{x})] + \mathbf{w}_{\text{deep}}^T a^{(L)} + b \right)$$
+
+### 3. Joint Optimization vs. Ensemble Training
+Wide & Deep is **jointly trained** in a single backward pass, distinct from an ensemble:
+- In an **Ensemble**, individual models are trained independently without knowledge of each other.
+- In **Joint Training**, the Wide component only needs to complement the weaknesses of the Deep component (handling niche exceptions), reducing the required size of the Wide model.
+
+Wide weights are optimized via FTRL-Proximal (Follow-The-Regularized-Leader) with $L_1$ regularization for sparsity, while Deep weights are optimized via AdaGrad or Adam.
+
+## 8. Training Procedure
+- **Data Preprocessing:** Extract sparse categorical IDs, generate cross-product features for Wide branch, normalize continuous features for Deep branch.
+- **Joint Optimization:** Execute forward pass through both branches simultaneously. Compute Binary Cross-Entropy loss $\mathcal{L}_{\text{BCE}}(y, \hat{y})$.
+- Optimizers: Apply **FTRL** to Wide branch parameters (for $L_1$ weight sparsity) and **Adam** to Deep branch parameters.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Wide & Deep Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+
+class WideAndDeep(nn.Module):
+    def __init__(self, wide_dim, num_categorical_features, vocab_sizes, embed_dim=32, num_dense_features=5):
+        super().__init__()
+        # 1. WIDE BRANCH
+        self.wide_linear = nn.Linear(wide_dim, 1, bias=False)
+        
+        # 2. DEEP BRANCH
+        # Categorical Embedding Tables
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(vocab_size, embed_dim) for vocab_size in vocab_sizes
+        ])
+        
+        total_deep_in = num_categorical_features * embed_dim + num_dense_features
+        self.deep_mlp = nn.Sequential(
+            nn.Linear(total_deep_in, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+        
+        self.bias = nn.Parameter(torch.zeros(1))
+
+    def forward(self, wide_inputs, cat_inputs, dense_inputs):
+        """
+        wide_inputs: (B, wide_dim)
+        cat_inputs:  (B, num_categorical_features)
+        dense_inputs:(B, num_dense_features)
+        """
+        # Wide Branch
+        y_wide = self.wide_linear(wide_inputs) # (B, 1)
+        
+        # Deep Branch: Lookup and Concatenate Embeddings
+        embedded = [self.embeddings[i](cat_inputs[:, i]) for i in range(cat_inputs.shape[1])]
+        deep_in = torch.cat(embedded + [dense_inputs], dim=-1) # (B, total_deep_in)
+        y_deep = self.deep_mlp(deep_in) # (B, 1)
+        
+        # Joint Combination
+        logits = y_wide + y_deep + self.bias
+        probs = torch.sigmoid(logits)
+        return probs
+
+if __name__ == "__main__":
+    B = 512
+    wide_dim = 10
+    vocab_sizes = [1000, 5000, 200, 50]
+    num_dense = 5
+    
+    model = WideAndDeep(wide_dim=wide_dim, num_categorical_features=4, vocab_sizes=vocab_sizes, num_dense_features=num_dense)
+    
+    wide_x = torch.randn(B, wide_dim)
+    cat_x = torch.cat([torch.randint(0, v, (B, 1)) for v in vocab_sizes], dim=1)
+    dense_x = torch.randn(B, num_dense)
+    
+    pred = model(wide_x, cat_x, dense_x)
+    
+    print(f"Wide & Deep Prediction Output Shape: {pred.shape}")
+    assert pred.shape == (B, 1)
+    print("Wide & Deep verification successful!")
+```
+
+## 10. Strengths
+- **Combines Memorization & Generalization:** Balances direct memory rule lookup with dense embedding generalization.
+- **Production Proven:** Serves over 1 Billion users in Google Play with high click-through-rate (CTR) gains.
+- **Flexible Dual Optimization:** Allows using FTRL ($L_1$ sparse) for Wide and Adam for Deep.
+
+## 11. Weaknesses
+- **Manual Feature Engineering for Wide Part:** Requires domain experts to manually define cross-product transformation rules for the Wide branch (addressed by DeepFM).
+
+## 12. Research Evolution
+Wide & Deep established dual-branch recommendation architectures, directly inspiring **DeepFM**, **xDeepFM**, and **DLRM**.
+
+## 13. Interview Questions
+
+**Q1: What is the main difference between "Memorization" and "Generalization" in recommendation systems?**
+**A1:** Memorization is the ability to learn historical correlation rules directly from frequent sparse feature co-occurrences (achieved via linear models over cross-product features). Generalization is the ability to explore unseen feature combinations based on latent vector similarity (achieved via deep neural network embeddings).
+
+**Q2: Why does Wide & Deep use Joint Training instead of an Ensemble of Wide and Deep models?**
+**A2:** In an Ensemble, individual models are trained independently without communication, requiring a large Wide model. In Joint Training, gradients flow back simultaneously through both branches; the Wide model only needs to learn niche exceptions that the Deep model struggles with, resulting in a much smaller Wide component.
+
+**Q3: Why is FTRL (Follow-The-Regularized-Leader) optimizer used for the Wide branch?**
+**A3:** FTRL enforces strong $L_1$ regularization, forcing most wide linear weights to exactly 0.0. This yields a sparse linear model that fits efficiently in RAM for real-time latency-critical serving.
+
+**Q4: Write out the combined Wide & Deep prediction equation.**
+**A4:** $P(Y=1 \mid \mathbf{x}) = \sigma\left( \mathbf{w}_{\text{wide}}^T [\mathbf{x}, \phi(\mathbf{x})] + \mathbf{w}_{\text{deep}}^T a^{(L)} + b \right)$.
+
+**Q5: What major limitation of Wide & Deep led to the development of DeepFM?**
+**A5:** Wide & Deep still requires domain experts to manually engineer cross-product feature transformations $\phi(\mathbf{x})$ for the Wide branch. DeepFM replaced the Wide linear model with a Factorization Machine (FM) layer, automating feature interaction learning.
+
+## 14. Related Papers
+- **Wide & Deep Paper:** *Wide & Deep Learning for Recommender Systems* (Cheng et al., DLRS Workshop 2016)
+- **Factorization Machines Paper:** *Factorization Machines* (Rendle, ICDM 2010)
+
+## 15. Further Reading
+- TensorFlow Official Wide & Deep Tutorial

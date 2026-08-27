@@ -1,0 +1,237 @@
+# CogVLM
+
+## 1. Overview
+CogVLM, introduced in 2023 by Weihan Wang, Qingsong Lv, Wenyi Zhao, Wen Meng, Lei Tao, Peng Zhang, Dong Dong, Francisco J. R. Ruiz, and Jie Tang (Tsinghua University & Zhipu AI), introduced **Visual Expert Modules for Deep Vision-Language Alignment**. Prior to CogVLM, standard Multimodal LLMs (such as LLaVA, BLIP-2, and MiniGPT-4) aligned vision and language by prepending visual tokens to the input prefix of a frozen language model. Wang et al. discovered a fundamental limitation of input-prefix alignment: **Visual-Linguistic Conflict**. In standard LLMs, the self-attention weights $W_Q, W_K, W_V$ and FFN weights $W_{\text{in}}, W_{\text{out}}$ were optimized exclusively for text processing. Forcing visual tokens to share the exact same weights inside deep LLM Transformer layers causes interference between visual feature processing and language reasoning. CogVLM solved this by inserting dedicated, trainable **Visual Expert Modules** (Visual QKV matrices and Visual FFN) in parallel into EVERY Transformer layer of the language model, eliminating visual-linguistic weight conflict while retaining full LLM reasoning power.
+
+:::note
+CogVLM core innovation: "Visual Expert Module: adds dedicated trainable Visual $W_Q^V, W_K^V, W_V^V$ and Visual FFN in parallel to every LLM layer, completely eliminating visual-linguistic weight conflict."
+:::
+
+## 2. Historical Context
+In 2023, open-source VLMs (LLaVA, InstructBLIP) attempted to improve performance by increasing image resolution or collecting better instruction data. However, they all maintained a single set of attention parameters in the LLM backbone for both text and visual tokens.
+
+Wang et al. conducted an empirical study showing that text tokens and visual tokens require fundamentally different transformation dynamics. By adding parallel Visual Expert parameters to Vicuna-7B/13B, CogVLM set the state of the art across 10 multimodal benchmarks (including VQA v2, OK-VQA, TextVQA).
+
+## 3. Problem It Solves
+CogVLM resolves three core architectural limitations in vision-language integration:
+1. **Visual-Linguistic Weight Conflict:** Eliminates parameter sharing interference between visual and text tokens inside deep LLM layers via dedicated **Visual Expert Modules**.
+2. **Shallow Adapter Bottleneck:** Replaces front-loaded prefix connectors (linear/Q-Former) with deep, layer-by-layer visual interaction throughout all 32+ Transformer layers.
+3. **OCR and Fine-Grained Grounding Deficits:** Achieves state-of-the-art spatial grounding and text reading by maintaining separate visual transformations across deep layers.
+
+## 4. Architecture Diagram Data
+Below is the CogVLM Transformer Layer architecture featuring dedicated **Visual Expert QKV & FFN Modules** in parallel with Frozen Text Attention.
+
+```text
+       INPUT TO COGVLM TRANSFORMER LAYER l: Text Tokens & Visual Tokens
+                                       |
+         +-----------------------------+-----------------------------+
+         | (If Token is TEXT)                                        | (If Token is VISUAL)
+         v                                                           v
+  +==============================+                            +==============================+
+  | FROZEN TEXT ATTENTION        |                            | TRAINABLE VISUAL EXPERT      |
+  | Q_T = X W_Q^T                |                            | Q_V = X W_Q^V                |
+  | K_T = X W_K^T                |                            | K_V = X W_K^V                |
+  | V_T = X W_V^T                |                            | V_V = X W_V^V                |
+  +==============================+                            +==============================+
+         |                                                           |
+         +-----------------------------+-----------------------------+
+                                       |
+                                       v
+       +==================================================================+
+       | SHARED MULTI-HEAD SELF-ATTENTION                                 |
+       | Text and Visual Tokens attend to each other jointly              |
+       | Attn = Softmax( Q K^T / sqrt(d) ) * V                            |
+       +==================================================================+
+                                       |
+         +-----------------------------+-----------------------------+
+         | (If Token is TEXT)                                        | (If Token is VISUAL)
+         v                                                           v
+  +==============================+                            +==============================+
+  | FROZEN TEXT FFN              |                            | TRAINABLE VISUAL EXPERT FFN  |
+  | FFN_Text( X )                |                            | FFN_Visual( X )              |
+  +==============================+                            +==============================+
+         |                                                           |
+         +-----------------------------+-----------------------------+
+                                       |
+                                       v
+       [ Output Hidden Representation Tensor H^(l+1) in R^d ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Vision Encoder & EVA2-CLIP:**
+- Encodes input image $I \in \mathbb{R}^{3 \times 490 \times 490}$ using EVA2-CLIP ViT-E/14.
+- Extracts visual patch features $Z_v \in \mathbb{R}^{1225 \times 1024}$.
+- Maps features to LLM dimension $d=4096$ using a 2-layer MLP.
+
+**2. CogVLM Dual-Expert Transformer Layer:**
+- For **Text Tokens**:
+  $$Q_T = X_T W_Q^T, \quad K_T = X_T W_K^T, \quad V_T = X_T W_V^T$$
+  $$\text{FFN}_{\text{text}}(X_T) = \text{SwiGLU}(X_T W_1^T) W_2^T$$
+- For **Visual Tokens**:
+  $$Q_V = X_V W_Q^V, \quad K_V = X_V W_K^V, \quad V_V = X_V W_V^V$$
+  $$\text{FFN}_{\text{visual}}(X_V) = \text{SwiGLU}(X_V W_1^V) W_2^V$$
+
+**3. Shared Joint Attention:**
+- Text queries $Q_T$ and Visual queries $Q_V$ attend to combined keys $[K_T \parallel K_V]$ and values $[V_T \parallel V_V]$, enabling full cross-modal self-attention.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through a CogVLM layer for batch size $B=2$, 1225 visual tokens, 50 text tokens, LLM dimension $d=4096$.
+
+1. **Token Routing:**
+   - Input Sequence $X$: `(2, 1275, 4096)` (1225 visual tokens + 50 text tokens)
+2. **Visual Expert vs. Text Expert Projections:**
+   - Text Tokens $X_T$ `(2, 50, 4096)` $\xrightarrow{\text{Frozen } W_{QKV}^T} Q_T, K_T, V_T$: `(2, 50, 4096)`
+   - Visual Tokens $X_V$ `(2, 1225, 4096)` $\xrightarrow{\text{Trainable } W_{QKV}^V} Q_V, K_V, V_V$: `(2, 1225, 4096)`
+3. **Shared Attention Computation:**
+   - Concat $Q = [Q_V \parallel Q_T]$, $K = [K_V \parallel K_T]$, $V = [V_V \parallel V_T] \to$ `(2, 1275, 4096)`
+   - Multi-Head Attention $\to H_{\text{attn}}$: `(2, 1275, 4096)`
+4. **Routed FFN Pass:**
+   - Route $H_{\text{attn}}[:1225] \to \text{FFN}_{\text{visual}}$ `(2, 1225, 4096)`
+   - Route $H_{\text{attn}}[1225:] \to \text{FFN}_{\text{text}}$ `(2, 50, 4096)`
+   - Combine outputs $\to H^{(l+1)}$: `(2, 1275, 4096)`.
+
+## 7. Mathematical Foundations
+
+### 1. Visual Expert Attention Formulation
+Let $X \in \mathbb{R}^{(N_v + N_t) \times d}$ be the concatenated visual and text hidden states at layer $l$.
+The Query, Key, and Value projections are computed conditionally based on token modality:
+
+$$Q_i = \begin{cases} X_i W_Q^V & \text{if token } i \text{ is Visual} \\ X_i W_Q^T & \text{if token } i \text{ is Text} \end{cases}$$
+
+$$K_i = \begin{cases} X_i W_K^V & \text{if token } i \text{ is Visual} \\ X_i W_K^T & \text{if token } i \text{ is Text} \end{cases}$$
+
+$$V_i = \begin{cases} X_i W_V^V & \text{if token } i \text{ is Visual} \\ X_i W_V^T & \text{if token } i \text{ is Text} \end{cases}$$
+
+The attention matrix is evaluated across the combined $Q, K, V$ sequence:
+
+$$\text{Attention}(Q, K, V) = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} \right) V$$
+
+### 2. Routed Feed-Forward Network
+Similarly, the non-linear FFN transformation routes visual and text tokens to dedicated parameter matrices:
+
+$$\text{FFN}(H_i) = \begin{cases} \text{SwiGLU}\left( H_i W_1^V \right) W_2^V & \text{if token } i \text{ is Visual} \\ \text{SwiGLU}\left( H_i W_1^T \right) W_2^T & \text{if token } i \text{ is Text} \end{cases}$$
+
+## 8. Training Procedure
+- **Stage 1 (Multimodal Pre-Training):** Train Visual Expert parameters ($W_{QKV}^V, W_{\text{FFN}}^V$) on 1.5B image-caption pairs for 120,000 steps (~3 days on 64 $\times$ A100 GPUs).
+- **Stage 2 (Multimodal Instruction Fine-Tuning):** Fine-tune Visual Experts and Vicuna LLM on 500k visual instruction conversations (including grounding datasets like RefCOCO).
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **CogVLM Dual-Expert Transformer Layer**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CogVLMExpertLayer(nn.Module):
+    """ CogVLM Transformer Layer with Trainable Visual Expert Modules """
+    def __init__(self, embed_dim=4096, num_heads=32):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        
+        # 1. Text Expert Projection Matrices (Frozen)
+        self.qkv_text = nn.Linear(embed_dim, 3 * embed_dim)
+        self.ffn_text = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),
+            nn.SiLU(),
+            nn.Linear(4 * embed_dim, embed_dim)
+        )
+        
+        # 2. Visual Expert Projection Matrices (Trainable)
+        self.qkv_visual = nn.Linear(embed_dim, 3 * embed_dim)
+        self.ffn_visual = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),
+            nn.SiLU(),
+            nn.Linear(4 * embed_dim, embed_dim)
+        )
+        
+        self.mha = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim)
+
+    def forward(self, x, is_visual_mask):
+        """
+        x:              (B, L_total, 4096)
+        is_visual_mask: (B, L_total) True for visual tokens, False for text tokens
+        """
+        B, L_total, D = x.shape
+        
+        # 1. Route QKV Projections conditionally
+        qkv = torch.zeros(B, L_total, 3 * D, device=x.device)
+        
+        # Text Token Routing
+        text_mask = ~is_visual_mask
+        if text_mask.any():
+            qkv[text_mask] = self.qkv_text(x[text_mask])
+            
+        # Visual Token Routing
+        if is_visual_mask.any():
+            qkv[is_visual_mask] = self.qkv_visual(x[is_visual_mask])
+            
+        q, k, v = torch.chunk(qkv, 3, dim=-1) # (B, L_total, 4096) each
+        
+        # 2. Shared Joint Multi-Head Attention
+        attn_out, _ = self.mha(q, k, v)
+        h1 = self.norm1(x + attn_out)
+        
+        # 3. Route FFN Pass conditionally
+        ffn_out = torch.zeros_like(h1)
+        if text_mask.any():
+            ffn_out[text_mask] = self.ffn_text(h1[text_mask])
+        if is_visual_mask.any():
+            ffn_out[is_visual_mask] = self.ffn_visual(h1[is_visual_mask])
+            
+        out = self.norm2(h1 + ffn_out)
+        return out
+
+if __name__ == "__main__":
+    B, N_v, N_t, D = 2, 1225, 50, 4096
+    cogvlm_layer = CogVLMExpertLayer(embed_dim=D, num_heads=32)
+    
+    x = torch.randn(B, N_v + N_t, D)
+    is_visual = torch.zeros(B, N_v + N_t, dtype=torch.bool)
+    is_visual[:, :N_v] = True # First 1225 tokens are visual
+    
+    out = cogvlm_layer(x, is_visual)
+    
+    print(f"CogVLM Output Tensor Shape: {out.shape}")
+    assert out.shape == (B, N_v + N_t, D)
+    print("CogVLM verification successful!")
+```
+
+## 10. Strengths
+- **Eliminates Visual-Linguistic Weight Conflict:** Dedicated Visual Expert modules prevent interference with language weights.
+- **Deep Layer-by-Layer Integration:** Processes visual features throughout all 32+ LLM Transformer layers.
+- **State-of-the-Art Spatial Grounding:** Outstanding accuracy on RefCOCO and complex document reading benchmarks.
+
+## 11. Weaknesses
+- **Increased Parameter Footprint:** Adding Visual Experts increases total parameter count by ~30%.
+
+## 12. Research Evolution
+CogVLM established Visual Expert architectures, directly inspiring **CogVLM2**, **GLM-4V**, and **MiniCPM-V**.
+
+## 13. Interview Questions
+
+**Q1: What is "Visual-Linguistic Weight Conflict" in Multimodal LLMs?**
+**A1:** It occurs when visual tokens and text tokens are forced to share the exact same attention ($W_{QKV}$) and FFN weights inside deep LLM Transformer layers. Because visual perception and text reasoning require different feature transformation dynamics, sharing weights causes parameter interference and capacity degradation.
+
+**Q2: How does CogVLM solve Visual-Linguistic Weight Conflict?**
+**A2:** By introducing dedicated, trainable **Visual Expert Modules** ($W_Q^V, W_K^V, W_V^V$ and Visual FFN) in parallel with frozen text parameters inside every Transformer layer.
+
+**Q3: How are visual tokens and text tokens routed in CogVLM's Transformer layer?**
+**A3:** Visual tokens are projected using $W_{QKV}^V$ and processed by $\text{FFN}_{\text{visual}}$. Text tokens are projected using $W_{QKV}^T$ and processed by $\text{FFN}_{\text{text}}$. All tokens participate jointly in the multi-head self-attention step.
+
+**Q4: Does CogVLM freeze the pre-trained text LLM parameters?**
+**A4:** Yes. The pre-trained LLM text weights ($W_{QKV}^T$ and $\text{FFN}_{\text{text}}$) remain **completely frozen**, while only the Visual Expert parameters are trained.
+
+**Q5: Compare CogVLM with LLaVA 1.5.**
+**A5:** LLaVA 1.5 uses an MLP connector at the input prefix stage, sending visual tokens through identical LLM layers. CogVLM uses dedicated Visual Expert parameters inside **every** LLM layer, achieving deeper visual-linguistic alignment.
+
+## 14. Related Papers
+- **CogVLM Paper:** *CogVLM: Visual Expert for Pretrained Language Models* (Wang et al., arXiv 2023)
+- **Vicuna Paper:** *Vicuna: An Open-Source Chatbot Impressing GPT-4 with 90%* ChatGPT Quality (Zheng et al., 2023)
+
+## 15. Further Reading
+- Official Tsinghua THUDM CogVLM GitHub Repository

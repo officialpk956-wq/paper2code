@@ -1890,7 +1890,12 @@ export const PAPERS: PaperEntry[] = [
     "rank": 135,
     "title": "JAX: Composable Transformations of Python+NumPy Programs",
     "section": "SYSTEMS",
-    "authors": "Bradbury, Frostig"
+    "authors": "Bradbury, Frostig",
+    "year": 2018,
+    "difficulty": "Advanced",
+    "whyImportant": "Introduced JAX's composable program transformations for automatic differentiation, compilation, batching, and accelerator execution in NumPy-style Python.",
+    "conceptsIntroduced": "Composable function transformations, automatic differentiation, JIT compilation, vectorized mapping",
+    "industryImpact": "Established the functional numerical foundation used by major research stacks built with Flax, Haiku, Optax, and XLA."
   },
   {
     "slug": "jax-composable-transformations-of-numpy-programs",
@@ -2604,5 +2609,57 @@ export const PAPERS: PaperEntry[] = [
     "architecturesIntroduced": "Video-LLaMA (video + audio Q-Former + LLM)",
     "conceptsIntroduced": "Temporal visual encoding with Q-Former, audio branch from ImageBind, joint audio-visual-text generation",
     "industryImpact": "Foundation for subsequent video understanding models (Video-LLaVA, MiniGPT4-Video, InternVL-Video). Enabled QA over meeting recordings, lecture videos, and instructional content."
+  },
+  {
+    "slug": "improving-language-understanding-by-generative-pre-training-gpt-1",
+    "rank": 192,
+    "title": "Improving Language Understanding by Generative Pre-Training (GPT-1)",
+    "section": "NLP & LANGUAGE MODELS",
+    "authors": "Radford, Narasimhan, Salimans, Sutskever (OpenAI)",
+    "year": 2018,
+    "difficulty": "Intermediate",
+    "whyImportant": "Established the pretrain-then-fine-tune recipe for decoder-only Transformers and showed that one generative language model could transfer to many supervised NLP tasks.",
+    "architecturesIntroduced": "GPT-1 (decoder-only Transformer)",
+    "conceptsIntroduced": "Generative pretraining, task-aware input transformations, decoder-only transfer learning",
+    "industryImpact": "Started the GPT lineage and the modern foundation-model approach to reusable language representations."
+  },
+  {
+    "slug": "language-models-are-unsupervised-multitask-learners-gpt-2",
+    "rank": 193,
+    "title": "Language Models are Unsupervised Multitask Learners (GPT-2)",
+    "section": "NLP & LANGUAGE MODELS",
+    "authors": "Radford, Wu, Child, Luan, Amodei, Sutskever (OpenAI)",
+    "year": 2019,
+    "difficulty": "Intermediate",
+    "whyImportant": "Demonstrated that scaling a language model on broad web text produces useful zero-shot behavior without task-specific supervised training.",
+    "architecturesIntroduced": "GPT-2",
+    "conceptsIntroduced": "Zero-shot task transfer through language modeling, WebText training corpus, scale-driven multitask behavior",
+    "industryImpact": "Made open-ended neural text generation practical and provided the bridge from fine-tuned language models to prompt-based systems."
+  },
+  {
+    "slug": "palm-scaling-language-modeling-with-pathways",
+    "rank": 194,
+    "title": "PaLM: Scaling Language Modeling with Pathways",
+    "section": "NLP & LANGUAGE MODELS",
+    "authors": "Chowdhery et al. (Google Research)",
+    "year": 2022,
+    "difficulty": "Advanced",
+    "whyImportant": "Showed how a 540-billion-parameter dense Transformer could be trained efficiently across 6,144 TPU v4 chips while gaining strong few-shot reasoning and multilingual capabilities.",
+    "architecturesIntroduced": "PaLM",
+    "conceptsIntroduced": "Pathways-scale training, large dense decoder models, scale-enabled reasoning",
+    "industryImpact": "Influenced Google’s production language-model stack and the later PaLM 2 and Gemini model families."
+  },
+  {
+    "slug": "switch-transformers-scaling-to-trillion-parameter-models-with-simple-and-efficient-sparsity",
+    "rank": 195,
+    "title": "Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity",
+    "section": "NLP & LANGUAGE MODELS",
+    "authors": "Fedus, Zoph, Shazeer (Google Research)",
+    "year": 2021,
+    "difficulty": "Advanced",
+    "whyImportant": "Simplified mixture-of-experts routing to one expert per token, making trillion-parameter sparse language models trainable with stable and efficient infrastructure.",
+    "architecturesIntroduced": "Switch Transformer",
+    "conceptsIntroduced": "Top-1 expert routing, sparse conditional computation, expert-capacity balancing",
+    "industryImpact": "Established practical sparse scaling patterns used by later mixture-of-experts systems such as GLaM, Mixtral, and production-scale sparse LLMs."
   }
 ];

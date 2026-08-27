@@ -1,0 +1,253 @@
+# Mask2Former
+
+## 1. Overview
+Mask2Former (Masked-attention Mask Transformer), introduced in 2022 by Bowen Cheng, Ishan Misra, Alexander G. Schwing, Alexander Kirillov, and Richard Zhang (FAIR & UIUC), is a universal segmentation architecture capable of tackling **semantic, instance, and panoptic segmentation** using a single, unified design with zero task-specific modifications. Building upon MaskFormer (2021), Mask2Former outperforms specialist models across all three tasks by introducing **Masked Attention**: a novel attention mechanism that restricts cross-attention in the Transformer decoder to localized foreground regions predicted by the previous decoder layer. This key innovation speeds up model convergence by $4\times$, drastically reduces memory footprint, and prevents cross-attention from wasting capacity on irrelevant background noise.
+
+:::note
+Mask2Former treats ALL segmentation tasks (semantic, instance, panoptic) as a single paradigm: **Mask Classification**. The model predicts a fixed set of $N$ binary masks along with $N$ corresponding class probabilities.
+:::
+
+## 2. Historical Context
+Before 2021, computer vision maintained rigid architectural divides:
+- **Semantic Segmentation:** Solved via per-pixel classification (e.g., DeepLabv3+, PSPNet) predicting $C$-channel score maps.
+- **Instance Segmentation:** Solved via region proposals and bounding boxes (e.g., Mask R-CNN) predicting RoI-aligned masks.
+- **Panoptic Segmentation:** Solved via hybrid multi-head networks (e.g., Panoptic FPN) fusing stuff and thing branches.
+
+MaskFormer (Cheng et al., 2021) broke this divide by proving that per-pixel classification is unnecessary; all three tasks can be formulated as predicting a set of $N$ binary masks and associated class labels. However, MaskFormer suffered from slow training convergence (requiring 300+ epochs) because its Transformer decoder used global cross-attention—allowing every query token to attend to every pixel in the entire image. Mask2Former resolved this convergence bottleneck by replacing global cross-attention with **Masked Attention**, restricting each query's receptive field to its own predicted foreground region.
+
+## 3. Problem It Solves
+Mask2Former resolves four core limitations of prior segmentation networks:
+1. **Architectural Fragmentation:** Replaces task-specific pipelines (Mask R-CNN for instance, DeepLab for semantic) with a single architecture that achieves state-of-the-art across all three tasks.
+2. **Slow Transformer Convergence:** Global cross-attention in standard Mask Transformers takes hundreds of epochs to learn where to look. Masked Attention forces queries to focus immediately on localized binary mask regions, accelerating training by $4\times$.
+3. **High Memory in High-Resolution Feature Maps:** Processing full-resolution feature maps in cross-attention causes $O(HW)$ memory explosion. Mask2Former uses a **Pixel Decoder** with a multi-scale feature pyramid ($1/32, 1/16, 1/8$ scales) combined with sampled point loss (**PointRend sampling**) during training.
+4. **Small Object Omission:** Multi-scale feature feeding into the Transformer decoder ensures small object queries attend to high-resolution feature scales.
+
+## 4. Architecture Diagram Data
+Below is the full Mask2Former architecture featuring the Pixel Decoder, Multi-Scale Transformer Decoder, and Masked Attention.
+
+```text
+                     [ Input Image: (B, 3, H, W) ]
+                                   |
+                                   v
+             +============================================+
+             |  Backbone: ResNet or Swin (C2, C3, C4, C5) |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             |  Pixel Decoder (MSDeformAttn / FPN)        |
+             |  - Generates Multi-scale features:         |
+             |    {F_1/8, F_1/16, F_1/32}                 |
+             |  - Generates High-Res Per-Pixel Embedding: |
+             |    E_pixel (Shape: B, C, H/4, W/4)         |
+             +============================================+
+                                   |
+                                   v
+             +============================================+
+             |  Multi-Scale Transformer Decoder (L Layers)|
+             |  - Inputs: N learned Object Queries Q      |
+             |  - Feeds {F_1/32, F_1/16, F_1/8} round-robin|
+             |                                            |
+             |  For Layer l = 1 to L:                     |
+             |   1. Predict Intermediate Mask M_{l-1}    |
+             |   2. Compute Mask Matrix: B_{l-1} = 0 if   |
+             |      M_{l-1} > 0.5 else -inf               |
+             |   3. Masked Cross-Attention(Q, F_l, B_{l-1})|
+             |   4. Self-Attention(Q) + FFN(Q)            |
+             +============================================+
+                                   |
+                   +---------------+---------------+
+                   | Query Outputs (B, N, C)       |
+                   v                               v
+         +===================+           +===================+
+         | Class Head (Linear|           | Mask Head (MLP)   |
+         | N -> K+1 classes) |           | N -> Embed E_query|
+         +===================+           +===================+
+                   |                               |
+                   v                               v
+         [ Class Probabilities ]         [ Mask Prediction ]
+         [ (B, N, K+1)         ]         [ M = E_query x E_pixel ]
+                                         [ (B, N, H/4, W/4)    ]
+```
+
+## 5. Layer-by-Layer Breakdown
+Mask2Former consists of three key components:
+
+**1. Backbone & Pixel Decoder:**
+- **Backbone (Swin / ResNet):** Extracts features $C_2, C_3, C_4, C_5$ at strides $4, 8, 16, 32$.
+- **Pixel Decoder:** A Multi-Scale Deformable Attention (MSDeformAttn) network that generates multi-scale features $\{F_8, F_{16}, F_{32}\}$ for the transformer decoder, and a high-resolution $1/4$-scale per-pixel embedding $E_{\text{pixel}} \in \mathbb{R}^{C \times H/4 \times W/4}$.
+
+**2. Transformer Decoder with Masked Attention:**
+Contains $L=9$ layers. $N$ learned query vectors $Q \in \mathbb{R}^{N \times C}$ (typically $N=100$) are iteratively updated across layers.
+- **Round-Robin Multi-Scale Feeding:** The decoder feeds multi-scale features in turn: $F_{32} \rightarrow F_{16} \rightarrow F_8 \rightarrow F_{32} \dots$
+- **Masked Cross-Attention:** For layer $l$, cross-attention between Query $Q$ and feature map $F_l$ is constrained by the binary mask $M_{l-1}$ predicted from the previous layer:
+  $$\text{MaskedAttention}(Q, K, V) = \text{Softmax}\left( Q K^T + \mathcal{B}_{l-1} \right) V$$
+  where the attention bias $\mathcal{B}_{l-1}$ is 0 inside the predicted mask foreground ($M_{l-1} \ge 0.5$) and $-\infty$ outside.
+
+**3. Prediction Heads:**
+- **Class Head:** A linear layer mapping each query embedding $Q_i$ to $K+1$ class logits (where $K$ is the number of categories and $+1$ represents "no object" / background).
+- **Mask Head:** A 3-layer MLP mapping each query embedding $Q_i$ to a query mask embedding $E_{\text{query}} \in \mathbb{R}^{N \times C}$. The binary mask predictions are computed via dot product with the per-pixel embedding:
+  $$M = \text{Sigmoid}\left( E_{\text{query}} \times E_{\text{pixel}} \right) \in \mathbb{R}^{N \times H/4 \times W/4}$$
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors for $N=100$ queries, batch size $B=2$, image size $(512, 512)$, $K=80$ classes, and feature dim $C=256$.
+
+1. **Backbone & Pixel Decoder Output:**
+   - Per-Pixel Embedding $E_{\text{pixel}}$: `(2, 256, 128, 128)` ($1/4$ scale)
+   - Multi-scale features: $F_8$ `(2, 256, 64, 64)`, $F_{16}$ `(2, 256, 32, 32)`, $F_{32}$ `(2, 256, 16, 16)`
+
+2. **Transformer Decoder Layer 1:**
+   - Queries $Q$: `(2, 100, 256)`
+   - Initial Mask Prediction $M_0$: `(2, 100, 16, 16)` (derived from initial dot product with downsampled $E_{\text{pixel}}$).
+   - Attention Bias $\mathcal{B}_0$: Binarize $M_0 \ge 0.5 \rightarrow$ set $0$ where True, $-\infty$ where False. Shape: `(2, 100, 256)` (spatial flattened $16 \times 16 = 256$).
+   - Masked Cross-Attention($Q$, $F_{32}$, $\mathcal{B}_0$) $\rightarrow$ Updated $Q$: `(2, 100, 256)`.
+
+3. **Decoder Output & Final Prediction Heads:**
+   - Output Queries $Q_{\text{final}}$: `(2, 100, 256)`
+   - **Class Logits:** Linear(256 $\rightarrow 81$) $\rightarrow$ `(2, 100, 81)`
+   - **Mask Embeddings:** MLP(256 $\rightarrow 256$) $\rightarrow$ `(2, 100, 256)`
+   - **Mask Generation:** Batch matrix multiplication of $E_{\text{query}}$ `(2, 100, 256)` and $E_{\text{pixel}}$ `(2, 256, 128*128)` $\rightarrow$ Reshape to `(2, 100, 128, 128)`. Apply Sigmoid $\rightarrow$ Final Masks: `(2, 100, 128, 128)`.
+
+## 7. Mathematical Foundations
+
+### Masked Cross-Attention Derivation
+Standard cross-attention allows Query $q_i$ to attend to all spatial locations $x$ in feature map $X$:
+$$\text{Attention}(q_i, X) = \text{Softmax}\left( q_i K(X)^T \right) V(X)$$
+
+Masked Attention modifies the softmax input by adding a spatial attention bias $\mathcal{B}_{l-1} \in \{0, -\infty\}^{N \times H_l W_l}$:
+
+$$\mathcal{B}_{l-1}(i, x) = \begin{cases} 0 & \text{if } M_{l-1}(i, x) \ge 0.5 \\ -\infty & \text{otherwise} \end{cases}$$
+
+$$\text{MaskedAttention}(q_i, X) = \text{Softmax}\left( q_i K(X)^T + \mathcal{B}_{l-1}(i, \cdot) \right) V(X)$$
+
+When $\mathcal{B}_{l-1}(i, x) = -\infty$, $\exp(-\infty) = 0$, completely blocking query $q_i$ from extracting features outside its current predicted mask region $M_{l-1}$.
+
+### Bipartite Matching Loss (Hungarian Matching)
+Mask2Former uses Hungarian matching to assign ground-truth mask targets $\{y_i = (c_i, m_i)\}_{i=1}^{N_{\text{gt}}}$ to predicted queries $\{\hat{y}_\sigma(i) = (\hat{p}_{\sigma(i)}, \hat{m}_{\sigma(i)})\}_{i=1}^N$:
+
+$$\hat{\sigma} = \arg\min_{\sigma \in \mathfrak{S}_N} \sum_{i=1}^N \mathcal{L}_{\text{match}}(y_i, \hat{y}_{\sigma(i)})$$
+
+$$\mathcal{L}_{\text{match}} = -\mathbf{1}_{\{c_i \neq \emptyset\}} \hat{p}_{\sigma(i)}(c_i) + \mathbf{1}_{\{c_i \neq \emptyset\}} \left[ \lambda_{\text{focal}} \mathcal{L}_{\text{focal}}(m_i, \hat{m}_{\sigma(i)}) + \lambda_{\text{dice}} \mathcal{L}_{\text{dice}}(m_i, \hat{m}_{\sigma(i)}) \right]$$
+
+## 8. Training Procedure
+- **Point-Based Mask Loss (PointRend Sampling):** Instead of computing dense $H/4 \times W/4$ mask loss over all pixels (which consumes massive VRAM), Mask2Former randomly samples $K = 11264$ points per image based on uncertainty, computing focal and dice loss only on sampled points.
+- **Data Augmentation:** Large Scale Jittering (LSJ) with random resizing between 0.1 and 2.0, random cropping ($1024 \times 1024$).
+- **Optimization:** AdamW with base learning rate $1 \times 10^{-4}$, weight decay 0.05, trained for 50 epochs on COCO.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **Masked Cross-Attention** module used inside Mask2Former's Transformer Decoder.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MaskedCrossAttention(nn.Module):
+    def __init__(self, d_model=256, nhead=8):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.head_dim = d_model // nhead
+        
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, q, feat_map, mask_pred):
+        """
+        q: (B, N_query, d_model)
+        feat_map: (B, d_model, H_l, W_l)
+        mask_pred: (B, N_query, H_l, W_l) - predicted binary mask from previous layer
+        """
+        B, N_query, _ = q.shape
+        _, _, H_l, W_l = feat_map.shape
+        S = H_l * W_l
+        
+        # Flatten feature map to sequence: (B, S, d_model)
+        x_flat = feat_map.flatten(2).permute(0, 2, 1)
+        
+        # Project Q, K, V
+        Q = self.q_proj(q).view(B, N_query, self.nhead, self.head_dim).transpose(1, 2) # (B, nhead, N_query, head_dim)
+        K = self.k_proj(x_flat).view(B, S, self.nhead, self.head_dim).transpose(1, 2)  # (B, nhead, S, head_dim)
+        V = self.v_proj(x_flat).view(B, S, self.nhead, self.head_dim).transpose(1, 2)  # (B, nhead, S, head_dim)
+        
+        # Calculate raw attention scores: (B, nhead, N_query, S)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        
+        # Binarize mask_pred and create Attention Bias B_mask
+        # Threshold at 0.5 (or logits > 0)
+        mask_fg = (mask_pred > 0.0).flatten(2) # (B, N_query, S)
+        
+        # B_mask: 0.0 for foreground, -1e9 for background
+        attn_bias = torch.zeros((B, N_query, S), device=q.device)
+        attn_bias = attn_bias.masked_fill(~mask_fg, -1e9)
+        
+        # Expand bias for multi-head: (B, 1, N_query, S)
+        attn_bias = attn_bias.unsqueeze(1)
+        
+        # Add Masked Attention Bias to raw scores
+        masked_scores = scores + attn_bias
+        
+        # Softmax & Context aggregation
+        attn_weights = F.softmax(masked_scores, dim=-1)
+        out = torch.matmul(attn_weights, V) # (B, nhead, N_query, head_dim)
+        
+        out = out.transpose(1, 2).contiguous().view(B, N_query, self.d_model)
+        return self.out_proj(out)
+
+if __name__ == "__main__":
+    B, N_query, C = 2, 100, 256
+    H_l, W_l = 32, 32
+    
+    attn = MaskedCrossAttention(d_model=C, nhead=8)
+    
+    q = torch.randn(B, N_query, C)
+    feat_map = torch.randn(B, C, H_l, W_l)
+    mask_pred = torch.randn(B, N_query, H_l, W_l) # Logits from previous layer
+    
+    out_q = attn(q, feat_map, mask_pred)
+    
+    print(f"Query Input Shape:  {q.shape}")
+    print(f"Query Output Shape: {out_q.shape}")
+    assert out_q.shape == (B, N_query, C), f"Expected shape ({B}, {N_query}, {C}), got {out_q.shape}"
+    print("Mask2Former Masked Cross-Attention verification successful!")
+```
+
+## 10. Strengths
+- **Universal Architecture:** Achieves state-of-the-art across Semantic, Instance, and Panoptic segmentation with zero architectural changes.
+- **Fast Training Convergence:** Masked Attention speeds up training by $4\times$ compared to standard global cross-attention transformers.
+- **Memory Efficient:** PointRend sampled loss calculation avoids computing dense high-resolution loss matrices during training.
+
+## 11. Weaknesses
+- **Dependent on Initial Mask Estimates:** If the initial predicted mask $M_0$ completely misses a small object, the masked attention bias ($-\infty$) prevents the query from seeing that object in subsequent layers.
+- **High Memory During Inference:** Batch matrix multiplication between $N$ query embeddings and high-resolution $H/4 \times W/4$ pixel embeddings requires considerable VRAM.
+
+## 12. Research Evolution
+Mask2Former unified the segmentation domain by proving that mask classification with masked attention is universally optimal. It replaced specialist models and laid the groundwork for interactive segmentation models like **Segment Anything (SAM)**.
+
+## 13. Interview Questions
+
+**Q1: What is the core difference between MaskFormer and Mask2Former?**
+**A1:** MaskFormer used global cross-attention in its Transformer decoder, allowing queries to attend to all image pixels, resulting in slow training convergence (300+ epochs). Mask2Former replaces global attention with **Masked Attention**, restricting cross-attention for each query to its predicted foreground region from the previous layer, accelerating convergence by $4\times$.
+
+**Q2: How does Mask2Former handle semantic segmentation vs. instance segmentation during inference?**
+**A2:** During inference, Mask2Former outputs $N$ (mask, class probability) pairs. For **Instance Segmentation**, predictions with high confidence are retained directly. For **Semantic Segmentation**, masks assigned to the same category are merged via matrix multiplication: $S_c = \sum_{i: \arg\max c_i = c} p_i(c) \cdot m_i$.
+
+**Q3: Explain the mathematical form of the attention bias in Masked Cross-Attention.**
+**A3:** The attention bias $\mathcal{B}_{l-1}(i, x)$ is set to $0$ if pixel $x$ falls inside the predicted mask region $M_{l-1}(i, x) \ge 0.5$, and $-\infty$ otherwise. Adding $-\infty$ before softmax forces the attention weight to $\exp(-\infty) = 0$, blocking cross-attention outside the mask.
+
+**Q4: What is the role of the Pixel Decoder in Mask2Former?**
+**A4:** The Pixel Decoder takes multi-scale backbone features ($C_2 \dots C_5$) and generates multi-scale feature maps ($F_8, F_{16}, F_{32}$) for the Transformer decoder, as well as a high-resolution $1/4$-scale per-pixel embedding map $E_{\text{pixel}}$ used to generate final binary masks via dot product with query embeddings.
+
+**Q5: How does Mask2Former compute loss efficiently on high-resolution masks without running out of GPU memory?**
+**A5:** Instead of calculating dense loss over all $H/4 \times W/4$ pixels, Mask2Former uses point-based sampling (PointRend). During training, it randomly samples $K = 11264$ uncertain points per image and evaluates Focal and Dice losses exclusively at those sampled points.
+
+## 14. Related Papers
+- **Mask2Former Paper:** *Masked-attention Mask Transformer for Universal Image Segmentation* (Cheng et al., CVPR 2022)
+- **MaskFormer Paper:** *Per-Pixel Classification is Not All You Need for Semantic Segmentation* (Cheng et al., NeurIPS 2021)
+- **PointRend:** *PointRend: Image Segmentation as Rendering* (Kirillov et al., CVPR 2020)
+
+## 15. Further Reading
+- FAIR Mask2Former Official GitHub & Model Zoo
+- Detectron2 Integration Guide for Universal Segmentation

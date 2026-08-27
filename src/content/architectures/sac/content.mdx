@@ -1,0 +1,215 @@
+# Soft Actor-Critic (SAC)
+
+## 1. Overview
+Soft Actor-Critic (SAC), introduced in 2018 by Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine (UC Berkeley), established the gold standard for continuous off-policy reinforcement learning by incorporating **Maximum Entropy RL**. Standard RL maximizes expected cumulative reward $\sum r_t$. SAC optimizes a dual objective: **maximizing expected cumulative reward AND policy entropy**:
+
+$$\pi^* = \arg\max_\pi \sum_t \mathbb{E}_{(s_t, a_t)} \left[ r(s_t, a_t) + \alpha \mathcal{H}\left(\pi(\cdot \mid s_t)\right) \right]$$
+
+where $\mathcal{H}(\pi(\cdot \mid s_t))$ is the Shannon entropy of the policy and $\alpha$ is the temperature parameter. By rewarding the agent for acting as randomly as possible while still accomplishing the task, SAC achieves exceptional exploration, prevents premature policy collapse, enables automatic temperature tuning ($\alpha$), and provides extreme sample efficiency and stability across continuous control tasks (MuJoCo robotics).
+
+:::tip
+SAC's core framework: Maximum Entropy RL off-policy Actor-Critic combining Twin Critics ($\min(Q_1, Q_2)$), Stochastic Gaussian Policy ($\pi_\theta$), and Automatic Temperature Tuning ($\alpha$).
+:::
+
+## 2. Historical Context
+In 2018, continuous control RL was divided between sample-inefficient on-policy methods (PPO, TRPO) and brittle off-policy methods (DDPG, TD3). While TD3 stabilized deterministic policy gradients using twin critics, its policy remained deterministic ($\mu(s)$), making exploration brittle and sensitive to initial seeds.
+
+Tuomas Haarnoja et al. extended Brian Ziebart's Maximum Entropy RL framework to deep off-policy Actor-Critic networks. They proved that maximizing entropy forces the policy to explore all promising action modes (learning "all ways to solve a task"), making the learned policy robust to environmental perturbations and noise.
+
+## 3. Problem It Solves
+SAC resolves three major engineering challenges in continuous RL:
+1. **Premature Policy Collapse & Poor Exploration:** Standard RL policies quickly become deterministic, getting trapped in local optima. Entropy maximization rewards exploration, keeping the policy stochastic until task mastery.
+2. **Brittle Hyperparameter Tuning for Temperature ($\alpha$):** Fixed entropy weights require manual tuning per environment. SAC introduces **Automatic Temperature Tuning**, adjusting $\alpha$ automatically via dual gradient descent to maintain a target entropy $\mathcal{H}_0$.
+3. **Off-Policy Sample Efficiency:** Operates off-policy using an Experience Replay Buffer, achieving $10\times$ higher sample efficiency than PPO on continuous robotics.
+
+## 4. Architecture Diagram Data
+Below is the Maximum Entropy Off-Policy Actor-Critic architecture of SAC featuring Twin Critics, Gaussian Stochastic Policy, and Automatic Temperature Tuning.
+
+```text
+       [ Environment State s_t ]
+                   |
+                   v
+       +===================================================+
+       | Stochastic Actor Network pi_theta(a | s)           |
+       | - Outputs Mean mu(s) and Std log_sigma(s)          |
+       | - Samples a = tanh( mu + sigma * epsilon )        |
+       +===================================================+
+                   |
+                   +-----------------------+--------------------------------+
+                                           |                                |
+                                           v                                v
+                       [ Executed Action a_t ~ pi(a|s_t) ]        [ Computed Entropy H(pi) ]
+                                           |                                |
+                                           v                                v
+                       [ Transition (s_t, a_t, r_t, s_{t+1}, d) ]  [ Auto Alpha Tuning ]
+                                           |                        (Loss L_alpha)
+                                           v                                |
+                       [ Insert into Replay Buffer (Cap: 1M) ]              |
+                                           |                                |
+                                           v                                v
+                       [ Sample Mini-Batch (B=256) ] <----------------------+
+                                           |
+         +---------------------------------+---------------------------------+
+         | (For Actor & Alpha Updates)                                       | (For Critic Updates)
+         v                                                                   v
+  [ Twin Critics Q_phi1, Q_phi2 ]                                 [ Target Twin Critics Q_1^-, Q_2^- ]
+         |                                                                   |
+         v                                                                   v
+  [ Loss_Actor = E[ alpha*log_pi - min(Q1,Q2) ] ]                 [ Target y = r + gamma*(min(Q1^-,Q2^-) - alpha*log_pi) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Stochastic Actor Network ($\pi_\theta$):**
+- 2 Fully Connected layers (256 units, ReLU).
+- Dual output heads: Mean $\mu_\theta(s) \in \mathbb{R}^{\text{action\_dim}}$ and Log Standard Deviation $\log \sigma_\theta(s) \in \mathbb{R}^{\text{action\_dim}}$.
+- Applies **Reparameterization Trick with Tanh Enforcing**:
+  $$a = \tanh\left( \mu_\theta(s) + \sigma_\theta(s) \odot \epsilon \right), \quad \epsilon \sim \mathcal{N}(0, \mathbf{I})$$
+
+**2. Twin Critic Networks ($Q_{\phi_1}, Q_{\phi_2}$):**
+- Two independent Critics (2 FC layers, 256 units, ReLU). Take state $s$ and action $a$ to output scalar Q-values.
+
+**3. Automatic Temperature Tuning ($\alpha$):**
+- A single learnable scalar log-temperature $\log \alpha$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through SAC for mini-batch $B=256$, state dim 17, continuous action dim 6 (MuJoCo).
+
+1. **Actor Pass & Reparameterization:**
+   - State $s$: `(256, 17)` $\to$ Mean $\mu$: `(256, 6)`, Log Std $\log \sigma$: `(256, 6)`
+   - Sample Noise $\epsilon \sim \mathcal{N}(0, \mathbf{I})$: `(256, 6)`
+   - Bounded Action $a = \tanh(\mu + \sigma \odot \epsilon)$: `(256, 6)`
+   - Compute Log-Probability $\log \pi(a \mid s)$ (with Jacobian Tanh correction): `(256, 1)`
+2. **Twin Critic Pass:**
+   - $Q_{\phi_1}(s, a)$: `(256, 1)`, $Q_{\phi_2}(s, a)$: `(256, 1)`
+   - Min Q: $\min(Q_1, Q_2) \to$ `(256, 1)`
+3. **Target Soft Q-Value:**
+   - Next Action $\tilde{a}' \sim \pi_\theta(\cdot \mid s')$: `(256, 6)`
+   - Soft Target $y = r + \gamma(1-d) \left( \min(Q_1^-(s', \tilde{a}'), Q_2^-(s', \tilde{a}')) - \alpha \log \pi(\tilde{a}' \mid s') \right) \to$ `(256, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Derivation of the Entropy-Regularized Bellman Equation
+In Maximum Entropy RL, the soft state-value function $V(s_t)$ incorporates policy entropy:
+
+$$V(s_t) = \mathbb{E}_{a_t \sim \pi} \left[ Q(s_t, a_t) - \alpha \log \pi(a_t \mid s_t) \right]$$
+
+The Soft Bellman Optimality Equation for the soft Q-value function $Q(s_t, a_t)$ is:
+
+$$Q(s_t, a_t) = r(s_t, a_t) + \gamma \mathbb{E}_{s_{t+1} \sim P} \left[ V(s_{t+1}) \right]$$
+
+Substituting $V(s_{t+1})$ yields the **Entropy-Regularized Soft Bellman Equation**:
+
+$$Q(s_t, a_t) = r(s_t, a_t) + \gamma \mathbb{E}_{s_{t+1} \sim P, \; a_{t+1} \sim \pi} \left[ Q(s_{t+1}, a_{t+1}) - \alpha \log \pi(a_{t+1} \mid s_{t+1}) \right]$$
+
+### 2. Tanh Jacobian Log-Probability Correction
+Applying $a = \tanh(u)$ alters probability density. By the Change-of-Variables formula:
+
+$$\log \pi(a \mid s) = \log \mu(u \mid s) - \sum_{i=1}^D \log\left( 1 - \tanh^2(u_i) + \epsilon \right)$$
+
+### 3. Automatic Temperature ($\alpha$) Tuning Objective
+To maintain a target entropy $\mathcal{H}_0 = -\dim(\mathcal{A})$, temperature $\alpha$ is updated via:
+
+$$\mathcal{L}(\alpha) = \mathbb{E}_{a_t \sim \pi_t} \left[ -\alpha \left( \log \pi(a_t \mid s_t) + \mathcal{H}_0 \right) \right]$$
+
+## 8. Training Procedure
+- Sample mini-batch $(s, a, r, s', d) \sim \mathcal{D}$.
+- Calculate soft TD target $y = r + \gamma(1-d) \left( \min(Q_1^-, Q_2^-) - \alpha \log \pi(a'|s') \right)$.
+- Update Twin Critics $\phi_1, \phi_2$ using MSE loss against $y$.
+- Update Actor $\theta$ using loss $\mathcal{L}_{\text{Actor}} = \mathbb{E}_{a \sim \pi} [\alpha \log \pi(a|s) - \min(Q_1(s, a), Q_2(s, a))]$.
+- Update Temperature $\alpha$ using loss $\mathcal{L}(\alpha) = -\alpha (\log \pi(a|s) + \mathcal{H}_0)$.
+- Soft update target networks: $\phi_i^- \leftarrow \tau \phi_i + (1-\tau)\phi_i^-$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **SAC Gaussian Stochastic Actor**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Normal
+
+class SACGaussianActor(nn.Module):
+    """ SAC Stochastic Gaussian Policy with Tanh Correction """
+    def __init__(self, state_dim=17, action_dim=6, max_action=1.0, log_std_min=-20, log_std_max=2):
+        super().__init__()
+        self.max_action = max_action
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        
+        self.fc1 = nn.Linear(state_dim, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.mu_head = nn.Linear(256, action_dim)
+        self.log_std_head = nn.Linear(256, action_dim)
+
+    def forward(self, state):
+        h = F.relu(self.fc1(state))
+        h = F.relu(self.fc2(h))
+        mu = self.mu_head(h)
+        log_std = self.log_std_head(h)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        return mu, log_std
+
+    def sample(self, state):
+        mu, log_std = self.forward(state)
+        std = log_std.exp()
+        normal = Normal(mu, std)
+        
+        # Reparameterization Trick: u = mu + std * eps
+        u = normal.rsample()
+        action = torch.tanh(u)
+        
+        # Enforce action bound log-prob correction
+        log_prob = normal.log_prob(u) - torch.log(1.0 - action.pow(2) + 1e-6)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)
+        
+        return action * self.max_action, log_prob, torch.tanh(mu) * self.max_action
+
+if __name__ == "__main__":
+    B, state_dim, action_dim = 256, 17, 6
+    actor = SACGaussianActor(state_dim=state_dim, action_dim=action_dim)
+    state = torch.randn(B, state_dim)
+    
+    action, log_prob, mean_action = actor.sample(state)
+    
+    print(f"Sampled Action Shape:   {action.shape}")
+    print(f"Log Probability Shape:  {log_prob.shape}")
+    assert action.shape == (B, action_dim)
+    assert log_prob.shape == (B, 1)
+    print("SAC Gaussian Actor verification successful!")
+```
+
+## 10. Strengths
+- **State-of-the-Art Off-Policy Stability:** Maximum Entropy RL prevents premature policy collapse.
+- **Automatic Temperature Tuning:** Eliminates manual entropy hyperparameter tuning.
+- **High Sample Efficiency:** $10\times$ more sample efficient than PPO on robotics benchmarks.
+
+## 11. Weaknesses
+- **Computationally Heavy:** Requires 5 neural networks (Actor, 2 Critics, 2 Target Critics) and dual gradient updates.
+
+## 12. Research Evolution
+SAC established the state of the art in off-policy continuous control, leading to **REDQ** and **Soft Modular RL**.
+
+## 13. Interview Questions
+
+**Q1: What is Maximum Entropy Reinforcement Learning, and why does SAC use it?**
+**A1:** Maximum Entropy RL maximizes expected cumulative reward AND policy entropy: $\sum [r_t + \alpha \mathcal{H}(\pi(\cdot|s_t))]$. Rewarding policy randomness encourages multi-modal exploration, prevents premature policy collapse, and makes learned policies robust to environment noise.
+
+**Q2: Write out the Entropy-Regularized Soft Bellman Equation for $Q(s_t, a_t)$.**
+**A2:** $Q(s_t, a_t) = r(s_t, a_t) + \gamma \mathbb{E}_{s_{t+1}, a_{t+1}} \left[ Q(s_{t+1}, a_{t+1}) - \alpha \log \pi(a_{t+1} \mid s_{t+1}) \right]$.
+
+**Q3: Why is the Tanh Log-Probability correction necessary when sampling actions in SAC?**
+**A3:** Applying $a = \tanh(u)$ maps unconstrained Gaussian outputs into bounded range $[-1, 1]$. By the Change-of-Variables theorem, the non-linear transformation alters probability density, requiring the log-prob correction $\log \pi(a|s) = \log \mu(u|s) - \sum \log(1 - \tanh^2(u) + \epsilon)$.
+
+**Q4: How does Automatic Temperature Tuning ($\alpha$) work in SAC?**
+**A4:** $\alpha$ is treated as a learnable parameter updated via dual gradient descent: $\mathcal{L}(\alpha) = -\alpha (\log \pi(a|s) + \mathcal{H}_0)$, where $\mathcal{H}_0 = -\dim(\mathcal{A})$ is the target entropy. If entropy drops below $\mathcal{H}_0$, $\alpha$ increases to boost exploration.
+
+**Q5: Compare SAC with TD3.**
+**A5:** TD3 uses a deterministic policy $\mu(s)$ with manual exploration noise. SAC uses a stochastic Gaussian policy $\pi(a|s)$ with Maximum Entropy RL and automatic temperature tuning ($\alpha$). Both use Twin Critics ($\min(Q_1, Q_2)$).
+
+## 14. Related Papers
+- **SAC Paper:** *Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor* (Haarnoja et al., ICML 2018)
+- **SAC Applications:** *Soft Actor-Critic Algorithms and Applications* (Haarnoja et al., arXiv 2018)
+
+## 15. Further Reading
+- Tuomas Haarnoja's Official SAC PyTorch Implementation

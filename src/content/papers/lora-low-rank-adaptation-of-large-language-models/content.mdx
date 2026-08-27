@@ -1,0 +1,175 @@
+# LoRA: Low-Rank Adaptation of Large Language Models
+
+**Hu, Shen, Wallis et al. (Microsoft) · arXiv 2021 · arXiv:2106.09685 · ~12,000 citations**
+
+---
+
+## 1. Overview
+
+**LoRA (Low-Rank Adaptation)** is one of the most widely used Parameter-Efficient Fine-Tuning (PEFT) techniques in deep learning. Developed by researchers at Microsoft, it solved a major challenge: as Large Language Models grew to hundreds of billions of parameters, fine-tuning all model parameters for specific downstream tasks became computationally prohibitive and memory-intensive.
+
+Rather than updating the full $d \times d$ weight matrices of the model, LoRA freezes the pre-trained weights and injects two trainable **low-rank decomposition matrices** ($A$ and $B$) in parallel. This reduces the number of trainable parameters by up to 10,000x and GPU memory requirements by 3x. Crucially, at inference time, these low-rank matrices can be merged back into the base weights, introducing **zero additional inference latency**.
+
+---
+
+## 2. Historical Context
+
+In 2021, the standard workflow for adapting pre-trained models to specific tasks was **Full Fine-Tuning**: updating all parameters of the model. For models like GPT-3 (175B parameters), full fine-tuning required storing gradients and optimizer states for all weights, demanding hundreds of gigabytes of GPU memory.
+
+Early PEFT attempts included:
+- **Adapter layers:** Inserting small bottleneck layers sequentially inside transformer blocks. These layers added sequential computation steps, increasing inference latency by 10-30%.
+- **Prefix Tuning / Prompt Tuning:** Prepending trainable virtual token embeddings to the keys and values. This was hard to optimize, restricted the effective prompt context length, and degraded performance on out-of-distribution tasks.
+
+---
+
+## 3. Research Problem
+
+Can we adapt a large language model to specific tasks by updating only a tiny fraction of its parameters, without degrading downstream performance or adding latency at inference time? Specifically:
+1. How do we represent weight updates in a low-dimensional space?
+2. Which transformer layers should be targeted for optimal fine-tuning efficiency?
+3. How does this low-rank formulation compare to full fine-tuning on diverse tasks?
+
+---
+
+## 4. Prior Work
+
+| Method | Trainable Params | GPU Memory Savings | Added Inference Latency | Context Length Preservation |
+|:---|:---|:---|:---|:---|
+| Full Fine-Tuning | 100% | None | None | Yes |
+| Adapter Layers | ~1% | High | Yes (Sequential overhead) | Yes |
+| Prefix Tuning | &lt;1% | High | Minimal | No (Consumes context) |
+| **LoRA** | **&lt;0.1%** | **High (3x savings)** | **None (Zero overhead)** | **Yes** |
+
+---
+
+## 5. Why Previous Methods Failed
+
+**Adapters:** Adapters insert sequential feedforward blocks after attention and MLP layers. This breaks the parallelism of the GPU, as threads must wait for the sequential adapter calculations to finish. This creates a latency bottleneck when running inference at scale.
+
+**Prefix/Prompt Tuning:** Virtual token approaches are highly sensitive to learning rate initialization. Because they consume part of the model's sequence length, they leave less space for actual prompt context, limiting usefulness for long-document tasks.
+
+---
+
+## 6. Core Innovation
+
+LoRA is based on the hypothesis that the weight updates during adaptation have a low **intrinsic rank**.
+
+For a pre-trained weight matrix $W_0 \in \mathbb{R}^{d \times k}$, LoRA parameterizes the update $\Delta W$ using two low-rank matrices $B \in \mathbb{R}^{d \times r}$ and $A \in \mathbb{R}^{r \times k}$ where $r \ll \min(d, k)$:
+$$W = W_0 + \Delta W = W_0 + \frac{\alpha}{r} B A$$
+During training, $W_0$ is frozen (receives no gradient updates). Only $A$ and $B$ are updated.
+
+```
+                  Input (x)
+                 /         \
+                /           \
+     [Frozen Base W0]     [Trainable Matrix A] (Initialized with Gaussian)
+        (d x k)                  (d x r)
+            |                       |
+            |             [Trainable Matrix B] (Initialized with Zero)
+            |                    (r x k)
+            \                       /
+             \                     /
+              + ---> Output (y) <--- (Scaled by alpha / r)
+```
+
+**Initialization Scheme:**
+- Matrix $A$ is initialized from a random Gaussian distribution.
+- Matrix $B$ is initialized to zero.
+- This ensures $\Delta W = 0$ at the start of training, meaning the model's behavior is initially unchanged.
+
+---
+
+## 7. Architecture Breakdown
+
+**Low-Rank Tensors:**
+- In standard transformers, LoRA is applied to the attention projection weights ($W_q, W_k, W_v, W_o$).
+- **Rank ($r$):** Typically set to a very small value, such as 4 or 8.
+- **Scaling ($\alpha$):** A constant hyperparameter that scales the low-rank delta updates. The scaling factor is $\frac{\alpha}{r}$. Scaling is kept constant when tuning $r$, ensuring stable optimization.
+
+---
+
+## 8. Mathematical Foundations
+
+**Weight Merging for Inference:**
+During training, we compute the forward pass as:
+$$h = W_0 x + \Delta W x = W_0 x + \frac{\alpha}{r} B A x$$
+Once training is complete, we can pre-compute $\Delta W = \frac{\alpha}{r} B A$ and add it directly to $W_0$:
+$$W_{\text{merged}} = W_0 + \frac{\alpha}{r} B A$$
+We store only $W_{\text{merged}}$ for deployment. At inference, we compute $h = W_{\text{merged}} x$, which requires the exact same number of operations as the original base model, adding **zero latency**.
+
+---
+
+## 9. Key Experiments
+
+- Evaluated LoRA on RoBERTa-large, DeBERTa-v2, and GPT-3 (175B).
+- Task domains: GLUE (understanding), WikiText-2 (language modeling), and generation datasets (E2E NLG).
+- Evaluated performance across different ranks ($r \in [1, 2, 4, 8, 64, 128, 256]$).
+
+---
+
+## 10. Benchmark Results
+
+Results on GPT-3 175B:
+
+| Model | Fine-Tuning Type | Trainable Parameters | WikiText-2 Perplexity | E2E BLEU Score |
+|:---|:---|:---|:---|:---|
+| GPT-3 175B | None (Few-shot) | 0 | 20.5 | 26.8 |
+| GPT-3 175B | Full Fine-Tuning | 175B (100%) | 18.2 | 35.8 |
+| GPT-3 175B | Adapter (Seq) | 270M (0.15%) | 18.9 | 34.2 |
+| **GPT-3 175B** | **LoRA (r=4)** | **37.7M (0.02%)** | **17.9** | **35.9** |
+
+**LoRA matched or exceeded full fine-tuning performance using only 0.02% of the trainable parameters.**
+
+---
+
+## 11. Ablation Studies
+
+**Targeting Attention Heads:**
+The authors studied which weight matrices should be targeted with LoRA. They found that applying LoRA to both $W_q$ and $W_v$ with a small rank ($r=4$) yielded better results than applying it to $W_q$ alone with a larger rank ($r=8$). This showed that adapting multiple attention layers is more effective than scaling the rank of a single layer.
+
+---
+
+## 12. Implementation Details
+
+- **Optimizer:** AdamW.
+- **Initialization:** $A \sim \mathcal{N}(0, \sigma^2)$ with $\sigma=1/\sqrt{r}$; $B = 0$.
+- **Scale:** $\alpha = 16$ or $32$ (default).
+- **Weight decay:** 0.01.
+
+---
+
+## 13. Engineering Insights
+
+- **Zero latency deployment:** The ability to merge weights makes LoRA highly practical for serving systems.
+- **Dynamic Task Switching:** In multi-tenant systems, we can store a single copy of the large base model $W_0$ in GPU memory. When a user requests a specific task, we load the tiny $A$ and $B$ matrices (a few megabytes) and apply them to the batch, avoiding the need to host separate 175B model instances.
+- **Optimizer State Memory Savings:** By reducing trainable parameters, LoRA saves massive VRAM during training by eliminating the need to store optimizer states (e.g., Adam's first and second moments) for the base weights.
+
+---
+
+## 14. Limitations
+
+- **Task Batching Challenges:** Batching requests from different users who require different LoRA adapters is difficult if the weights are merged. If we do not merge the weights, we lose the zero-latency benefit.
+- **Linear Representation Constraint:** LoRA is restricted to linear layers. It cannot easily adapt non-linear components like LayerNorm or activation functions.
+- **Underperforming on Multi-task Training:** A single low-rank update may lack the capacity to learn multiple distinct tasks simultaneously compared to full fine-tuning.
+
+---
+
+## 15. Influence on Later Research
+
+- **QLoRA (Dettmers et al., 2023):** Combines LoRA with 4-bit base model quantization, enabling the fine-tuning of 70B models on a single 48GB GPU.
+- **LoRA for Diffusion Models:** Used to train custom style adapters (SD-LoRAs) for Stable Diffusion, allowing users to fine-tune specific characters or art styles with only a few MBs of weights.
+- **AdaLoRA (Zhang et al., 2023):** Dynamically allocates parameter budget across layers based on importances, pruning low-rank matrices during training.
+
+---
+
+## 16. Related Architectures
+
+- [Transformer](/architectures/transformer) — the base architecture targeted by LoRA.
+- [LLaMA](/architectures/llama) — base model commonly fine-tuned using LoRA and QLoRA.
+
+---
+
+## 17. Related Problems
+
+- [gradient-descent](/dojo/ml-gradient-descent) — the optimizer math used to train the low-rank weights.
+- [backpropagation](/dojo/dl-backprop-single-neuron) — calculating gradients for $A$ and $B$ matrices while freezing $W_0$.

@@ -1,0 +1,229 @@
+# Swin v2
+
+## 1. Overview
+Swin Transformer V2 (Swin v2), released in early 2022 by Microsoft Research Asia, is an architectural evolution designed to push the boundaries of Vision Transformers (ViTs) to unprecedented scales. The original Swin Transformer (V1) successfully adapted Transformers to computer vision by introducing hierarchical feature maps and shifted window attention, allowing it to process images efficiently. However, when researchers tried to scale Swin V1 up to massive sizes (billions of parameters) and huge image resolutions (e.g., 1536x1536 pixels), they encountered severe training instability and massive memory consumption. Swin V2 solved these scaling issues through three brilliant mathematical and architectural modifications: replacing the standard dot-product attention with scaled **Cosine Attention**, introducing a **Log-Spaced Continuous Position Bias** (allowing seamless transfer across vastly different resolutions), and utilizing **SimMIM** (a self-supervised masked image modeling approach) to train a massive 3-Billion parameter model. Swin V2 set new state-of-the-art records across multiple benchmarks, proving that ViTs could scale as effectively in vision as they do in NLP.
+
+:::warning
+Swin v2 is a highly advanced architecture. To fully understand it, you must first be comfortable with the concepts of Shifted Window (Swin) Attention from V1, as V2 focuses entirely on the mathematical tweaks required to scale that base architecture to massive sizes.
+:::
+
+## 2. Historical Context
+By 2022, Large Language Models (LLMs) in NLP had easily scaled past 100 billion parameters (e.g., GPT-3, Megatron-Turing), demonstrating predictable performance gains with increased scale. In contrast, Vision Transformers were lagging. The largest dense vision models were stuck around 1 billion parameters. Scaling them further resulted in "activation explosions" (where values in deeper layers became so large they caused NaN errors and crashed training). Furthermore, fine-tuning a model trained on 224x224 images on a massive 1536x1536 image caused the positional embeddings to break down. Microsoft Research set out to solve these exact scaling bottlenecks. Swin v2 was their answer: a masterclass in normalizing activations and re-thinking positional biases, allowing them to train a 3-billion parameter model that could ingest massive high-resolution imagery for tasks like medical imaging and satellite analysis, bringing the "scaling laws" era definitively to computer vision.
+
+## 3. Problem It Solves
+Swin V2 addresses two primary bottlenecks in scaling Vision Transformers: **Training Instability at Scale** and **Resolution Transfer Degradation**. 
+1. **Instability:** In massive Transformers, the variance of the activations grows exponentially in deeper layers. Standard dot-product attention exacerbates this, causing activation spikes that crash mixed-precision (FP16) training. Swin V2 solves this by replacing the dot product with *Cosine Attention*, which mathematically bounds the attention scores between -1 and 1, completely eliminating activation explosions regardless of model depth. 
+2. **Resolution Transfer:** If you train a model on $256^2$ images and test on $1536^2$, the relative distances between patches change drastically. Standard relative position biases fail because they only learned small distances. Swin V2 solves this using *Log-spaced Continuous Position Bias*. Instead of a discrete lookup table, a tiny neural network calculates the bias based on the log of the distance. This allows the model to smoothly extrapolate to massive, unseen resolutions during fine-tuning without losing performance.
+
+## 4. Architecture Diagram Data
+Below is a conceptual representation of the modifications in a Swin V2 Block, highlighting the post-normalization and cosine attention.
+
+```text
+    +===========================================================+
+    |                 Swin V2 Transformer Block                 |
+    |                                                           |
+    |                     [ Input Features ]                    |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |        Window / Shifted-Window Partitioning         |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |              Scaled Cosine Attention                |  |
+    |  |                                                     |  |
+    |  |     1. Normalize Q and K (L2 Norm)                  |  |
+    |  |     2. Cosine Similarity: (Q_norm * K_norm^T) / tau |  |
+    |  |     3. Add Log-Spaced Continuous Position Bias      |  |
+    |  |     4. Softmax & Multiply with V                    |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |               Layer Normalization                   |  |
+    |  |             (Moved to POST-Attention)               |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |                  Dense FFN (GELU)                   |  |
+    |  +-----------------------------------------------------+  |
+    |                            |                              |
+    |                       [Residual Add]                      |
+    |                            |                              |
+    |  +-----------------------------------------------------+  |
+    |  |               Layer Normalization                   |  |
+    |  |                (Moved to POST-FFN)                  |  |
+    |  +-----------------------------------------------------+  |
+    +===========================================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+The macro-architecture of Swin V2 maintains the hierarchical feature maps of V1 (merging patches at different stages to create feature maps of varying resolutions). The critical changes occur *inside* the Transformer blocks.
+
+**1. Post-Normalization:** In standard ViTs (and Swin V1), LayerNorm is applied *before* the attention and FFN layers (Pre-Norm). Swin V2 moves LayerNorm to *after* the residual addition (Post-Norm). The authors found that Pre-Norm allows the main branch activations to accumulate and grow unbounded in massive models. Post-Norm forces the activations to be re-normalized at the end of every block, stabilizing the main branch.
+
+**2. Scaled Cosine Attention:** Standard attention uses the dot product ($Q \cdot K^T$). In deep networks, the magnitude of $Q$ and $K$ can spike, causing the dot product to yield massive numbers, pushing the Softmax function into regions with zero gradients (saturation). Swin V2 computes the cosine similarity instead. It L2-normalizes $Q$ and $K$ before multiplying them. The result is strictly bounded between $[-1, 1]$. This is then scaled by a learnable parameter $\tau$ (tau). This completely prevents attention saturation.
+
+**3. Log-Spaced Continuous Position Bias:** Swin V1 used a discrete lookup table for relative position bias. If fine-tuning on a larger image, the table size had to be awkwardly interpolated. Swin V2 passes the relative coordinates $(\Delta x, \Delta y)$ into a 2-layer MLP to generate the bias. Crucially, it converts the linear coordinates into logarithmic coordinates. This means transferring from a $256^2$ image to a $1536^2$ image only requires a small extrapolation in log-space, making it vastly more stable.
+
+## 6. Tensor Flow Walkthrough
+Let's trace the Cosine Attention mechanism inside a Swin V2 window. Assume Batch `B=8`, Window Size `M=8`, sequence length in window `T=M^2=64`, Heads `H=4`, Head Dim `D_h=32`.
+
+1.  **Input to Attention:** `X` (already partitioned into a window)
+    *   Shape: `(B, T, H, D_h)` -> `(8, 64, 4, 32)`
+2.  **Linear Projections:**
+    *   $Q = X W^Q$, $K = X W^K$, $V = X W^V$
+    *   Shapes for $Q, K, V$: `(8, 64, 4, 32)`
+3.  **L2 Normalization (The Cosine shift):**
+    *   Normalize $Q$ along the `D_h` dimension. `Q_norm = Q / ||Q||_2`
+    *   Normalize $K$ along the `D_h` dimension. `K_norm = K / ||K||_2`
+    *   Shapes remain: `(8, 64, 4, 32)`
+4.  **Cosine Similarity:**
+    *   `Sim = Q_norm * K_norm^T`
+    *   Shape: `(B, H, T, T)` -> `(8, 4, 64, 64)`
+    *   *Note: Values in `Sim` are now strictly between -1 and 1.*
+5.  **Scaling and Bias:**
+    *   Multiply by a learnable scalar $\tau$ (often initialized to 1/0.01).
+    *   `Scaled_Sim = Sim / tau`
+    *   Add the Log-Spaced Continuous Position Bias (shape `1, 4, 64, 64`).
+    *   `Scores = Scaled_Sim + Bias`
+6.  **Attention Output:**
+    *   `Attn_out = Softmax(Scores) * V`
+    *   Shape: `(B, H, T, D_h)` -> flatten to `(B, T, D_model)`
+
+## 7. Mathematical Foundations
+The two defining mathematical shifts in Swin V2 are Cosine Attention and Log-spaced coordinates.
+
+**1. Scaled Cosine Attention:**
+Standard dot-product attention is defined as:
+$$ \text{Sim}(q_i, k_j) = \frac{q_i \cdot k_j}{\sqrt{d}} $$
+In massive models, the magnitude of $q$ and $k$ can dominate this calculation, causing extreme values.
+Swin V2 replaces this with Cosine Similarity, which focuses purely on the *angle* between the vectors, ignoring their magnitude.
+$$ \text{Sim}(q_i, k_j) = \frac{q_i \cdot k_j}{\|q_i\|_2 \|k_j\|_2} = \cos(\theta) $$
+This value is strictly bounded $[-1, 1]$. To allow the Softmax to produce sharp probability distributions (rather than a flat, uniform distribution), it is divided by a learnable temperature parameter $\tau$:
+$$ \text{Attention}(Q, K, V) = \text{Softmax}\left(\frac{\cos(Q, K)}{\tau} + B\right)V $$
+
+**2. Log-Spaced Continuous Position Bias:**
+Let $\Delta x$ and $\Delta y$ be the linear distance between two pixels in a window. Swin V2 transforms these coordinates into log-space before passing them into a small MLP network $\mathcal{G}$ to generate the bias $B$:
+$$ \widehat{\Delta x} = \text{sign}(\Delta x) \cdot \log(1 + |\Delta x|) $$
+$$ \widehat{\Delta y} = \text{sign}(\Delta y) \cdot \log(1 + |\Delta y|) $$
+$$ B = \mathcal{G}(\widehat{\Delta x}, \widehat{\Delta y}) $$
+**Why?** If you train on window size 8, $\Delta x \in [-7, 7]$. If you test on window size 24, $\Delta x \in [-23, 23]$. In linear space, extrapolating from 7 to 23 is a massive jump (factor of 3.2x). In log space, the jump is much smaller and smoother, allowing the small MLP to extrapolate safely without causing artifacts in the attention maps.
+
+## 8. Training Procedure
+Training a 3-billion parameter vision model required significant innovations in memory management and self-supervised learning.
+
+**Self-Supervised Pre-training (SimMIM):** You cannot train a 3B parameter model from scratch on ImageNet-1K (1.2M images) using standard supervised learning; it will simply memorize the dataset instantly (overfitting). To solve this, Microsoft used **SimMIM** (a variant of masked image modeling, similar to MAE). They masked out large portions of the image and forced the 3B model to reconstruct the raw pixel values. This self-supervised task is incredibly difficult, forcing the massive model to learn deep semantic representations of the visual world without relying on human labels.
+
+**Memory Optimization:** A 3B model processing high-resolution images ($1536^2$) requires astronomical VRAM, far exceeding the capacity of a single A100 GPU (80GB). Microsoft utilized **ZeRO** optimizer state partitioning (from DeepSpeed) to split the model across GPUs. Crucially, they also heavily utilized **Activation Checkpointing**, saving only a subset of activations during the forward pass and re-computing the rest during the backward pass, trading a slight increase in compute time for a massive reduction in VRAM footprint.
+
+## 9. PyTorch Implementation
+Below is a PyTorch implementation of the Scaled Cosine Attention mechanism, the core innovation of Swin V2.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CosineAttention(nn.Module):
+    def __init__(self, d_model, n_heads):
+        super().__init__()
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        
+        self.qkv = nn.Linear(d_model, d_model * 3, bias=True)
+        self.proj = nn.Linear(d_model, d_model)
+        
+        # Learnable temperature parameter tau, initialized to > 0
+        # In the paper, initialized such that 1/tau = 100
+        self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((n_heads, 1, 1))))
+        
+    def forward(self, x, relative_position_bias=None):
+        B, T, C = x.shape
+        
+        # Generate Q, K, V
+        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2] # Shapes: (B, n_heads, T, d_head)
+        
+        # --- SWIN V2: COSINE SIMILARITY ---
+        # 1. L2 Normalize Q and K along the feature dimension (d_head)
+        q_norm = F.normalize(q, p=2, dim=-1)
+        k_norm = F.normalize(k, p=2, dim=-1)
+        
+        # 2. Dot product of normalized vectors yields Cosine Similarity
+        # Resulting values are strictly in [-1, 1]
+        attn = torch.matmul(q_norm, k_norm.transpose(-2, -1)) # (B, n_heads, T, T)
+        
+        # 3. Scale by learnable parameter tau
+        # torch.exp ensures tau is positive
+        logit_scale = torch.clamp(torch.exp(self.logit_scale), max=100)
+        attn = attn * logit_scale
+        
+        # Add position bias (assume passed in from log-spaced MLP in full model)
+        if relative_position_bias is not None:
+            attn = attn + relative_position_bias
+            
+        # Softmax and multiply by V (V is NOT normalized)
+        attn = F.softmax(attn, dim=-1)
+        out = torch.matmul(attn, v)
+        
+        # Reshape and project
+        out = out.transpose(1, 2).reshape(B, T, C)
+        out = self.proj(out)
+        
+        return out
+
+# --- Test ---
+if __name__ == "__main__":
+    B, T, d_model = 2, 64, 128
+    n_heads = 4
+    
+    attn_module = CosineAttention(d_model, n_heads)
+    x = torch.randn(B, T, d_model)
+    
+    # Dummy bias for shape testing (1, n_heads, T, T)
+    dummy_bias = torch.zeros(1, n_heads, T, T)
+    
+    out = attn_module(x, relative_position_bias=dummy_bias)
+    
+    print(f"Input shape: {x.shape}")
+    print(f"Output shape: {out.shape}")
+    assert out.shape == (B, T, d_model), "Shape mismatch!"
+    print("Test passed: Swin V2 Cosine Attention evaluated successfully.")
+```
+
+## 10. Strengths
+Swin V2's greatest strength is its absolute scalability. By solving the mathematical instabilities of deep transformers using Cosine Attention and Post-Norm, it allowed researchers to build vision models on par with massive NLP LLMs (3 Billion parameters). Furthermore, its Log-Spaced Continuous Position Bias gives it unmatched versatility in handling resolution changes. A model can be pre-trained quickly and cheaply on small $256^2$ images, and then successfully fine-tuned on massive $1536^2$ satellite or medical images without the attention mechanism breaking down. This flexibility cemented Swin V2 as a foundational backbone for a vast array of downstream computer vision tasks (object detection, segmentation) that require high-resolution feature maps.
+
+## 11. Weaknesses
+The primary weakness of Swin V2 is its extreme engineering complexity. Implementing the Shifted Window partitioning (from V1) combined with the continuous coordinate log-transformations and grouped self-attention requires highly specialized CUDA kernels to run efficiently. It is significantly harder to code, debug, and optimize than a standard, "vanilla" Vision Transformer (like ViT or DeiT). Additionally, while it is efficient for its size, training the 3B parameter variant is completely out of reach for anyone outside of massive tech conglomerates, requiring thousands of GPU hours and complex ZeRO memory partitioning just to load the model into VRAM.
+
+## 12. Research Evolution
+Swin V2 marked the moment the "Scaling Laws" definitively arrived in computer vision. It proved that the instability issues preventing ViTs from reaching 100B+ parameters were not inherent flaws of the Transformer, but simply a need for better normalization and mathematical bounding (Cosine Attention). Its success with SimMIM self-supervised training also accelerated the industry's shift away from supervised ImageNet training, proving that massive vision models, just like language models, are best trained by reconstructing masked data. Swin V2 heavily influenced the design of subsequent foundation models, establishing that hierarchical structures and bounded attention are critical for handling the massive spatial dimensions of high-resolution video and 3D imaging.
+
+## 13. Interview Questions
+
+**Q1: What specific training failure occurs when scaling standard Vision Transformers to billions of parameters, and how does Swin V2's Cosine Attention solve it?**
+**A1:** In massive Transformers, the variance of the activations grows in deeper layers. When calculating standard dot-product attention ($Q \cdot K^T$), these large activations multiply, resulting in massive attention scores. This pushes the Softmax function into saturation, resulting in zero gradients and crashing training. Cosine Attention solves this by L2-normalizing $Q$ and $K$ before multiplying. This strictly bounds the attention scores between -1 and 1, completely preventing activation explosions regardless of model depth.
+
+**Q2: Why did Swin V2 move the Layer Normalization to *after* the residual addition (Post-Norm) instead of keeping it before (Pre-Norm)?**
+**A2:** Microsoft researchers found that in massive models, Pre-Norm allows the values in the main residual branch (the skip connection) to accumulate unbounded layer after layer, leading to instability. By moving Layer Normalization to the end of the block (Post-Norm), every block's output is forced back into a normalized distribution before being passed to the next block, acting as a strict safety valve that stabilizes the entire network.
+
+**Q3: Explain the problem with fine-tuning a model on a larger image resolution, and how Log-Spaced Continuous Position Bias addresses it.**
+**A3:** If you train on a small window (e.g., 8x8 pixels) and test on a large window (e.g., 24x24), the linear distances between pixels increase by a factor of 3x. A standard relative position table has never seen these large distances and extrapolates poorly. By taking the logarithm of the coordinates before passing them to a small neural network to generate the bias, the massive 3x jump in linear space becomes a very small, manageable shift in log space. This allows the network to extrapolate smoothly to much larger resolutions.
+
+**Q4: How did Microsoft train the 3-Billion parameter Swin V2 without it instantly overfitting to the ImageNet dataset?**
+**A4:** They abandoned standard supervised learning (predicting the label "dog"). Instead, they used SimMIM, a self-supervised masked image modeling technique. They masked out huge portions of the input images and forced the 3B model to reconstruct the missing raw pixels. This is a vastly more complex task than simple classification, forcing the massive model to learn deep semantic representations without overfitting to human-provided labels.
+
+**Q5: What is the role of the learnable parameter $\tau$ (tau) in Swin V2's Cosine Attention?**
+**A5:** Cosine similarity strictly bounds values between -1 and 1. If you pass values from [-1, 1] directly into a Softmax function, the resulting probability distribution is very "flat" or uniform, meaning the model can't focus sharply on specific tokens. By dividing the cosine similarity by a small temperature parameter $\tau$ (e.g., $\tau = 0.01$, effectively multiplying the score by 100), the values are expanded, allowing the Softmax to produce the sharp, confident attention distributions required for learning.
+
+## 14. Related Papers
+*   **Swin Transformer V2: Scaling Up Capacity and Resolution (Liu et al., 2022):** The official Swin V2 paper.
+*   **Swin Transformer: Hierarchical Vision Transformer using Shifted Windows (Liu et al., 2021):** The foundational Swin V1 architecture.
+*   **SimMIM: A Simple Framework for Masked Image Modeling (Xie et al., 2021):** Details the self-supervised training method used for the 3B model.
+
+## 15. Further Reading
+*   DeepSpeed documentation on ZeRO optimization for training massive models.
+*   Comparisons of Pre-Norm vs. Post-Norm in deep Transformer architectures.
+*   Explorations of activation checkpointing techniques to save VRAM during training.

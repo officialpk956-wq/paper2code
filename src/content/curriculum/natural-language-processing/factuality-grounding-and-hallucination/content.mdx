@@ -1,0 +1,110 @@
+# Factuality, Grounding & Hallucination
+
+## 1. Overview
+
+Hallucination — a language model confidently generating false information, fabricated citations, or nonexistent facts — is widely considered the single biggest obstacle to deploying LLMs in any setting where being wrong has real consequences: legal research, medical advice, financial analysis. This topic studies why hallucination happens (it's not a bug in the ordinary software sense, but a structural consequence of how language models are trained and how they generate text), how to measure it rigorously, and the main families of techniques — retrieval grounding, citation generation, calibration — used to reduce it in production systems.
+
+## 2. Prerequisites in Context
+
+**RLHF** matters because a model's tendency to hallucinate is heavily shaped by its post-training alignment process — RLHF can inadvertently reward confident-sounding, fluent responses over correctly hedged "I don't know" responses, since human raters (and reward models trained on their preferences) often rate confident wrong answers as more helpful-seeming than honest uncertainty, a subtle but well-documented failure mode. **RAG** (retrieval-augmented generation) is the primary grounding technique this topic covers in depth, so you need to understand the basic retrieve-then-generate pipeline before examining how grounding specifically reduces (but does not eliminate) hallucination. **Evaluation Methodology** is essential because measuring hallucination rigorously — distinguishing a genuinely false claim from a subjective, unverifiable, or merely imprecise one — turns out to be a much harder problem than it first appears, and sloppy evaluation methodology is a common source of misleading hallucination-rate claims in the literature.
+
+## 3. Core Concept
+
+At a mechanistic level, a language model is trained to predict the most probable next token given its context — it has no built-in mechanism to check whether a generated claim is actually true, only whether it's *plausible* given the patterns in its training data. When a model is asked about something it has weak, contradictory, or absent knowledge of, it doesn't have a reliable way to recognize this gap and abstain — instead, it continues generating fluent, grammatically confident text, because fluency (not truthfulness) is what the underlying training objective directly optimizes for. This explains why hallucinations are often maximally *convincing*: the model isn't trying to deceive, it's doing exactly what it was trained to do (produce plausible continuations), and a plausible-sounding fabrication is, by construction, hard to distinguish from a plausible-sounding true statement using surface features alone. **Grounding** techniques address this by giving the model access to external, verifiable information at generation time (via retrieval) so that at least some of its claims can be directly checked against or directly copied from a trustworthy source, rather than relying purely on the model's internal, unverifiable parametric "memory" of its training data.
+
+## 4. Theoretical Foundations
+
+Hallucination is often decomposed into two categories with different root causes. **Intrinsic hallucination** occurs when a model's output contradicts its own given source/context (relevant in summarization: the model states something the source document doesn't actually say) — this is measurable via natural language inference (NLI) style entailment checking between the generated claim and the source. **Extrinsic hallucination** occurs when a model generates a claim that can't be verified or contradicted by the given source at all (it's simply added information, possibly true, possibly false, but ungrounded in what was provided) — this is much harder to measure automatically, since it requires checking against external world knowledge rather than just the immediate context. A useful way to think about faithfulness quantitatively for retrieval-augmented generation is **citation precision and recall**: precision measures what fraction of a generated claim's cited sources actually support that claim, and recall measures what fraction of the claim's content is actually attributable to some cited source — a system can score well on one while scoring poorly on the other (e.g., citing sources that are technically relevant but don't actually support the specific claim made, a common and subtle failure mode).
+
+## 5. Worked Example
+
+Ask an ungrounded LLM "What year did [an obscure, real but rarely-discussed historical figure] publish their most famous work?" If this fact appears rarely or ambiguously in the model's training data, the model doesn't have a reliable internal signal telling it "I'm uncertain about this" — its next-token prediction process will still assign meaningfully high probability to *some* specific year, because the training objective rewards producing a plausible-sounding continuation, and a vague hedge ("I'm not sure") is often a less probable continuation pattern in typical training text than a confident, specific (but potentially wrong) answer. Now give the same model a retrieved paragraph from a reliable source containing the correct year, as context, and ask the same question: the model can now directly copy or closely paraphrase the grounded fact rather than relying on its uncertain internal knowledge — this contrast is exactly why RAG measurably reduces (though does not eliminate — the model can still misread or misattribute the retrieved passage) hallucination rates on knowledge-intensive questions compared to closed-book generation.
+
+## 6. Code / Implementation
+
+```python
+import re
+
+def citation_precision_recall(generated_text, cited_sources, claim_extractor, entailment_checker):
+    """
+    Simplified faithfulness scoring for a RAG-generated answer with inline citations.
+    claim_extractor: text -> list of (claim, cited_source_ids) pairs
+    entailment_checker: (claim, source_text) -> bool (does source support the claim?)
+    """
+    claims_with_citations = claim_extractor(generated_text)
+    total_claims, total_citations = 0, 0
+    supported_claims, supported_citations = 0, 0
+
+    for claim, source_ids in claims_with_citations:
+        total_claims += 1
+        claim_supported = any(entailment_checker(claim, cited_sources[sid]) for sid in source_ids)
+        if claim_supported:
+            supported_claims += 1
+        for sid in source_ids:
+            total_citations += 1
+            if entailment_checker(claim, cited_sources[sid]):
+                supported_citations += 1
+
+    recall = supported_claims / total_claims if total_claims else 1.0
+    precision = supported_citations / total_citations if total_citations else 1.0
+    return {"citation_precision": precision, "citation_recall": recall}
+
+if __name__ == "__main__":
+    # Toy example: naive keyword-overlap "entailment" checker for demonstration
+    def toy_entailment(claim, source):
+        claim_words = set(re.findall(r"\w+", claim.lower()))
+        source_words = set(re.findall(r"\w+", source.lower()))
+        overlap = len(claim_words & source_words) / len(claim_words)
+        return overlap > 0.5
+
+    def toy_extractor(text):
+        return [("The Eiffel Tower was completed in 1889 [1]", [1]),
+                ("It was designed by Gustave Eiffel and his engineering company [1]", [1])]
+
+    sources = {1: "The Eiffel Tower, completed in 1889, was designed by Gustave Eiffel's company."}
+    scores = citation_precision_recall("...", sources, toy_extractor, toy_entailment)
+    print(f"Citation precision: {scores['citation_precision']:.2f}, recall: {scores['citation_recall']:.2f}")
+```
+
+## 7. Real-World Applications
+
+Legal research tools (like those built on top of frontier LLMs for case-law search) invest heavily in citation-grounded generation specifically because a fabricated case citation in a legal filing has caused real, publicly documented professional sanctions for lawyers who submitted AI-generated briefs without verification — this is the highest-stakes, most publicized real-world hallucination failure mode to date. Medical question-answering systems built on LLMs universally require retrieval grounding against verified medical literature or clinical guidelines rather than relying on the model's closed-book parametric knowledge, precisely because the cost of a hallucinated drug interaction or dosage recommendation is unacceptably high. Search engines that have integrated LLM-generated summaries (rather than just links) rely heavily on citation-based grounding and explicit "cited sources" UI patterns specifically to let users verify claims rather than trusting the generated summary at face value.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is believing that RAG (retrieval augmentation) "solves" hallucination — it substantially reduces one category of hallucination (claims that contradict retrievable facts the model should have access to) but does not eliminate hallucination entirely, since the model can still misread, misattribute, or subtly misrepresent even correctly retrieved source content, and it does nothing to prevent hallucination on genuinely novel reasoning or synthesis that goes beyond any single retrieved passage. Another pitfall is conflating "confidently stated" with "verified" when evaluating model outputs — a model's expressed confidence (via its tone or hedging language) is not a reliable calibrated signal of actual correctness, since RLHF training can inadvertently teach models to sound confident regardless of underlying uncertainty, making surface-level confidence a poor proxy for actual factual reliability.
+
+## 9. How This Connects
+
+This topic requires **RLHF** (to understand how alignment training can inadvertently shape hallucination tendencies), **RAG** (as the primary grounding mechanism examined), and **Evaluation Methodology** (since rigorously measuring hallucination is itself a nontrivial methodological challenge). It directly unlocks **Faithful RAG** (research and engineering focused specifically on maximizing the correspondence between generated claims and retrieved sources, beyond basic retrieval augmentation), **Citation Generation** (the specific technical problem of producing accurate, verifiable inline citations alongside generated text), and **Verification Pipelines** (production systems that automatically check generated claims against trusted sources before surfacing them to end users, an increasingly standard component of high-stakes LLM deployments).
+
+## 10. Check Your Understanding
+
+**Q1: Why is hallucination described as a structural consequence of how LLMs are trained, rather than simply a bug?**
+Because a language model's core training objective is to predict plausible next tokens given context, not to verify factual truth — it has no built-in mechanism to distinguish "this is a well-supported fact" from "this is a plausible-sounding continuation," so when faced with a question it has weak or absent reliable knowledge about, it still generates fluent, confident-sounding text, because fluency (not truthfulness) is what's directly being optimized during training.
+
+**Q2: What's the difference between intrinsic and extrinsic hallucination?**
+Intrinsic hallucination occurs when a model's output actually contradicts its own provided source or context — measurable via checking whether the source entails the generated claim. Extrinsic hallucination occurs when the model adds information that the given source neither supports nor contradicts — it's simply unverifiable relative to that source, which makes it much harder to detect automatically since it requires checking against broader world knowledge rather than just the immediate context.
+
+**Q3: Why can a RAG system score well on citation recall but poorly on citation precision (or vice versa)?**
+Citation recall measures whether the claim's content is attributable to some cited source, while citation precision measures whether the cited sources actually support the specific claim made. A system can cite technically relevant-seeming sources for every claim (high apparent coverage, contributing to recall) while some of those citations don't actually substantiate the specific claim being made (low precision) — these are genuinely separate failure modes that require separate evaluation.
+
+**Q4: Why doesn't RAG (retrieval-augmented generation) fully eliminate hallucination?**
+Because even when relevant, accurate source material is successfully retrieved, the generating model can still misread, misattribute, over-generalize, or subtly misrepresent that source content in its output — retrieval solves the "did the model have access to the right information" problem but not the separate "did the model correctly use that information" problem, and it does nothing to prevent hallucination in reasoning or synthesis that goes beyond any single retrieved passage.
+
+**Q5: Why is a model's expressed confidence an unreliable signal of its actual factual accuracy?**
+Because RLHF and other post-training alignment processes can inadvertently reward confident-sounding responses over accurately hedged ones, since human raters often perceive confident answers as more helpful even when they're wrong — this means a model's surface-level tone of certainty reflects what was rewarded during training, not necessarily a calibrated, genuine assessment of how likely its claim is to be true.
+
+## 11. Further Reading
+
+- Ji et al., "Survey of Hallucination in Natural Language Generation" (2023)
+- Gao et al., "Enabling Large Language Models to Generate Text with Citations" (ALCE, 2023) — citation precision/recall metrics
+- Lin, Hilton & Evans, "TruthfulQA: Measuring How Models Mimic Human Falsehoods" (2022)
+- Kalai & Vempala, "Calibrated Language Models Must Hallucinate" (2024) — a theoretical argument for why some hallucination is unavoidable
+- See also: `rag-systems` curriculum domain and the `production-rag-architecture-at-scale` topic for the grounding-pipeline engineering side
+
+## Related Platform Content
+
+- [NATURAL LANGUAGE PROCESSING curriculum overview](/learn/natural-language-processing)
+- [RAG Systems](/system-design/rag-systems)
+- [Browse all system designs](/system-design)

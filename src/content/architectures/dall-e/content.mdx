@@ -1,0 +1,216 @@
+# DALL-E
+
+## 1. Overview
+DALL-E (dVAE + Autoregressive Transformer), introduced in 2021 by Aditya Ramesh, Mikhail Pavlov, Gabriel Goh, Scott Gray, Chelsea Voss, Alec Radford, Mark Chen, and Ilya Sutskever (OpenAI), pioneered **Zero-Shot Text-to-Image Generation** at scale. Before DALL-E, text-to-image generation relied on GANs (like AttnGAN) which suffered from unstable training, mode collapse, and poor text alignment when prompted with complex, unseen concepts (e.g., "an avocado shaped like an armchair"). DALL-E solved text-to-image synthesis by casting it as a single **Autoregressive Sequence Modeling Problem**. DALL-E operates in two stages: (1) a **Discrete Variational Autoencoder (dVAE)** compresses $256 \times 256$ RGB images into a $32 \times 32$ grid of discrete visual tokens from a 8,192-codebook vocabulary; (2) a 12-Billion parameter **Decoder-Only Transformer** concatenates up to 256 text BPE tokens with 1,024 visual tokens, training autoregressively via cross-entropy loss over the combined 1,280-token sequence.
+
+:::note
+DALL-E's core architecture: "Compress images into $32 \times 32 = 1,024$ discrete visual tokens using dVAE. Concatenate 256 text BPE tokens with 1,024 visual tokens into a single 1,280-token sequence and train a 12B autoregressive GPT Transformer."
+:::
+
+## 2. Historical Context
+In 2020, GPT-3 demonstrated that autoregressive language models could perform arbitrary zero-shot text tasks simply by conditioning on text prompts. Meanwhile, VQ-VAE-2 showed that images could be tokenized into discrete visual codes.
+
+Aditya Ramesh et al. combined these two breakthroughs. They reasoned that if images could be tokenized into discrete tokens just like text words, a single large GPT model could be trained on concatenated `[Text Tokens || Image Tokens]` sequences to generate high-fidelity images directly from text captions.
+
+## 3. Problem It Solves
+DALL-E resolves three fundamental challenges in generative AI:
+1. **Instability of Text-Conditioned GANs:** Eliminates adversarial min-max optimization, replacing GANs with stable autoregressive cross-entropy training.
+2. **Zero-Shot Concept Compositionality:** Enables composing novel, unseen visual concepts (e.g., "a snail made of a harp") that never occurred together in training data.
+3. **Continuous Pixel-Space Computational Barrier:** Compress $256 \times 256 \times 3 = 196,608$ pixel values into $32 \times 32 = 1,024$ discrete tokens, making Transformer sequence modeling feasible.
+
+## 4. Architecture Diagram Data
+Below is the two-stage DALL-E pipeline showing dVAE visual tokenization and 12B Autoregressive Transformer training.
+
+```text
+       STAGE 1: DISCRETE VAE (dVAE) COMPRESSION & TOKENS
+
+       [ Image x: (B, 3, 256, 256) ]
+                    |
+                    v
+       +==================================+
+       | dVAE ENCODER                     |
+       +==================================+
+                    |
+                    v (Quantize to 8,192 Codebook Entries)
+       [ 32 x 32 = 1,024 Discrete Visual Tokens y ] (Values in 0..8191)
+                    |
+                    v
+       +==================================+
+       | dVAE DECODER                     | ---> [ Reconstructed Image x_hat ]
+       +==================================+
+
+       ========================================================================
+
+       STAGE 2: 12B AUTOREGRESSIVE TRANSFORMER TRAINING
+
+       [ Text Caption: (Up to 256 BPE Tokens) ]   [ Image Tokens: (1,024 Visual Tokens) ]
+                         |                                          |
+                         +--------------------+---------------------+
+                                              |
+                                              v
+       +==================================================================+
+       | CONCATENATED SEQUENCE (Length L = 256 + 1024 = 1,280 Tokens)     |
+       | [ Text_1 ... Text_256 || Vis_1 ... Vis_1024 ]                   |
+       +==================================================================+
+                                              |
+                                              v
+       +==================================================================+
+       | 12B PARAMETER DECODER-ONLY GPT TRANSFORMER                       |
+       | - 64 Layers, 64 Attention Heads, Embedding Dim D = 3968         |
+       | - Sparse Causal Masking (Row, Column, & Convolutional Masking)   |
+       +==================================================================+
+                                              |
+                                              v
+       [ Autoregressive Cross-Entropy Loss over Image Tokens ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Discrete VAE (dVAE) Visual Tokenizer:**
+- **Encoder:** Convolutions downsampling image $x \in \mathbb{R}^{3 \times 256 \times 256}$ to continuous latent grid $z \in \mathbb{R}^{8192 \times 32 \times 32}$.
+- **Gumbel-Softmax Relaxation:** Maps continuous logits to discrete codebook vectors using Gumbel-Softmax temperature relaxation during training:
+  $$y_{i,j} = \text{Softmax}\left( \frac{z_{i,j} + g_{i,j}}{\tau} \right)$$
+- **Decoder:** Transposed Convolutions reconstructing $\hat{x} \in \mathbb{R}^{3 \times 256 \times 256}$ from $32 \times 32$ codebook indices.
+
+**2. 12B Autoregressive GPT Transformer:**
+- 64 Transformer Decoder layers ($D=3968$, 64 attention heads).
+- Uses specialized sparse causal attention masks: **Row Attention**, **Column Attention**, and **Convolutional Attention** to scale $O(N^2)$ self-attention across 1,280 tokens.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DALL-E for batch size $B=4$, 256 text BPE tokens, $32 \times 32 = 1024$ visual tokens.
+
+1. **Sequence Assembly:**
+   - Text Tokens: `(4, 256)`, Visual Tokens: `(4, 1024)`
+   - Concat $\to$ Full Sequence: `(4, 1280)`
+2. **Embedding Lookup:**
+   - Text Embeddings ($V_{\text{text}}=16384$) + Visual Embeddings ($V_{\text{vis}}=8192$) + Positional Embeddings $\to$ Input Tensor: `(4, 1280, 3968)`
+3. **12B Sparse Transformer Pass:**
+   - 64 Sparse Causal Transformer Layers $\to$ Output Representations: `(4, 1280, 3968)`
+4. **Logits Prediction Head:**
+   - Project visual token positions $[256 \dots 1279] \to$ Logits: `(4, 1024, 8192)`
+   - Compute Cross-Entropy Loss against ground-truth visual tokens.
+
+## 7. Mathematical Foundations
+
+### 1. Evidence Lower Bound (ELBO) Optimization
+DALL-E maximizes the joint likelihood of text $x$ and image $y$ using the ELBO lower bound:
+
+$$\ln P_\theta(x, y) \ge \mathbb{E}_{q_\phi(z \mid y)} \left[ \ln P_\theta(y \mid z) \right] - D_{\text{KL}}\left( q_\phi(z \mid y) \;\middle\|\; P_\theta(z \mid x) \right)$$
+
+where $q_\phi(z \mid y)$ is the dVAE encoder, $P_\theta(y \mid z)$ is the dVAE decoder, and $P_\theta(z \mid x)$ is the 12B autoregressive Transformer prior over visual tokens $z$ conditioned on text $x$.
+
+### 2. Gumbel-Softmax Relaxation for Discrete Token Learning
+Because argmax codebook lookup is non-differentiable ($\frac{\partial \text{argmax}}{\partial z} = \mathbf{0}$), dVAE uses Gumbel-Softmax relaxation during training:
+
+$$y_k = \frac{\exp\left( (\ln \pi_k + g_k) / \tau \right)}{\sum_{j=1}^K \exp\left( (\ln \pi_j + g_j) / \tau \right)}$$
+
+where $g_k \sim \text{Gumbel}(0, 1)$ noise, and temperature $\tau$ decays from $1.0 \to 0.06$.
+
+## 8. Training Procedure
+- **Stage 1 (dVAE Pre-training):** Train dVAE encoder/decoder on 250M images using $L_1 / L_2$ reconstruction loss + Gumbel-Softmax KL penalty to learn an 8,192-codebook vocabulary.
+- **Stage 2 (12B Transformer Training):** Freeze dVAE. Tokenize 250M `(text, image)` pairs. Train 12B GPT Transformer autoregressively on 1,280-token sequences using cross-entropy loss over visual tokens.
+- **CLIP Reranking at Inference:** Generate 512 candidate images per text prompt; rerank generated images using CLIP score and output the top 1.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **DALL-E's Sequence Concatenation and Autoregressive Loss**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DALLETransformer(nn.Module):
+    """ DALL-E Autoregressive Text-to-Image Transformer Model """
+    def __init__(self, text_vocab_size=16384, image_vocab_size=8192, text_len=256, image_len=1024, embed_dim=512, n_layers=4):
+        super().__init__()
+        self.text_len = text_len
+        self.image_len = image_len
+        self.total_len = text_len + image_len
+        
+        # Separate Token Embeddings
+        self.text_emb = nn.Embedding(text_vocab_size, embed_dim)
+        self.image_emb = nn.Embedding(image_vocab_size, embed_dim)
+        self.pos_emb = nn.Parameter(torch.randn(1, self.total_len, embed_dim))
+        
+        # Transformer Decoder
+        layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=8, dim_feedforward=4*embed_dim, batch_first=True)
+        self.transformer = nn.TransformerEncoder(layer, num_layers=n_layers)
+        
+        # Visual Prediction Head (Predicts image codebook indices in 0..8191)
+        self.head = nn.Linear(embed_dim, image_vocab_size)
+
+    def forward(self, text_tokens, image_tokens):
+        """
+        text_tokens:  (B, 256)
+        image_tokens: (B, 1024)
+        """
+        B = text_tokens.shape[0]
+        
+        # 1. Look up Embeddings & Concatenate
+        t_embed = self.text_emb(text_tokens)   # (B, 256, d)
+        i_embed = self.image_emb(image_tokens) # (B, 1024, d)
+        
+        seq_embed = torch.cat([t_embed, i_embed], dim=1) + self.pos_emb # (B, 1280, d)
+        
+        # 2. Causal Masking
+        causal_mask = torch.triu(torch.full((self.total_len, self.total_len), float('-inf'), device=text_tokens.device), diagonal=1)
+        
+        # 3. Transformer Forward Pass
+        h = self.transformer(seq_embed, mask=causal_mask) # (B, 1280, d)
+        
+        # 4. Extract Visual Token Positions (Indices 255 to 1278 for predicting next visual token)
+        h_vis = h[:, self.text_len - 1 : -1, :] # (B, 1024, d)
+        logits = self.head(h_vis) # (B, 1024, 8192)
+        
+        loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), image_tokens.reshape(-1))
+        return logits, loss
+
+if __name__ == "__main__":
+    B, text_len, image_len = 2, 256, 1024
+    dalle = DALLETransformer(text_len=text_len, image_len=image_len, embed_dim=512)
+    
+    text_tokens = torch.randint(0, 16384, (B, text_len))
+    image_tokens = torch.randint(0, 8192, (B, image_len))
+    
+    logits, loss = dalle(text_tokens, image_tokens)
+    
+    print(f"Visual Prediction Logits Shape: {logits.shape}")
+    print(f"DALL-E Cross-Entropy Loss:    {loss.item():.4f}")
+    assert logits.shape == (B, image_len, 8192)
+    print("DALL-E verification successful!")
+```
+
+## 10. Strengths
+- **Pioneered Zero-Shot Text-to-Image:** Demonstrated zero-shot visual generation from complex text prompts.
+- **Compositional Creativity:** Seamlessly combines distinct visual concepts (anthropomorphic animals, optical illusions).
+- **Stable Autoregressive Training:** Replaced unstable adversarial GAN training with standard cross-entropy loss.
+
+## 11. Weaknesses
+- **High Inference Latency:** Autoregressively generating 1,024 visual tokens step-by-step requires 1,024 forward passes (addressed by Diffusion models).
+
+## 12. Research Evolution
+DALL-E established text-to-image autoregressive tokenization, leading directly to **DALL-E 2** (unCLIP diffusion), **Imagen**, and **DALL-E 3**.
+
+## 13. Interview Questions
+
+**Q1: What are the two training stages of DALL-E?**
+**A1:** (1) **Stage 1 (dVAE Pre-training):** A discrete VAE compresses $256 \times 256$ images into $32 \times 32 = 1,024$ discrete codebook tokens from an 8,192 vocabulary; (2) **Stage 2 (12B Autoregressive Transformer):** A 12B GPT Transformer is trained on concatenated `[256 Text Tokens || 1024 Image Tokens]` sequences via cross-entropy loss.
+
+**Q2: How does DALL-E make discrete codebook lookup differentiable during dVAE training?**
+**A2:** By using **Gumbel-Softmax relaxation** with temperature annealing ($\tau = 1.0 \to 0.06$). Gumbel noise allows gradients to backpropagate through categorical codebook distributions.
+
+**Q3: How does CLIP assist DALL-E during test-time image generation?**
+**A3:** DALL-E generates 512 candidate images autoregressively for a given text prompt. CLIP evaluates the text-image similarity score for all 512 candidates and selects the top 1 image for the user.
+
+**Q4: Write out the total sequence length processed by DALL-E's 12B Transformer.**
+**A4:** $L = 256 \text{ (text BPE tokens)} + 1,024 \text{ (dVAE visual tokens)} = 1,280 \text{ tokens}$.
+
+**Q5: Compare DALL-E with DALL-E 2.**
+**A5:** DALL-E is an **Autoregressive Transformer** operating on discrete dVAE tokens. DALL-E 2 is a **Diffusion Model** operating on continuous latent spaces conditioned on CLIP image embeddings.
+
+## 14. Related Papers
+- **DALL-E Paper:** *Zero-Shot Text-to-Image Generation* (Ramesh et al., ICML 2021)
+- **CLIP Paper:** *Learning Transferable Visual Models From Natural Language Supervision* (Radford et al., ICML 2021)
+
+## 15. Further Reading
+- OpenAI DALL-E 1 Official Blog & Paper

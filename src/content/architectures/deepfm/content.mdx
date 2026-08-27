@@ -1,0 +1,222 @@
+# DeepFM
+
+## 1. Overview
+DeepFM (Deep Factorization Machine), introduced in 2017 by Huifeng Guo, Ruiming Tang, Yunaiming Ye, Zhenguo Li, and Xiuqiang He (Harbin Institute of Technology & Huawei Noah's Ark Lab), solved the primary engineering bottleneck of Google's Wide & Deep model: **manual feature engineering for the wide component**. While Wide & Deep effectively combined linear memorization and deep generalization, the Wide branch required domain experts to manually define cross-product feature transformations. DeepFM eliminated manual feature engineering entirely by replacing the Wide linear model with a **Factorization Machine (FM) Component**. Furthermore, DeepFM introduced a novel **Shared Embedding Architecture**: both the FM component (which models 1st-order linear and 2nd-order pairwise feature interactions) and the Deep component (which models higher-order non-linear feature interactions) share the exact same low-dimensional embedding vectors, enabling end-to-end joint optimization without manual feature extraction.
+
+:::tip
+DeepFM innovation: "Replace Wide & Deep's manual wide branch with a Factorization Machine (FM) layer. Share the exact same feature embeddings between FM and Deep components—zero manual feature engineering!"
+:::
+
+## 2. Historical Context
+In 2016, recommendation engines like Wide & Deep required data scientists to spend weeks hand-crafting cross-product features (e.g., `user_gender="female" AND item_category="shoes"`).
+
+Factorization Machines (Rendle, 2010) had previously automated pairwise 2nd-order feature interactions by modeling interaction weights as inner products of latent vectors $v_i \cdot v_j$. Huifeng Guo et al. realized that by integrating an FM layer into a deep neural network and forcing both branches to share identical embedding tables, the network could simultaneously model 1st-order linear features, 2nd-order pairwise combinations, and higher-order deep non-linear interactions end-to-end.
+
+## 3. Problem It Solves
+DeepFM resolves three major challenges in deep recommendation systems:
+1. **Elimination of Manual Feature Engineering:** Replaces manual cross-product rules with an automated Factorization Machine (FM) 2nd-order vector dot-product layer.
+2. **Shared Feature Representation:** The FM and Deep components share identical embedding parameters, ensuring that 2nd-order pairwise interaction learning directly updates deep MLP features.
+3. **Multi-Order Interaction Modeling:** Simultaneously captures 1st-order linear features, 2nd-order explicit pairwise interactions, and higher-order implicit non-linear interactions.
+
+## 4. Architecture Diagram Data
+Below is the shared embedding dual-branch architecture of DeepFM showing the FM Component and Deep Component.
+
+```text
+       SPARSE CATEGORICAL FEATURE FIELDS (Field 1, Field 2, ... Field m)
+                                   |
+                                   v
+       +===================================================================+
+       | SHARED EMBEDDING LAYER (Look up feature vectors v_i in R^k)       |
+       +===================================================================+
+                                   |
+         +-------------------------+-------------------------+
+         |                                                   |
+         v                                                   v
+  +==========================+                       +==========================+
+  | FM COMPONENT             |                       | DEEP COMPONENT           |
+  | - 1st-Order Linear Head  |                       | - Concatenated           |
+  |   sum( w_i * x_i )       |                       |   Embeddings [v_1..v_m]  |
+  | - 2nd-Order Pairwise     |                       | - Multi-Layer Perceptron |
+  |   Dot Products           |                       |   (MLP Stack)            |
+  |   sum( <v_i, v_j> x_i x_j)|                       | - Higher-Order           |
+  |   y_FM = 1st + 2nd Order |                       |   Non-Linear Features    |
+  +==========================+                       +==========================+
+         |                                                   |
+         +-------------------------+-------------------------+
+                                   |
+                                   v
+             +============================================+
+             | SUMMATION & SIGMOID OUTPUT LAYER           |
+             | P(Y=1 | x) = Sigmoid( y_FM + y_Deep )      |
+             +============================================+
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Shared Embedding Layer:**
+- Input consists of $m$ categorical field IDs.
+- Field $i$ looks up embedding vector $v_i \in \mathbb{R}^k$ from shared embedding matrix.
+- All field embeddings are shared between the FM component and Deep component.
+
+**2. Factorization Machine (FM) Component:**
+- **1st-Order Linear Term:** Evaluates scalar weighted sum $\sum_i w_i x_i$.
+- **2nd-Order Interaction Term:** Computes pairwise dot products of latent vectors:
+  $$y_{\text{2nd}} = \sum_{i=1}^m \sum_{j=i+1}^m \langle v_i, v_j \rangle x_i x_j = \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{i=1}^m v_{i,f} x_i \right)^2 - \sum_{i=1}^m v_{i,f}^2 x_i^2 \right]$$
+- FM Output: $y_{\text{FM}} = \langle w, x \rangle + y_{\text{2nd}}$.
+
+**3. Deep Component:**
+- Concatenates field embeddings $a^{(0)} = [v_1, v_2, \dots, v_m] \in \mathbb{R}^{m \cdot k}$.
+- Passes through 3 Fully Connected layers ($400 \to 400 \to 400$, ReLU) $\to y_{\text{Deep}}$.
+
+**4. Final Combined Prediction:**
+- $\hat{y} = \sigma\left( y_{\text{FM}} + y_{\text{Deep}} \right)$.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through DeepFM for mini-batch $B=512$, $m=10$ sparse field categories, embedding dimension $k=32$.
+
+1. **Shared Embedding Lookup:**
+   - Field Categoricals: `(512, 10)` $\xrightarrow{\text{Shared Embeddings}} V$: `(512, 10, 32)`
+2. **FM 2nd-Order Calculation (Linear-time trick):**
+   - Sum of Embeddings $\sum v_i$: `(512, 32)` $\xrightarrow{\text{Square}} (\sum v_i)^2$: `(512, 32)`
+   - Sum of Squared Embeddings $\sum v_i^2$: `(512, 32)`
+   - $y_{\text{2nd}} = 0.5 \cdot \text{sum}\left( (\sum v_i)^2 - \sum v_i^2, \text{dim}=-1 \right) \to$ `(512, 1)`
+   - FM Output $y_{\text{FM}} = y_{\text{1st}} + y_{\text{2nd}} \to$ `(512, 1)`
+3. **Deep Component Pass:**
+   - Flatten Embeddings: `(512, 320)` $\xrightarrow{\text{3-Layer MLP}} y_{\text{Deep}}$: `(512, 1)`
+4. **Final Combined Prediction:**
+   - $\hat{y} = \text{Sigmoid}(y_{\text{FM}} + y_{\text{Deep}}) \to$ Click Probabilities: `(512, 1)`.
+
+## 7. Mathematical Foundations
+
+### 1. Factorization Machine (FM) 2nd-Order Mathematical Formulation
+The standard 2nd-order interaction equation is:
+
+$$y_{\text{FM}} = \langle w, x \rangle + \sum_{i=1}^d \sum_{j=i+1}^d \langle v_i, v_j \rangle x_i x_j$$
+
+Naively evaluating all pairwise dot products requires $O(k \cdot d^2)$ time. Rendle's **linear-time math simplification** reformulates the sum in $O(k \cdot d)$ time:
+
+$$\sum_{i=1}^d \sum_{j=i+1}^d \langle v_i, v_j \rangle x_i x_j = \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{i=1}^d v_{i,f} x_i \right)^2 - \sum_{i=1}^d v_{i,f}^2 x_i^2 \right]$$
+
+### 2. DeepFM Combined Prediction Objective
+$$\hat{y} = \sigma \left( y_{\text{FM}} + y_{\text{Deep}} \right)$$
+
+where:
+- $y_{\text{FM}} = w_0 + \sum_{i=1}^d w_i x_i + \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_i v_{i,f} x_i \right)^2 - \sum_i v_{i,f}^2 x_i^2 \right]$
+- $y_{\text{Deep}} = W^{(H+1)} \cdot \text{ReLU}\left( W^{(H)} a^{(H-1)} + b^{(H)} \right) \dots + b^{(H+1)}$
+
+## 8. Training Procedure
+- Input sparse categorical IDs for $m$ feature fields.
+- Perform forward pass to compute shared field embeddings $V \in \mathbb{R}^{m \times k}$.
+- Evaluate FM 1st-order, FM 2nd-order, and Deep MLP components.
+- Minimize Binary Cross-Entropy (BCE) loss $\mathcal{L} = -\sum \left( y \log \hat{y} + (1-y) \log(1-\hat{y}) \right)$ using Adam optimizer.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of **DeepFM with Shared Embeddings**.
+
+```python
+import torch
+import torch.nn as nn
+
+class DeepFM(nn.Module):
+    def __init__(self, num_fields, vocab_sizes, embed_dim=32, deep_hidden_dims=[400, 400, 400]):
+        super().__init__()
+        self.num_fields = num_fields
+        self.embed_dim = embed_dim
+        
+        # 1. SHARED EMBEDDING TABLES
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(vocab_size, embed_dim) for vocab_size in vocab_sizes
+        ])
+        
+        # 2. FM 1ST-ORDER LINEAR EMBEDDINGS
+        self.fm_1st_order = nn.ModuleList([
+            nn.Embedding(vocab_size, 1) for vocab_size in vocab_sizes
+        ])
+        
+        # 3. DEEP COMPONENT MLP
+        total_deep_in = num_fields * embed_dim
+        deep_layers = []
+        in_dim = total_deep_in
+        for h_dim in deep_hidden_dims:
+            deep_layers.append(nn.Linear(in_dim, h_dim))
+            deep_layers.append(nn.ReLU())
+            in_dim = h_dim
+        deep_layers.append(nn.Linear(in_dim, 1))
+        self.deep_mlp = nn.Sequential(*deep_layers)
+
+    def forward(self, field_inputs):
+        """ field_inputs: (B, num_fields) """
+        B, num_fields = field_inputs.shape
+        
+        # 1. FM 1st-Order Linear Term
+        fm_1st = torch.cat([self.fm_1st_order[i](field_inputs[:, i]) for i in range(num_fields)], dim=-1) # (B, num_fields)
+        y_1st = fm_1st.sum(dim=-1, keepdim=True) # (B, 1)
+        
+        # 2. Shared Embedding Lookup for 2nd-Order FM and Deep
+        embed_list = [self.embeddings[i](field_inputs[:, i]) for i in range(num_fields)]
+        embed_tensor = torch.stack(embed_list, dim=1) # (B, num_fields, embed_dim)
+        
+        # FM 2nd-Order Linear-Time Trick: 0.5 * sum( (sum v)^2 - sum(v^2) )
+        sum_embed = embed_tensor.sum(dim=1) # (B, embed_dim)
+        sum_sq_embed = (embed_tensor ** 2).sum(dim=1) # (B, embed_dim)
+        y_2nd = 0.5 * (sum_embed ** 2 - sum_sq_embed).sum(dim=-1, keepdim=True) # (B, 1)
+        
+        y_fm = y_1st + y_2nd
+        
+        # 3. Deep Component
+        deep_in = embed_tensor.view(B, -1) # (B, num_fields * embed_dim)
+        y_deep = self.deep_mlp(deep_in) # (B, 1)
+        
+        # Final Combined Output
+        probs = torch.sigmoid(y_fm + y_deep)
+        return probs
+
+if __name__ == "__main__":
+    B = 512
+    vocab_sizes = [1000, 5000, 200, 50, 1200]
+    num_fields = len(vocab_sizes)
+    
+    deepfm = DeepFM(num_fields=num_fields, vocab_sizes=vocab_sizes, embed_dim=32)
+    inputs = torch.cat([torch.randint(0, v, (B, 1)) for v in vocab_sizes], dim=1)
+    
+    probs = deepfm(inputs)
+    
+    print(f"DeepFM Click Probability Output Shape: {probs.shape}")
+    assert probs.shape == (B, 1)
+    print("DeepFM verification successful!")
+```
+
+## 10. Strengths
+- **Zero Manual Feature Engineering:** Automates 2nd-order feature interaction learning via FM layer.
+- **Shared Embedding Architecture:** Synchronizes 2nd-order pairwise learning with deep non-linear feature representation.
+- **Linear-Time FM Computation:** Computes $O(d^2)$ pairwise interactions in $O(k \cdot d)$ time.
+
+## 11. Weaknesses
+- **Restricted to 2nd-Order Explicit Interactions:** The FM component only models 2nd-order pairwise combinations explicitly (addressed by xDeepFM).
+
+## 12. Research Evolution
+DeepFM advanced industrial click-through-rate (CTR) modeling, directly influencing **xDeepFM**, **AutoInt**, and **DLRM**.
+
+## 13. Interview Questions
+
+**Q1: How does DeepFM improve upon Google's Wide & Deep architecture?**
+**A1:** DeepFM replaces Wide & Deep's wide linear branch (which required domain experts to manually define cross-product feature rules) with a Factorization Machine (FM) layer. It also shares identical embedding parameters between FM and Deep components, eliminating manual feature engineering entirely.
+
+**Q2: Write out the linear-time formula for FM 2nd-order feature interactions.**
+**A2:** $\frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{i=1}^d v_{i,f} x_i \right)^2 - \sum_{i=1}^d v_{i,f}^2 x_i^2 \right]$. This reduces time complexity from $O(k \cdot d^2)$ to $O(k \cdot d)$.
+
+**Q3: What are the three interaction orders modeled simultaneously by DeepFM?**
+**A3:** (1) **1st-Order:** Linear feature weights $\sum w_i x_i$; (2) **2nd-Order:** Explicit pairwise dot products $\langle v_i, v_j \rangle x_i x_j$; (3) **Higher-Order:** Deep implicit non-linear interactions via multi-layer perceptron (MLP).
+
+**Q4: Why is parameter sharing between FM and Deep components beneficial?**
+**A4:** Sharing embedding vectors $v_i$ ensures that gradient signals from 2nd-order pairwise interaction learning directly refine the inputs to the deep MLP, leading to faster convergence and better feature representations.
+
+**Q5: What loss function is used to train DeepFM for Click-Through-Rate (CTR) prediction?**
+**A5:** Binary Cross-Entropy (BCE) loss: $\mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \left( y_i \log \hat{y}_i + (1 - y_i) \log(1 - \hat{y}_i) \right)$.
+
+## 14. Related Papers
+- **DeepFM Paper:** *DeepFM: A Factorization-Machine based Neural Network for CTR Prediction* (Guo et al., IJCAI 2017)
+- **Factorization Machines Paper:** *Factorization Machines* (Rendle, ICDM 2010)
+
+## 15. Further Reading
+- DeepCTR PyTorch DeepFM Implementation Library

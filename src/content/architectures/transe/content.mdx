@@ -1,0 +1,230 @@
+# TransE
+
+## 1. Overview
+TransE (Translational Embeddings), introduced in 2013 by Antoine Bordes, Nicolas Usunier, Alberto Garcia-Duran, Jason Weston, and Oksana Yakhnenko (Heuritech Services & Université de Technologie de Compiègne), introduced a groundbreaking geometric representation paradigm for **Knowledge Graph Embeddings**. Knowledge Graphs represent facts as subject-predicate-object triples $(h, r, t)$ (head entity, relation, tail entity), such as `(Obama, BornIn, Hawaii)`. Bordes et al. proposed a remarkably simple geometric intuition: **relations should be modeled as translations in a continuous low-dimensional vector space**. If a triple $(h, r, t)$ holds true, the embedding of the tail entity $t$ should be close to the embedding of the head entity $h$ plus the relation translation vector $r$: $\mathbf{h} + \mathbf{r} \approx \mathbf{t}$. TransE established the translation-based family of knowledge graph models, enabling fast, scalable link prediction and entity reasoning across massive knowledge bases.
+
+:::note
+TransE geometric intuition: "Model relations as translations in embedding space: $\mathbf{h} + \mathbf{r} \approx \mathbf{t}$. Minimize distance $d(\mathbf{h} + \mathbf{r}, \mathbf{t}) = \|\mathbf{h} + \mathbf{r} - \mathbf{t}\|_{1/2}$ using Margin-Based Ranking Loss."
+:::
+
+## 2. Historical Context
+Prior to 2013, Knowledge Graph completion relied on non-linear tensor factorization models (such as RESCAL) or symbolic logic rules. RESCAL represented each relation $r$ as an $d \times d$ matrix $M_r$, evaluating triple scores via bilinear tensor products $h^T M_r t$.
+
+Bordes et al. recognized that full $d \times d$ relational matrices overfit on sparse relations and scaled poorly to large knowledge graphs ($O(d^2)$ parameters per relation). Inspired by Word2Vec vector translation properties (where `vector("King") - vector("Man") + vector("Woman") ≈ vector("Queen")`), TransE represented relations directly as 1D translation vectors $r \in \mathbb{R}^d$, drastically reducing parameters to $O(d)$ per relation while improving link prediction accuracy.
+
+## 3. Problem It Solves
+TransE resolves three fundamental challenges in Knowledge Graph reasoning:
+1. **High Parameter Complexity of Tensor Factorization:** Reduces relation parameter count from $O(d^2)$ matrix representations (RESCAL) to $O(d)$ 1D translation vectors.
+2. **Scalability to Large Knowledge Bases:** Enables rapid link prediction and entity retrieval over graphs containing millions of entities and thousands of relations (Freebase, WordNet).
+3. **Geometric Interpretability:** Provides intuitive continuous spatial geometry where directional relation vectors represent semantic facts ($h + r \approx t$).
+
+## 4. Architecture Diagram Data
+Below is the geometric translation vector space model and margin-based ranking loss of TransE.
+
+```text
+       GEOMETRIC TRANSLATION IN EMBEDDING SPACE R^d
+
+       For True Triple (h, r, t): e.g., (Obama, BornIn, Hawaii)
+       
+       Head Vector h
+            o
+             \
+              \  Relation Vector r (Translation)
+               \
+                +-----------------------> o Tail Vector t
+                                           (h + r ~ t)
+
+       For Corrupted Negative Triple (h', r, t) or (h, r, t'):
+       
+       Head Vector h
+            o
+             \
+              \  Relation Vector r
+               \
+                +-----------------------> o (Far from corrupted t')
+
+       ========================================================================
+
+       MARGIN-BASED RANKING LOSS MECHANISM
+
+       [ True Triple (h, r, t) ] --------> Score f(h,r,t) = || h + r - t ||
+                                                    |
+       [ Corrupted Triple (h', r, t') ] --> Score f(h',r,t') = || h' + r - t' ||
+                                                    |
+                                                    v
+       [ Loss L = max( 0, gamma + f(h,r,t) - f(h',r,t') ) ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. Entity & Relation Embedding Lookup:**
+- Entity Embedding Matrix $E \in \mathbb{R}^{|V| \times d}$ (maps entity IDs to $\mathbf{h}, \mathbf{t} \in \mathbb{R}^d$).
+- Relation Embedding Matrix $R \in \mathbb{R}^{|\mathcal{R}| \times d}$ (maps relation IDs to $\mathbf{r} \in \mathbb{R}^d$).
+
+**2. Distance Scoring Layer:**
+- Computes translation distance $f_r(h, t)$ for a triple $(h, r, t)$:
+  $$f_r(h, t) = \|\mathbf{h} + \mathbf{r} - \mathbf{t}\|_p$$
+  where $p = 1$ ($L_1$ norm / Manhattan distance) or $p = 2$ ($L_2$ norm / Euclidean distance).
+
+**3. Unit Norm Constraint Layer:**
+- Constrains entity vectors to unit norm $\|\mathbf{h}\|_2 = 1, \|\mathbf{t}\|_2 = 1$ to prevent the loss from trivially shrinking entity embeddings to zero.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through TransE for mini-batch $B=1024$ positive triples, embedding dimension $d=100$, 5 corrupted negative triples per positive triple.
+
+1. **Embedding Lookup:**
+   - Head IDs $h$: `(1024,)` $\to \mathbf{h}$: `(1024, 100)`
+   - Relation IDs $r$: `(1024,)` $\to \mathbf{r}$: `(1024, 100)`
+   - Tail IDs $t$: `(1024,)` $\to \mathbf{t}$: `(1024, 100)`
+2. **Positive Distance Score:**
+   - $\mathbf{h} + \mathbf{r} - \mathbf{t} \to$ `(1024, 100)` $\xrightarrow{L_1 \text{ Norm}} f(h, r, t)$: `(1024,)`
+3. **Corrupted Negative Distance Score (Batch size $B \times 5 = 5120$):**
+   - Corrupted Heads $\mathbf{h}'$: `(5120, 100)`, Corrupted Tails $\mathbf{t}'$: `(5120, 100)`
+   - $\mathbf{h}' + \mathbf{r} - \mathbf{t}' \to \xrightarrow{L_1 \text{ Norm}} f(h', r, t')$: `(5120,)`
+4. **Margin Loss Evaluation:**
+   - $\mathcal{L} = \max(0, \gamma + f_{\text{pos}} - f_{\text{neg}}) \to$ Scalar gradient update.
+
+## 7. Mathematical Foundations
+
+### 1. TransE Distance Scoring Function
+For a candidate triple $(h, r, t)$, the dissimilarity score $f_r(h, t)$ is defined as the $L_1$ or $L_2$ norm of the translation error vector:
+
+$$f_r(h, t) = \|\mathbf{h} + \mathbf{r} - \mathbf{t}\|_p = \begin{cases} \sum_{i=1}^d |h_i + r_i - t_i| & \text{if } p=1 \\ \sqrt{\sum_{i=1}^d (h_i + r_i - t_i)^2} & \text{if } p=2 \end{cases}$$
+
+For valid true triples, $f_r(h, t) \approx 0$. For false corrupted triples, $f_r(h', r, t') \gg 0$.
+
+### 2. Margin-Based Ranking Loss Derivation
+TransE is trained by minimizing a **Pairwise Margin-Based Ranking Loss** $\mathcal{L}$ over positive training set $S$ and corrupted negative set $S'_{(h,r,t)}$:
+
+$$\mathcal{L} = \sum_{(h,r,t) \in S} \sum_{(h',r,t') \in S'_{(h,r,t)}} \max\left( 0, \; \gamma + f_r(h, t) - f_r(h', t') \right)$$
+
+where:
+- $\gamma > 0$ is the margin hyperparameter (typically $\gamma = 1.0$).
+- $S'_{(h,r,t)} = \{(h', r, t) \mid h' \in E\} \cup \{(h, r, t') \mid t' \in E\}$ is the set of corrupted triples created by replacing either the head or tail entity with a random entity.
+
+### 3. Entity Norm Constraint
+To prevent the loss from trivially shrinking entity vectors toward zero ($\|\mathbf{h}\| \to 0, \|\mathbf{t}\| \to 0$) to minimize distance, entity embeddings are constrained after every SGD step:
+
+$$\|\mathbf{h}\|_2 = 1, \quad \forall h \in E$$
+
+## 8. Training Procedure
+- Initialize Entity Embeddings $E$ and Relation Embeddings $R$ using uniform distribution $\mathcal{N}(-\frac{6}{\sqrt{d}}, \frac{6}{\sqrt{d}})$. Normalize entity vectors: $\mathbf{e} \leftarrow \frac{\mathbf{e}}{\|\mathbf{e}\|_2}$.
+- Loop epochs:
+  - Sample mini-batch of $B$ positive triples $(h, r, t) \in S$.
+  - Construct negative set $S'$ by randomly replacing head $h$ or tail $t$ with a random entity $e' \in V$.
+  - Compute Margin Ranking Loss $\mathcal{L} = \max(0, \gamma + d_{\text{pos}} - d_{\text{neg}})$.
+  - Update parameters using SGD or Adam.
+  - Re-normalize all entity embeddings: $\mathbf{e} \leftarrow \frac{\mathbf{e}}{\|\mathbf{e}\|_2}$.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **TransE Model with Margin Ranking Loss**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class TransE(nn.Module):
+    """ TransE Knowledge Graph Embedding Model """
+    def __init__(self, num_entities, num_relations, dim=100, p_norm=1, margin=1.0):
+        super().__init__()
+        self.num_entities = num_entities
+        self.num_relations = num_relations
+        self.dim = dim
+        self.p_norm = p_norm
+        self.margin = margin
+        
+        # Entity and Relation Embeddings
+        self.entity_embeddings = nn.Embedding(num_entities, dim)
+        self.relation_embeddings = nn.Embedding(num_relations, dim)
+        
+        # Initialization
+        r_bound = 6.0 / (dim ** 0.5)
+        nn.init.uniform_(self.entity_embeddings.weight, -r_bound, r_bound)
+        nn.init.uniform_(self.relation_embeddings.weight, -r_bound, r_bound)
+        
+        # Normalize relation embeddings
+        self.relation_embeddings.weight.data = F.normalize(self.relation_embeddings.weight.data, p=2, dim=-1)
+
+    def normalize_entities(self):
+        """ Constrain entity embeddings to unit L2 norm """
+        with torch.no_grad():
+            self.entity_embeddings.weight.data = F.normalize(self.entity_embeddings.weight.data, p=2, dim=-1)
+
+    def score_triple(self, h_idx, r_idx, t_idx):
+        """
+        Computes f_r(h, t) = || h + r - t ||_p
+        """
+        h = self.entity_embeddings(h_idx) # (B, d)
+        r = self.relation_embeddings(r_idx) # (B, d)
+        t = self.entity_embeddings(t_idx) # (B, d)
+        
+        # Translation vector: h + r - t
+        err = h + r - t
+        score = torch.norm(err, p=self.p_norm, dim=-1) # (B,)
+        return score
+
+    def forward(self, pos_h, pos_r, pos_t, neg_h, neg_r, neg_t):
+        pos_score = self.score_triple(pos_h, pos_r, pos_t) # (B,)
+        neg_score = self.score_triple(neg_h, neg_r, neg_t) # (B,)
+        
+        # Margin-Based Ranking Loss: max(0, margin + pos_score - neg_score)
+        loss = F.margin_ranking_loss(
+            neg_score, pos_score, target=torch.ones_like(pos_score), margin=self.margin
+        )
+        return loss
+
+if __name__ == "__main__":
+    B, num_ent, num_rel, d = 1024, 10000, 500, 100
+    model = TransE(num_entities=num_ent, num_relations=num_rel, dim=d, p_norm=1, margin=1.0)
+    
+    pos_h = torch.randint(0, num_ent, (B,))
+    pos_r = torch.randint(0, num_rel, (B,))
+    pos_t = torch.randint(0, num_ent, (B,))
+    
+    neg_h = torch.randint(0, num_ent, (B,))
+    neg_r = pos_r.clone()
+    neg_t = torch.randint(0, num_ent, (B,))
+    
+    loss = model(pos_h, pos_r, pos_t, neg_h, neg_r, neg_t)
+    model.normalize_entities()
+    
+    print(f"TransE Margin Loss: {loss.item():.4f}")
+    assert not torch.isnan(loss)
+    print("TransE verification successful!")
+```
+
+## 10. Strengths
+- **Geometric Simplicity:** Intuitive 1D vector translation mechanism ($\mathbf{h} + \mathbf{r} \approx \mathbf{t}$).
+- **Parameter Efficiency:** Requires only $O(d)$ parameters per relation (vs. $O(d^2)$ in tensor models).
+- **Scales to Massive KGs:** Trains efficiently over graphs with millions of entities (Freebase, WordNet).
+
+## 11. Weaknesses
+- **Inability to Model 1-to-N, N-to-1, and N-to-N Relations:** If multiple tails $t_1, t_2$ exist for $(h, r)$, TransE forces $t_1 \approx t_2$, collapsing distinct entities (addressed by TransH / TransR).
+
+## 12. Research Evolution
+TransE created translation-based knowledge graph embeddings, directly inspiring **TransH**, **TransR**, **TransD**, and **RotatE**.
+
+## 13. Interview Questions
+
+**Q1: What is the core geometric principle behind TransE?**
+**A1:** TransE models relations as 1D vector translations in embedding space: if a triple $(h, r, t)$ is true, the tail entity embedding $t$ should be close to the head entity embedding $h$ plus relation vector $r$: $\mathbf{h} + \mathbf{r} \approx \mathbf{t}$.
+
+**Q2: Write out the TransE scoring function $f_r(h, t)$ and margin-based ranking loss.**
+**A2:** Scoring function: $f_r(h, t) = \|\mathbf{h} + \mathbf{r} - \mathbf{t}\|_p$ ($p=1$ or $2$). Loss: $\mathcal{L} = \sum \max(0, \; \gamma + f_r(h, t) - f_r(h', t'))$.
+
+**Q3: Why fails TransE when modeling 1-to-N or N-to-1 relations?**
+**A3:** For a 1-to-N relation like `(Director, DirectedMovie, Movie)`, if Director $h$ directed two different movies $t_1$ and $t_2$, TransE enforces $\mathbf{h} + \mathbf{r} \approx \mathbf{t}_1$ and $\mathbf{h} + \mathbf{r} \approx \mathbf{t}_2$. This forces $\mathbf{t}_1 \approx \mathbf{t}_2$, collapsing distinct movie embeddings into identical points.
+
+**Q4: Why does TransE normalize entity embeddings $\|\mathbf{h}\|_2 = 1$ after every optimization step?**
+**A4:** Without $L_2$ normalization, the optimization algorithm can artificially minimize the distance $\|\mathbf{h} + \mathbf{r} - \mathbf{t}\|$ by shrinking entity vector magnitudes to zero ($\|\mathbf{h}\| \to 0, \|\mathbf{t}\| \to 0$). Normalization prevents this trivial degenerate solution.
+
+**Q5: Compare TransE with DistMult.**
+**A5:** TransE is a **translation-based** model using vector addition ($\mathbf{h} + \mathbf{r} \approx \mathbf{t}$). DistMult is a **multiplicative bilinear** model using diagonal matrix multiplication ($f(h, r, t) = \mathbf{h}^T \text{diag}(\mathbf{r}) \mathbf{t}$).
+
+## 14. Related Papers
+- **TransE Paper:** *Translating Embeddings for Modeling Multi-relational Data* (Bordes et al., NIPS 2013)
+- **TransH Paper:** *Knowledge Graph Embedding by Translating on Hyperplanes* (Wang et al., AAAI 2014)
+
+## 15. Further Reading
+- OpenKE Knowledge Graph Embedding PyTorch Library

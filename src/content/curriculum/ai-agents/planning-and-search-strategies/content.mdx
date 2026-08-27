@@ -1,0 +1,200 @@
+# Planning and Search Strategies
+
+## 1. Overview
+
+An agent that blindly tries random actions (random search) will eventually solve some problems but incredibly inefficiently. **Planning** is the act of thinking through a sequence of actions before executing them, pruning obviously bad paths. **Search strategies** formalize this: breadth-first search explores all possibilities at each depth before deeper paths; depth-first search commits to one path and backtracks on dead ends; best-first search (using a heuristic to rank promise) explores the most promising paths first. For agents, the space being searched is the space of possible action sequences — from the current state, which actions can the agent take? Which are likely to advance toward the goal? This topic covers how agents plan and search efficiently through enormous action spaces.
+
+## 2. Prerequisites in Context
+
+**Agent Architecture and Reasoning Loops** is essential — agents need a framework to execute plans and refine them. **Tool Calling and Function Use** matters because the agent's "actions" are tool calls, and the space of actions is the space of possible tool calls. **Graph Search and Algorithms** (BFS, DFS, A*) provide the algorithmic foundations, though full depth in algorithms is not required — the key is understanding the tradeoffs between different search strategies.
+
+## 3. Core Concept
+
+Given a problem (query, task), an agent needs to plan an action sequence. If the agent naively tries every possible tool call, it faces **combinatorial explosion**: with $k$ tools and depth $d$, the search tree has $k^d$ nodes (10 tools, depth 5 = 100,000 nodes). **Pruning** (eliminating obviously bad branches) and **heuristics** (ranking promising branches higher) are essential. Common strategies: (1) **Greedy/Reactive** — at each step, pick the action that seems most helpful now (no lookahead), very fast but gets stuck in local optima; (2) **BFS** — explore all possible 1-step action sequences, then all possible 2-step sequences, guaranteed to find a solution but exponentially slow; (3) **A* / Best-First Search** — use a heuristic (e.g., how close does this action get me to the goal?) to prioritize promising paths, balancing speed and optimality; (4) **Monte-Carlo Tree Search (MCTS)** — stochastically sample action sequences, evaluate outcomes, and use those results to guide future sampling, effective for very large search spaces. **LLM-based planning** differs from classical planning: instead of explicitly constructing the search tree, the LLM reasons about the problem and generates an action sequence as text (e.g., step 1, step 2, ... via chain-of-thought), which is faster but less guaranteed to be optimal.
+
+## 4. Theoretical Foundations
+
+**Search complexity**: if the branching factor (average number of actions) is $b$ and the solution depth is $d$, the search tree has $O(b^d)$ nodes. BFS guarantees finding a solution at depth $d$ but requires exploring $O(b^d)$ nodes. **Heuristics** (estimated cost-to-goal for a state) reduce this: A* explores only promising branches, reducing effective branching factor from $b$ to perhaps $b'$, so only $O({b'}^d)$ nodes explored. Admissible heuristics (never overestimate cost-to-goal) guarantee A* finds the optimal solution; inadmissible heuristics are faster but may find suboptimal paths. **LLM-based planning** trades search for reasoning: instead of exploring many paths explicitly, the LLM uses its training to reason about likely good paths, then the agent executes the planned sequence, observes results, and re-plans if needed.
+
+## 5. Worked Example
+
+Agent task: "Move all red blocks to the left side of the table" with actions: pick_block(block, location), place_block(block, location), move_gripper(location). Naive search: $2^{10}$ possible moves for 5 blocks × 2 sides. A* search: estimate "cost" as (number of misplaced blocks) × (estimated moves per block). The heuristic guides search toward moving misplaced blocks first, reducing search tree from exponential to manageable. LLM planning: given the task, the LLM reasons "First, I'll move red block 1 to the left. Then red block 2. Then ..." and outputs a plan. The agent executes, observes results, and if needed, re-plans. Much faster but less guaranteed optimal than A*.
+
+## 6. Code / Implementation
+
+```python
+from typing import List, Tuple, Any, Callable
+from collections import deque
+import heapq
+
+class State:
+    """Represents a problem state."""
+    def __init__(self, config: Any, cost: int = 0, parent=None):
+        self.config = config
+        self.cost = cost
+        self.parent = parent
+    
+    def __lt__(self, other):
+        return self.cost < other.cost  # For heapq
+
+class SearchAgent:
+    """Agent with planning and search capabilities."""
+    def __init__(self, initial_state, goal_test, actions, heuristic=None):
+        self.initial_state = initial_state
+        self.goal_test = goal_test
+        self.actions = actions  # List of possible actions
+        self.heuristic = heuristic or (lambda s: 0)  # Default: zero heuristic
+    
+    def bfs_plan(self) -> List[Any]:
+        """Breadth-first search for action sequence."""
+        queue = deque([(self.initial_state, [])])
+        visited = {id(self.initial_state)}
+        
+        while queue:
+            state, path = queue.popleft()
+            
+            if self.goal_test(state):
+                return path
+            
+            for action in self.actions:
+                next_state = action(state)
+                if id(next_state) not in visited:
+                    visited.add(id(next_state))
+                    queue.append((next_state, path + [action]))
+        
+        return None  # No solution found
+    
+    def astar_plan(self) -> List[Any]:
+        """A* search with heuristic guidance."""
+        start = State(self.initial_state, cost=0)
+        heap = [(self.heuristic(start.config), 0, start, [])]  # (f, g, state, path)
+        visited = set()
+        
+        while heap:
+            f_score, g_score, state, path = heapq.heappop(heap)
+            
+            if state.config in visited:
+                continue
+            visited.add(state.config)
+            
+            if self.goal_test(state.config):
+                return path
+            
+            for action in self.actions:
+                next_config = action(state.config)
+                next_g = g_score + 1  # Cost of one action
+                next_h = self.heuristic(next_config)
+                next_f = next_g + next_h
+                
+                if next_config not in visited:
+                    next_state = State(next_config, cost=next_f)
+                    heapq.heappush(heap, (next_f, next_g, next_state, path + [action]))
+        
+        return None  # No solution found
+    
+    def greedy_plan(self, max_depth: int = 10) -> List[Any]:
+        """Greedy/reactive planning: pick locally best action at each step."""
+        state = self.initial_state
+        path = []
+        
+        for _ in range(max_depth):
+            if self.goal_test(state):
+                return path
+            
+            # Pick action that reduces heuristic most
+            best_action = None
+            best_heuristic = self.heuristic(state)
+            
+            for action in self.actions:
+                next_state = action(state)
+                next_h = self.heuristic(next_state)
+                if next_h < best_heuristic:
+                    best_heuristic = next_h
+                    best_action = action
+            
+            if best_action is None:
+                break  # No improving action found
+            
+            state = best_action(state)
+            path.append(best_action)
+        
+        return path if self.goal_test(state) else None
+
+if __name__ == "__main__":
+    # Simple puzzle: get all red blocks to the left
+    class BlockState:
+        def __init__(self, blocks):
+            self.blocks = tuple(sorted(blocks))  # (block_id, side) tuples
+        
+        def __hash__(self):
+            return hash(self.blocks)
+        
+        def __eq__(self, other):
+            return self.blocks == other.blocks
+    
+    def move_block(block_id, target_side):
+        def action(state):
+            new_blocks = list(state.blocks)
+            for i, (bid, side) in enumerate(new_blocks):
+                if bid == block_id:
+                    new_blocks[i] = (bid, target_side)
+                    break
+            return BlockState(new_blocks)
+        return action
+    
+    # Initial: red blocks 1,2,3 are on the right (R), should be on left (L)
+    initial = BlockState([(1, 'R'), (2, 'R'), (3, 'R')])
+    goal_test = lambda state: all(side == 'L' for _, side in state.blocks)
+    heuristic = lambda state: sum(1 for _, side in state.blocks if side == 'R')
+    
+    actions = [move_block(i, 'L') for i in range(1, 4)] + [move_block(i, 'R') for i in range(1, 4)]
+    
+    agent = SearchAgent(initial, goal_test, actions, heuristic)
+    
+    # Test different search strategies
+    print("Greedy plan:", len(agent.greedy_plan()) if agent.greedy_plan() else "Failed")
+    print("A* plan:", len(agent.astar_plan()) if agent.astar_plan() else "Failed")
+```
+
+## 7. Real-World Applications
+
+Game-playing AI (Chess, Go) uses alpha-beta pruning (a variant of A*) to search billions of moves. Robotics task planning uses PDDL (planning domain definition language) and classical planners that search through action sequences. Autonomous driving uses behavior planning (which high-level maneuver?) combined with trajectory planning (smooth path). Natural language task planning (e.g., LangChain) uses LLMs to generate action sequences, then agents execute them.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that more sophisticated search (A*, MCTS) is always better — for simple, well-understood problems, greedy or BFS is often sufficient and faster. Another pitfall is poor heuristic design — a bad heuristic can misdirect A* search into worse performance than BFS. A third pitfall is ignoring **anytime algorithms** — sometimes it's better to find a good solution quickly (and re-plan if needed) than to spend lots of compute on an optimal solution upfront. A fourth pitfall is assuming LLM planning is always fast — while LLM chain-of-thought is often faster than explicit search, if the LLM hallucinates or plans incorrectly, recovery requires re-planning, potentially slower than a guaranteed-correct search method.
+
+## 9. How This Connects
+
+This topic requires **Agent Architecture and Reasoning Loops** and **Tool Calling and Function Use** as prerequisites. It connects to **Memory and Context Management** (agents need to remember what they've explored), **Multi-Agent Systems** (coordinating multiple agents requires planning), and applications to **Game-Playing AI**, **Robotics**, **Autonomous Agents**, **Task Planning**.
+
+## 10. Check Your Understanding
+
+**Q1: What is the fundamental difference between greedy and A* search?**
+Greedy picks the locally best action at each step (no lookahead). A* uses a heuristic to estimate total cost (including lookahead) and prioritizes paths with lowest estimated cost, typically finding better solutions but requiring more computation.
+
+**Q2: What is a heuristic in the context of A* search, and what makes a heuristic "admissible"?**
+A heuristic estimates the cost from a state to the goal. An admissible heuristic never overestimates, guaranteeing A* finds an optimal solution. A non-admissible heuristic may overestimate and lead to suboptimal solutions.
+
+**Q3: Why does the search tree size grow exponentially, and how do heuristics help?**
+With branching factor $b$ and depth $d$, the tree has $O(b^d)$ nodes. Heuristics reduce the effective branching factor by pruning unpromising branches, reducing the search space from exponential to more manageable.
+
+**Q4: What is the tradeoff between LLM-based planning and explicit search?**
+LLM planning is fast (one or a few LLM calls) but not guaranteed correct (hallucination, poor reasoning). Explicit search is slower but guaranteed to find a solution if one exists. Hybrid approaches (LLM generates candidate plans, search refines) can combine benefits.
+
+**Q5: What is an anytime algorithm, and why is it useful for planning?**
+An anytime algorithm can be interrupted at any time and return the best solution found so far. For agents, this means finding a reasonable solution quickly, executing it, re-planning if needed — better than spending lots of compute on a perfect plan that arrives too late.
+
+## 11. Further Reading
+
+- Russell & Norvig, "Artificial Intelligence: A Modern Approach" (2021) — classical planning and search
+- Hart, Nilsson & Raphael, "A Formal Basis for the Heuristic Determination of Minimum Cost Paths" (A*, 1968)
+- Schaal, "Learning Movement Primitives" (2006) — hierarchical planning for robotics
+- Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models" (2023)
+- See also: `agent-architecture-and-reasoning-loops` and `tool-calling-and-function-use` in this domain
+
+## Related Platform Content
+
+- [AI AGENTS curriculum overview](/learn/ai-agents)
+- [Production system](/system-design/agent-systems)
+- [Browse all system designs](/system-design)

@@ -1,0 +1,222 @@
+# LLaVA 1.5
+
+## 1. Overview
+LLaVA 1.5 (Improved Baselines with Visual Instruction Tuning), introduced in late 2023 by Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae Lee (UW-Madison, Microsoft Research, & Columbia University), turned original LLaVA into a state-of-the-art multimodal workhorse while establishing that **a simple architecture with targeted data and structural refinements can outperform complex specialized models**. Original LLaVA suffered from poor OCR recognition, hallucinatory visual answers, and limited high-resolution perception due to its single linear projection layer and low $224 \times 224$ image resolution. LLaVA 1.5 introduced four simple upgrades: (1) replacing the linear projection connector with a **2-Layer MLP Connector with GELU activation**, (2) upgrading the vision encoder to high-resolution **CLIP ViT-L/14-336px** ($336 \times 336$ resolution $\to N=576$ visual patches), (3) adding **Academic VQA & OCR Task Datasets** to instruction tuning, and (4) introducing format-conditioned system prompts. With these lightweight modifications, LLaVA 1.5 achieved state-of-the-art results across 11 benchmarks while requiring only 1 day of training on 8 $\times$ A100 GPUs.
+
+:::tip
+LLaVA 1.5 upgrades: "1. 2-Layer MLP connector (Linear -> GELU -> Linear); 2. CLIP ViT-L-336px ($N=576$ tokens); 3. Academic VQA/OCR dataset mixture; 4. $10\times$ more compute-efficient than proprietary models."
+:::
+
+## 2. Historical Context
+In late 2023, proprietary multimodal models (such as GPT-4V and Qwen-VL) dominated vision-language benchmarks. Many open-source models attempted to match them by adding complex resampler networks, extra visual tokens, or custom cross-attention layers.
+
+Haotian Liu et al. demonstrated that complex architectural engineering was unnecessary. By simply upgrading LLaVA's linear projector to a 2-layer MLP, increasing input resolution to $336 \times 336$, and incorporating academic VQA datasets (TextVQA, GQA, VizWiz), LLaVA 1.5 set the open-source multimodal state-of-the-art with minimal compute.
+
+## 3. Problem It Solves
+LLaVA 1.5 resolves four specific weaknesses of original LLaVA and prior open-source VLMs:
+1. **Linear Projection Bottleneck:** Replaces single linear layer with a **2-Layer MLP Connector** ($\text{Linear} \to \text{GELU} \to \text{Linear}$) to compute non-linear cross-channel visual abstractions.
+2. **Low-Resolution Blur ($224 \times 224$):** Upgrades vision encoder to **CLIP-ViT-L/14-336px**, doubling spatial resolution and increasing patch tokens from 256 to 576.
+3. **Poor Reading Comprehension & OCR Hallucinations:** Integrates specialized OCR (TextVQA) and academic VQA datasets into instruction tuning.
+4. **Verbosity Bias:** Introduces format-conditioned system prompts to control answer brevity (short answers vs. detailed conversations).
+
+## 4. Architecture Diagram Data
+Below is the LLaVA 1.5 architecture showing the 2-Layer MLP Connector and CLIP ViT-L-336px Encoder.
+
+```text
+       INPUT IMAGE I (336 x 336 px) & USER PROMPT: "Read the text on the sign."
+             |                                                |
+             v                                                v
+       +====================================+        +====================================+
+       | HIGH-RES CLIP VISION ENCODER       |        | TOKENIZER                          |
+       | (ViT-L/14-336px, Patch size 14x14)  |        | Tokenized Instruction Text         |
+       | Output: Grid of N=576 Patches       |        | Tokens: T_text                     |
+       | Z_v in R^(576 x 1024)              |        +====================================+
+       +====================================+                         |
+                     |                                                |
+                     v                                                v
+       +====================================+                         |
+       | 2-LAYER MLP CONNECTOR WITH GELU    |                         |
+       | Linear_1 (1024 -> 4096)            |                         |
+       | GELU Activation                    |                         |
+       | Linear_2 (4096 -> 4096)            |                         |
+       | Output: H_v in R^(576 x 4096)       |                         |
+       +====================================+                         |
+                     |                                                |
+                     +-----------------------+------------------------+
+                                             |
+                                             v
+       +==================================================================+
+       | CONCATENATED INPUT SEQUENCE                                      |
+       | [ 576 Visual Tokens H_v || User Text Tokens T_text ]             |
+       +==================================================================+
+                                             |
+                                             v
+       +==================================================================+
+       | FROZEN/FINE-TUNED LLM (Vicuna-v1.5 7B/13B)                       |
+       | Autoregressive Text Generation                                   |
+       +==================================================================+
+                                             |
+                                             v
+       [ Answer: "NO PARKING ANYTIME" ]
+```
+
+## 5. Layer-by-Layer Breakdown
+
+**1. High-Resolution CLIP Vision Encoder:**
+- Processes input image $I \in \mathbb{R}^{3 \times 336 \times 336}$ through CLIP ViT-L/14-336px.
+- Outputs grid patch embeddings before pooling: $Z_v \in \mathbb{R}^{576 \times 1024}$ ($24 \times 24 = 576$ visual tokens).
+
+**2. 2-Layer MLP Projection Connector:**
+- Computes non-linear feature transformation:
+  $$H_v = \text{Linear}_2\left( \text{GELU}\left( \text{Linear}_1(Z_v) \right) \right) \in \mathbb{R}^{576 \times 4096}$$
+
+**3. Vicuna-v1.5 LLM Backbone:**
+- Concatenates 576 visual prefix tokens $H_v$ with text prompt tokens $T_{\text{text}}$.
+- Generates answer tokens autoregressively.
+
+## 6. Tensor Flow Walkthrough
+Let's trace tensors through LLaVA 1.5 for batch size $B=2$, image $336 \times 336 \to 576$ visual patches, text length $L=50$, Vicuna-13B dim $d_{\text{llm}}=5120$.
+
+1. **CLIP-336px Feature Extraction:**
+   - Image $I$: `(2, 3, 336, 336)` $\xrightarrow{\text{CLIP ViT-L-336px}} Z_v$: `(2, 576, 1024)`
+2. **2-Layer MLP Connector Pass:**
+   - $\text{Linear}_1(1024 \to 5120) \to$ GELU $\to \text{Linear}_2(5120 \to 5120) \to H_v$: `(2, 576, 5120)`
+3. **Sequence Assembly & LLM Forward Pass:**
+   - Text Tokens $T_{\text{text}}$: `(2, 50, 5120)`
+   - Concat $[H_v \parallel T_{\text{text}}] \to X_{\text{input}}$: `(2, 626, 5120)`
+   - Pass through 40 Vicuna-13B Transformer layers $\to$ Logits: `(2, 626, 32000)`.
+
+## 7. Mathematical Foundations
+
+### 1. 2-Layer MLP Connector Formula
+Let $Z_v \in \mathbb{R}^{N \times d_v}$ be the visual features from CLIP ViT-L/14-336px ($N=576, d_v=1024$).
+
+The 2-Layer MLP connector evaluates:
+
+$$H_v = \text{GELU}\left( Z_v W_1 + b_1 \right) W_2 + b_2 \in \mathbb{R}^{576 \times d_{\text{llm}}}$$
+
+where $W_1 \in \mathbb{R}^{1024 \times d_{\text{llm}}}$, $W_2 \in \mathbb{R}^{d_{\text{llm}} \times d_{\text{llm}}}$, and $\text{GELU}(x) = x \cdot \Phi(x)$ is the Gaussian Error Linear Unit.
+
+### 2. Multi-Task Instruction Mixture Objective
+LLaVA 1.5 optimizes autoregressive cross-entropy loss over a balanced dataset mixture $D = D_{\text{instruct}} \cup D_{\text{academic\_VQA}} \cup D_{\text{OCR}}$:
+
+$$\mathcal{L}_{\text{LLaVA1.5}}(\theta) = -\sum_{(I, X, Y) \in D} \sum_{i=1}^{|Y|} \log P_\theta\left( y_i \;\middle|\; y_{<i}, \; \text{MLP}(\text{ViT}(I)), \; X \right)$$
+
+## 8. Training Procedure
+- **Stage 1 (Feature Alignment Pre-training):** Train ONLY 2-layer MLP connector $W_1, W_2$ for 1 epoch on 558k filtering CC3M image-caption subset. Compute time: ~5.5 hours on 8 $\times$ A100 GPUs.
+- **Stage 2 (Visual Instruction Fine-tuning):** Fine-tune 2-layer MLP and Vicuna LLM for 1 epoch on 665k instruction dataset mixture (158k LLaVA conversations + TextVQA + GQA + ScienceQA + VizWiz). Compute time: ~20 hours on 8 $\times$ A100 GPUs.
+
+## 9. PyTorch Implementation
+Here is a complete PyTorch implementation of the **LLaVA 1.5 2-Layer MLP Connector and Architecture**.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class LLaVA15Connector(nn.Module):
+    """ LLaVA 1.5 2-Layer MLP Projection Connector """
+    def __init__(self, vision_dim=1024, llm_dim=4096):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(vision_dim, llm_dim),
+            nn.GELU(),
+            nn.Linear(llm_dim, llm_dim)
+        )
+
+    def forward(self, z_v):
+        """ z_v: (B, 576, 1024) """
+        return self.mlp(z_v) # (B, 576, 4096)
+
+class LLaVA15Model(nn.Module):
+    """ Complete LLaVA 1.5 Architecture """
+    def __init__(self, vision_dim=1024, llm_dim=4096, vocab_size=32000):
+        super().__init__()
+        # Simulated CLIP-336px Vision Encoder
+        self.vision_tower = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=14, stride=14),
+            nn.Flatten(2)
+        )
+        self.vis_proj_in = nn.Linear(64, vision_dim)
+        
+        # 2-Layer MLP Connector
+        self.connector = LLaVA15Connector(vision_dim=vision_dim, llm_dim=llm_dim)
+        
+        # LLM Layers
+        self.embed_tokens = nn.Embedding(vocab_size, llm_dim)
+        self.llm_layer = nn.TransformerDecoderLayer(d_model=llm_dim, nhead=8, dim_feedforward=4*llm_dim, batch_first=True)
+        self.lm_head = nn.Linear(llm_dim, vocab_size)
+
+    def forward(self, images, text_tokens):
+        """
+        images:      (B, 3, 336, 336)
+        text_tokens: (B, L_text)
+        """
+        B, L_text = text_tokens.shape
+        
+        # 1. High-Res Vision Features: (B, 576, 1024)
+        v_feats = self.vision_tower(images).transpose(1, 2)
+        v_feats = self.vis_proj_in(v_feats)
+        
+        # 2. 2-Layer MLP Connector Pass: (B, 576, 4096)
+        h_v = self.connector(v_feats)
+        
+        # 3. Text Embeddings: (B, L_text, 4096)
+        h_t = self.embed_tokens(text_tokens)
+        
+        # 4. Concatenate: [ 576 Visual Prefix Tokens || Text Tokens ] -> (B, 576 + L_text, 4096)
+        inputs_embeds = torch.cat([h_v, h_t], dim=1)
+        
+        # 5. Forward Pass
+        h_out = self.llm_layer(inputs_embeds, inputs_embeds)
+        logits = self.lm_head(h_out)
+        return logits
+
+if __name__ == "__main__":
+    B, L_text = 2, 50
+    llava15 = LLaVA15Model()
+    
+    images = torch.randn(B, 3, 336, 336)
+    text_tokens = torch.randint(0, 32000, (B, L_text))
+    
+    logits = llava15(images, text_tokens)
+    
+    print(f"LLaVA 1.5 Logits Output Shape: {logits.shape}")
+    assert logits.shape == (B, 576 + L_text, 32000)
+    print("LLaVA 1.5 verification successful!")
+```
+
+## 10. Strengths
+- **State-of-the-Art Open-Source VLM:** Outperformed prior models across 11 benchmarks using standard LLaMA/Vicuna backbones.
+- **Compute Efficient:** Requires only 1 day of training on 8 $\times$ A100 GPUs ($10\times$ to $100\times$ more compute-efficient than proprietary models).
+- **Strong OCR & Reading Comprehension:** High-res $336 \times 336$ ViT + MLP connector enables parsing small text and charts.
+
+## 11. Weaknesses
+- **Increased Context Window Consumption:** $N=576$ visual tokens per image consume significant LLM context space.
+
+## 12. Research Evolution
+LLaVA 1.5 established the open-source VLM baseline, directly leading to **LLaVA-NeXT**, **ShareGPT4V**, and **LLaVA-OneVision**.
+
+## 13. Interview Questions
+
+**Q1: What are the four key technical upgrades in LLaVA 1.5 compared to original LLaVA?**
+**A1:** (1) Replacing single linear projection with a **2-Layer MLP Connector** ($\text{Linear} \to \text{GELU} \to \text{Linear}$); (2) Upgrading vision encoder to **CLIP-ViT-L/14-336px** ($576$ visual tokens); (3) Adding academic VQA and OCR datasets (TextVQA, GQA, ScienceQA); (4) Format-conditioned system prompts.
+
+**Q2: Why does increasing input resolution from $224 \times 224$ to $336 \times 336$ benefit LLaVA 1.5?**
+**A2:** Doubling image resolution quadruples pixel information, increasing ViT patch tokens from $256$ to $576$. This allows the model to perceive fine-grained details, read small OCR text, and parse dense charts.
+
+**Q3: How many trainable parameters are in LLaVA 1.5's MLP connector?**
+**A3:** A 2-layer MLP ($1024 \to 4096 \to 4096$) contains ~21 Million parameters, representing a tiny fraction ($<0.3\%$) of the full model size.
+
+**Q4: How does LLaVA 1.5 handle answer brevity during inference?**
+**A4:** By adding format instructions (such as *"Answer the question using a single word or phrase"*) to prompt templates during instruction fine-tuning, preventing the LLM from outputting excessively verbose responses when short answers are requested.
+
+**Q5: Compare LLaVA 1.5 with Q-Former-based models (like BLIP-2).**
+**A5:** Q-Former models compress images into a fixed bottleneck of 32 tokens via cross-attention. LLaVA 1.5 projects all 576 visual patch tokens directly into the LLM via an MLP connector, preserving fine spatial details at the expense of higher context length consumption.
+
+## 14. Related Papers
+- **LLaVA 1.5 Paper:** *Improved Baselines with Visual Instruction Tuning* (Liu et al., CVPR 2024)
+- **LLaVA Paper:** *Visual Instruction Tuning* (Liu et al., NeurIPS 2023)
+
+## 15. Further Reading
+- Official LLaVA 1.5 GitHub Repository & Web Demo

@@ -1,0 +1,127 @@
+# Continued Pre-Training
+
+## 1. Overview
+
+A deployed LLM's knowledge is frozen at its training cutoff — it knows nothing about events after that date, regardless of how important they become. Continued pre-training is the technique of taking an already-trained base model and resuming the pretraining process on fresh, newer data, effectively updating the model's knowledge without the cost of training from scratch. Unlike instruction tuning (which teaches a model to follow tasks) or fine-tuning on specialized data (which teaches domain-specific patterns), continued pretraining directly expands a model's parametric knowledge by exposing it to new token sequences it's never seen, allowing it to learn new facts, new code styles, new writing patterns emerging after the original training cutoff.
+
+## 2. Prerequisites in Context
+
+**Pretraining** as a foundation process is the direct prerequisite — you need to understand what the raw, unsupervised token-prediction objective does and how models accumulate knowledge through it before understanding what "resuming" that process means. **Transfer Learning** and **Domain Adaptation** matter because continued pretraining is a specific, practical form of both — you're taking learned representations from one distribution (old web text, old code) and adapting them to a new distribution (recent news, recent GitHub code) with minimal weight initialization changes. **Learning Rate Scheduling** is essential because resuming training on a model that's already converged on its original data introduces stability challenges — a learning rate that worked for the initial phase is now often too large, and recovering from divergence requires careful, adaptive scheduling.
+
+## 3. Core Concept
+
+The simplest approach to continued pretraining is to load a trained model's weights, reset its optimizer state to zeros (or use a fresh optimizer), set the learning rate to a value roughly 1/10 to 1/100 of what was used during initial pretraining, and then run standard language modeling loss on new data. This works surprisingly well for knowledge updates — the model's existing representations, learned on the original data, generalize sufficiently that learning new tokens on fresh text doesn't require retraining from scratch. However, this simple approach has a major pitfall: the model's tokenizer is typically fixed and trained on the original data distribution. If the new data contains tokens (new abbreviations, new code syntax, new terminology) that were rare or absent in the original vocabulary, the tokenizer represents them as multiple rare or out-of-vocabulary tokens, which forces the model to expend capacity learning how to piece together novel concepts from clumsy approximations. **Tokenizer expansion** — adding new vocabulary tokens and their embeddings to accommodate the new data's characteristics — improves efficiency substantially. The model also risks "catastrophic forgetting" — learning new data so aggressively that it unlearns old knowledge, a failure mode mitigated by keeping the learning rate low and mixing in some original training data during the continued pretraining phase.
+
+## 4. Theoretical Foundations
+
+From an information-theoretic perspective, a model trained to convergence on data distribution $D_{\text{old}}$ has essentially extracted all compressible structure from $D_{\text{old}}$ that its parameters can represent. When presented with new data $D_{\text{new}}$ from a shifted distribution, the model's loss on $D_{\text{new}}$ is initially high (new patterns haven't been learned), but the model's *representations*, learned on $D_{\text{old}}$, often transfer partially — the linear projections and nonlinear transformations that efficiently represented $D_{\text{old}}$ often capture relevant structure in $D_{\text{new}}$ with modest modification. Continued pretraining exploits this: it reuses the efficiently-learned base representation and fine-tunes it for the new distribution, typically converging much faster and with far fewer examples than training from scratch. The learning rate must decay appropriately, typically following a schedule like $\eta_t = \eta_0 / (1 + \alpha t)$ or exponential decay, to avoid overshooting the narrow basin around the original solution and destabilizing training.
+
+## 5. Worked Example
+
+A model trained on data through January 2024 knows nothing about major events after that date. If GPT-4's knowledge cutoff is April 2024 and new world events occur in July 2024, continued pretraining on a curated corpus of news, Wikipedia updates, and other reliable text from July 2024 onward can efficiently teach the model about these events. Starting with learning rate $\eta_0 \approx 10^{-5}$ (compared to $\eta_0 \approx 10^{-3}$ or $10^{-4}$ during initial pretraining), the model converges on the new data in weeks to months rather than the years required for initial pretraining, because the vast majority of the model's weights — learned linguistic structure, mathematical reasoning, code understanding — remain valuable for the new distribution.
+
+## 6. Code / Implementation
+
+```python
+import torch
+import torch.nn as nn
+
+def continued_pretrain_step(model, batch_tokens, learning_rate=1e-5, mix_old_data_ratio=0.1):
+    """
+    One gradient step of continued pretraining with optional mixing of old data
+    to mitigate catastrophic forgetting.
+    
+    batch_tokens: (batch_size, seq_len) — new data or mixed old+new
+    learning_rate: typically 10-100x smaller than initial pretraining LR
+    mix_old_data_ratio: fraction of batch to sample from original data
+    """
+    logits = model(batch_tokens)
+    # Standard language modeling loss (predict next token)
+    loss = nn.functional.cross_entropy(
+        logits[:, :-1].reshape(-1, logits.shape[-1]),
+        batch_tokens[:, 1:].reshape(-1)
+    )
+    
+    loss.backward()
+    # Gentle gradient clipping to avoid instability on already-trained model
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer.step()
+    optimizer.zero_grad()
+    
+    return loss.item()
+
+def expand_tokenizer(model, new_tokens, embedding_dim):
+    """
+    Adds new_tokens to the model's vocabulary, initializing their embeddings
+    from the mean of existing embeddings (or another heuristic).
+    Typically done before continued pretraining on data with novel vocabulary.
+    """
+    old_vocab_size = model.embedding.weight.shape[0]
+    new_vocab_size = old_vocab_size + len(new_tokens)
+    
+    new_embeddings = nn.Parameter(torch.randn(new_vocab_size, embedding_dim) * 0.02)
+    # Initialize new embeddings at the mean of existing ones (conservative)
+    new_embeddings.data[old_vocab_size:] = model.embedding.weight.mean(dim=0, keepdim=True)
+    
+    model.embedding.weight = new_embeddings
+    # Also expand output projection if present
+    if hasattr(model, 'output_proj'):
+        model.output_proj.weight = nn.Parameter(
+            torch.randn(new_vocab_size, embedding_dim) * 0.02
+        )
+    
+    return model
+
+if __name__ == "__main__":
+    # Minimal example: resume training on new data
+    model = nn.TransformerEncoderLayer(d_model=64, nhead=4, batch_first=True)
+    batch = torch.randint(0, 1000, (4, 32))
+    
+    loss = continued_pretrain_step(model, batch, learning_rate=1e-5)
+    print(f"Continued pretraining loss: {loss:.4f}")
+    print("(In practice, continue for many steps with learning rate scheduling)")
+```
+
+## 7. Real-World Applications
+
+Major model updates from labs (e.g., Claude models, GPT updates) often combine initial pretraining on static data with continued pretraining phases on recent data to keep knowledge current without full retraining. Open-source models benefit substantially from community continued pretraining initiatives — models like Mistral or Llama have been continued on specialized corpora (recent news, technical documentation, specific domains) by different teams to extend their knowledge and specialize their capabilities for new use cases.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that continued pretraining is cheap compared to initial pretraining — while it's cheaper than retraining from scratch, it's not "free" and can still consume substantial compute over weeks for a billion-parameter model on a large new corpus. Another pitfall is ignoring tokenizer mismatch — if new data contains symbols or vocabulary the original tokenizer doesn't handle efficiently, the model spends significant effort learning workarounds, and adding new tokens to the vocabulary before pretraining (with corresponding embedding initialization) pays back its overhead quickly. A serious pitfall is catastrophic forgetting — if learning rates are too aggressive or old data isn't mixed in at all, the model can degrade substantially on its original benchmark tasks while improving on new ones, an unacceptable tradeoff in production settings.
+
+## 9. How This Connects
+
+This topic requires understanding **Pretraining** fundamentals and **Transfer Learning** dynamics. It directly connects to **Domain Adaptation** (specializing a pretrained model to a specific domain without full retraining), **Fine-Tuning Strategies** (choosing when to use continued pretraining versus targeted fine-tuning), and **Knowledge Distillation** (if you want to move the knowledge learned via continued pretraining into a smaller, faster model).
+
+## 10. Check Your Understanding
+
+**Q1: Why is the learning rate for continued pretraining typically 10-100x smaller than for initial pretraining?**
+Because the model is already at or near a good solution for its original data distribution, and a large learning rate would overshoot that solution, causing instability or divergence. A smaller learning rate allows fine-tuning of existing parameters without disruption.
+
+**Q2: What is "catastrophic forgetting" in the context of continued pretraining, and how is it mitigated?**
+It's the phenomenon where aggressive learning on new data causes the model to unlearn knowledge from the original data. It's mitigated by using low learning rates, mixing in some original data alongside new data during training, and monitoring performance on old benchmarks.
+
+**Q3: Why might tokenizer expansion be necessary before continued pretraining?**
+If new data contains novel vocabulary (rare abbreviations, new code syntax, domain-specific terms) not well-represented in the original tokenizer, the model must represent these concepts as multiple tokens, wasting model capacity. Adding new tokens to the vocabulary allows efficient representation of novel concepts.
+
+**Q4: How does continued pretraining differ from fine-tuning?**
+Continued pretraining resumes the pretraining loss (predicting the next token) on new data, directly expanding the model's parametric knowledge. Fine-tuning typically uses a task-specific supervised objective (classification, QA, etc.) and is shallower and more targeted than pretraining.
+
+**Q5: Why doesn't continued pretraining require retraining the entire model from scratch?**
+Because the representations learned during initial pretraining on the original distribution transfer substantially to the new distribution — the model's learned linguistic structure, reasoning patterns, and encodings remain useful even when the specific knowledge (facts, recent events) changes.
+
+## 11. Further Reading
+
+- Gao et al., "Scaling Laws for Transfer" (2022) — empirical study of transfer efficiency between pretraining phases
+- Hoffmann et al., "Training Compute-Optimal Large Language Models" (Chinchilla, 2022) — includes findings on model updates via continued training
+- Roziere et al., "Code as Policies: Language Model Programs for Embodied Control" (2023) — includes examples of continued pretraining for code
+- See also: `pretraining` in the Deep Learning curriculum and `fine-tuning-strategies` in this domain
+
+## Related Platform Content
+
+- [LLM ENGINEERING curriculum overview](/learn/llm-engineering)
+- [Production system](/system-design/llm-serving)
+- [Browse all system designs](/system-design)

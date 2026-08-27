@@ -1,0 +1,208 @@
+# Agent Architecture and Reasoning Loops
+
+## 1. Overview
+
+An AI agent is not just a language model that generates text in response to prompts — it's a system that can reason, plan, use tools, observe the results, and iterate to achieve goals. A **reasoning loop** (or **agentic loop**) formalizes this: the agent observes the current state (the problem, what it knows so far), reasons about what action to take (call a tool, ask for clarification, generate an answer), executes that action, observes the result, and repeats until reaching a goal state. This is distinct from a single-turn LLM call: an agent can make multiple decisions, each informed by previous results. This topic covers the fundamental architecture: state representation, action selection, observation loops, and termination conditions.
+
+## 2. Prerequisites in Context
+
+**Language Models and Prompting** are the foundation — agents are typically built on top of LLMs, which do the reasoning and planning. **Tool Calling and Function Use** is closely related — agents act by calling external functions/tools and observing their outputs. **Planning and Search** matter because an agent must decide which action to take next, and this involves planning and search through possible action sequences. **Evaluation and Reward** concepts are useful because agents need a way to assess whether they're making progress toward goals.
+
+## 3. Core Concept
+
+A basic agent loop has four components: (1) **Reasoning/Planning** — the agent (an LLM with a system prompt) observes the current state and decides what action to take next; (2) **Action Execution** — the agent calls a tool, queries a database, or performs another action; (3) **Observation** — the system collects the result and feeds it back to the agent; (4) **Iteration** — the agent reasons on the new state (previous information + new observations) and repeats. A **termination condition** stops the loop when a goal is reached (e.g., the agent produces a final answer) or a failure condition is met (e.g., too many iterations, a tool fails catastrophically). The **state** is everything the agent knows at that point: the original query, previous tool calls and their results, intermediate conclusions, and remaining actions to try. **Stateless agents** (no persistent memory between actions, each decision made on a fresh context window) are simpler but less powerful; **stateful agents** (maintaining a memory or conversation history) can reason more effectively but require careful memory management to avoid exceeding context limits.
+
+## 4. Theoretical Foundations
+
+The agentic loop is a formalization of **means-ends analysis**: given a goal and a set of available actions (tools), the agent repeatedly identifies the gap between the current state and the goal, selects an action that reduces that gap, executes it, and iterates. From a control-theory perspective, this is **feedback control**: the agent observes the state, outputs an action, observes the new state (feedback), and uses that feedback to adjust future actions. **Model-based** reasoning (the agent maintains a representation of the world and predicts action outcomes) is more powerful than **model-free** reactive behavior (act based on current observation without lookahead), but requires more computation and is vulnerable to model errors. Most practical agents use a hybrid: they use an LLM to reason as if they have a world model (predicting outcomes of actions) without explicitly maintaining one — relying on the LLM's training to encode world knowledge implicitly.
+
+## 5. Worked Example
+
+An agent tasked with "find the best restaurant in San Francisco for a vegetarian dinner party tomorrow" executes:
+1. **Observation**: Goal stated, no information gathered yet.
+2. **Reasoning**: "I should search for vegetarian restaurants in San Francisco and check reviews/availability."
+3. **Action**: Call search_restaurants("vegetarian restaurants San Francisco").
+4. **Observation**: Get list of 10 restaurants with ratings.
+5. **Reasoning**: "I should check which ones have availability for a group dinner tomorrow."
+6. **Action**: Call check_availability(restaurants[0], party_size=6, date="tomorrow").
+7. **Observation**: Restaurant A has availability at 7 PM, B is fully booked, C has availability at 5 PM.
+8. **Reasoning**: "Let me check reviews and menus to compare A and C."
+9. **Action**: Call get_reviews_and_menu(restaurant_A), get_reviews_and_menu(restaurant_C).
+10. **Observation**: Detailed reviews and menus for both.
+11. **Reasoning**: "Based on reviews, ratings, and menu quality, A is the best choice."
+12. **Action**: Return final recommendation.
+13. **Termination**: Goal achieved, agent stops.
+
+## 6. Code / Implementation
+
+```python
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+class ActionType(Enum):
+    TOOL_CALL = "tool_call"
+    REASONING = "reasoning"
+    FINAL_ANSWER = "final_answer"
+
+@dataclass
+class Action:
+    type: ActionType
+    tool_name: Optional[str] = None
+    tool_args: Optional[Dict] = None
+    reasoning: Optional[str] = None
+
+class SimpleAgent:
+    """Simplified agent with reasoning loop."""
+    def __init__(self, llm, tools: Dict[str, callable], max_iterations: int = 10):
+        self.llm = llm
+        self.tools = tools
+        self.max_iterations = max_iterations
+        self.state_history = []
+    
+    def reason_and_act(self, query: str, context: str = "") -> str:
+        """Main agent loop: reason, act, observe, iterate."""
+        state = {
+            "query": query,
+            "observations": [],
+            "reasoning_steps": []
+        }
+        
+        for iteration in range(self.max_iterations):
+            # 1. Prepare context for LLM
+            llm_context = self._format_context(state)
+            prompt = f"{llm_context}\n\nWhat should I do next?"
+            
+            # 2. LLM decides next action
+            decision = self.llm.query(prompt)  # In practice, parse LLM output for action
+            action = self._parse_decision(decision)
+            
+            # 3. Execute action
+            if action.type == ActionType.TOOL_CALL:
+                try:
+                    result = self.tools[action.tool_name](**action.tool_args)
+                    state["observations"].append({
+                        "tool": action.tool_name,
+                        "args": action.tool_args,
+                        "result": result
+                    })
+                except Exception as e:
+                    state["observations"].append({
+                        "tool": action.tool_name,
+                        "error": str(e)
+                    })
+            
+            elif action.type == ActionType.REASONING:
+                state["reasoning_steps"].append(action.reasoning)
+            
+            elif action.type == ActionType.FINAL_ANSWER:
+                return action.reasoning  # Return final answer
+        
+        # Fallback if max iterations reached
+        return "Reached maximum iterations without finding answer."
+    
+    def _format_context(self, state: Dict) -> str:
+        """Format state into LLM-readable context."""
+        context = f"Original query: {state['query']}\n\n"
+        
+        if state["observations"]:
+            context += "Previous observations:\n"
+            for obs in state["observations"]:
+                if "result" in obs:
+                    context += f"  - Called {obs['tool']} with {obs['args']}: {obs['result']}\n"
+                else:
+                    context += f"  - Attempted {obs['tool']}: ERROR - {obs['error']}\n"
+        
+        if state["reasoning_steps"]:
+            context += "\nPrevious reasoning:\n"
+            for step in state["reasoning_steps"]:
+                context += f"  - {step}\n"
+        
+        return context
+    
+    def _parse_decision(self, llm_output: str) -> Action:
+        """Parse LLM output into an Action (simplified)."""
+        # In practice, use structured outputs (JSON) or special tokens
+        if "FINAL_ANSWER:" in llm_output:
+            return Action(
+                type=ActionType.FINAL_ANSWER,
+                reasoning=llm_output.split("FINAL_ANSWER:")[-1].strip()
+            )
+        elif "TOOL:" in llm_output:
+            tool_call = llm_output.split("TOOL:")[-1]
+            # Parse tool name and args (simplified parsing)
+            return Action(
+                type=ActionType.TOOL_CALL,
+                tool_name=tool_call.split("(")[0].strip(),
+                tool_args={}  # In practice, parse args properly
+            )
+        else:
+            return Action(
+                type=ActionType.REASONING,
+                reasoning=llm_output
+            )
+
+if __name__ == "__main__":
+    # Mock LLM and tools
+    class MockLLM:
+        def query(self, prompt):
+            # Simulated LLM responses (simplified)
+            if "restaurant" in prompt.lower():
+                return "TOOL: search_restaurants(query='vegetarian')"
+            else:
+                return "FINAL_ANSWER: Restaurant A is the best choice."
+    
+    def search_restaurants(query):
+        return ["Restaurant A", "Restaurant B", "Restaurant C"]
+    
+    agent = SimpleAgent(
+        llm=MockLLM(),
+        tools={"search_restaurants": search_restaurants}
+    )
+    
+    result = agent.reason_and_act("Find a good vegetarian restaurant.")
+    print(f"Agent result: {result}")
+```
+
+## 7. Real-World Applications
+
+OpenAI's GPT-4 with function calling enables agentic loops for customer support (retrieve tickets, analyze issues, suggest solutions). Anthropic's Claude supports tool use and can execute multi-step reasoning loops. Autonomous driving systems use reasoning loops: observe sensor data, reason about environment, decide actions (accelerate, brake, turn), execute, observe new sensor data. Robot task execution uses reasoning loops: observe gripper state, reason about next task step, execute action (move to object, grasp, move to location), observe result, iterate.
+
+## 8. Common Pitfalls & Misconceptions
+
+A common misconception is that agents are "autonomously reasoning"— they're still using an LLM to generate decisions, which means they inherit the LLM's limitations (biases, hallucinations, poor reasoning on novel problems). Another pitfall is treating all agent problems as needing complex reasoning loops — simple, direct LLM calls often outperform multi-step agents on tasks where a single decision suffices. A third pitfall is ignoring context length in stateful agents — as the state history grows (many observations, reasoning steps), eventually the agent runs out of context window, requiring **memory management** and **summarization** of past steps. A fourth pitfall is insufficient error handling — tools fail, return unexpected results, or are called with wrong arguments, and agents need graceful degradation, not crashes.
+
+## 9. How This Connects
+
+This topic requires **Language Models and Prompting** and **Tool Calling and Function Use** as foundations. It connects to **Planning and Search Strategies** (more sophisticated agentic reasoning), **Memory and Context Management** (how agents maintain state), **Multi-Agent Systems** (multiple agents cooperating), and applications to **Chatbots**, **Autonomous Agents**, **Task Automation**.
+
+## 10. Check Your Understanding
+
+**Q1: What is a reasoning loop, and how does it differ from a single-turn LLM call?**
+A reasoning loop has the agent observe state, decide action, execute, observe results, and iterate until a goal is reached. A single-turn call is one LLM query → one response, no iteration or action execution.
+
+**Q2: What are the four main components of an agent loop?**
+Reasoning/planning (decide action), action execution (call tool or take action), observation (collect result), and iteration (repeat with new state).
+
+**Q3: What is the difference between stateless and stateful agents?**
+Stateless agents make each decision from a fresh context (simpler, lower memory); stateful agents maintain memory of all previous actions and observations (more powerful, but requires memory management to avoid exceeding context limits).
+
+**Q4: Why is error handling important in agent loops?**
+Tools fail, return unexpected results, or are called incorrectly. Without error handling, the agent crashes. With error handling (catching errors, trying alternatives), the agent can recover and continue reasoning.
+
+**Q5: What is a termination condition, and why is it necessary?**
+A termination condition stops the agent loop (when goal is reached, maximum iterations exceeded, or failure detected). Without it, the agent could loop indefinitely.
+
+## 11. Further Reading
+
+- Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models" (2023)
+- Wei et al., "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models" (2022)
+- OpenAI, "Function calling and other API updates" (2023)
+- Anthropic, "Tool Use in Claude" documentation
+- See also: `tool-calling-and-function-use` and `planning-and-search-strategies` in this domain
+
+## Related Platform Content
+
+- [AI AGENTS curriculum overview](/learn/ai-agents)
+- [Production system](/system-design/agent-systems)
+- [Browse all system designs](/system-design)
