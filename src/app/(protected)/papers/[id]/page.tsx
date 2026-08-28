@@ -1,13 +1,27 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
-import { getMdxContent } from '@/lib/mdx';
+import { getMdxContent, getMethodology } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
+import MethodologyTrack from '@/components/paper/MethodologyTrack';
 import WorkspacePaperClient from './WorkspacePaperClient';
 import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { paperToArchSlug } from '@/components/arch/archFlows';
 import { Reveal } from '@/components/anim';
 import { PAPER_ROUTE_ALIASES } from '@/data/content/routeAliases';
+
+function getPaperMethodology(id: string) {
+  const direct = getMethodology(id);
+  if (direct) return direct;
+
+  for (const [alias, canonical] of Object.entries(PAPER_ROUTE_ALIASES)) {
+    if (canonical === id) {
+      const aliased = getMethodology(alias);
+      if (aliased) return aliased;
+    }
+  }
+  return null;
+}
 
 export default async function PaperWorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -18,6 +32,7 @@ export default async function PaperWorkspacePage({ params }: { params: Promise<{
 
   if (mdxContent) {
     const archSlug = paperToArchSlug(id);
+    const methodology = getPaperMethodology(id);
     return (
       <div className="min-h-screen bg-transparent text-white overflow-y-auto">
         <div className="max-w-4xl mx-auto p-12">
@@ -30,6 +45,11 @@ export default async function PaperWorkspacePage({ params }: { params: Promise<{
                 Architecture
               </div>
               <ArchDiagramView slug={archSlug} />
+            </Reveal>
+          )}
+          {methodology && (
+            <Reveal className="mb-10">
+              <MethodologyTrack methodology={methodology} />
             </Reveal>
           )}
           <MdxRenderer source={mdxContent} />

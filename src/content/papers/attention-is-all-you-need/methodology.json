@@ -1,0 +1,54 @@
+{
+  "paper": "attention-is-all-you-need",
+  "title": "Reconstruct the Transformer",
+  "summary": "Rebuild the Transformer's attention mechanism one piece at a time -- three questions to check understanding, then two graded implementations.",
+  "parts": [
+    {
+      "n": 1,
+      "kind": "concept",
+      "title": "Why scale by 1/sqrt(d_k)?",
+      "prompt": "Scores are QK^T divided by sqrt(d_k) before softmax. Explain what breaks as d_k grows if you drop the 1/sqrt(d_k) factor, and why scaling fixes it.",
+      "answer": "A dot product of two independent d_k-dim vectors has variance proportional to d_k, so raw scores grow with d_k. Very large scores push softmax into saturated regions where gradients vanish. Dividing by sqrt(d_k) normalizes the score variance back to ~1, keeping softmax well-conditioned.",
+      "hints": [
+        "Consider the variance of a dot product of vectors with i.i.d. entries.",
+        "What does softmax do to inputs that are huge in magnitude?"
+      ]
+    },
+    {
+      "n": 2,
+      "kind": "concept",
+      "title": "Why the causal mask?",
+      "prompt": "The decoder applies a causal (look-ahead) mask. What property does it enforce, and where in the computation must it be applied?",
+      "answer": "It enforces autoregression: position i may attend only to positions <= i, so the model cannot peek at future tokens during teacher-forced training and matches inference. The mask is applied to the scores BEFORE softmax (blocked entries set to a large negative), so they get ~0 probability.",
+      "hints": [
+        "What leaks if position 2 could attend to position 5 during training?",
+        "Applying the mask after softmax would not zero contributions correctly."
+      ]
+    },
+    {
+      "n": 3,
+      "kind": "concept",
+      "title": "Why multiple heads?",
+      "prompt": "Multi-head attention splits d_model into h heads instead of one attention over the full dimension. What do multiple heads buy you?",
+      "answer": "Each head projects Q/K/V into a different subspace, so heads attend to different relationships in parallel (syntactic, positional, coreference, ...). Concat + Wo recombines these views. A single head must average all patterns into one distribution, losing the ability to represent several relations at once.",
+      "hints": [
+        "A single softmax attention produces ONE distribution over positions.",
+        "Different projections = different notions of similarity."
+      ]
+    },
+    {
+      "n": 4,
+      "kind": "code",
+      "title": "Implement scaled dot-product attention",
+      "prompt": "Implement attention(Q,K,V,mask=None) = softmax(QK^T/sqrt(d_k)) V. Apply the mask before softmax and keep softmax numerically stable.",
+      "dojoSlug": "transformer-scaled-dot-product-attention"
+    },
+    {
+      "n": 5,
+      "kind": "code",
+      "title": "Implement multi-head attention",
+      "prompt": "Build on part 4: project X into Q/K/V, split into num_heads heads, attend per head, concatenate, and apply the output projection Wo.",
+      "dojoSlug": "transformer-multi-head-attention"
+    }
+  ]
+}

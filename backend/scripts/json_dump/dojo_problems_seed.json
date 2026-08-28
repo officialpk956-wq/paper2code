@@ -4803,5 +4803,3488 @@
       ]
     },
     "reference_solution": "import numpy as np\ndef flash_attn_single_query(q, K, V, block_size):\n    q = np.asarray(q, float); K = np.asarray(K, float); V = np.asarray(V, float)\n    N, d = K.shape\n    m = -np.inf; l = 0.0; O = np.zeros((1, d))\n    for s in range(0, N, block_size):\n        Kj = K[s:s+block_size]; Vj = V[s:s+block_size]\n        sj = q @ Kj.T\n        m_new = max(m, sj.max())\n        p = np.exp(sj - m_new)\n        l_new = l * np.exp(m - m_new) + p.sum()\n        O = (O * l * np.exp(m - m_new) + p @ Vj) / l_new\n        m, l = m_new, l_new\n    return O\n"
+  },
+  {
+    "id": "transformer-scaled-dot-product-attention",
+    "slug": "transformer-scaled-dot-product-attention",
+    "title": "Scaled Dot-Product Attention",
+    "category": "Transformers",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement softmax(QK^T / sqrt(d_k)) @ V with optional masking and a numerically stable softmax. This is the core operation of the Transformer (Vaswani et al., 2017, Sec 3.2.1).",
+    "tags": [
+      "attention",
+      "transformer",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef scaled_dot_product_attention(Q, K, V, mask=None):\n    # Q:(seq_q,d_k) K:(seq_k,d_k) V:(seq_k,d_v); mask:(seq_q,seq_k) 0=blocked or None\n    # Return softmax(QK^T/sqrt(d_k)) @ V, applying the mask BEFORE softmax.\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "scaled_dot_product_attention",
+      "checker": "allclose",
+      "tolerance": 1e-06,
+      "depth": "L2",
+      "statement": {
+        "motivation": "Attention lets each position pull information from every other position, weighted by learned relevance.",
+        "task": "Return softmax(QK^T/sqrt(d_k)) @ V; apply the mask (0=blocked) before softmax.",
+        "math": "Attention(Q,K,V)=softmax(QK^T/sqrt(d_k))V",
+        "paper_ref": "Attention Is All You Need, Sec 3.2.1"
+      },
+      "think_prompts": [
+        "What shape are the scores QK^T?",
+        "Where must the mask be applied relative to softmax?",
+        "Why divide by sqrt(d_k)?"
+      ],
+      "cases": [
+        {
+          "name": "s-nomask",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                2.0
+              ],
+              [
+                3.0,
+                4.0
+              ],
+              [
+                5.0,
+                6.0
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              3.0,
+              4.0
+            ],
+            [
+              3.4066725560787154,
+              4.406672556078716
+            ],
+            [
+              3.5104695304536615,
+              4.510469530453662
+            ]
+          ],
+          "explain": "no mask: softmax over all keys"
+        },
+        {
+          "name": "h-causal",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                2.0
+              ],
+              [
+                3.0,
+                4.0
+              ],
+              [
+                5.0,
+                6.0
+              ]
+            ],
+            [
+              [
+                1,
+                0,
+                0
+              ],
+              [
+                1,
+                1,
+                0
+              ],
+              [
+                1,
+                1,
+                1
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              1.0,
+              2.0
+            ],
+            [
+              2.3395230986533138,
+              3.3395230986533138
+            ],
+            [
+              3.5104695304536615,
+              4.510469530453662
+            ]
+          ],
+          "feedback": "set masked scores to a large negative value BEFORE softmax"
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\n\ndef _softmax(x):\n    x = x - np.max(x, axis=-1, keepdims=True)\n    e = np.exp(x)\n    return e / np.sum(e, axis=-1, keepdims=True)\n\ndef scaled_dot_product_attention(Q, K, V, mask=None):\n    Q = np.asarray(Q, float); K = np.asarray(K, float); V = np.asarray(V, float)\n    d_k = Q.shape[-1]\n    scores = Q @ K.T / np.sqrt(d_k)\n    if mask is not None:\n        scores = np.where(np.asarray(mask) == 0, -1e9, scores)\n    return _softmax(scores) @ V\n"
+  },
+  {
+    "id": "transformer-multi-head-attention",
+    "slug": "transformer-multi-head-attention",
+    "title": "Multi-Head Attention",
+    "category": "Transformers",
+    "difficulty": "Hard",
+    "estimated_time": 45,
+    "description": "Build multi-head attention on top of scaled dot-product attention: project X into Q/K/V, split into num_heads heads, attend per head, concatenate, then apply the output projection Wo.",
+    "tags": [
+      "attention",
+      "transformer",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef multi_head_attention(X, Wq, Wk, Wv, Wo, num_heads):\n    # X:(seq,d_model); Wq,Wk,Wv,Wo:(d_model,d_model)\n    # Project X, split into num_heads heads (d_k=d_model//num_heads), run scaled\n    # dot-product attention per head, concat, then apply Wo.\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "multi_head_attention",
+      "checker": "allclose",
+      "tolerance": 1e-06,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Multiple heads let the model attend to different relationships in parallel subspaces.",
+        "task": "Project, split into heads, run scaled dot-product attention per head, concat, apply Wo.",
+        "math": "MultiHead(X)=Concat(head_1..head_h)W^O",
+        "paper_ref": "Attention Is All You Need, Sec 3.2.2"
+      },
+      "think_prompts": [
+        "What is d_k when d_model=4 and num_heads=2?",
+        "How do you reshape (seq,d_model) into (heads,seq,d_k)?",
+        "num_heads=1 should reduce to single-head attention."
+      ],
+      "cases": [
+        {
+          "name": "s-2head",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+              ]
+            ],
+            [
+              [
+                0.6,
+                0.1,
+                0.1,
+                0.1
+              ],
+              [
+                0.1,
+                0.6,
+                0.1,
+                0.1
+              ],
+              [
+                0.1,
+                0.1,
+                0.6,
+                0.1
+              ],
+              [
+                0.1,
+                0.1,
+                0.1,
+                0.6
+              ]
+            ],
+            [
+              [
+                0.5,
+                0.2,
+                0.2,
+                0.2
+              ],
+              [
+                0.2,
+                0.5,
+                0.2,
+                0.2
+              ],
+              [
+                0.2,
+                0.2,
+                0.5,
+                0.2
+              ],
+              [
+                0.2,
+                0.2,
+                0.2,
+                0.5
+              ]
+            ],
+            [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                0.8500000000000001,
+                0.05,
+                0.05,
+                0.05
+              ],
+              [
+                0.05,
+                0.8500000000000001,
+                0.05,
+                0.05
+              ],
+              [
+                0.05,
+                0.05,
+                0.8500000000000001,
+                0.05
+              ],
+              [
+                0.05,
+                0.05,
+                0.05,
+                0.8500000000000001
+              ]
+            ],
+            2
+          ],
+          "expected": [
+            [
+              0.6576189294523298,
+              0.6302604975191428,
+              0.39183033130582323,
+              0.3626753360766732
+            ],
+            [
+              0.6302604975191428,
+              0.6576189294523298,
+              0.3626753360766732,
+              0.39183033130582323
+            ],
+            [
+              0.648998803146664,
+              0.6489988031466641,
+              0.37256749561015534,
+              0.3725674956101553
+            ]
+          ],
+          "explain": "2 heads, d_k=2"
+        },
+        {
+          "name": "h-1head",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+              ]
+            ],
+            [
+              [
+                0.6,
+                0.1,
+                0.1,
+                0.1
+              ],
+              [
+                0.1,
+                0.6,
+                0.1,
+                0.1
+              ],
+              [
+                0.1,
+                0.1,
+                0.6,
+                0.1
+              ],
+              [
+                0.1,
+                0.1,
+                0.1,
+                0.6
+              ]
+            ],
+            [
+              [
+                0.5,
+                0.2,
+                0.2,
+                0.2
+              ],
+              [
+                0.2,
+                0.5,
+                0.2,
+                0.2
+              ],
+              [
+                0.2,
+                0.2,
+                0.5,
+                0.2
+              ],
+              [
+                0.2,
+                0.2,
+                0.2,
+                0.5
+              ]
+            ],
+            [
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                0.8500000000000001,
+                0.05,
+                0.05,
+                0.05
+              ],
+              [
+                0.05,
+                0.8500000000000001,
+                0.05,
+                0.05
+              ],
+              [
+                0.05,
+                0.05,
+                0.8500000000000001,
+                0.05
+              ],
+              [
+                0.05,
+                0.05,
+                0.05,
+                0.8500000000000001
+              ]
+            ],
+            1
+          ],
+          "expected": [
+            [
+              0.6530649572576448,
+              0.6131024116123593,
+              0.3868975883876407,
+              0.3469350427423554
+            ],
+            [
+              0.6131024116123593,
+              0.6530649572576447,
+              0.3469350427423554,
+              0.3868975883876407
+            ],
+            [
+              0.6400811853915725,
+              0.6400811853915724,
+              0.35991881460842756,
+              0.35991881460842756
+            ]
+          ],
+          "feedback": "1 head must equal single-head attention on the projected X"
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\n\ndef _softmax(x):\n    x = x - np.max(x, axis=-1, keepdims=True)\n    e = np.exp(x)\n    return e / np.sum(e, axis=-1, keepdims=True)\n\ndef multi_head_attention(X, Wq, Wk, Wv, Wo, num_heads):\n    X = np.asarray(X, float)\n    Wq = np.asarray(Wq, float); Wk = np.asarray(Wk, float)\n    Wv = np.asarray(Wv, float); Wo = np.asarray(Wo, float)\n    seq, d_model = X.shape\n    d_k = d_model // num_heads\n    Q = X @ Wq; K = X @ Wk; V = X @ Wv\n    def split(M):\n        return M.reshape(seq, num_heads, d_k).transpose(1, 0, 2)\n    Qh, Kh, Vh = split(Q), split(K), split(V)\n    scores = Qh @ Kh.transpose(0, 2, 1) / np.sqrt(d_k)\n    ctx = _softmax(scores) @ Vh\n    ctx = ctx.transpose(1, 0, 2).reshape(seq, d_model)\n    return ctx @ Wo\n"
+  },
+  {
+    "id": "alexnet-conv2d-forward",
+    "slug": "alexnet-conv2d-forward",
+    "title": "AlexNet Convolution Forward Pass",
+    "category": "Computer Vision",
+    "difficulty": "Hard",
+    "estimated_time": 40,
+    "description": "Implement channel-first multi-filter 2D convolution without padding.",
+    "tags": [
+      "computer-vision",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef conv2d_forward(x, w, b, stride):\n    # x:(C,H,W), w:(F,C,KH,KW), b:(F,)\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "conv2d_forward",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Convolution is the feature extractor at the heart of AlexNet.",
+        "task": "Slide every filter over the input with the requested stride and add one bias per output channel.",
+        "math": "y[f,i,j]=sum(x[:,i*s:i*s+kh,j*s:j*s+kw]*w[f])+b[f]",
+        "paper_ref": "ImageNet Classification with Deep Convolutional Neural Networks"
+      },
+      "think_prompts": [
+        "Derive output height and width first.",
+        "Each filter spans every input channel.",
+        "Bias is scalar per output filter."
+      ],
+      "cases": [
+        {
+          "name": "s-single-filter",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                [
+                  1,
+                  2,
+                  0
+                ],
+                [
+                  0,
+                  1,
+                  3
+                ],
+                [
+                  2,
+                  1,
+                  0
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ]
+                ]
+              ]
+            ],
+            [
+              0.5
+            ],
+            1
+          ],
+          "explain": "one channel and one filter",
+          "expected": [
+            [
+              [
+                0.5,
+                -0.5
+              ],
+              [
+                -0.5,
+                1.5
+              ]
+            ]
+          ]
+        },
+        {
+          "name": "h-stride-two",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                [
+                  1,
+                  2,
+                  3,
+                  4
+                ],
+                [
+                  5,
+                  6,
+                  7,
+                  8
+                ],
+                [
+                  9,
+                  10,
+                  11,
+                  12
+                ],
+                [
+                  13,
+                  14,
+                  15,
+                  16
+                ]
+              ],
+              [
+                [
+                  0,
+                  1,
+                  0,
+                  1
+                ],
+                [
+                  1,
+                  0,
+                  1,
+                  0
+                ],
+                [
+                  0,
+                  1,
+                  0,
+                  1
+                ],
+                [
+                  1,
+                  0,
+                  1,
+                  0
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              [
+                [
+                  [
+                    0.5,
+                    -0.5
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    1
+                  ],
+                  [
+                    0,
+                    0
+                  ]
+                ]
+              ]
+            ],
+            [
+              0,
+              -1
+            ],
+            2
+          ],
+          "feedback": "respect channels, filters, and stride",
+          "expected": [
+            [
+              [
+                9,
+                13
+              ],
+              [
+                25,
+                29
+              ]
+            ],
+            [
+              [
+                4.5,
+                6.5
+              ],
+              [
+                12.5,
+                14.5
+              ]
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef conv2d_forward(x, w, b, stride):\n    x=np.asarray(x,float); w=np.asarray(w,float); b=np.asarray(b,float)\n    F,C,KH,KW=w.shape; _,H,W=x.shape\n    OH=(H-KH)//stride+1; OW=(W-KW)//stride+1\n    out=np.empty((F,OH,OW),float)\n    for f in range(F):\n        for i in range(OH):\n            for j in range(OW):\n                out[f,i,j]=np.sum(x[:,i*stride:i*stride+KH,j*stride:j*stride+KW]*w[f])+b[f]\n    return out\n"
+  },
+  {
+    "id": "alexnet-max-pool2d",
+    "slug": "alexnet-max-pool2d",
+    "title": "AlexNet Max Pooling",
+    "category": "Computer Vision",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement channel-wise 2D max pooling.",
+    "tags": [
+      "computer-vision",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef max_pool2d(x, size, stride):\n    # x:(C,H,W)\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "max_pool2d",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "Pooling reduces spatial resolution while retaining strong local responses.",
+        "task": "Return the maximum in every size-by-size window for each channel.",
+        "math": "y[c,i,j]=max x[c,i*s:i*s+k,j*s:j*s+k]",
+        "paper_ref": "AlexNet, overlapping max pooling"
+      },
+      "think_prompts": [
+        "Pooling never mixes channels.",
+        "Derive output dimensions as for convolution.",
+        "Overlapping pooling has stride smaller than size."
+      ],
+      "cases": [
+        {
+          "name": "s-nonoverlap",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                [
+                  1,
+                  3,
+                  2,
+                  0
+                ],
+                [
+                  4,
+                  6,
+                  5,
+                  1
+                ],
+                [
+                  0,
+                  2,
+                  8,
+                  7
+                ],
+                [
+                  3,
+                  1,
+                  9,
+                  4
+                ]
+              ]
+            ],
+            2,
+            2
+          ],
+          "explain": "two non-overlapping windows per axis",
+          "expected": [
+            [
+              [
+                6,
+                5
+              ],
+              [
+                3,
+                9
+              ]
+            ]
+          ]
+        },
+        {
+          "name": "h-overlap",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                [
+                  1,
+                  5,
+                  2
+                ],
+                [
+                  4,
+                  3,
+                  6
+                ],
+                [
+                  0,
+                  7,
+                  8
+                ]
+              ],
+              [
+                [
+                  9,
+                  1,
+                  2
+                ],
+                [
+                  3,
+                  4,
+                  0
+                ],
+                [
+                  5,
+                  6,
+                  7
+                ]
+              ]
+            ],
+            2,
+            1
+          ],
+          "feedback": "pool each channel independently",
+          "expected": [
+            [
+              [
+                5,
+                6
+              ],
+              [
+                7,
+                8
+              ]
+            ],
+            [
+              [
+                9,
+                4
+              ],
+              [
+                6,
+                7
+              ]
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef max_pool2d(x, size, stride):\n    x=np.asarray(x,float); C,H,W=x.shape\n    OH=(H-size)//stride+1; OW=(W-size)//stride+1\n    out=np.empty((C,OH,OW),float)\n    for c in range(C):\n        for i in range(OH):\n            for j in range(OW): out[c,i,j]=np.max(x[c,i*stride:i*stride+size,j*stride:j*stride+size])\n    return out\n"
+  },
+  {
+    "id": "resnet-relu",
+    "slug": "resnet-relu",
+    "title": "ResNet ReLU",
+    "category": "Computer Vision",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement the elementwise rectified linear unit.",
+    "tags": [
+      "computer-vision",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef relu(x):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "relu",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "ReLU supplies the nonlinearity around residual transforms.",
+        "task": "Return max(x,0) elementwise.",
+        "math": "ReLU(x)=max(0,x)",
+        "paper_ref": "Deep Residual Learning for Image Recognition"
+      },
+      "think_prompts": [
+        "Preserve the input shape.",
+        "Zero is unchanged."
+      ],
+      "cases": [
+        {
+          "name": "s-vector",
+          "kind": "sample",
+          "args": [
+            [
+              -2,
+              -0.5,
+              0,
+              1,
+              3
+            ]
+          ],
+          "explain": "negative values become zero",
+          "expected": [
+            0,
+            0,
+            0,
+            1,
+            3
+          ]
+        },
+        {
+          "name": "h-matrix",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                -1,
+                2
+              ],
+              [
+                3,
+                -4
+              ]
+            ]
+          ],
+          "feedback": "apply elementwise",
+          "expected": [
+            [
+              0,
+              2
+            ],
+            [
+              3,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef relu(x):\n    return np.maximum(np.asarray(x,float),0.0)\n"
+  },
+  {
+    "id": "resnet-residual-block",
+    "slug": "resnet-residual-block",
+    "title": "Linear Residual Block",
+    "category": "Computer Vision",
+    "difficulty": "Hard",
+    "estimated_time": 40,
+    "description": "Implement two linear layers with an identity shortcut and ReLU activations.",
+    "tags": [
+      "computer-vision",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef residual_block(x, W1, W2):\n    # x:(N,D), W1/W2:(D,D)\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "residual_block",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Identity shortcuts turn deep optimization into residual correction.",
+        "task": "Return ReLU(ReLU(x@W1)@W2 + x).",
+        "math": "y=ReLU(W2 ReLU(W1 x)+x)",
+        "paper_ref": "Deep Residual Learning, residual block"
+      },
+      "think_prompts": [
+        "The shortcut bypasses both learned transforms.",
+        "The shapes must match at addition.",
+        "Apply the final ReLU after addition."
+      ],
+      "cases": [
+        {
+          "name": "s-identity-weights",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                -2
+              ],
+              [
+                3,
+                4
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ]
+          ],
+          "explain": "identity weights still include the skip path",
+          "expected": [
+            [
+              2,
+              0
+            ],
+            [
+              6,
+              8
+            ]
+          ]
+        },
+        {
+          "name": "h-mixed",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                -1,
+                2
+              ],
+              [
+                0.5,
+                -0.5
+              ]
+            ],
+            [
+              [
+                1,
+                -1
+              ],
+              [
+                0.5,
+                2
+              ]
+            ],
+            [
+              [
+                0.25,
+                1
+              ],
+              [
+                -1,
+                0.5
+              ]
+            ]
+          ],
+          "feedback": "add x before the final ReLU",
+          "expected": [
+            [
+              0,
+              4.5
+            ],
+            [
+              0.5625,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef residual_block(x, W1, W2):\n    x=np.asarray(x,float); W1=np.asarray(W1,float); W2=np.asarray(W2,float)\n    hidden=np.maximum(x@W1,0.0)\n    return np.maximum(hidden@W2+x,0.0)\n"
+  },
+  {
+    "id": "batchnorm-normalized-stats",
+    "slug": "batchnorm-normalized-stats",
+    "title": "Batch Statistics (mean & variance)",
+    "category": "Deep Learning",
+    "difficulty": "Easy",
+    "estimated_time": 20,
+    "description": "Return the per-feature mean and variance of a mini-batch, computed over the batch dimension. These are the statistics Batch Normalization uses to standardize activations (Ioffe & Szegedy, 2015).",
+    "tags": [
+      "batchnorm",
+      "normalization",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef batchnorm_stats(x):\n    # x: (batch, features). Return (mean, var) computed per feature over axis 0.\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "batchnorm_stats",
+      "checker": "allclose",
+      "tolerance": 1e-06,
+      "depth": "L1",
+      "statement": {
+        "motivation": "BatchNorm standardizes each feature using the batch's own mean and variance.",
+        "task": "Return (mean, var), each a per-feature vector computed over the batch (axis 0).",
+        "math": "mu_j = mean_i x_ij ,  var_j = mean_i (x_ij - mu_j)^2",
+        "paper_ref": "Batch Normalization, Ioffe & Szegedy 2015, Sec 3"
+      },
+      "think_prompts": [
+        "Which axis is the batch dimension?",
+        "Is variance population (/N) or sample (/(N-1)) here?"
+      ],
+      "cases": [
+        {
+          "name": "s-two-features",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                2
+              ],
+              [
+                3,
+                4
+              ],
+              [
+                5,
+                6
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              3.0,
+              4.0
+            ],
+            [
+              2.6666666666666665,
+              2.6666666666666665
+            ]
+          ],
+          "explain": "mean and variance per column"
+        },
+        {
+          "name": "h-constant-feature",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                2,
+                1
+              ],
+              [
+                2,
+                3
+              ],
+              [
+                2,
+                5
+              ],
+              [
+                2,
+                7
+              ]
+            ]
+          ],
+          "expected": [
+            [
+              2.0,
+              4.0
+            ],
+            [
+              0.0,
+              5.0
+            ]
+          ],
+          "feedback": "a constant feature has variance 0"
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef batchnorm_stats(x):\n    x = np.asarray(x, float)\n    return np.mean(x, axis=0), np.var(x, axis=0)\n"
+  },
+  {
+    "id": "batchnorm-forward",
+    "slug": "batchnorm-forward",
+    "title": "BatchNorm Forward Pass",
+    "category": "Optimization",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Normalize a dense mini-batch and apply learned scale and shift.",
+    "tags": [
+      "optimization",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef batchnorm_forward(x, gamma, beta, eps):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "batchnorm_forward",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "Learned affine parameters preserve BatchNorm representation power.",
+        "task": "Compute per-feature normalization, then gamma*x_hat+beta.",
+        "math": "y=gamma*(x-mean)/sqrt(var+eps)+beta",
+        "paper_ref": "Batch Normalization, Algorithm 1"
+      },
+      "think_prompts": [
+        "Reduce over examples, not features.",
+        "Gamma and beta broadcast over the batch.",
+        "Use population variance."
+      ],
+      "cases": [
+        {
+          "name": "s-affine",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                2
+              ],
+              [
+                3,
+                4
+              ],
+              [
+                5,
+                6
+              ]
+            ],
+            [
+              2,
+              0.5
+            ],
+            [
+              -1,
+              1
+            ],
+            0.00001
+          ],
+          "explain": "normalize then apply scale and shift",
+          "expected": [
+            [
+              -3.4494851500028276,
+              0.3876287124992931
+            ],
+            [
+              -1,
+              1
+            ],
+            [
+              1.4494851500028276,
+              1.6123712875007068
+            ]
+          ]
+        },
+        {
+          "name": "h-broadcast",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                0,
+                2,
+                5
+              ],
+              [
+                2,
+                2,
+                1
+              ],
+              [
+                4,
+                2,
+                3
+              ]
+            ],
+            [
+              1,
+              -2,
+              0.25
+            ],
+            [
+              0,
+              3,
+              -1
+            ],
+            0.0001
+          ],
+          "feedback": "handle constant and varying features",
+          "expected": [
+            [
+              -1.2247219080710918,
+              3,
+              -0.693819522982227
+            ],
+            [
+              0,
+              3,
+              -1.306180477017773
+            ],
+            [
+              1.2247219080710918,
+              3,
+              -1
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef batchnorm_forward(x, gamma, beta, eps):\n    x=np.asarray(x,float); gamma=np.asarray(gamma,float); beta=np.asarray(beta,float)\n    mean=np.mean(x,axis=0); var=np.var(x,axis=0)\n    return gamma*(x-mean)/np.sqrt(var+eps)+beta\n"
+  },
+  {
+    "id": "adam-moments",
+    "slug": "adam-moments",
+    "title": "Adam Moment Updates",
+    "category": "Optimization",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Update Adam exponential first and second gradient moments.",
+    "tags": [
+      "optimization",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef adam_moments(g, m, v, b1, b2):\n    # Return (m_new, v_new).\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "adam_moments",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Adam combines momentum with coordinate-wise gradient scaling.",
+        "task": "Return updated m and v from gradient g.",
+        "math": "m=b1*m+(1-b1)g; v=b2*v+(1-b2)g^2",
+        "paper_ref": "Adam, Algorithm 1"
+      },
+      "think_prompts": [
+        "Square g elementwise for v.",
+        "Do not bias-correct in this helper."
+      ],
+      "cases": [
+        {
+          "name": "s-first-step",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              -2
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            0.9,
+            0.999
+          ],
+          "explain": "moments begin at zero",
+          "expected": [
+            [
+              0.09999999999999998,
+              -0.19999999999999996
+            ],
+            [
+              0.0010000000000000009,
+              0.0040000000000000036
+            ]
+          ]
+        },
+        {
+          "name": "h-existing-state",
+          "kind": "hidden",
+          "args": [
+            [
+              0.5,
+              -1,
+              2
+            ],
+            [
+              0.1,
+              0.2,
+              -0.3
+            ],
+            [
+              0.01,
+              0.04,
+              0.09
+            ],
+            0.8,
+            0.95
+          ],
+          "feedback": "include previous moments",
+          "expected": [
+            [
+              0.18,
+              -0.039999999999999925,
+              0.15999999999999992
+            ],
+            [
+              0.022000000000000013,
+              0.08800000000000005,
+              0.2855000000000002
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef adam_moments(g, m, v, b1, b2):\n    g=np.asarray(g,float); m=np.asarray(m,float); v=np.asarray(v,float)\n    return b1*m+(1-b1)*g, b2*v+(1-b2)*(g*g)\n"
+  },
+  {
+    "id": "adam-step",
+    "slug": "adam-step",
+    "title": "One Adam Optimization Step",
+    "category": "Optimization",
+    "difficulty": "Hard",
+    "estimated_time": 40,
+    "description": "Perform one complete Adam parameter update with bias correction.",
+    "tags": [
+      "optimization",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef adam_step(p, g, m, v, t, lr, b1, b2, eps):\n    # Return (p_new, m_new, v_new).\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "adam_step",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Bias-corrected adaptive moments create Adam parameter steps.",
+        "task": "Return (p_new,m_new,v_new) after one update.",
+        "math": "p=p-lr*m_hat/(sqrt(v_hat)+eps)",
+        "paper_ref": "Adam, Algorithm 1"
+      },
+      "think_prompts": [
+        "Update moments before correcting them.",
+        "Correction exponents use t.",
+        "Epsilon belongs in the denominator."
+      ],
+      "cases": [
+        {
+          "name": "s-first-step",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              -1
+            ],
+            [
+              0.2,
+              -0.5
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            1,
+            0.01,
+            0.9,
+            0.999,
+            1e-8
+          ],
+          "explain": "first step includes strong bias correction",
+          "expected": [
+            [
+              0.9900000004999999,
+              -0.9900000002
+            ],
+            [
+              0.019999999999999997,
+              -0.04999999999999999
+            ],
+            [
+              0.000040000000000000044,
+              0.0002500000000000002
+            ]
+          ]
+        },
+        {
+          "name": "h-later-step",
+          "kind": "hidden",
+          "args": [
+            [
+              0.5,
+              -1,
+              2
+            ],
+            [
+              0.1,
+              -0.2,
+              0.3
+            ],
+            [
+              0.04,
+              -0.08,
+              0.1
+            ],
+            [
+              0.01,
+              0.02,
+              0.03
+            ],
+            5,
+            0.005,
+            0.8,
+            0.95,
+            0.000001
+          ],
+          "feedback": "use supplied state and time index",
+          "expected": [
+            [
+              0.4981606691682569,
+              -0.9974614785394739,
+              1.9972739833669795
+            ],
+            [
+              0.052,
+              -0.104,
+              0.14
+            ],
+            [
+              0.01,
+              0.021,
+              0.033
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef adam_step(p, g, m, v, t, lr, b1, b2, eps):\n    p=np.asarray(p,float); g=np.asarray(g,float); m=np.asarray(m,float); v=np.asarray(v,float)\n    m_new=b1*m+(1-b1)*g; v_new=b2*v+(1-b2)*(g*g)\n    m_hat=m_new/(1-b1**t); v_hat=v_new/(1-b2**t)\n    return p-lr*m_hat/(np.sqrt(v_hat)+eps), m_new, v_new\n"
+  },
+  {
+    "id": "lstm-sigmoid",
+    "slug": "lstm-sigmoid",
+    "title": "Stable LSTM Sigmoid",
+    "category": "Sequence Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement a numerically stable sigmoid for LSTM gates.",
+    "tags": [
+      "sequence-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef sigmoid(x):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "sigmoid",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "LSTM gates use sigmoid values as soft switches.",
+        "task": "Return sigmoid(x) elementwise without overflow for large magnitudes.",
+        "math": "sigmoid(x)=1/(1+exp(-x))",
+        "paper_ref": "Long Short-Term Memory"
+      },
+      "think_prompts": [
+        "Use separate formulas for positive and negative inputs.",
+        "Preserve shape."
+      ],
+      "cases": [
+        {
+          "name": "s-basic",
+          "kind": "sample",
+          "args": [
+            [
+              -2,
+              0,
+              2
+            ]
+          ],
+          "explain": "values remain between zero and one",
+          "expected": [
+            0.11920292202211755,
+            0.5,
+            0.8807970779778823
+          ]
+        },
+        {
+          "name": "h-extreme",
+          "kind": "hidden",
+          "args": [
+            [
+              -1000,
+              -20,
+              20,
+              1000
+            ]
+          ],
+          "feedback": "avoid overflow at extreme values",
+          "expected": [
+            0,
+            2.0611536181902033e-9,
+            0.9999999979388463,
+            1
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef sigmoid(x):\n    x=np.asarray(x,float); out=np.empty_like(x)\n    pos=x>=0; out[pos]=1/(1+np.exp(-x[pos]))\n    ex=np.exp(x[~pos]); out[~pos]=ex/(1+ex)\n    return out\n"
+  },
+  {
+    "id": "lstm-cell",
+    "slug": "lstm-cell",
+    "title": "LSTM Cell Forward Pass",
+    "category": "Sequence Models",
+    "difficulty": "Hard",
+    "estimated_time": 45,
+    "description": "Implement one LSTM cell from concatenated gate projections.",
+    "tags": [
+      "sequence-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef lstm_cell(x, h_prev, c_prev, Wx, Wh, b):\n    # Gate order: input, forget, output, candidate. Return (h,c).\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "lstm_cell",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "The LSTM cell separates memory retention, writing, and exposure.",
+        "task": "Use z=x@Wx+h_prev@Wh+b split as i,f,o,g; return (h,c).",
+        "math": "c=f*c_prev+i*tanh(g); h=o*tanh(c)",
+        "paper_ref": "Long Short-Term Memory"
+      },
+      "think_prompts": [
+        "Split the last dimension into four equal parts.",
+        "Apply sigmoid to i, f, and o only.",
+        "Return hidden state before cell state."
+      ],
+      "cases": [
+        {
+          "name": "s-one-unit",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                0.5
+              ]
+            ],
+            [
+              [
+                0.2
+              ]
+            ],
+            [
+              [
+                0.1
+              ]
+            ],
+            [
+              [
+                0.3,
+                -0.2,
+                0.4,
+                0.1
+              ],
+              [
+                0.5,
+                0.2,
+                -0.3,
+                0.6
+              ]
+            ],
+            [
+              [
+                0.1,
+                -0.1,
+                0.2,
+                0.3
+              ]
+            ],
+            [
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "explain": "one batch item and one hidden unit",
+          "expected": [
+            [
+              [
+                0.17792874340784323
+              ]
+            ],
+            [
+              [
+                0.321725551280057
+              ]
+            ]
+          ]
+        },
+        {
+          "name": "h-two-units",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                0.5,
+                -1
+              ]
+            ],
+            [
+              [
+                0.1,
+                0.2
+              ]
+            ],
+            [
+              [
+                0.3,
+                -0.4
+              ]
+            ],
+            [
+              [
+                0.2,
+                0.1,
+                -0.3,
+                0.4,
+                0.5,
+                -0.2,
+                0.1,
+                0.3
+              ],
+              [
+                -0.1,
+                0.4,
+                0.2,
+                -0.2,
+                0.3,
+                0.5,
+                -0.4,
+                0.1
+              ]
+            ],
+            [
+              [
+                0.2,
+                -0.1,
+                0.3,
+                0.2,
+                -0.2,
+                0.4,
+                0.1,
+                -0.3
+              ],
+              [
+                0.1,
+                0.2,
+                -0.1,
+                0.3,
+                0.4,
+                -0.2,
+                0.2,
+                0.1
+              ]
+            ],
+            [
+              0.05,
+              -0.05,
+              0.1,
+              -0.1,
+              0,
+              0.2,
+              -0.2,
+              0.1
+            ]
+          ],
+          "feedback": "split all four gates along the feature axis",
+          "expected": [
+            [
+              [
+                0.14579371828443435,
+                -0.07174745458932158
+              ]
+            ],
+            [
+              [
+                0.2987155930163302,
+                -0.18072427042510658
+              ]
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef _sigmoid(x): return 1/(1+np.exp(-x))\ndef lstm_cell(x, h_prev, c_prev, Wx, Wh, b):\n    x=np.asarray(x,float); h_prev=np.asarray(h_prev,float); c_prev=np.asarray(c_prev,float)\n    z=x@np.asarray(Wx,float)+h_prev@np.asarray(Wh,float)+np.asarray(b,float)\n    i,f,o,g=np.split(z,4,axis=-1)\n    i=_sigmoid(i); f=_sigmoid(f); o=_sigmoid(o); g=np.tanh(g)\n    c=f*c_prev+i*g; h=o*np.tanh(c)\n    return h,c\n"
+  },
+  {
+    "id": "word2vec-softmax",
+    "slug": "word2vec-softmax",
+    "title": "Word2Vec Stable Softmax",
+    "category": "NLP",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement stable softmax for vocabulary logits.",
+    "tags": [
+      "nlp",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef softmax(x):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "softmax",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Skip-gram converts embedding similarities into context-word probabilities.",
+        "task": "Return stable softmax probabilities for a vector.",
+        "math": "p_i=exp(z_i-max(z))/sum_j exp(z_j-max(z))",
+        "paper_ref": "Efficient Estimation of Word Representations"
+      },
+      "think_prompts": [
+        "Subtract the maximum first.",
+        "Probabilities sum to one."
+      ],
+      "cases": [
+        {
+          "name": "s-basic",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "explain": "larger logits get larger probability",
+          "expected": [
+            0.09003057317038046,
+            0.24472847105479764,
+            0.6652409557748218
+          ]
+        },
+        {
+          "name": "h-large",
+          "kind": "hidden",
+          "args": [
+            [
+              1000,
+              1001,
+              999
+            ]
+          ],
+          "feedback": "subtract the maximum to avoid overflow",
+          "expected": [
+            0.24472847105479764,
+            0.6652409557748218,
+            0.09003057317038046
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef softmax(x):\n    x=np.asarray(x,float); e=np.exp(x-np.max(x))\n    return e/np.sum(e)\n"
+  },
+  {
+    "id": "word2vec-skipgram-loss",
+    "slug": "word2vec-skipgram-loss",
+    "title": "Skip-gram Full-Softmax Loss",
+    "category": "NLP",
+    "difficulty": "Hard",
+    "estimated_time": 40,
+    "description": "Compute one full-softmax Skip-gram context prediction loss.",
+    "tags": [
+      "nlp",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef skipgram_loss(center, context, W_in, W_out):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "skipgram_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "Skip-gram learns a center embedding by predicting surrounding words.",
+        "task": "Score center against every output embedding and return target negative log probability.",
+        "math": "L=-log softmax(W_out W_in[center])[context]",
+        "paper_ref": "Word2Vec Skip-gram objective"
+      },
+      "think_prompts": [
+        "Center and context are integer indices.",
+        "Use W_in only for the center vector.",
+        "Stabilize log-softmax."
+      ],
+      "cases": [
+        {
+          "name": "s-small-vocab",
+          "kind": "sample",
+          "args": [
+            0,
+            2,
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ]
+          ],
+          "explain": "predict context index two from center zero",
+          "expected": 0.8619948040582511
+        },
+        {
+          "name": "h-nontrivial",
+          "kind": "hidden",
+          "args": [
+            2,
+            1,
+            [
+              [
+                0.2,
+                -0.1
+              ],
+              [
+                0.5,
+                0.3
+              ],
+              [
+                -0.4,
+                0.8
+              ]
+            ],
+            [
+              [
+                0.1,
+                0.6
+              ],
+              [
+                -0.2,
+                0.4
+              ],
+              [
+                0.7,
+                -0.5
+              ],
+              [
+                0.3,
+                0.2
+              ]
+            ]
+          ],
+          "feedback": "score every output row",
+          "expected": 1.124306879081201
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef skipgram_loss(center, context, W_in, W_out):\n    W_in=np.asarray(W_in,float); W_out=np.asarray(W_out,float)\n    logits=W_out@W_in[int(center)]; shifted=logits-np.max(logits)\n    log_probs=shifted-np.log(np.sum(np.exp(shifted)))\n    return -log_probs[int(context)]\n"
+  },
+  {
+    "id": "bert-layer-norm",
+    "slug": "bert-layer-norm",
+    "title": "BERT Layer Normalization",
+    "category": "Transformers",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement LayerNorm over the final feature dimension.",
+    "tags": [
+      "transformers",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef layer_norm(x, gamma, beta, eps):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "layer_norm",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "LayerNorm stabilizes each token representation independently.",
+        "task": "Normalize the last axis and apply gamma and beta.",
+        "math": "y=gamma*(x-mean_last)/sqrt(var_last+eps)+beta",
+        "paper_ref": "BERT encoder blocks"
+      },
+      "think_prompts": [
+        "Keep dimensions for broadcasting.",
+        "Each row uses its own statistics.",
+        "Gamma and beta match the last dimension."
+      ],
+      "cases": [
+        {
+          "name": "s-two-tokens",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                2,
+                2,
+                4
+              ]
+            ],
+            [
+              1,
+              1,
+              1
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            0.00001
+          ],
+          "explain": "normalize each token separately",
+          "expected": [
+            [
+              -1.2247356859083902,
+              0,
+              1.2247356859083902
+            ],
+            [
+              -0.7071028037444629,
+              -0.7071028037444629,
+              1.4142056074889262
+            ]
+          ]
+        },
+        {
+          "name": "h-affine",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                0,
+                -1,
+                2,
+                4
+              ],
+              [
+                3,
+                1,
+                -2,
+                0
+              ]
+            ],
+            [
+              0.5,
+              2,
+              -1,
+              1
+            ],
+            [
+              1,
+              -1,
+              0.5,
+              0
+            ],
+            0.001
+          ],
+          "feedback": "broadcast affine parameters",
+          "expected": [
+            [
+              0.6745718454082328,
+              -3.3430827130607237,
+              0.10948621448987939,
+              1.4318838802037757
+            ],
+            [
+              1.6932685967774401,
+              -0.44538512257804797,
+              1.88653719355488,
+              -0.277307438710976
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef layer_norm(x, gamma, beta, eps):\n    x=np.asarray(x,float); gamma=np.asarray(gamma,float); beta=np.asarray(beta,float)\n    mean=np.mean(x,axis=-1,keepdims=True); var=np.var(x,axis=-1,keepdims=True)\n    return gamma*(x-mean)/np.sqrt(var+eps)+beta\n"
+  },
+  {
+    "id": "bert-gelu",
+    "slug": "bert-gelu",
+    "title": "BERT GELU Activation",
+    "category": "Transformers",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement the tanh approximation to GELU.",
+    "tags": [
+      "transformers",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef gelu(x):\n    # Use the tanh approximation.\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "gelu",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "GELU smoothly gates BERT feed-forward activations by magnitude.",
+        "task": "Apply the standard tanh GELU approximation elementwise.",
+        "math": "0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x^3)))",
+        "paper_ref": "BERT implementation"
+      },
+      "think_prompts": [
+        "Use the elementwise cube.",
+        "Preserve input shape."
+      ],
+      "cases": [
+        {
+          "name": "s-basic",
+          "kind": "sample",
+          "args": [
+            [
+              -2,
+              -1,
+              0,
+              1,
+              2
+            ]
+          ],
+          "explain": "GELU is smooth near zero",
+          "expected": [
+            -0.04540230591222494,
+            -0.1588080093917233,
+            0,
+            0.8411919906082768,
+            1.954597694087775
+          ]
+        },
+        {
+          "name": "h-matrix",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                -3,
+                0.5
+              ],
+              [
+                1.5,
+                4
+              ]
+            ]
+          ],
+          "feedback": "apply elementwise",
+          "expected": [
+            [
+              -0.0036373920817729943,
+              0.34571400982514394
+            ],
+            [
+              1.3995715769802328,
+              3.9999297540518075
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef gelu(x):\n    x=np.asarray(x,float)\n    return 0.5*x*(1+np.tanh(np.sqrt(2/np.pi)*(x+0.044715*x**3)))\n"
+  },
+  {
+    "id": "gpt3-causal-self-attention",
+    "slug": "gpt3-causal-self-attention",
+    "title": "GPT Causal Self-Attention",
+    "category": "Transformers",
+    "difficulty": "Hard",
+    "estimated_time": 45,
+    "description": "Implement projected single-head self-attention with a causal mask.",
+    "tags": [
+      "transformers",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef causal_self_attention(X, Wq, Wk, Wv):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "causal_self_attention",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "GPT predicts each token using only its prefix.",
+        "task": "Project X, compute scaled scores, mask future positions, softmax, and multiply V.",
+        "math": "softmax(mask(XWq (XWk)^T/sqrt(d_k))) XWv",
+        "paper_ref": "Language Models are Few-Shot Learners"
+      },
+      "think_prompts": [
+        "The causal mask is lower triangular.",
+        "Apply it before softmax.",
+        "Stabilize each softmax row."
+      ],
+      "cases": [
+        {
+          "name": "s-identity-projections",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ]
+          ],
+          "explain": "first token attends only to itself",
+          "expected": [
+            [
+              1,
+              0
+            ],
+            [
+              0.3302384506733431,
+              0.6697615493266569
+            ],
+            [
+              0.7517449217422769,
+              0.7517449217422769
+            ]
+          ]
+        },
+        {
+          "name": "h-projected",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1,
+                2
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                -1,
+                1
+              ]
+            ],
+            [
+              [
+                0.5,
+                0.2
+              ],
+              [
+                -0.1,
+                0.7
+              ]
+            ],
+            [
+              [
+                0.3,
+                -0.2
+              ],
+              [
+                0.6,
+                0.4
+              ]
+            ],
+            [
+              [
+                1,
+                0.5
+              ],
+              [
+                -0.5,
+                1
+              ]
+            ]
+          ],
+          "feedback": "project before applying causal attention",
+          "expected": [
+            [
+              0,
+              2.5
+            ],
+            [
+              0.5702260325256222,
+              2.0723304756057837
+            ],
+            [
+              -0.1187148424713905,
+              1.1809310021511388
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef causal_self_attention(X, Wq, Wk, Wv):\n    X=np.asarray(X,float); Q=X@np.asarray(Wq,float); K=X@np.asarray(Wk,float); V=X@np.asarray(Wv,float)\n    scores=Q@K.T/np.sqrt(Q.shape[-1]); mask=np.tril(np.ones(scores.shape,dtype=bool))\n    scores=np.where(mask,scores,-1e9); scores=scores-np.max(scores,axis=-1,keepdims=True)\n    weights=np.exp(scores); weights/=np.sum(weights,axis=-1,keepdims=True)\n    return weights@V\n"
+  },
+  {
+    "id": "gpt3-softmax-cross-entropy",
+    "slug": "gpt3-softmax-cross-entropy",
+    "title": "GPT Token Cross-Entropy",
+    "category": "Transformers",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Compute stable cross-entropy for one target token.",
+    "tags": [
+      "transformers",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef softmax_cross_entropy(logits, target):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "softmax_cross_entropy",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "Next-token prediction trains GPT with vocabulary cross-entropy.",
+        "task": "Return -log softmax(logits)[target] stably.",
+        "math": "L=logsumexp(logits)-logits[target]",
+        "paper_ref": "GPT-3 autoregressive objective"
+      },
+      "think_prompts": [
+        "Subtracting max preserves softmax.",
+        "Target is an integer index.",
+        "Return a scalar."
+      ],
+      "cases": [
+        {
+          "name": "s-three-tokens",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              2,
+              3
+            ],
+            2
+          ],
+          "explain": "target is the highest logit",
+          "expected": 0.4076059644443806
+        },
+        {
+          "name": "h-large-logits",
+          "kind": "hidden",
+          "args": [
+            [
+              1000,
+              999,
+              1001,
+              995
+            ],
+            1
+          ],
+          "feedback": "use log-sum-exp stability",
+          "expected": 2.409253573857427
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef softmax_cross_entropy(logits, target):\n    z=np.asarray(logits,float); m=np.max(z)\n    return np.log(np.sum(np.exp(z-m)))+m-z[int(target)]\n"
+  },
+  {
+    "id": "instructgpt-reward-pairwise-loss",
+    "slug": "instructgpt-reward-pairwise-loss",
+    "title": "InstructGPT Pairwise Reward Loss",
+    "category": "Alignment",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement the preference loss for chosen and rejected response rewards.",
+    "tags": [
+      "alignment",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef reward_pairwise_loss(r_chosen, r_rejected):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "reward_pairwise_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Human rankings train a scalar reward model without absolute labels.",
+        "task": "Return mean softplus(-(r_chosen-r_rejected)).",
+        "math": "L=-mean(log sigmoid(r_chosen-r_rejected))",
+        "paper_ref": "Training language models to follow instructions with human feedback"
+      },
+      "think_prompts": [
+        "Only the score difference matters.",
+        "Use logaddexp for stability."
+      ],
+      "cases": [
+        {
+          "name": "s-clear-preference",
+          "kind": "sample",
+          "args": [
+            [
+              2,
+              1
+            ],
+            [
+              0,
+              -1
+            ]
+          ],
+          "explain": "chosen scores exceed rejected scores",
+          "expected": 0.1269280110429725
+        },
+        {
+          "name": "h-mixed",
+          "kind": "hidden",
+          "args": [
+            [
+              10,
+              -2,
+              0.5
+            ],
+            [
+              0,
+              3,
+              0.5
+            ]
+          ],
+          "feedback": "average stable pair losses",
+          "expected": 1.8999693093160934
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef reward_pairwise_loss(r_chosen, r_rejected):\n    d=np.asarray(r_chosen,float)-np.asarray(r_rejected,float)\n    return np.mean(np.logaddexp(0.0,-d))\n"
+  },
+  {
+    "id": "instructgpt-ppo-clip-objective",
+    "slug": "instructgpt-ppo-clip-objective",
+    "title": "InstructGPT PPO Clipped Objective",
+    "category": "Alignment",
+    "difficulty": "Hard",
+    "estimated_time": 35,
+    "description": "Implement the clipped PPO surrogate objective used for policy updates.",
+    "tags": [
+      "alignment",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef ppo_clip_objective(ratio, adv, eps):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "ppo_clip_objective",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "PPO limits destructive policy-ratio changes during reward optimization.",
+        "task": "Return mean(min(ratio*adv,clip(ratio,1-eps,1+eps)*adv)).",
+        "math": "mean min(r*A, clip(r,1-eps,1+eps)*A)",
+        "paper_ref": "InstructGPT PPO objective"
+      },
+      "think_prompts": [
+        "Clipping behaves differently for positive and negative advantages through min.",
+        "Return the objective, not its negative loss.",
+        "Apply operations elementwise."
+      ],
+      "cases": [
+        {
+          "name": "s-positive-adv",
+          "kind": "sample",
+          "args": [
+            [
+              0.8,
+              1,
+              1.4
+            ],
+            [
+              1,
+              1,
+              1
+            ],
+            0.2
+          ],
+          "explain": "large positive improvement is clipped",
+          "expected": 1
+        },
+        {
+          "name": "h-mixed-sign",
+          "kind": "hidden",
+          "args": [
+            [
+              0.5,
+              0.9,
+              1.1,
+              1.5
+            ],
+            [
+              -1,
+              2,
+              -3,
+              4
+            ],
+            0.1
+          ],
+          "feedback": "use elementwise min with signed advantages",
+          "expected": 0.5
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef ppo_clip_objective(ratio, adv, eps):\n    ratio=np.asarray(ratio,float); adv=np.asarray(adv,float)\n    return np.mean(np.minimum(ratio*adv,np.clip(ratio,1-eps,1+eps)*adv))\n"
+  },
+  {
+    "id": "cot-self-consistency-vote",
+    "slug": "cot-self-consistency-vote",
+    "title": "Chain-of-Thought Self-Consistency Vote",
+    "category": "Reasoning",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Aggregate sampled reasoning paths by majority answer.",
+    "tags": [
+      "reasoning",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef self_consistency_vote(answers):\n    # Return the most frequent answer; smallest wins ties.\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "self_consistency_vote",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Self-consistency marginalizes over diverse reasoning paths.",
+        "task": "Return the most frequent numeric answer, breaking ties by the smallest value.",
+        "math": "argmax_a count(answer_i=a)",
+        "paper_ref": "Self-Consistency Improves Chain of Thought Reasoning"
+      },
+      "think_prompts": [
+        "Count final answers only.",
+        "Define deterministic tie-breaking."
+      ],
+      "cases": [
+        {
+          "name": "s-majority",
+          "kind": "sample",
+          "args": [
+            [
+              42,
+              40,
+              42,
+              42,
+              41
+            ]
+          ],
+          "explain": "answer 42 has most paths",
+          "expected": 42
+        },
+        {
+          "name": "h-tie",
+          "kind": "hidden",
+          "args": [
+            [
+              3,
+              2,
+              3,
+              2
+            ]
+          ],
+          "feedback": "smallest answer wins an exact tie",
+          "expected": 2
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef self_consistency_vote(answers):\n    vals,counts=np.unique(np.asarray(answers),return_counts=True)\n    return vals[np.flatnonzero(counts==np.max(counts))[0]]\n"
+  },
+  {
+    "id": "cot-weighted-majority",
+    "slug": "cot-weighted-majority",
+    "title": "Weighted Reasoning-Path Vote",
+    "category": "Reasoning",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Aggregate numeric answers using confidence weights.",
+    "tags": [
+      "reasoning",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef weighted_majority(answers, weights):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "weighted_majority",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "Reasoning paths can contribute unequally when confidence estimates are available.",
+        "task": "Sum weights per answer and return the largest total, breaking ties by smallest answer.",
+        "math": "argmax_a sum_i weight_i * 1[answer_i=a]",
+        "paper_ref": "Chain-of-thought self-consistency extension"
+      },
+      "think_prompts": [
+        "Group weights by answer.",
+        "Do not simply choose the largest individual weight.",
+        "Use deterministic ties."
+      ],
+      "cases": [
+        {
+          "name": "s-weighted",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              2,
+              1,
+              3
+            ],
+            [
+              0.2,
+              0.8,
+              0.3,
+              0.1
+            ]
+          ],
+          "explain": "answer 2 wins despite fewer samples",
+          "expected": 2
+        },
+        {
+          "name": "h-total-tie",
+          "kind": "hidden",
+          "args": [
+            [
+              4,
+              5,
+              4,
+              5
+            ],
+            [
+              0.4,
+              0.2,
+              0.1,
+              0.3
+            ]
+          ],
+          "feedback": "smallest answer wins tied total weight",
+          "expected": 4
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef weighted_majority(answers, weights):\n    answers=np.asarray(answers); weights=np.asarray(weights,float)\n    vals=np.unique(answers); totals=np.array([np.sum(weights[answers==v]) for v in vals])\n    return vals[np.flatnonzero(np.isclose(totals,np.max(totals)))[0]]\n"
+  },
+  {
+    "id": "gan-discriminator-loss",
+    "slug": "gan-discriminator-loss",
+    "title": "GAN Discriminator Loss",
+    "category": "Generative Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement stable binary cross-entropy for real and generated probabilities.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef discriminator_loss(d_real, d_fake):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "discriminator_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "The discriminator learns to distinguish data from generator samples.",
+        "task": "Return -mean(log(d_real)+log(1-d_fake)) with probability clipping.",
+        "math": "L_D=-E log D(x)-E log(1-D(G(z)))",
+        "paper_ref": "Generative Adversarial Nets"
+      },
+      "think_prompts": [
+        "Real targets are one.",
+        "Fake targets are zero.",
+        "Clip probabilities before logs."
+      ],
+      "cases": [
+        {
+          "name": "s-good-discriminator",
+          "kind": "sample",
+          "args": [
+            [
+              0.9,
+              0.8
+            ],
+            [
+              0.1,
+              0.2
+            ]
+          ],
+          "explain": "confident correct predictions have low loss",
+          "expected": 0.328504066972036
+        },
+        {
+          "name": "h-boundaries",
+          "kind": "hidden",
+          "args": [
+            [
+              1,
+              0.5
+            ],
+            [
+              0,
+              0.5
+            ]
+          ],
+          "feedback": "clip exact zero and one safely",
+          "expected": 0.6931471805609453
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef discriminator_loss(d_real, d_fake):\n    r=np.clip(np.asarray(d_real,float),1e-12,1-1e-12); f=np.clip(np.asarray(d_fake,float),1e-12,1-1e-12)\n    return -np.mean(np.log(r)+np.log(1-f))\n"
+  },
+  {
+    "id": "gan-generator-loss",
+    "slug": "gan-generator-loss",
+    "title": "GAN Non-Saturating Generator Loss",
+    "category": "Generative Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Implement the non-saturating generator BCE objective.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef generator_loss(d_fake):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "generator_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "The non-saturating objective gives stronger gradients when fakes are easily rejected.",
+        "task": "Return -mean(log(d_fake)) with safe clipping.",
+        "math": "L_G=-E log D(G(z))",
+        "paper_ref": "Generative Adversarial Nets practical heuristic"
+      },
+      "think_prompts": [
+        "The generator wants fake samples labeled real.",
+        "Clip before taking logs."
+      ],
+      "cases": [
+        {
+          "name": "s-improving-fakes",
+          "kind": "sample",
+          "args": [
+            [
+              0.2,
+              0.6,
+              0.8
+            ]
+          ],
+          "explain": "higher discriminator scores lower generator loss",
+          "expected": 0.7811356958381003
+        },
+        {
+          "name": "h-zero-prob",
+          "kind": "hidden",
+          "args": [
+            [
+              0,
+              0.5,
+              1
+            ]
+          ],
+          "feedback": "clip zero before log",
+          "expected": 9.441389432163163
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef generator_loss(d_fake):\n    f=np.clip(np.asarray(d_fake,float),1e-12,1-1e-12)\n    return -np.mean(np.log(f))\n"
+  },
+  {
+    "id": "vae-reparameterize",
+    "slug": "vae-reparameterize",
+    "title": "VAE Reparameterization Trick",
+    "category": "Generative Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Create a differentiable latent sample from Gaussian parameters and fixed noise.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef reparameterize(mu, logvar, eps):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "reparameterize",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Reparameterization lets gradients pass through stochastic latent sampling.",
+        "task": "Return mu + exp(0.5*logvar)*eps.",
+        "math": "z=mu+sigma*eps; sigma=exp(logvar/2)",
+        "paper_ref": "Auto-Encoding Variational Bayes"
+      },
+      "think_prompts": [
+        "logvar stores log variance, not log standard deviation.",
+        "All operations are elementwise."
+      ],
+      "cases": [
+        {
+          "name": "s-unit-variance",
+          "kind": "sample",
+          "args": [
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              1,
+              -1
+            ]
+          ],
+          "explain": "zero log variance means unit standard deviation",
+          "expected": [
+            1,
+            0
+          ]
+        },
+        {
+          "name": "h-scaled",
+          "kind": "hidden",
+          "args": [
+            [
+              0.5,
+              -0.5
+            ],
+            [
+              1.3862943611198906,
+              -1.3862943611198906
+            ],
+            [
+              0.25,
+              -2
+            ]
+          ],
+          "feedback": "convert log variance to standard deviation",
+          "expected": [
+            1,
+            -1.5
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef reparameterize(mu, logvar, eps):\n    return np.asarray(mu,float)+np.exp(0.5*np.asarray(logvar,float))*np.asarray(eps,float)\n"
+  },
+  {
+    "id": "vae-loss",
+    "slug": "vae-loss",
+    "title": "VAE Reconstruction and KL Loss",
+    "category": "Generative Models",
+    "difficulty": "Hard",
+    "estimated_time": 35,
+    "description": "Combine mean squared reconstruction error with Gaussian KL divergence.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef vae_loss(x, x_hat, mu, logvar):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "vae_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L2",
+      "statement": {
+        "motivation": "The ELBO balances data fidelity with a sampleable latent space.",
+        "task": "Return mean squared error plus mean KL across the batch, summing KL latent dimensions.",
+        "math": "MSE + mean[-0.5 sum(1+logvar-mu^2-exp(logvar))]",
+        "paper_ref": "Auto-Encoding Variational Bayes"
+      },
+      "think_prompts": [
+        "Sum KL across latent dimensions.",
+        "Average KL across batch items.",
+        "Use the stated mean reconstruction convention."
+      ],
+      "cases": [
+        {
+          "name": "s-zero-kl",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                0.8,
+                0.1
+              ],
+              [
+                0.2,
+                0.9
+              ]
+            ],
+            [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ],
+          "explain": "standard-normal posterior has zero KL",
+          "expected": 0.024999999999999998
+        },
+        {
+          "name": "h-nonzero-kl",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            [
+              [
+                0.5,
+                2.5,
+                2
+              ]
+            ],
+            [
+              [
+                0.3,
+                -0.4
+              ]
+            ],
+            [
+              [
+                0.2,
+                -0.3
+              ]
+            ]
+          ],
+          "feedback": "include both reconstruction and latent regularization",
+          "expected": 0.656110489420944
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef vae_loss(x, x_hat, mu, logvar):\n    x=np.asarray(x,float); x_hat=np.asarray(x_hat,float); mu=np.asarray(mu,float); logvar=np.asarray(logvar,float)\n    recon=np.mean((x-x_hat)**2)\n    kl=np.mean(-0.5*np.sum(1+logvar-mu**2-np.exp(logvar),axis=-1))\n    return recon+kl\n"
+  },
+  {
+    "id": "ddpm-q-sample",
+    "slug": "ddpm-q-sample",
+    "title": "DDPM Forward Noising",
+    "category": "Generative Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Sample a noisy diffusion state directly from x0 and fixed noise.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef q_sample(x0, noise, alpha_bar_t):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "q_sample",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "The closed-form forward process trains on arbitrary timesteps efficiently.",
+        "task": "Return sqrt(alpha_bar_t)*x0 + sqrt(1-alpha_bar_t)*noise.",
+        "math": "x_t=sqrt(alpha_bar_t)x_0+sqrt(1-alpha_bar_t)epsilon",
+        "paper_ref": "Denoising Diffusion Probabilistic Models"
+      },
+      "think_prompts": [
+        "alpha_bar_t is scalar in these cases.",
+        "At one the sample is x0; at zero it is noise."
+      ],
+      "cases": [
+        {
+          "name": "s-mid-noise",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              -1,
+              0.5
+            ],
+            [
+              0.2,
+              0.4,
+              -0.3
+            ],
+            0.64
+          ],
+          "explain": "mix signal and noise by square-root coefficients",
+          "expected": [
+            0.92,
+            -0.56,
+            0.22000000000000003
+          ]
+        },
+        {
+          "name": "h-boundaries",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1,
+                2
+              ],
+              [
+                3,
+                4
+              ]
+            ],
+            [
+              [
+                9,
+                8
+              ],
+              [
+                7,
+                6
+              ]
+            ],
+            1
+          ],
+          "feedback": "alpha_bar one preserves x0",
+          "expected": [
+            [
+              1,
+              2
+            ],
+            [
+              3,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef q_sample(x0, noise, alpha_bar_t):\n    x0=np.asarray(x0,float); noise=np.asarray(noise,float); a=float(alpha_bar_t)\n    return np.sqrt(a)*x0+np.sqrt(1-a)*noise\n"
+  },
+  {
+    "id": "ddpm-loss",
+    "slug": "ddpm-loss",
+    "title": "DDPM Noise Prediction Loss",
+    "category": "Generative Models",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Compute the simplified DDPM noise-prediction objective.",
+    "tags": [
+      "generative-models",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef ddpm_loss(noise, pred_noise):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "ddpm_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "Predicting injected noise yields a simple diffusion training target.",
+        "task": "Return mean squared error between true and predicted noise.",
+        "math": "L=mean ||epsilon-epsilon_theta(x_t,t)||^2",
+        "paper_ref": "DDPM, simplified objective"
+      },
+      "think_prompts": [
+        "Subtract arrays elementwise.",
+        "Average over every element."
+      ],
+      "cases": [
+        {
+          "name": "s-vector",
+          "kind": "sample",
+          "args": [
+            [
+              1,
+              -1,
+              0
+            ],
+            [
+              0.5,
+              -0.5,
+              0
+            ]
+          ],
+          "explain": "mean squared prediction error",
+          "expected": 0.16666666666666666
+        },
+        {
+          "name": "h-image",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                [
+                  1,
+                  0
+                ],
+                [
+                  0,
+                  -1
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  0.8,
+                  0.1
+                ],
+                [
+                  -0.2,
+                  -0.7
+                ]
+              ]
+            ]
+          ],
+          "feedback": "average all tensor elements",
+          "expected": 0.045000000000000005
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef ddpm_loss(noise, pred_noise):\n    return np.mean((np.asarray(noise,float)-np.asarray(pred_noise,float))**2)\n"
+  },
+  {
+    "id": "clip-l2-normalize",
+    "slug": "clip-l2-normalize",
+    "title": "CLIP L2 Normalization",
+    "category": "Multimodal",
+    "difficulty": "Medium",
+    "estimated_time": 30,
+    "description": "Normalize embedding rows to unit L2 norm.",
+    "tags": [
+      "multimodal",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef l2_normalize(x):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "l2_normalize",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L1",
+      "statement": {
+        "motivation": "CLIP compares embedding direction using cosine similarity.",
+        "task": "Normalize along the final axis with an epsilon floor.",
+        "math": "x_hat=x/max(||x||_2,eps)",
+        "paper_ref": "Learning Transferable Visual Models From Natural Language Supervision"
+      },
+      "think_prompts": [
+        "Compute one norm per row.",
+        "Keep the final axis for broadcasting.",
+        "Protect zero vectors."
+      ],
+      "cases": [
+        {
+          "name": "s-rows",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                3,
+                4
+              ],
+              [
+                1,
+                0
+              ]
+            ]
+          ],
+          "explain": "each row gets unit norm",
+          "expected": [
+            [
+              0.6,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        {
+          "name": "h-zero",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                1,
+                -2,
+                2
+              ]
+            ]
+          ],
+          "feedback": "zero vectors remain finite",
+          "expected": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0.3333333333333333,
+              -0.6666666666666666,
+              0.6666666666666666
+            ]
+          ]
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef l2_normalize(x):\n    x=np.asarray(x,float); norm=np.linalg.norm(x,axis=-1,keepdims=True)\n    return x/np.maximum(norm,1e-12)\n"
+  },
+  {
+    "id": "clip-contrastive-loss",
+    "slug": "clip-contrastive-loss",
+    "title": "CLIP Symmetric Contrastive Loss",
+    "category": "Multimodal",
+    "difficulty": "Hard",
+    "estimated_time": 45,
+    "description": "Implement CLIP symmetric image-text contrastive cross-entropy.",
+    "tags": [
+      "multimodal",
+      "numpy",
+      "paper-capstone"
+    ],
+    "python_template": "import numpy as np\n\ndef clip_contrastive_loss(img_embeds, txt_embeds, temperature):\n    # TODO\n    pass\n",
+    "test_cases": {
+      "version": 2,
+      "entry_kind": "function",
+      "entry": "clip_contrastive_loss",
+      "checker": "allclose",
+      "tolerance": 0.000001,
+      "depth": "L3",
+      "statement": {
+        "motivation": "CLIP aligns matched image and text embeddings within each batch.",
+        "task": "Normalize rows, compute similarities divided by temperature, and average row and column diagonal cross-entropies.",
+        "math": "0.5*(CE(S,I)+CE(S^T,I)); S=normalize(I)normalize(T)^T/tau",
+        "paper_ref": "CLIP contrastive pretraining objective"
+      },
+      "think_prompts": [
+        "Matched pairs are on the diagonal.",
+        "Normalize both modalities first.",
+        "Use stable log-softmax in both directions."
+      ],
+      "cases": [
+        {
+          "name": "s-aligned",
+          "kind": "sample",
+          "args": [
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            0.5
+          ],
+          "explain": "aligned diagonal pairs should have low loss",
+          "expected": 0.1269280110429726
+        },
+        {
+          "name": "h-imperfect",
+          "kind": "hidden",
+          "args": [
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                0,
+                1
+              ]
+            ],
+            [
+              [
+                0.8,
+                1.2
+              ],
+              [
+                1,
+                -0.5
+              ],
+              [
+                -0.2,
+                1
+              ]
+            ],
+            0.7
+          ],
+          "feedback": "normalize before building both directional losses",
+          "expected": 0.5278775043717512
+        }
+      ]
+    },
+    "reference_solution": "import numpy as np\ndef clip_contrastive_loss(img_embeds, txt_embeds, temperature):\n    I=np.asarray(img_embeds,float); T=np.asarray(txt_embeds,float)\n    I=I/np.maximum(np.linalg.norm(I,axis=-1,keepdims=True),1e-12)\n    T=T/np.maximum(np.linalg.norm(T,axis=-1,keepdims=True),1e-12)\n    S=I@T.T/float(temperature)\n    def ce_rows(A):\n        shifted=A-np.max(A,axis=1,keepdims=True)\n        log_probs=shifted-np.log(np.sum(np.exp(shifted),axis=1,keepdims=True))\n        return -np.mean(np.diag(log_probs))\n    return 0.5*(ce_rows(S)+ce_rows(S.T))\n"
   }
 ]
