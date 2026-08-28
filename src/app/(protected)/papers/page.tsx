@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Upload, ChevronDown, ChevronRight } from 'lucide-react';
+import { Upload, ChevronDown, ChevronRight, Hammer } from 'lucide-react';
 import { apiGet, apiPostForm, isLoggedIn } from '@/lib/api';
 import { PAPERS, PaperEntry } from '@/data/content/papers';
 import { findArchLoose, dojoSlugFor, LIBRARY_TO_WORKSPACE_ID } from '@/lib/crosslinks';
+import { METHODOLOGY_TRACK_SLUGS } from '@/data/content/methodologyTracks';
 
 type Paper = {
   id: string;
@@ -43,6 +44,7 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
   ].includes(paper.slug);
 
   const href = hasMdx ? `/papers/${paper.slug}` : (hasWorkspace ? `/papers/${workspaceId}` : null);
+  const hasTrack = METHODOLOGY_TRACK_SLUGS.has(paper.slug);
 
   return (
     <motion.div 
@@ -66,6 +68,17 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
               <div className="text-[15px] font-bold text-white">{paper.title}</div>
             )}
             <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+              {hasTrack && (
+                <Link
+                  href={`/papers/${paper.slug}`}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Rebuild this paper step by step — 3 concept checks + 2 graded code capstones"
+                  className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md font-medium bg-[#A78BFA]/15 text-[#A78BFA] hover:bg-[#A78BFA]/25 transition-colors"
+                >
+                  <Hammer size={11} />
+                  Reconstruct
+                </Link>
+              )}
               {paper.year && <span className="text-[11px] text-[#525252]">{paper.year}</span>}
               {paper.difficulty && (
                 <span className="text-[10px] px-2 py-0.5 rounded-md font-medium" style={{ backgroundColor: `${getDifficultyColor(paper.difficulty)}20`, color: getDifficultyColor(paper.difficulty) }}>
