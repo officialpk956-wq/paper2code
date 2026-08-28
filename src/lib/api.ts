@@ -4,6 +4,15 @@ const BASE =
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+const TIMEOUT_MESSAGE = 'Request timed out — check your connection and try again';
+
+export class ApiTimeoutError extends Error {
+  constructor(message = TIMEOUT_MESSAGE) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
 let refreshPromise: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -99,48 +108,57 @@ function isTimeoutError(err: unknown): boolean {
   return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<Response> {
   if (!init.signal) {
-    init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    init.signal = AbortSignal.timeout(timeoutMs);
   }
   try {
     return await fetch(url, init);
   } catch (err) {
     if (isTimeoutError(err)) {
-      throw new Error('Request timed out — check your connection and try again');
+      throw new ApiTimeoutError();
     }
     throw err;
   }
 }
 
 async function requestWithRetry<T>(
-  buildRequest: () => { url: string; init: RequestInit }
+  buildRequest: () => { url: string; init: RequestInit },
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<T> {
   const { url, init } = buildRequest();
-  let res = await fetchWithTimeout(url, init);
+  let res = await fetchWithTimeout(url, init, timeoutMs);
 
   if (res.status === 401) {
     const newToken = await refreshAccessToken();
     if (newToken) {
       const retryReq = buildRequest();
-      res = await fetchWithTimeout(retryReq.url, retryReq.init);
+      res = await fetchWithTimeout(retryReq.url, retryReq.init, timeoutMs);
     }
   }
 
   return handle<T>(res);
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   return requestWithRetry<T>(() => ({
     url: `${BASE}${path}`,
     init: {
       method: 'GET',
       headers: authHeaders(),
     },
-  }));
+  }), timeoutMs);
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body: unknown,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<T> {
   return requestWithRetry<T>(() => ({
     url: `${BASE}${path}`,
     init: {
@@ -151,13 +169,14 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
       },
       body: JSON.stringify(body),
     },
-  }));
+  }), timeoutMs);
 }
 
 export async function apiPostForm<T>(
   path: string,
   form: FormData | URLSearchParams | string,
-  contentType?: string
+  contentType?: string,
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<T> {
   return requestWithRetry<T>(() => {
     const headers: Record<string, string> = authHeaders();
@@ -172,7 +191,13 @@ export async function apiPostForm<T>(
         body: form,
       },
     };
-  });
+  }, timeoutMs);
+}
+
+export function warmUpBackend(): void {
+  try {
+    fetch(`${BASE}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {});
+  } catch {}
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {

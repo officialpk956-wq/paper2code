@@ -5,8 +5,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuthModal } from './AuthModalContext';
 import { useAuthActions } from './useAuthActions';
+import { warmUpBackend } from '@/lib/api';
 
 const inp ='w-full bg-[#111111] border border-[#262626] rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA] transition-colors';
+const COLD_BACKEND_MESSAGE = 'Waking up the server (it sleeps when idle) — this can take up to a minute…';
 
 export function AuthModal() {
   const { isOpen, tab, setTab, close, signIn } = useAuthModal();
@@ -17,13 +19,25 @@ export function AuthModal() {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showWakeStatus, setShowWakeStatus] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
+    warmUpBackend();
     const fn = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
   }, [isOpen, close]);
+
+  useEffect(() => {
+    if (!loading) {
+      setShowWakeStatus(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => setShowWakeStatus(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   const cardVariants = {
     hidden:  { opacity: 0, scale: shouldReduceMotion ? 1 : 0.95, y: shouldReduceMotion ? 0 : 8 },
@@ -45,7 +59,10 @@ export function AuthModal() {
         signIn(user);
       }
     } catch (err: unknown) {
-      setError((err as Error).message || 'Authentication failed');
+      const authError = err as Error;
+      setError(authError.name === 'TimeoutError'
+        ? COLD_BACKEND_MESSAGE
+        : authError.message || 'Authentication failed');
     } finally {
       setLoading(false);
     }
@@ -59,7 +76,9 @@ export function AuthModal() {
       signIn(user);
     } catch (err: unknown) {
       const msg = (err as { message?: string; code?: string }).message || 'Google sign-in failed';
-      if ((err as { code?: string }).code !== 'auth/popup-closed-by-user') setError(msg);
+      if ((err as { code?: string }).code !== 'auth/popup-closed-by-user') {
+        setError(err instanceof Error && err.name === 'TimeoutError' ? COLD_BACKEND_MESSAGE : msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -129,6 +148,11 @@ export function AuthModal() {
                 </div>
               )}
               {error && <div className="text-xs text-red-500 bg-red-500/10 border border-red-500/20 p-2 rounded">{error}</div>}
+              {showWakeStatus && !error && (
+                <div role="status" aria-live="polite" className="text-xs text-[#A3A3A3]">
+                  {COLD_BACKEND_MESSAGE}
+                </div>
+              )}
               <button type="submit" disabled={loading}
                 className="mt-4 w-full rounded-lg bg-[#A78BFA] py-2.5 font-semibold text-black transition-colors hover:bg-[#C4B5FD] disabled:opacity-50">
                 {loading ? 'Processing...' : (tab === 'signin' ? 'Sign In' : 'Create Account')}
