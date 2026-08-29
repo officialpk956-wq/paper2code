@@ -253,6 +253,108 @@ def build_ingestion_payload(pdf_bytes: bytes, source_filename: str, title: str) 
     }
 
 
+def _positive_int(value: Any) -> int | None:
+    """Return a positive integer accepted by ArchitectureSpec, otherwise None."""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _architecture_spec_payload(
+    extracted_spec: dict[str, Any], result_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Adapt ConfigExtractor/graph output to the learning-module schema."""
+    extracted_spec = extracted_spec or {}
+    family = str(
+        result_dict.get("family")
+        or extracted_spec.get("model_family")
+        or extracted_spec.get("family")
+        or "unknown"
+    )
+    input_config = extracted_spec.get("input") or {}
+    spatial = input_config.get("spatial_dims") or []
+    if isinstance(spatial, (list, tuple)) and spatial:
+        input_shape = [
+            _positive_int(input_config.get("channels")) or 3,
+            *[_positive_int(value) or 224 for value in spatial[:2]],
+        ]
+    elif _positive_int(input_config.get("seq_len")) or family in (
+        "transformer",
+        "bert_gpt",
+    ):
+        input_shape = [_positive_int(input_config.get("seq_len")) or 64]
+    else:
+        input_shape = [3, 224, 224]
+
+    graph = result_dict.get("graph")
+    graph_nodes = list(getattr(graph, "nodes", None) or [])
+    layers: list[dict[str, Any]] = []
+    for index, node in enumerate(graph_nodes):
+        params = getattr(node, "params", None) or {}
+        layers.append(
+            {
+                "type": str(getattr(node, "type", None) or "identity"),
+                "name": str(
+                    getattr(node, "label", None)
+                    or getattr(node, "id", None)
+                    or f"layer_{index}"
+                ),
+                "channels": _positive_int(
+                    params.get("channels") or params.get("out_channels")
+                ),
+                "kernel_size": _positive_int(
+                    params.get("kernel_size") or params.get("kernel")
+                ),
+                "stride": _positive_int(params.get("stride")),
+                "heads": _positive_int(
+                    params.get("num_heads") or params.get("heads")
+                ),
+                "hidden_size": _positive_int(
+                    params.get("hidden_size")
+                    or params.get("embed_dim")
+                    or params.get("d_model")
+                ),
+            }
+        )
+
+    if not layers:
+        for index, layer in enumerate(extracted_spec.get("layers") or []):
+            if not isinstance(layer, dict):
+                continue
+            params = layer.get("params") or {}
+            layers.append(
+                {
+                    "type": str(layer.get("type") or "identity"),
+                    "name": str(layer.get("name") or layer.get("id") or f"layer_{index}"),
+                    "channels": _positive_int(
+                        params.get("channels") or params.get("out_channels")
+                    ),
+                    "kernel_size": _positive_int(
+                        params.get("kernel_size") or params.get("kernel")
+                    ),
+                    "stride": _positive_int(params.get("stride")),
+                    "heads": _positive_int(
+                        params.get("num_heads") or params.get("heads")
+                    ),
+                    "hidden_size": _positive_int(
+                        params.get("hidden_size")
+                        or params.get("embed_dim")
+                        or params.get("d_model")
+                    ),
+                }
+            )
+
+    return {
+        "family": family,
+        "input_shape": input_shape,
+        "layers": layers,
+    }
+
+
 def ingest_pdf_paper(
     db: Session,
     pdf_bytes: bytes,
@@ -275,7 +377,9 @@ def ingest_pdf_paper(
 
     logger = logging.getLogger(__name__)
     try:
-        validated_spec = ArchitectureSpec(**spec)
+        validated_spec = ArchitectureSpec(
+            **_architecture_spec_payload(spec, result_dict)
+        )
         spec = validated_spec.model_dump()
     except ValidationError as e:
         logger.warning("Architecture spec validation failed: %s — using partial spec", e)
@@ -325,6 +429,18 @@ def ingest_pdf_paper(
         abstract=paper_meta.get("abstract"),
         architecture_graph=paper_meta.get("architecture_graph"),
         flops_analysis=paper_meta.get("flops_analysis"),
+        generated_code_source=result_dict.get("code") or None,
+        generated_code_compiled={
+            "language": "python",
+            "framework": "pytorch",
+            "code_source": result_dict.get("code_source", "skeleton"),
+            "entrypoint_class": (result_dict.get("verification_report") or {}).get(
+                "entrypoint_class"
+            ),
+        },
+        generation_status=result_dict.get("generation_status", "needs_review"),
+        verification_report=result_dict.get("verification_report"),
+        last_generation_error=(result_dict.get("verification_report") or {}).get("error"),
     )
 
     db.add(paper)
@@ -359,6 +475,8 @@ def ingest_pdf_paper(
         "code": result_dict.get("code", ""),
         "code_source": result_dict.get("code_source", "skeleton"),
         "family": result_dict.get("family", "unknown"),
+        "generation_status": paper.generation_status,
+        "verification_report": paper.verification_report,
         "report": {
             "nodes": len(graph.nodes),
             "edges": len(graph.edges),

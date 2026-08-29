@@ -1,3 +1,5 @@
+import re
+
 from core.architecture_graph import ArchitectureGraph
 
 
@@ -5,8 +7,11 @@ def classify_architecture(graph: ArchitectureGraph) -> str:
     """
     Deterministically classify the architecture graph into one of 14 families.
     """
-    types = [node.type.lower() for node in graph.nodes]
-    names = [node.name.lower() for node in graph.nodes]
+    if not graph or not getattr(graph, "nodes", None):
+        return "cnn"
+
+    types = [(node.type or "").lower() for node in graph.nodes]
+    names = [(node.label or "").lower() for node in graph.nodes]
 
     all_str = " ".join(types + names)
 
@@ -26,7 +31,11 @@ def classify_architecture(graph: ArchitectureGraph) -> str:
         return "diffusion"
     elif "masking" in all_str or "random_mask" in all_str or "mask_ratio" in all_str:
         return "mae"
-    elif "patch_embed" in all_str or "patch_embedding" in all_str:
+    elif (
+        "patchembedding" in all_str
+        or "patch_embed" in all_str
+        or "patch_embedding" in all_str
+    ):
         return "vit"
     elif "window_attention" in all_str or "patch_merging" in all_str:
         return "swin"
@@ -52,9 +61,11 @@ def classify_architecture(graph: ArchitectureGraph) -> str:
         return "cnn"  # Fallback if unknown
 
 
-def infer_family_from_name(paper_name: str) -> str | None:
+def infer_family_from_name(paper_name: str | None) -> str | None:
     """Keyword-based fallback when graph is unavailable."""
-    name = paper_name.lower()
+    if not paper_name:
+        return None
+    name = re.sub(r"[-_]+", " ", str(paper_name).lower())
     KEYWORDS = {
         "efficientnet": "efficientnet",
         "mbconv": "efficientnet",
@@ -80,6 +91,7 @@ def infer_family_from_name(paper_name: str) -> str | None:
         "yolo": "yolo",
         "unet": "unet",
         "u-net": "unet",
+        "u net": "unet",
         "vit": "vit",
         "vision transformer": "vit",
         "resnet": "resnet",

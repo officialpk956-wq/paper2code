@@ -23,11 +23,25 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 const mockApiGet = apiGet as any;
+const mockApiPost = apiPost as any;
 
 describe('WorkspacePaperClient - Implement Tab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiGet.mockImplementation((url) => {
+      if (url.includes('/api/papers/5/executable-graph')) {
+        return Promise.resolve({
+          status: 'success',
+          language: 'python',
+          code: "print('generated code ready')",
+          verification_report: {
+            passed: true,
+            entrypoint_class: 'TestModel',
+            input_shape: [1, 3, 224, 224],
+            output_shape: [1, 1000],
+          },
+        });
+      }
       if (url.includes('/api/papers/5/implement')) {
         return Promise.resolve({
           status: 'ok',
@@ -77,5 +91,26 @@ describe('WorkspacePaperClient - Implement Tab', () => {
     // Verify run button is disabled
     const runBtn = screen.getByRole('button', { name: /Run in Sandbox/i });
     expect(runBtn).toBeDisabled();
+  });
+
+  test('Executable tab renders persisted generated code and runs it in the sandbox', async () => {
+    mockApiPost.mockResolvedValue({ stdout: 'generated code ready\n', stderr: '', exit_code: 0 });
+    render(<WorkspacePaperClient id="5" />);
+
+    await waitFor(() => expect(screen.getByText('Test Paper')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Executable' }));
+
+    expect(await screen.findByText(/print\('generated code ready'\)/)).toBeInTheDocument();
+    expect(screen.getByText('Phase 1 verified')).toBeInTheDocument();
+    expect(screen.getByText(/Entrypoint:/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    await waitFor(() => {
+      expect(mockApiPost).toHaveBeenCalledWith('/api/dojo/execute', {
+        code: "print('generated code ready')",
+        stdin: '',
+      });
+    });
+    expect(await screen.findByText('generated code ready')).toBeInTheDocument();
   });
 });

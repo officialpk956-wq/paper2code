@@ -471,7 +471,8 @@ async def upload_paper(
             "task_id": task.id,
             "status": "pending",
             "poll_url": f"/api/tasks/{task.id}",
-            "message": "PDF uploaded. Poll poll_url every 3s for the generated code.",
+            "paper_id": None,
+            "message": "PDF uploaded. Poll poll_url every 1s for the generated code.",
         }
     except HTTPException:
         raise
@@ -622,7 +623,8 @@ async def confirm_upload(
         "task_id": task.id,
         "status": "pending",
         "poll_url": f"/api/tasks/{task.id}",
-        "message": "Upload confirmed. Poll poll_url every 3s for generated code.",
+        "paper_id": None,
+        "message": "Upload confirmed. Poll poll_url every 1s for generated code.",
     }
 
 
@@ -691,6 +693,16 @@ def get_executable_graph(
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
     _assert_paper_readable(p, current_user)
+    if p.generated_code_source:
+        return {
+            "status": p.generation_status or "needs_review",
+            "code": p.generated_code_source,
+            "language": "python",
+            "compiled": p.generated_code_compiled,
+            "verification_report": p.verification_report,
+            "last_generation_error": p.last_generation_error,
+        }
+
     eg = (p.architecture_graph or {}).get("ingestion", {}).get("executable_graph")
     if not eg:
         raise HTTPException(status_code=404, detail="Executable graph not generated yet")

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState, useEffect, useRef, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Upload, ChevronDown, ChevronRight, Hammer } from 'lucide-react';
 import { apiGet, apiPostForm, isLoggedIn } from '@/lib/api';
 import { PAPERS, PaperEntry } from '@/data/content/papers';
@@ -10,15 +10,41 @@ import { findArchLoose, dojoSlugFor, LIBRARY_TO_WORKSPACE_ID } from '@/lib/cross
 import { METHODOLOGY_TRACK_SLUGS } from '@/data/content/methodologyTracks';
 
 type Paper = {
-  id: string;
+  id: string | number;
   title: string;
   authors: string;
   topics?: string[];
-  status: 'Ready' | 'Processing';
+  status?: string;
   color?: string;
   created_at?: string;
   visibility?: 'public' | 'private';
 };
+
+type PapersResponse = { papers?: Paper[] };
+
+type PaperUploadResponse = {
+  task_id: string;
+  status: 'pending';
+  poll_url: string;
+  paper_id: null;
+  message: string;
+};
+
+type PaperTaskResponse = {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  result?: {
+    stage?: string;
+    paper_id?: number;
+    code_source?: string;
+    generation_status?: string;
+  } | null;
+  error?: string | null;
+};
+
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const POLL_INTERVAL_MS = 1000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -160,6 +186,7 @@ function PaperRow({ paper }: { paper: PaperEntry }) {
 }
 
 function PapersContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const initTab = searchParams.get('tab') === 'library' ? 'Library' : 'Workspace';
   const [activeTab, setActiveTab] = useState<'Library' | 'Workspace'>(initTab);
@@ -167,11 +194,20 @@ function PapersContent() {
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [uploadStage, setUploadStage] = useState('Uploading PDF');
+  const [retryFile, setRetryFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollCancelledRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUserLoggedIn = isLoggedIn();
 
   useEffect(() => {
     fetchPapers();
+    return () => {
+      pollCancelledRef.current = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, []);
 
   const fetchPapers = async () => {
@@ -181,8 +217,8 @@ function PapersContent() {
       // GET /api/papers already handles the public/authenticated visibility
       // split server-side via get_optional_user (backend/routers/papers.py) —
       // there is no separate /public endpoint.
-      const data = await apiGet<Paper[]>('/api/papers');
-      setPapers(data);
+      const data = await apiGet<PapersResponse>('/api/papers');
+      setPapers(Array.isArray(data?.papers) ? data.papers : []);
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load papers');
     } finally {
@@ -191,19 +227,56 @@ function PapersContent() {
   };
 
   const handleUploadClick = () => {
+    if (!isUserLoggedIn) {
+      setError('Please sign in to upload papers.');
+      return;
+    }
+    if (!termsAccepted) {
+      setError('You must accept the Terms of Service before uploading.');
+      return;
+    }
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const waitForNextPoll = () => new Promise<void>((resolve) => {
+    pollTimerRef.current = setTimeout(resolve, POLL_INTERVAL_MS);
+  });
 
-    if (!isUserLoggedIn) {
-      alert('Please sign in to upload papers.');
+  const pollPaperTask = async (pollUrl: string) => {
+    const startedAt = Date.now();
+    while (!pollCancelledRef.current && Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      if (!isLoggedIn()) throw new Error('Your session ended while processing the paper. Please sign in and retry.');
+      const task = await apiGet<PaperTaskResponse>(pollUrl);
+      if (task.result?.stage) setUploadStage(task.result.stage);
+      if (task.status === 'failed') throw new Error(task.error || 'Paper processing failed.');
+      if (task.status === 'completed') {
+        const paperId = task.result?.paper_id;
+        if (!paperId) throw new Error('Processing completed without a paper ID.');
+        setUploadStage('complete');
+        router.push(`/papers/${paperId}`);
+        return;
+      }
+      await waitForNextPoll();
+    }
+    if (!pollCancelledRef.current) {
+      throw new Error('Paper processing timed out after 10 minutes. You can retry the upload.');
+    }
+  };
+
+  const startUpload = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type !== 'application/pdf')) {
+      setError('Only PDF files are supported.');
+      return;
+    }
+    if (file.size > MAX_PDF_BYTES) {
+      setError('PDF files must be 20 MB or smaller.');
       return;
     }
 
+    pollCancelledRef.current = false;
+    setRetryFile(file);
     setUploading(true);
+    setUploadStage('uploading');
     setError('');
 
     try {
@@ -211,15 +284,22 @@ function PapersContent() {
       formData.append('file', file);
       formData.append('title', file.name.replace('.pdf', ''));
       formData.append('visibility', 'private');
+      formData.append('terms_accepted', 'true');
 
-      const newPaper = await apiPostForm<Paper>('/api/papers/upload', formData);
-      setPapers(prev => [newPaper, ...prev]);
+      const task = await apiPostForm<PaperUploadResponse>('/api/papers/upload', formData);
+      setUploadStage('pending');
+      await pollPaperTask(task.poll_url);
     } catch (err: unknown) {
       setError((err as Error).message || 'Upload failed');
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) await startUpload(file);
   };
 
   // Group papers by section in file order
@@ -258,7 +338,7 @@ function PapersContent() {
 
       {error && activeTab === 'Workspace' && (
         <div className="bg-red-500/10 border-b border-red-500/20 px-8 py-2 text-xs text-red-500 flex justify-center">
-          Could not load data — retrying… ({error})
+          {error}
         </div>
       )}
 
@@ -286,27 +366,35 @@ function PapersContent() {
             <div className="w-[400px] flex-shrink-0">
               <input type="file" accept=".pdf" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
               
-              <div onClick={handleUploadClick}
+              <div onClick={handleUploadClick} role="button" tabIndex={0}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') handleUploadClick(); }}
+                aria-disabled={!termsAccepted || uploading}
                 className="border-2 border-dashed border-[#A78BFA]/35 rounded-2xl bg-[#0A0A0A] min-h-[220px] flex flex-col items-center justify-center gap-4 p-8 cursor-pointer hover:border-[#A78BFA]/30 hover:bg-[#A78BFA]/3 transition-all">
                 <div className="w-14 h-14 bg-[#A78BFA]/12 rounded-full flex items-center justify-center">
                   <Upload className="text-[#A78BFA]" size={24} />
                 </div>
                 <div className="text-[15px] font-semibold text-white">Drop your PDF here</div>
                 <div className="text-[12px] text-[#525252] -mt-2">or click to browse — arXiv PDFs supported</div>
-                <button className="bg-[#A78BFA] text-black rounded-lg px-5 py-2.5 text-[13px] font-semibold mt-2 hover:brightness-110">
+                <button type="button" disabled={!termsAccepted || uploading} className="bg-[#A78BFA] disabled:opacity-40 disabled:cursor-not-allowed text-black rounded-lg px-5 py-2.5 text-[13px] font-semibold mt-2 hover:brightness-110">
                   Browse Files
                 </button>
-                <div className="text-[11px] text-[#525252] mt-1">PDF files up to 50MB</div>
+                <div className="text-[11px] text-[#525252] mt-1">PDF files up to 20 MB</div>
               </div>
 
-              {uploading && (
-                <div className="bg-[#111111] border border-[#262626] rounded-xl p-4 mt-4">
-                  <div className="text-[13px] font-semibold text-white">Uploading...</div>
-                  <div className="h-1.5 bg-[#1A1A1A] rounded-full mt-3 overflow-hidden">
-                    <div className="h-full bg-[#A78BFA] rounded-full w-[65%] animate-pulse" />
-                  </div>
-                  <div className="text-[11px] text-[#A78BFA] mt-2">Processing document...</div>
-                </div>
+              <label className="flex items-start gap-2 mt-4 text-xs text-[#A3A3A3] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(event) => { setTermsAccepted(event.target.checked); if (event.target.checked) setError(''); }}
+                  className="mt-0.5 accent-[#A78BFA]"
+                />
+                <span>I accept the <Link href="/terms" className="text-[#A78BFA] hover:underline">Terms of Service</Link>.</span>
+              </label>
+
+              {!uploading && error && retryFile && (
+                <button type="button" onClick={() => startUpload(retryFile)} className="mt-4 w-full rounded-lg border border-[#A78BFA]/40 px-4 py-2 text-sm text-[#A78BFA] hover:bg-[#A78BFA]/10">
+                  Retry upload
+                </button>
               )}
             </div>
 
@@ -365,6 +453,19 @@ function PapersContent() {
           </div>
         )}
       </div>
+
+      {uploading && (
+        <div role="dialog" aria-modal="true" aria-label="Paper upload progress" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-[#262626] bg-[#111111] p-6 shadow-2xl">
+            <div className="text-base font-semibold text-white">Preparing your paper workspace</div>
+            <div className="mt-2 text-sm capitalize text-[#A78BFA]">{uploadStage.replace(/_/g, ' ')}</div>
+            <div className="h-1.5 bg-[#1A1A1A] rounded-full mt-4 overflow-hidden">
+              <div className="h-full bg-[#A78BFA] rounded-full w-2/3 animate-pulse" />
+            </div>
+            <p className="mt-3 text-xs text-[#737373]">Keep this page open while the backend extracts the paper and generates code.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

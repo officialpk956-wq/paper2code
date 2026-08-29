@@ -6,7 +6,7 @@ from backend.models import Paper, Task
 def test_generate_code_from_pdf_task_rewired(db_session):
     # Setup mock data & mocks
     task_id = "test-task-123"
-    storage_ref = "r2://temp/paper.pdf"
+    storage_ref = r"C:\temp\paper.pdf"
     paper_name = "Attention Is All You Need"
     user_id = 999
     visibility = "private"
@@ -45,15 +45,21 @@ def test_generate_code_from_pdf_task_rewired(db_session):
             "code": "import torch\nclass Model(torch.nn.Module):\n    pass",
             "code_source": "builder",
             "family": "transformer",
+            "generation_status": "success",
+            "verification_report": {
+                "passed": True,
+                "entrypoint_class": "TransformerModel",
+            },
         }
     )
     # Mock vector indexing
     mock_index = patch("backend.services.vector_service.index_paper")
     # Mock notification
     mock_notify = patch("backend.tasks.paper_tasks._notify_paper_done")
+    mock_cleanup = patch("backend.tasks.paper_tasks.cleanup")
 
     try:
-        with mock_db, mock_fetch as mf, mock_ingest as mi, mock_index as mx, mock_notify as mn:
+        with mock_db, mock_fetch as mf, mock_ingest as mi, mock_index as mx, mock_notify as mn, mock_cleanup as mc:
             # Run Celery task synchronously
             generate_code_from_pdf_task(
                 task_id=task_id,
@@ -74,13 +80,18 @@ def test_generate_code_from_pdf_task_rewired(db_session):
                 authors="",
             )
             mn.assert_called_once()
+            mc.assert_called_once_with(storage_ref)
 
             # Check DB updates on the Paper row
             db_session.refresh(dummy_paper)
             assert dummy_paper.uploaded_by == user_id
             assert dummy_paper.visibility == visibility
-            assert dummy_paper.r2_key == "temp/paper.pdf"
+            assert dummy_paper.r2_key is None
             assert dummy_paper.terms_accepted_at is not None
+            assert dummy_paper.generated_code_source.startswith("import torch")
+            assert dummy_paper.generation_status == "success"
+            assert dummy_paper.verification_report["passed"] is True
+            assert dummy_paper.generated_code_compiled["entrypoint_class"] == "TransformerModel"
 
             # Check task completion status
             task = repo.get(task_id)
@@ -88,5 +99,6 @@ def test_generate_code_from_pdf_task_rewired(db_session):
             assert task.result["paper_id"] == dummy_paper.id
             assert task.result["code_source"] == "builder"
             assert task.result["family"] == "transformer"
+            assert task.result["generation_status"] == "success"
     finally:
         db_session.close = original_close

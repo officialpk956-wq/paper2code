@@ -370,8 +370,11 @@ class ConfigExtractor:
             response = llm_complete(prompt)
             corrected = self._parse_json_response(response)
             # Only accept correction if it has more or equal layers (no regression)
-            if len(corrected.get("layers", [])) >= len(extracted.get("layers", [])):
-                return corrected
+            corrected_layers = (corrected or {}).get("layers") or []
+            extracted_layers = (extracted or {}).get("layers") or []
+            if isinstance(corrected_layers, list) and isinstance(extracted_layers, list):
+                if len(corrected_layers) >= len(extracted_layers):
+                    return corrected
         except Exception:
             pass
         return extracted

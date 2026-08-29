@@ -5,10 +5,13 @@ Transforms ConfigDict → deterministic, stable ConfigDict.
 No inference, no reasoning, pure transformation only.
 """
 
+import logging
 import re
 from typing import Any
 
 from core.agents.types import ConfigDict
+
+logger = logging.getLogger(__name__)
 
 # Canonical layer types (authoritative set)
 CANONICAL_TYPES = {
@@ -45,6 +48,7 @@ CANONICAL_TYPES = {
     "key_projection",
     "value_projection",
     "attention_merge",
+    "concat",
     "residual_add",
     "feedforward",
     "causal_attention",
@@ -190,6 +194,9 @@ _SYNONYM_MAP = {
     "v_proj": "value_projection",
     "attention_merge": "attention_merge",
     "attn_merge": "attention_merge",
+    "concat": "concat",
+    "concatenate": "concat",
+    "concatenation": "concat",
     "residual_add": "residual_add",
     "res_add": "residual_add",
     "feedforward": "feedforward",
@@ -343,8 +350,14 @@ def _normalize_type(layer_type: Any) -> str:
     Supports all variants via _SYNONYM_MAP.
     Whitespace/punctuation are normalized before lookup.
 
-    Enforces: only canonical types are returned.
-    Raises AssertionError if unknown type is encountered.
+    Falls back to the best-effort (non-canonical) type string for anything
+    outside the known vocabulary rather than raising -- real papers
+    legitimately describe layer types this list will never fully cover
+    (e.g. a diffusion model's "timestep_embedding"), and downstream
+    consumers (ConfigParsingAgent._compute_semantic_params) already handle
+    an unrecognized type gracefully via its own default semantic params.
+    A hard crash here previously took down the entire extraction call for
+    one unfamiliar layer name.
     """
     if not layer_type:
         return "conv2d"
@@ -354,10 +367,13 @@ def _normalize_type(layer_type: Any) -> str:
     type_normalized = re.sub(r"[\s\-_]+", "", type_str)
     canonical = _SYNONYM_MAP.get(type_normalized, type_str)
 
-    # ENFORCE: only canonical types allowed
-    assert canonical in CANONICAL_TYPES, (
-        f"Invalid canonical type after normalization: {canonical} (from input: {layer_type})"
-    )
+    if canonical not in CANONICAL_TYPES:
+        logger.warning(
+            "Layer type %r normalized to %r, which is outside the canonical "
+            "vocabulary -- keeping it as-is instead of failing extraction.",
+            layer_type,
+            canonical,
+        )
 
     return canonical
 

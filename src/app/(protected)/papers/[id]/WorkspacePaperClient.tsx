@@ -104,7 +104,23 @@ type GraphData = { status?: string; nodes?: GraphNode[]; edges?: GraphEdge[] };
 type BlueprintComponent = { name: string; description: string };
 type BlueprintData = { status?: string; components?: BlueprintComponent[]; confidence_score?: number };
 
-type ExecutableData = { status?: string; code?: string; language?: string };
+type VerificationReport = {
+  passed?: boolean;
+  status?: string;
+  entrypoint_class?: string;
+  input_shape?: number[];
+  output_shape?: number[];
+  error?: string;
+  checks?: Record<string, boolean>;
+};
+
+type ExecutableData = {
+  status?: string;
+  code?: string;
+  language?: string;
+  verification_report?: VerificationReport | null;
+  last_generation_error?: string | null;
+};
 
 type ImplData = {
   status: string;
@@ -181,6 +197,8 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   const [executableData, setExecutableData] = useState<ExecutableData | null>(null);
   const [implData, setImplData] = useState<ImplData | null>(null);
   const [implCode, setImplCode] = useState('');
+  const [generatedRunState, setGeneratedRunState] = useState<'idle' | 'running' | 'passed' | 'failed'>('idle');
+  const [generatedRunOutput, setGeneratedRunOutput] = useState('');
   
   // UI states
   const [loading, setLoading] = useState(true);
@@ -292,6 +310,24 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       setError((err as Error).message || 'Failed to load implementation');
     } finally {
       setTabLoading(false);
+    }
+  };
+
+  const runGeneratedCode = async () => {
+    if (!executableData?.code || generatedRunState === 'running') return;
+    setGeneratedRunState('running');
+    setGeneratedRunOutput('');
+    try {
+      const result = await apiPost<{ stdout?: string; stderr?: string; exit_code?: number }>(
+        '/api/dojo/execute',
+        { code: executableData.code, stdin: '' },
+      );
+      const output = result.stdout || result.stderr || 'Execution finished without output.';
+      setGeneratedRunOutput(output);
+      setGeneratedRunState(result.exit_code === 0 && !result.stderr ? 'passed' : 'failed');
+    } catch (err: unknown) {
+      setGeneratedRunOutput((err as Error).message || 'Sandbox execution failed.');
+      setGeneratedRunState('failed');
     }
   };
 
@@ -558,12 +594,36 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
         {tab === 'executable' && executableData?.status !== 'processing' && executableData?.code && (
           <div className="rounded-xl border border-[#262626] bg-[#0A0A0A] overflow-hidden">
             <div className="flex items-center justify-between border-b border-[#1A1A1A] px-4 py-2.5">
-              <div className="text-[13px] font-semibold text-white">implementation.{executableData.language === 'python' ? 'py' : 'txt'}</div>
-              <button className="text-[12px] px-3 py-1 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110">Run</button>
+              <div>
+                <div className="text-[13px] font-semibold text-white">implementation.{executableData.language === 'python' ? 'py' : 'txt'}</div>
+                <div className={'mt-1 text-[10px] font-semibold uppercase tracking-wide ' +
+                  (executableData.verification_report?.passed ? 'text-[#4ADE80]' : 'text-[#FACC15]')}>
+                  {executableData.verification_report?.passed ? 'Phase 1 verified' : (executableData.status || 'Needs review')}
+                </div>
+              </div>
+              <button type="button" onClick={runGeneratedCode} disabled={generatedRunState === 'running'} className="text-[12px] px-3 py-1 rounded-lg bg-[#A78BFA] disabled:opacity-50 text-black font-semibold hover:brightness-110">
+                {generatedRunState === 'running' ? 'Running…' : 'Run'}
+              </button>
             </div>
+            {executableData.verification_report && (
+              <div className="border-b border-[#1A1A1A] px-4 py-3 text-[11px] text-[#A3A3A3]">
+                {executableData.verification_report.entrypoint_class && <span className="mr-4">Entrypoint: <span className="text-white">{executableData.verification_report.entrypoint_class}</span></span>}
+                {executableData.verification_report.input_shape && executableData.verification_report.output_shape && (
+                  <span>Shape: <span className="text-white">({executableData.verification_report.input_shape.join(', ')}) → ({executableData.verification_report.output_shape.join(', ')})</span></span>
+                )}
+                {(executableData.verification_report.error || executableData.last_generation_error) && (
+                  <div className="mt-2 text-[#F87171]">{executableData.verification_report.error || executableData.last_generation_error}</div>
+                )}
+              </div>
+            )}
             <pre className="p-4 text-[12px] text-[#A3A3A3] overflow-x-auto leading-relaxed font-mono whitespace-pre-wrap">
               {executableData.code}
             </pre>
+            {generatedRunOutput && (
+              <pre className={'border-t border-[#1A1A1A] p-4 text-[12px] whitespace-pre-wrap ' + (generatedRunState === 'passed' ? 'text-[#4ADE80]' : 'text-[#F87171]')}>
+                {generatedRunOutput}
+              </pre>
+            )}
           </div>
         )}
 

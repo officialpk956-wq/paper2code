@@ -32,6 +32,8 @@ def generate_code_from_pdf_task(
     """
     db = SessionLocal()
     repo = TaskRepository(db)
+    paper = None
+    completed = False
     try:
         repo.set_running(task_id)
 
@@ -60,6 +62,23 @@ def generate_code_from_pdf_task(
         paper.uploaded_by = user_id
         paper.visibility = visibility
         paper.r2_key = r2_key_from_ref(storage_ref)
+        # The ingestion service normally persists these fields.  Assigning them
+        # here as well keeps the task boundary authoritative and supports
+        # alternate/test ingestion implementations.
+        paper.generated_code_source = ingest_result.get("code") or paper.generated_code_source
+        verification_report = ingest_result.get("verification_report") or paper.verification_report
+        paper.verification_report = verification_report
+        paper.generation_status = (
+            ingest_result.get("generation_status")
+            or ("success" if (verification_report or {}).get("passed") else "needs_review")
+        )
+        paper.generated_code_compiled = paper.generated_code_compiled or {
+            "language": "python",
+            "framework": "pytorch",
+            "code_source": ingest_result.get("code_source", "skeleton"),
+            "entrypoint_class": (verification_report or {}).get("entrypoint_class"),
+        }
+        paper.last_generation_error = (verification_report or {}).get("error")
         if terms_accepted:
             paper.terms_accepted_at = datetime.datetime.utcnow()
         db.commit()
@@ -71,9 +90,11 @@ def generate_code_from_pdf_task(
                 "code": ingest_result.get("code", ""),
                 "code_source": ingest_result.get("code_source", "skeleton"),
                 "family": ingest_result.get("family", "unknown"),
+                "generation_status": paper.generation_status,
                 "stage": "complete",
             },
         )
+        completed = True
 
         # ── Stage 5: index in vector store ───────────────────────────────────
         try:
@@ -93,11 +114,21 @@ def generate_code_from_pdf_task(
             _notify_paper_done(db, user_id, paper.title, paper.id)
 
     except Exception as exc:
+        if paper is not None:
+            try:
+                paper.generation_status = "failed"
+                paper.last_generation_error = str(exc)
+                db.commit()
+            except Exception:
+                db.rollback()
+                log.warning("Failed to persist generation error for paper %s", paper.id)
         repo.set_failed(task_id, str(exc))
         if self.request.retries >= self.max_retries:
             cleanup(storage_ref)
         raise self.retry(exc=exc)
     finally:
+        if completed and not storage_ref.startswith("r2://"):
+            cleanup(storage_ref)
         db.close()
 
 

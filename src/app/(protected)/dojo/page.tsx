@@ -232,7 +232,9 @@ export default function DojoPage() {
                 <div className="w-[68px] flex-shrink-0 text-right">Difficulty</div>
                 <div className="w-[60px] flex-shrink-0 text-right">Accept.</div>
               </div>
-              <StaggerList>
+              {/* Filtered rows change after the list has entered the viewport.
+                  A one-shot StaggerList leaves replacement rows at opacity 0. */}
+              <div>
                 {filtered.map(p => {
                   const Row = (
                     <motion.div 
@@ -267,7 +269,7 @@ export default function DojoPage() {
                     No problems match your filters.
                   </div>
                 )}
-              </StaggerList>
+              </div>
             </div>
           </>
         ) : (

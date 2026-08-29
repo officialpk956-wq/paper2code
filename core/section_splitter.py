@@ -14,10 +14,10 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def safe_parse_llm_output(raw_output: str, fallback_text: str):
     """
-    Safely parse LLM output.
+    Safely parse LLM output into a list of (section, content) pairs.
     Handles:
     - dict JSON
-    - list of dicts
+    - list of dicts (a chunk can legitimately contain multiple sections)
     - malformed / extra text
     """
     try:
@@ -25,23 +25,21 @@ def safe_parse_llm_output(raw_output: str, fallback_text: str):
 
         # Case 1: Proper dict
         if isinstance(parsed, dict):
-            return (
-                parsed.get("section", "other"),
-                parsed.get("content", fallback_text),
-            )
+            return [(parsed.get("section", "other"), parsed.get("content", fallback_text))]
 
-        # Case 2: List of dicts
+        # Case 2: List of dicts — keep every section, not just the first
         if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
-            return (
-                parsed[0].get("section", "other"),
-                parsed[0].get("content", fallback_text),
-            )
+            return [
+                (item.get("section", "other"), item.get("content", ""))
+                for item in parsed
+                if isinstance(item, dict)
+            ]
 
     except Exception:
         pass
 
     # Fallback
-    return "other", fallback_text
+    return [("other", fallback_text)]
 
 
 def process_text(text: str) -> dict:
@@ -62,11 +60,13 @@ def process_text(text: str) -> dict:
     for chunk in chunks:
         try:
             raw_result = classify_section(chunk)
-            section, content = safe_parse_llm_output(raw_result, chunk)
+            results = safe_parse_llm_output(raw_result, chunk)
         except Exception:
-            section, content = "other", chunk
+            results = [("other", chunk)]
 
-        section_store[section].append(content)
+        for section, content in results:
+            if content:
+                section_store[section].append(content)
 
     # Merge chunks per section
     return {section: "\n\n".join(contents).strip() for section, contents in section_store.items()}

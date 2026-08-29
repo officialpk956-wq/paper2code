@@ -123,6 +123,14 @@ class Paper(Base):
     # Storage infra: track file size for quota accounting
     file_size_bytes = Column(Integer, nullable=True)
 
+    # Phase 1 paper-to-code artifacts.  JSON is used instead of PostgreSQL-only
+    # JSONB so the same model remains usable in the SQLite test suite.
+    generated_code_source = Column(Text, nullable=True)
+    generated_code_compiled = Column(JSON, nullable=True)
+    generation_status = Column(String(20), nullable=True)
+    verification_report = Column(JSON, nullable=True)
+    last_generation_error = Column(Text, nullable=True)
+
     modules: list["PaperModule"] = relationship(
         "PaperModule",
         back_populates="paper",

@@ -28,16 +28,48 @@ def test_llm_complete_delegates_to_litellm():
     mock_lit.assert_called_once()
 
 
-def test_llm_complete_includes_fallback():
-    mock_resp = MagicMock()
-    mock_resp.choices[0].message.content = "ok"
-    mock_resp.usage = None
-    with patch("litellm.completion", return_value=mock_resp) as mock_lit:
+def test_llm_complete_includes_fallback_once_retries_are_exhausted():
+    """
+    Cross-provider fallback protection still exists, but (as of the Phase 2
+    rate-limit fix -- see core/llm_client.py and
+    tests/test_llm_client_retry.py) it's no longer passed to litellm on
+    every single call. litellm's `fallbacks` param recovers silently
+    *inside* one completion() call, which made a transient rate limit on
+    the primary invisibly swap providers mid-pipeline (ConfigExtractor's
+    multi-call extraction produced 20/8/20 layers for identical input
+    because of this). Fallback is now reserved for the final attempt,
+    after the primary has had real retries -- this test confirms that
+    protection still exists, just later.
+    """
+    from litellm import exceptions as litellm_exc
+
+    call_kwargs_seen = []
+
+    def fake_completion(**kwargs):
+        call_kwargs_seen.append(kwargs)
+        if len(call_kwargs_seen) < 3:
+            raise litellm_exc.RateLimitError(
+                message="rate limited", llm_provider="groq", model=kwargs["model"]
+            )
+        resp = MagicMock()
+        resp.choices[0].message.content = "ok"
+        resp.usage = None
+        return resp
+
+    with (
+        patch("litellm.completion", side_effect=fake_completion),
+        patch("time.sleep"),
+    ):
         from core.llm_client import llm_complete, PRIMARY_MODEL, FALLBACK_MODEL
+
         llm_complete("test")
-    call_kwargs = mock_lit.call_args[1]
-    assert "fallbacks" in call_kwargs
-    assert call_kwargs["fallbacks"] == (
+
+    # The two retries on the primary must NOT carry fallbacks (that's the
+    # whole point -- give the preferred model a real chance first).
+    assert call_kwargs_seen[0]["fallbacks"] == []
+    assert call_kwargs_seen[1]["fallbacks"] == []
+    # Fallback protection genuinely exists once retries are exhausted.
+    assert call_kwargs_seen[2]["fallbacks"] == (
         [FALLBACK_MODEL] if PRIMARY_MODEL != FALLBACK_MODEL else []
     )
 

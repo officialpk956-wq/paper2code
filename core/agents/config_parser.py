@@ -87,6 +87,11 @@ class ConfigParsingAgent(ParsingAgent):
             "compute_role": "projection",
             "flops": "high",
         },
+        "concat": {
+            "semantic_role": "feature_merge",
+            "compute_role": "merge",
+            "flops": "low",
+        },
         "mhsa": {
             "semantic_role": "token_mixer",
             "compute_role": "attention",

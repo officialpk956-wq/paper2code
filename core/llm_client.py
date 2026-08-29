@@ -72,26 +72,56 @@ def llm_complete(
 
     messages = [{"role": "user", "content": prompt}]
     target = model or PRIMARY_MODEL
-    try:
-        resp = completion(
-            model=target,
-            messages=messages,
-            temperature=0,
-            fallbacks=[FALLBACK_MODEL] if target != FALLBACK_MODEL else [],
-        )
-        text = resp.choices[0].message.content or ""
-        _failure_count = 0  # success resets counter
-    except (litellm_exc.APIConnectionError, litellm_exc.RateLimitError, litellm_exc.APIError) as e:
-        _failure_count += 1
-        if _failure_count >= FAILURE_THRESHOLD:
-            _circuit_open = True
-            _circuit_open_until = now + CIRCUIT_OPEN_DURATION
-        raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
-    except litellm_exc.AuthenticationError as e:
-        raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
-    except Exception as e:
-        logger.error("llm_complete failed: %s", e)
-        raise
+
+    # A transient rate limit on the primary model used to fall through
+    # immediately to litellm's cross-provider `fallbacks`, silently swapping
+    # to a different (lower-fidelity, differently-behaved) model mid-pipeline.
+    # For a multi-call pipeline (e.g. ConfigExtractor's extract+verify steps)
+    # that produced visibly inconsistent results between calls -- some on
+    # Groq, some silently rerouted to Gemini. Retry the primary a couple of
+    # times with backoff first; only allow the cross-provider fallback on
+    # the final attempt, once retrying the preferred model has been given a
+    # real chance to succeed.
+    max_rate_limit_retries = 2
+    rate_limit_backoff_seconds = 8
+
+    resp = None
+    for attempt in range(max_rate_limit_retries + 1):
+        use_fallback = attempt == max_rate_limit_retries
+        try:
+            resp = completion(
+                model=target,
+                messages=messages,
+                temperature=0,
+                fallbacks=[FALLBACK_MODEL] if (use_fallback and target != FALLBACK_MODEL) else [],
+            )
+            text = resp.choices[0].message.content or ""
+            _failure_count = 0  # success resets counter
+            break
+        except litellm_exc.RateLimitError as e:
+            if not use_fallback:
+                logger.warning(
+                    "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
+                    target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                )
+                time.sleep(rate_limit_backoff_seconds)
+                continue
+            _failure_count += 1
+            if _failure_count >= FAILURE_THRESHOLD:
+                _circuit_open = True
+                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+        except (litellm_exc.APIConnectionError, litellm_exc.APIError) as e:
+            _failure_count += 1
+            if _failure_count >= FAILURE_THRESHOLD:
+                _circuit_open = True
+                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+        except litellm_exc.AuthenticationError as e:
+            raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
+        except Exception as e:
+            logger.error("llm_complete failed: %s", e)
+            raise
     _log_usage(resp, user_id, action, db_write_callback)
     return text
 
@@ -124,26 +154,52 @@ async def llm_complete_async(
 
     messages = [{"role": "user", "content": prompt}]
     target = model or PRIMARY_MODEL
-    try:
-        resp = await acompletion(
-            model=target,
-            messages=messages,
-            temperature=0,
-            fallbacks=[FALLBACK_MODEL] if target != FALLBACK_MODEL else [],
-        )
-        text = resp.choices[0].message.content or ""
-        _failure_count = 0
-    except (litellm_exc.APIConnectionError, litellm_exc.RateLimitError, litellm_exc.APIError) as e:
-        _failure_count += 1
-        if _failure_count >= FAILURE_THRESHOLD:
-            _circuit_open = True
-            _circuit_open_until = now + CIRCUIT_OPEN_DURATION
-        raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
-    except litellm_exc.AuthenticationError as e:
-        raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
-    except Exception as e:
-        logger.error("llm_complete_async failed: %s", e)
-        raise
+
+    # See llm_complete's matching comment: retry the primary on a rate limit
+    # before allowing litellm's cross-provider fallback, so a transient 429
+    # doesn't silently swap models mid-pipeline.
+    max_rate_limit_retries = 2
+    rate_limit_backoff_seconds = 8
+
+    resp = None
+    for attempt in range(max_rate_limit_retries + 1):
+        use_fallback = attempt == max_rate_limit_retries
+        try:
+            resp = await acompletion(
+                model=target,
+                messages=messages,
+                temperature=0,
+                fallbacks=[FALLBACK_MODEL] if (use_fallback and target != FALLBACK_MODEL) else [],
+            )
+            text = resp.choices[0].message.content or ""
+            _failure_count = 0
+            break
+        except litellm_exc.RateLimitError as e:
+            if not use_fallback:
+                logger.warning(
+                    "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
+                    target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                )
+                import asyncio
+
+                await asyncio.sleep(rate_limit_backoff_seconds)
+                continue
+            _failure_count += 1
+            if _failure_count >= FAILURE_THRESHOLD:
+                _circuit_open = True
+                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+        except (litellm_exc.APIConnectionError, litellm_exc.APIError) as e:
+            _failure_count += 1
+            if _failure_count >= FAILURE_THRESHOLD:
+                _circuit_open = True
+                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
+            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+        except litellm_exc.AuthenticationError as e:
+            raise RuntimeError(f"LLM auth failed for {target}: {e}") from e
+        except Exception as e:
+            logger.error("llm_complete_async failed: %s", e)
+            raise
     _log_usage(resp, user_id, action, db_write_callback)
     return text
 

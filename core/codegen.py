@@ -82,7 +82,17 @@ def _generate_skeleton(graph: ArchitectureGraph) -> str:
         layer_str = _node_to_layer(node)
         if layer_str:
             lines.append(f"        self.{node.id} = {layer_str}")
-        forward_calls.append(f"        x = self.{node.id}(x)  # {node.label}")
+            forward_calls.append(f"        x = self.{node.id}(x)  # {node.label}")
+        else:
+            # _node_to_layer's MAP doesn't cover every canonical type (e.g.
+            # residualblock, concat, identity, or a paper-specific type like
+            # timestep_embedding) -- previously this still emitted a forward
+            # call to self.{node.id}, which was never defined in __init__,
+            # raising AttributeError on the very first skeleton-fallback run.
+            # Pass the input through unchanged for anything unrecognized
+            # rather than crash; the header comment already documents this
+            # skeleton as an approximation, not a faithful reproduction.
+            forward_calls.append(f"        # x unchanged: unrecognized layer type for {node.label}")
 
     # Build forward method
     forward = ["", "    def forward(self, x):"]
@@ -101,9 +111,14 @@ def _node_to_layer(node) -> str:
     p = node.params or {}
     ch = p.get("channels", p.get("filters", 64))
     k = p.get("kernel_size", 3)
+    # GraphNode.input_shape defaults to None (a dataclass field, not an
+    # absent attribute), so hasattr() was always True and node.input_shape[-1]
+    # crashed with "'NoneType' object is not subscriptable" for any node
+    # tensor_tracker hadn't populated shape info for -- the common case for
+    # skeleton-fallback graphs. Check for None explicitly before subscripting.
     in_hs = (
         node.input_shape[-1]
-        if hasattr(node, "input_shape") and isinstance(node.input_shape[-1], int)
+        if node.input_shape is not None and isinstance(node.input_shape[-1], int)
         else 512
     )
     out_hs = p.get("hidden_size", 512)

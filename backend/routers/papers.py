@@ -439,6 +439,11 @@ def get_paper_details(
         "flops": flops_analysis.get("total_flops_score", 0),
         "parameter_count": flops_analysis.get("total_params_estimate", 0),
         "ingestion": ingestion_data,
+        "generated_code_source": p.generated_code_source,
+        "generated_code_compiled": p.generated_code_compiled,
+        "generation_status": p.generation_status,
+        "verification_report": p.verification_report,
+        "last_generation_error": p.last_generation_error,
     }
 
 
