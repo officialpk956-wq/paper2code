@@ -4,7 +4,7 @@ import logging
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
-from backend.models import Notification, Paper, User
+from backend.models import Notification, Paper, PaperChunk, User
 from backend.repositories.task_repository import TaskRepository
 from backend.services.storage_service import cleanup, fetch_pdf, r2_key_from_ref
 
@@ -98,7 +98,7 @@ def generate_code_from_pdf_task(
 
         # ── Stage 5: index in vector store ───────────────────────────────────
         try:
-            from backend.services.vector_service import index_paper
+            from backend.services.vector_service import index_chunk, index_paper
 
             index_paper(
                 paper_id=paper.id,
@@ -106,6 +106,13 @@ def generate_code_from_pdf_task(
                 abstract=paper.abstract or "",
                 authors=paper.authors or "",
             )
+
+            chunks = db.query(PaperChunk).filter(PaperChunk.paper_id == paper.id).all()
+            for chunk in chunks:
+                if index_chunk(chunk.id, paper.id, chunk.text, chunk.section, chunk.page):
+                    chunk.embedding_id = str(chunk.id)
+            if chunks:
+                db.commit()
         except Exception as _ve:
             log.warning("vector index failed (non-fatal): %s", _ve)
 
@@ -129,6 +136,20 @@ def generate_code_from_pdf_task(
     finally:
         if completed and not storage_ref.startswith("r2://"):
             cleanup(storage_ref)
+        db.close()
+
+
+@celery_app.task
+def backfill_chunk_embeddings_task(
+    paper_id: int | None = None, batch_size: int = 100, dry_run: bool = False
+):
+    """Operator-triggered backfill for PaperChunks missing Qdrant embeddings."""
+    from backend.scripts.backfill_chunk_embeddings import backfill
+
+    db = SessionLocal()
+    try:
+        return backfill(db, paper_id=paper_id, batch_size=batch_size, dry_run=dry_run)
+    finally:
         db.close()
 
 

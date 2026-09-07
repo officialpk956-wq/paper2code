@@ -34,7 +34,7 @@ def test_llm_complete_retries_primary_before_falling_back(monkeypatch):
 
     calls = []
 
-    def fake_completion(model, messages, temperature, fallbacks):
+    def fake_completion(model, messages, temperature, fallbacks, **kwargs):
         calls.append({"model": model, "fallbacks": fallbacks})
         if len(calls) < 3:
             raise litellm_exc.RateLimitError(
@@ -66,7 +66,7 @@ def test_llm_complete_falls_back_after_exhausting_retries(monkeypatch):
 
     calls = []
 
-    def fake_completion(model, messages, temperature, fallbacks):
+    def fake_completion(model, messages, temperature, fallbacks, **kwargs):
         calls.append(model)
         raise litellm_exc.RateLimitError(
             message="still rate limited", llm_provider="groq", model=model

@@ -38,6 +38,21 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Qdrant (chunk/paper vector search — Phase 3 RAG) ────────────────────────
+  # backend/services/vector_service.py degrades gracefully when unreachable,
+  # so this is intentionally NOT a hard dependency for api/worker below — no
+  # healthcheck gate on it, unlike postgres/redis. No image-tool assumptions
+  # (base image doesn't ship curl/wget/bash), so no healthcheck is defined at
+  # all here; check readiness with `curl http://localhost:6333/healthz`.
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - api_network
+
 
   # ── FastAPI Application ────────────────────────────────────────────────────
   api:
@@ -51,6 +66,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://p2c:p2cdev@postgres:5432/p2c
       REDIS_URL:    redis://redis:6379/0
+      QDRANT_URL:   http://qdrant:6333
       ENVIRONMENT:  development
     networks:
       - api_network
@@ -71,6 +87,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://p2c:p2cdev@postgres:5432/p2c
       REDIS_URL:    redis://redis:6379/0
+      QDRANT_URL:   http://qdrant:6333
     networks:
       - api_network
     depends_on:
@@ -146,3 +163,4 @@ networks:
 
 volumes:
   pgdata:
+  qdrant_data:

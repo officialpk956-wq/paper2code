@@ -158,23 +158,28 @@ def test_ask_about_paper_fallback_on_error():
 # ── 3. Qdrant vector service (graceful degradation) ──────────────────────────
 
 def test_semantic_search_returns_empty_without_qdrant(monkeypatch):
-    monkeypatch.delenv("QDRANT_URL", raising=False)
+    # QDRANT_URL is read once at module import and cached as a module-level
+    # constant -- monkeypatch.delenv on os.environ can't un-cache it (and
+    # would permanently poison it for the rest of the session if the env
+    # var happened to be unset at whatever test imports this module first).
+    # Patch the already-imported module attribute directly instead.
     from backend.services import vector_service
+    monkeypatch.setattr(vector_service, "QDRANT_URL", "")
     vector_service._qdrant_client = None
     result = vector_service.semantic_search("transformers")
     assert result == []
 
 
 def test_index_paper_returns_false_without_qdrant(monkeypatch):
-    monkeypatch.delenv("QDRANT_URL", raising=False)
     from backend.services import vector_service
+    monkeypatch.setattr(vector_service, "QDRANT_URL", "")
     vector_service._qdrant_client = None
     assert vector_service.index_paper(42, "ResNet", "Deep residual learning") is False
 
 
 def test_delete_paper_returns_false_without_qdrant(monkeypatch):
-    monkeypatch.delenv("QDRANT_URL", raising=False)
     from backend.services import vector_service
+    monkeypatch.setattr(vector_service, "QDRANT_URL", "")
     vector_service._qdrant_client = None
     assert vector_service.delete_paper(42) is False
 
@@ -185,6 +190,232 @@ def test_embed_text_returns_none_when_embedder_fails(monkeypatch):
     with patch("sentence_transformers.SentenceTransformer", side_effect=OSError("no model")):
         result = vector_service.embed_text("hello")
     assert result is None
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    not os.getenv("QDRANT_URL"), reason="requires a real Qdrant instance (QDRANT_URL)"
+)
+def test_semantic_search_finds_real_semantic_match_against_live_qdrant():
+    """
+    Regression test: semantic_search() called client.search(), a method
+    removed from the installed qdrant-client version (>=1.10 replaced it
+    with the Query API's query_points()). This went undetected because
+    QDRANT_URL was empty in every prior environment, so the two tests
+    above (both testing the "Qdrant unavailable" fallback) were the only
+    coverage this function ever had -- the real query call never ran.
+    Uses a genuinely different wording for the query vs. the indexed text
+    so a pass proves real semantic (not keyword) matching.
+    """
+    from backend.services import vector_service
+
+    vector_service._qdrant_client = None  # force a fresh client for this URL
+    paper_id = 999_001
+    try:
+        assert vector_service.index_paper(
+            paper_id,
+            "Deep Residual Learning",
+            "A paper about residual networks and skip connections for image classification.",
+            "He et al.",
+        )
+        results = vector_service.semantic_search("residual connections for images", limit=5)
+        assert paper_id in results
+    finally:
+        vector_service.delete_paper(paper_id)
+
+
+def test_index_chunk_returns_false_without_qdrant(monkeypatch):
+    from backend.services import vector_service
+    monkeypatch.setattr(vector_service, "QDRANT_URL", "")
+    vector_service._qdrant_client = None
+    assert vector_service.index_chunk(1, 42, "some chunk text") is False
+
+
+def test_search_chunks_returns_empty_without_qdrant(monkeypatch):
+    from backend.services import vector_service
+    monkeypatch.setattr(vector_service, "QDRANT_URL", "")
+    vector_service._qdrant_client = None
+    assert vector_service.search_chunks("query") == []
+
+
+def test_hybrid_search_chunks_falls_back_to_bm25_and_family_without_qdrant(monkeypatch):
+    """With Qdrant unavailable, dense score is always 0 -- ranking should
+    still work from BM25 + KAG-inferred family alone."""
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+    from backend.services import vector_service
+    vector_service._qdrant_client = None
+
+    chunks = [
+        {"id": 1, "text": "A shortcut path adds the input back to the block output."},
+        {"id": 2, "text": "We train with Adam and a batch size of 256."},
+    ]
+    results = vector_service.hybrid_search_chunks(
+        "How do skip connections work?", chunks, limit=2, family=None
+    )
+    assert results[0]["chunk_id"] == 1
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    not os.getenv("QDRANT_URL"), reason="requires a real Qdrant instance (QDRANT_URL)"
+)
+def test_dense_and_hybrid_chunk_retrieval_against_live_qdrant():
+    """
+    Regression coverage for Phase 3 Half B (3.3/3.4/3.5):
+      - index_chunk/search_chunks: a query sharing NO keywords with the
+        target chunk's text must still surface it via dense similarity.
+      - hybrid_search_chunks: combining dense + BM25 + KAG-inferred family
+        must rank the correct chunk first, and the family bonus must be a
+        real, isolated contribution (not just riding on dense agreement).
+    """
+    from backend.services import vector_service as vs
+
+    vs._qdrant_client = None
+    paper_id = 999_002
+    chunks = [
+        {"id": 101, "text": "The network adds the input tensor back to the block output, forming a shortcut path around two convolutional layers.", "section": "method", "page": 3},
+        {"id": 102, "text": "We use the Adam optimizer with a learning rate of 1e-4 and a batch size of 256.", "section": "experiments", "page": 5},
+    ]
+    try:
+        for c in chunks:
+            assert vs.index_chunk(c["id"], paper_id, c["text"], c["section"], c["page"])
+
+        dense = vs.search_chunks("residual connection identity mapping", limit=5, paper_id=paper_id)
+        assert dense and dense[0]["chunk_id"] == 101
+
+        with_family = vs.hybrid_search_chunks(
+            "How do skip connections work in this network?", chunks, limit=2, paper_id=paper_id, family=None
+        )
+        without_family = vs.hybrid_search_chunks(
+            "How do skip connections work in this network?", chunks, limit=2, paper_id=paper_id, family="__unknown__"
+        )
+        assert with_family[0]["chunk_id"] == 101
+        w = {r["chunk_id"]: r["score"] for r in with_family}
+        wo = {r["chunk_id"]: r["score"] for r in without_family}
+        assert abs((w[101] - wo[101]) - 0.1) < 1e-6
+    finally:
+        client = vs._get_qdrant()
+        if client is not None:
+            from qdrant_client.models import PointIdsList
+            client.delete(collection_name=vs.CHUNKS_COLLECTION, points_selector=PointIdsList(points=[c["id"] for c in chunks]))
+
+
+@pytest.mark.live
+def test_hybrid_rank_texts_surfaces_target_via_real_embeddings():
+    """
+    hybrid_rank_texts is the Qdrant-free ranking function ConfigExtractor's
+    injected chunk_retriever uses at extraction time (before chunks are ever
+    persisted to Qdrant). Uses a query sharing no keywords with the target
+    text to prove real dense (not just BM25/family) matching.
+    """
+    from backend.services import vector_service as vs
+
+    texts = [
+        "The network adds the input tensor back to the output of the block before the activation, forming a shortcut path around two convolutional layers.",
+        "We use the Adam optimizer with a learning rate of 1e-4 and a batch size of 256 for all experiments.",
+        "Images are resized to 224x224 and normalized using ImageNet statistics before being fed to the model.",
+        "The dataset contains 1.2 million training images across 1000 categories.",
+    ]
+    ranked = vs.hybrid_rank_texts("residual connection identity mapping", texts, top_k=1)
+    assert ranked == [texts[0]]
+
+
+def test_related_concepts_expands_skip_connection_to_residual_family():
+    from core.rag.knowledge_graph import KnowledgeGraph
+    kg = KnowledgeGraph()
+    assert "residualblock" in kg.related_concepts("skip connections")
+    assert kg.related_concepts("nonexistent_concept_xyz") == []
+
+
+def test_infer_family_from_concept_resolves_resnet_from_skip_connections():
+    from core.rag.knowledge_graph import KnowledgeGraph
+    kg = KnowledgeGraph()
+    assert kg.infer_family_from_concept("The skip connections help gradient flow.") == "resnet"
+    assert kg.infer_family_from_concept("nothing architectural here") is None
+
+
+def test_query_expansion_uses_surface_forms_and_is_bounded():
+    from core.rag.knowledge_graph import KnowledgeGraph
+
+    kg = KnowledgeGraph()
+    expanded = kg.expand_query_terms("how do skip connections work")
+    assert "residual connection" in expanded
+    assert "skip connection" not in expanded
+    assert "residualblock" not in expanded
+    assert kg.expand_query_terms("the dataset has 1.2M images") == []
+
+    many_concepts = (
+        "skip connections self attention cross attention causal attention "
+        "patch embedding layer normalization batch normalization"
+    )
+    assert len(kg.expand_query_terms(many_concepts, max_terms=6)) == 6
+
+
+def test_kag_surface_forms_create_a_measurable_bm25_delta(monkeypatch):
+    """Expansion must improve lexical BM25, not merely ride dense ranking."""
+    from backend.services import vector_service as vs
+
+    texts = [
+        "A residual connection adds the input tensor to the block output. residual connection.",
+        "Experiment metadata records the optimizer and learning-rate schedule.",
+        "The visualization stores graph edges for a later diagram.",
+    ]
+    with_expansion, _ = vs._bm25_and_family_scores(
+        "skip connections", texts, family="__unknown__"
+    )
+    monkeypatch.setattr(vs, "_expand_query_terms", lambda query: [])
+    without_expansion, _ = vs._bm25_and_family_scores(
+        "skip connections", texts, family="__unknown__"
+    )
+
+    assert without_expansion[0] == 0
+    assert with_expansion[0] > 0
+
+    monkeypatch.setattr(vs, "_expand_query_terms", lambda query: ["residual connection"])
+    monkeypatch.setattr(vs, "search_chunks", lambda *args, **kwargs: [])
+    ranked = vs.hybrid_search_chunks(
+        "skip connections",
+        [{"id": index + 1, "text": text} for index, text in enumerate(texts)],
+        limit=3,
+        family="__unknown__",
+    )
+    assert ranked[0]["chunk_id"] == 1
+
+
+def test_mmr_select_falls_back_to_plain_ranking_without_vectors():
+    from backend.services.vector_service import _mmr_select
+
+    assert _mmr_select([0, 1, 2], [0.2, 0.9, 0.5], None, 2) == [1, 2]
+    assert _mmr_select([0, 1], [0.2, 0.9], None, 3) == [1, 0]
+    assert _mmr_select([], [], None, 3) == []
+
+
+def test_hybrid_rank_mmr_diversifies_but_preserves_reading_order(monkeypatch):
+    import numpy as np
+    from backend.services import vector_service as vs
+
+    duplicates = [f"Residual block {index} repeats the residual block design." for index in range(5)]
+    texts = duplicates + [
+        "The optimizer uses Adam with a learning rate of 1e-4.",
+        "The dataset contains 1.2 million training images.",
+    ]
+
+    class FakeEmbedder:
+        def encode(self, value, normalize_embeddings=True):
+            if isinstance(value, str):
+                return np.array([0.0, 0.0])
+            return np.array(
+                [[1.0, 0.0]] * 5 + [[0.0, 1.0], [0.0, -1.0]], dtype=float
+            )
+
+    monkeypatch.setattr(vs, "_get_embedder", lambda: FakeEmbedder())
+    without_mmr = vs.hybrid_rank_texts("residual block", texts, top_k=3, diversity=1.0)
+    diverse = vs.hybrid_rank_texts("residual block", texts, top_k=3, diversity=0.7)
+
+    assert without_mmr == duplicates[:3]
+    assert len([text for text in without_mmr if text in duplicates]) == 3
+    assert len([text for text in diverse if text in duplicates]) <= 2
+    assert diverse == [texts[index] for index in sorted(texts.index(text) for text in diverse)]
 
 
 # ── 4. Streaming tutor SSE ────────────────────────────────────────────────────

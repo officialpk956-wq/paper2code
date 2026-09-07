@@ -226,10 +226,42 @@ _PARAM_MAP = {
     "hidden_dim": "hidden_size",
     "units": "hidden_size",
     "num_units": "hidden_size",
+    # Generic input/output dimensions often describe an intermediate
+    # representation (for example a transformer's feed-forward width), not
+    # the final classifier. Keep them as hidden_size unless the key itself
+    # explicitly identifies classes.
+    "out_features": "hidden_size",
+    "output_size": "hidden_size",
+    "output_dim": "hidden_size",
+    "input_size": "hidden_size",
+    "input_dim": "hidden_size",
+    "num_output_classes": "num_classes",
+    "n_classes": "num_classes",
     "d_model": "embed_dim",
     "heads": "num_heads",
     "num_heads": "num_heads",
     "attention_heads": "num_heads",
+}
+
+
+# Parameters which must be concrete scalar numbers before they can safely
+# reach a builder.  Symbolic paper notation (for example ``2k`` or ``theta``)
+# describes a relationship, not an executable value.
+_NUMERIC_PARAM_KEYS = {
+    "channels",
+    "in_channels",
+    "kernel_size",
+    "stride",
+    "padding",
+    "hidden_size",
+    "embed_dim",
+    "num_heads",
+    "num_layers",
+    "num_classes",
+    "pool_size",
+    "growth_rate",
+    "compression",
+    "out_features",
 }
 
 
@@ -395,6 +427,7 @@ def _normalize_params(params: Any) -> dict[str, Any]:
         return {}
 
     normalized = {}
+    rejected_numeric_values = []
     for key, value in params.items():
         # Skip None or empty values
         if value is None or value == "":
@@ -413,9 +446,32 @@ def _normalize_params(params: Any) -> dict[str, Any]:
         key_lower = key_str.lower().strip()
         norm_key = _PARAM_MAP.get(key_lower, key_lower)
 
-        # Validate value
-        if isinstance(value, (int, float, str)):
+        if norm_key in _NUMERIC_PARAM_KEYS:
+            numeric_value: int | float | None = None
+            if isinstance(value, bool):
+                numeric_value = None
+            elif isinstance(value, (int, float)):
+                numeric_value = value
+            elif isinstance(value, str):
+                stripped_value = value.strip()
+                try:
+                    numeric_value = int(stripped_value)
+                except ValueError:
+                    try:
+                        numeric_value = float(stripped_value)
+                    except ValueError:
+                        numeric_value = None
+
+            if numeric_value is None:
+                rejected_numeric_values.append((norm_key, value))
+                continue
+
+            normalized[norm_key] = numeric_value
+        elif isinstance(value, (int, float, str, bool)):
             normalized[norm_key] = value
+
+    if rejected_numeric_values:
+        logger.debug("Dropped non-numeric layer parameters: %s", rejected_numeric_values)
 
     return normalized
 

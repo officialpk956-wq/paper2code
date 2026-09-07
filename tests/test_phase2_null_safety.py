@@ -7,7 +7,7 @@ from core.normalizer import normalize_model_spec
 from core.classification import classify_architecture, infer_family_from_name
 from core.paper_to_code_generator import PaperToCodeGenerator
 from core.architecture_graph import ArchitectureGraph, GraphNode
-from core.rag.normalizer import _normalize_type, normalize_config
+from core.rag.normalizer import _normalize_params, _normalize_type, normalize_config
 
 
 def test_normalizer_handles_explicit_none_in_nested_fields():
@@ -155,6 +155,45 @@ def test_normalize_type_degrades_gracefully_for_unrecognized_types():
     assert _normalize_type("timestep_embedding") == "timestep_embedding"
     assert _normalize_type("conv2d") == "conv2d"  # still normalizes known types
     assert _normalize_type(None) == "conv2d"
+
+
+def test_rag_normalizer_drops_symbolic_numeric_parameters():
+    params = _normalize_params({"channels": "2k", "out_features": "num_classes"})
+
+    assert "channels" not in params
+    assert "out_features" not in params
+
+
+def test_rag_normalizer_coerces_numeric_strings_and_keeps_zero():
+    assert _normalize_params({"channels": "64"}) == {"channels": 64}
+    assert _normalize_params({"channels": 0}) == {"channels": 0}
+
+
+def test_rag_normalizer_preserves_legitimate_non_numeric_parameters():
+    assert _normalize_params({"bottleneck": True}) == {"bottleneck": True}
+
+
+def test_rag_normalizer_removes_symbolic_densenet_parameters_from_config():
+    normalized = normalize_config(
+        {
+            "name": "DenseNet",
+            "layers": [
+                {
+                    "type": "conv2d",
+                    "params": {
+                        "channels": "2k",
+                        "growth_rate": "k",
+                        "compression": "θ",
+                        "num_layers": ["L1", "L2", "L3"],
+                        "out_features": "num_classes",
+                        "bottleneck": True,
+                    },
+                }
+            ],
+        }
+    )
+
+    assert normalized["layers"][0]["params"] == {"bottleneck": True}
 
 
 def test_e2b_input_candidates_handles_scalar_spatial_dims():

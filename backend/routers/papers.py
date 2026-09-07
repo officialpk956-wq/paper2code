@@ -439,10 +439,21 @@ def get_paper_details(
         "flops": flops_analysis.get("total_flops_score", 0),
         "parameter_count": flops_analysis.get("total_params_estimate", 0),
         "ingestion": ingestion_data,
+        "chunks": [
+            {
+                "id": chunk.id,
+                "section": chunk.section,
+                "page": chunk.page,
+                "chunk_type": chunk.chunk_type,
+                "text": chunk.text,
+            }
+            for chunk in p.chunks[:50]
+        ],
         "generated_code_source": p.generated_code_source,
         "generated_code_compiled": p.generated_code_compiled,
         "generation_status": p.generation_status,
         "verification_report": p.verification_report,
+        "evidence": (p.verification_report or {}).get("evidence", {}),
         "last_generation_error": p.last_generation_error,
     }
 

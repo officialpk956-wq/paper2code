@@ -11,6 +11,7 @@ import inspect
 import re
 
 from core.architecture_graph import ArchitectureGraph
+from core.knowledge.operations import lookup as lookup_operation
 
 _BUILDER_MAP = {
     "ResNet-18": ("core.model_builder", "ResNetBuilder"),
@@ -128,6 +129,7 @@ def _node_to_layer(node) -> str:
     MAP = {
         "conv2d": f"nn.Conv2d({ch}, {ch}, kernel_size={k}, padding={k // 2})",
         "conv1d": f"nn.Conv1d({ch}, {ch}, kernel_size={k}, padding={k // 2})",
+        "convtranspose2d": f"nn.ConvTranspose2d({ch}, {ch}, kernel_size=2, stride=2)",
         "linear": f"nn.Linear({in_hs}, {out_hs})",
         "relu": "nn.ReLU(inplace=True)",
         "gelu": "nn.GELU()",
@@ -142,8 +144,14 @@ def _node_to_layer(node) -> str:
         "upsample": "nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)",
         "multiheadattention": f"nn.MultiheadAttention(embed_dim={in_hs}, num_heads={heads}, batch_first=True)",
         "transformerblock": f"nn.TransformerEncoderLayer(d_model={in_hs}, nhead={heads}, batch_first=True)",
+        "feedforward": f"nn.Sequential(nn.Linear({in_hs}, {out_hs}), nn.GELU(), nn.Linear({out_hs}, {in_hs}))",
         "patchembedding": f"ViTPatchEmbed(3, {p.get('embed_dim', 768)}, {p.get('patch_size', 16)})",
         "sequence_pooling": "lambda x: x.mean(dim=1)",
     }
 
-    return MAP.get(node.type, None)
+    mapped_layer = MAP.get(node.type)
+    if mapped_layer is not None:
+        return mapped_layer
+
+    operation = lookup_operation(node.type)
+    return operation["syntax"] if operation is not None else None

@@ -57,7 +57,16 @@ describe('WorkspacePaperClient - Implement Tab', () => {
           year: 2024,
           abstract: 'Test abstract',
           color: '#ffffff',
-          contributions: []
+          contributions: [],
+          evidence: {
+            'stages[0].num_blocks': {
+              status: 'cited',
+              chunk_ids: [41],
+              pages: [2],
+              value: 3,
+              quote: 'Stage 1 has 3 bottleneck blocks.',
+            },
+          },
         });
       }
       return Promise.resolve({});
@@ -112,5 +121,17 @@ describe('WorkspacePaperClient - Implement Tab', () => {
       });
     });
     expect(await screen.findByText('generated code ready')).toBeInTheDocument();
+  });
+
+  test('Knowledge Graph tab exposes source-backed extraction evidence', async () => {
+    render(<WorkspacePaperClient id="5" />);
+    await waitFor(() => expect(screen.getByText('Test Paper')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge Graph' }));
+
+    expect(await screen.findByText('Extraction evidence')).toBeInTheDocument();
+    expect(screen.getByText('stages[0].num_blocks')).toBeInTheDocument();
+    expect(screen.getByText('Cited (page 2)')).toBeInTheDocument();
+    expect(screen.getByText('“Stage 1 has 3 bottleneck blocks.”')).toBeInTheDocument();
   });
 });

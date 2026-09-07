@@ -134,6 +134,127 @@ class KnowledgeGraph:
         self.graph.add_edge("sequence_pooling", "feature_aggregator", relation="performs")
         self.graph.add_edge("linear", "classifier_head", relation="implements")
 
+        # Same-family links so related_concepts() can surface a block's
+        # constituent parts (e.g. "residual_add" <-> "residualblock").
+        self.graph.add_edge("residual_add", "residualblock", relation="same_family")
+        self.graph.add_edge("residualblock", "residual_add", relation="same_family")
+
+    # Paper-language synonyms that aren't graph node names themselves --
+    # maps free-form phrasing to the node whose family should be expanded to.
+    _CONCEPT_ALIASES = {
+        "skip connection": "residual_add",
+        "skip connections": "residual_add",
+        "shortcut connection": "residual_add",
+        "shortcut connections": "residual_add",
+        "self attention": "multiheadattention",
+        "self-attention": "multiheadattention",
+    }
+
+    # Natural-language forms suitable for retrieval. These are deliberately
+    # prose phrases, never raw graph identifiers such as "residualblock".
+    # Entry-point aliases remain in _CONCEPT_ALIASES above.
+    _SURFACE_FORMS = {
+        "residual_add": [
+            "residual connection",
+            "projection shortcut",
+            "identity mapping",
+        ],
+        "residualblock": ["residual block", "bottleneck block"],
+        "multiheadattention": ["multihead attention", "multi-head attention"],
+        "cross_attention": ["cross attention", "encoder decoder attention"],
+        "causal_attention": ["causal attention", "masked self attention"],
+        "patchembedding": ["patch embedding", "image patch projection"],
+        "batchnorm2d": ["batch normalization", "batch norm"],
+        "layernorm": ["layer normalization", "layer norm"],
+    }
+
+    # Which architecture family a node's presence implies. Deliberately small
+    # -- only the families whose vocabulary matters for retrieval boosting.
+    _NODE_FAMILY = {
+        "residual_add": "resnet",
+        "residualblock": "resnet",
+        "patchembedding": "vit",
+        "sequence_pooling": "vit",
+        "transformer_encoder": "bert_gpt",
+        "transformer_decoder": "bert_gpt",
+        "causal_attention": "bert_gpt",
+        "cross_attention": "bert_gpt",
+        "transformerblock": "transformer",
+    }
+
+    def infer_family_from_concept(self, text: str) -> str | None:
+        """
+        Resolve free-form text (e.g. "the skip connections help gradient
+        flow") to an architecture family (e.g. "resnet") via the ontology
+        graph -- no LLM call. Checks direct node/alias mentions first, then
+        each mention's related_concepts, for a known family mapping.
+        """
+        text_lower = text.strip().lower()
+        candidates = [node for alias, node in self._CONCEPT_ALIASES.items() if alias in text_lower]
+        candidates += [node for node in self.graph.nodes() if node in text_lower]
+
+        for node in candidates:
+            if node in self._NODE_FAMILY:
+                return self._NODE_FAMILY[node]
+            for related in self.related_concepts(node):
+                if related in self._NODE_FAMILY:
+                    return self._NODE_FAMILY[related]
+        return None
+
+    def related_concepts(self, concept: str) -> list[str]:
+        """
+        Return concepts related to `concept` via the ontology graph, so a
+        query mentioning one term (e.g. "skip connections") can also match
+        content tagged with its family (e.g. "residual_add", "residualblock").
+        Deterministic, rule-based -- no LLM call.
+        """
+        concept = concept.strip().lower()
+        node = self._CONCEPT_ALIASES.get(concept, concept)
+        if node not in self.graph:
+            return []
+
+        related = set(self.graph.successors(node)) | set(self.graph.predecessors(node))
+        related.discard(node)
+        return sorted(related)
+
+    def expand_query_terms(self, query: str, max_terms: int = 12) -> list[str]:
+        """Expand a query with related natural-language surface forms.
+
+        The result is deterministic, lowercase, deduplicated, and bounded.
+        It intentionally returns no terms when the ontology cannot identify a
+        concept, preserving the existing literal-query retrieval behavior.
+        """
+        if not isinstance(query, str) or max_terms <= 0:
+            return []
+
+        query_lower = " ".join(query.lower().split())
+        if not query_lower:
+            return []
+
+        matched_nodes: list[str] = []
+        for alias, node in self._CONCEPT_ALIASES.items():
+            if alias in query_lower and node not in matched_nodes:
+                matched_nodes.append(node)
+        for node, forms in self._SURFACE_FORMS.items():
+            if (
+                node.replace("_", " ") in query_lower
+                or any(form in query_lower for form in forms)
+            ) and node not in matched_nodes:
+                matched_nodes.append(node)
+
+        if not matched_nodes:
+            return []
+
+        expanded: list[str] = []
+        for node in matched_nodes:
+            for related_node in [node, *self.related_concepts(node)]:
+                for form in self._SURFACE_FORMS.get(related_node, []):
+                    if form not in query_lower and form not in expanded:
+                        expanded.append(form)
+                        if len(expanded) == max_terms:
+                            return expanded
+        return expanded
+
     def get_semantic_role(self, node_type: str) -> str | None:
         """Infer the semantic role of a node type from the Knowledge Graph."""
         node_type = node_type.lower()

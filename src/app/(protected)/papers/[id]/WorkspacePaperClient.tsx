@@ -112,6 +112,27 @@ type VerificationReport = {
   output_shape?: number[];
   error?: string;
   checks?: Record<string, boolean>;
+  total_attempts?: number;
+  attempts?: VerificationAttempt[];
+  fidelity?: FidelityReport | null;
+};
+
+type VerificationAttempt = {
+  attempt?: number;
+  code_source?: string;
+  error?: string | null;
+  report?: { error?: string | null } | null;
+};
+
+type FidelityCheck = { name?: string; passed?: boolean; detail?: string };
+type FidelityReport = { score?: number; checks?: FidelityCheck[]; mismatches?: string[] };
+
+type PaperChunk = {
+  id?: number;
+  section?: string;
+  page?: number | null;
+  chunk_type?: string;
+  text?: string;
 };
 
 type ExecutableData = {
@@ -120,7 +141,160 @@ type ExecutableData = {
   language?: string;
   verification_report?: VerificationReport | null;
   last_generation_error?: string | null;
+  compiled?: { code_source?: string } | null;
 };
+
+type EvidenceEntry = {
+  status: 'cited' | 'inferred' | 'default';
+  chunk_ids: number[];
+  pages?: number[];
+  value?: unknown;
+  quote?: string;
+};
+
+type EvidenceMap = Record<string, EvidenceEntry>;
+
+function normalizeEvidence(value: unknown): EvidenceMap {
+  if (!isRecord(value)) return {};
+  const entries: EvidenceMap = {};
+  for (const [field, entry] of Object.entries(value)) {
+    if (!isRecord(entry)) continue;
+    const status = entry.status;
+    if (status !== 'cited' && status !== 'inferred' && status !== 'default') continue;
+    entries[field] = {
+      status,
+      chunk_ids: Array.isArray(entry.chunk_ids)
+        ? entry.chunk_ids.filter((id): id is number => typeof id === 'number')
+        : [],
+      pages: Array.isArray(entry.pages)
+        ? entry.pages.filter((page): page is number => typeof page === 'number')
+        : [],
+      value: entry.value,
+      quote: optionalString(entry.quote),
+    };
+  }
+  return entries;
+}
+
+function normalizeChunks(value: unknown): PaperChunk[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((chunk) => {
+    if (!isRecord(chunk)) return [];
+    return [{
+      id: typeof chunk.id === 'number' ? chunk.id : undefined,
+      section: optionalString(chunk.section),
+      page: typeof chunk.page === 'number' ? chunk.page : null,
+      chunk_type: optionalString(chunk.chunk_type) ?? 'text',
+      text: optionalString(chunk.text),
+    }];
+  });
+}
+
+function normalizeVerificationReport(value: unknown): VerificationReport | null {
+  return isRecord(value) ? value as VerificationReport : null;
+}
+
+function EvidencePanel({ evidence, title = 'Evidence', legacyLabels = false }: { evidence: EvidenceMap; title?: string; legacyLabels?: boolean }) {
+  const items = Object.entries(evidence);
+  const hasCitations = items.some(([, item]) => item.status === 'cited');
+
+  return (
+    <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="text-[13px] font-semibold text-white">{title}</div>
+        <span className="text-[10px] text-[#737373]">Verified quotes only</span>
+      </div>
+      {!hasCitations && (
+        <p className="mb-3 text-[12px] leading-relaxed text-[#FACC15]">
+          No verified citations — values were inferred from the model&apos;s reading of the paper.
+        </p>
+      )}
+      {items.length > 0 && (
+        <div className="space-y-2 text-[11px] text-[#A3A3A3]">
+          {items.map(([field, item]) => (
+            <div key={field} className="rounded bg-[#1A1A1A] px-3 py-2.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-white font-medium">{field}</span>
+                {item.value !== undefined && <span className="font-mono text-[#D4D4D4]">= {String(item.value)}</span>}
+                <span className={'rounded-full px-2 py-0.5 text-[10px] font-semibold ' +
+                  (item.status === 'cited' ? 'bg-[#4ADE80]/10 text-[#4ADE80]' : 'bg-[#FACC15]/10 text-[#FACC15]')}>
+                  {legacyLabels && item.status === 'cited'
+                    ? `Cited${item.pages && item.pages.length > 0 ? ` (page ${item.pages.join(', ')})` : ''}`
+                    : item.status === 'cited' ? 'cited' : 'inferred'}
+                </span>
+              </div>
+              {item.status === 'cited' && item.pages && item.pages.length > 0 && (
+                <div className="mt-1 text-[#737373]">Page {item.pages.join(', ')}</div>
+              )}
+              {item.status === 'cited' && item.quote && <p className="mt-1.5 italic text-[#A3A3A3]">“{item.quote}”</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GenerationPanel({ report, codeSource }: { report: VerificationReport | null; codeSource?: string }) {
+  const attempts = Array.isArray(report?.attempts) ? report.attempts : [];
+  const totalAttempts = typeof report?.total_attempts === 'number' ? report.total_attempts : attempts.length;
+  const fidelity = report?.fidelity;
+  const failedChecks = Array.isArray(fidelity?.checks)
+    ? fidelity.checks.filter((check) => check.passed === false).map((check) => check.name || check.detail || 'unnamed check')
+    : [];
+
+  return (
+    <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
+      <div className="text-[13px] font-semibold text-white mb-3">Generation</div>
+      <div className="grid gap-2 text-[12px] text-[#A3A3A3] sm:grid-cols-3">
+        <div>Attempts: <span className="text-white">{totalAttempts} / 3</span></div>
+        <div>Source: <span className="text-white">{codeSource || 'unavailable'}</span></div>
+        <div>Fidelity: <span className="text-white">{typeof fidelity?.score === 'number' ? `${Math.round(fidelity.score * 100)}%` : 'unavailable'}</span></div>
+      </div>
+      {attempts.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {attempts.map((attempt, index) => {
+            const attemptError = attempt.error ?? attempt.report?.error;
+            return (
+              <div key={`${attempt.attempt ?? index}-${attempt.code_source ?? 'unknown'}`} className="rounded bg-[#1A1A1A] px-3 py-2 text-[11px] text-[#A3A3A3]">
+                Attempt {attempt.attempt ?? index + 1}{attempt.code_source ? ` · ${attempt.code_source}` : ''}
+                {attemptError ? <div className="mt-1 text-[#F87171]">{attemptError}</div> : <div className="mt-1 text-[#4ADE80]">No reported error</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {failedChecks.length > 0 && <div className="mt-3 text-[11px] text-[#FACC15]">Fidelity mismatches: {failedChecks.join(', ')}</div>}
+      {Array.isArray(fidelity?.mismatches) && fidelity.mismatches.length > 0 && <div className="mt-1 text-[11px] text-[#A3A3A3]">{fidelity.mismatches.join(' · ')}</div>}
+    </div>
+  );
+}
+
+function ChunkPanel({ chunks, textSource }: { chunks: PaperChunk[]; textSource?: string }) {
+  return (
+    <div className="rounded-xl border border-[#262626] bg-[#111111] p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="text-[13px] font-semibold text-white">Retrieved source chunks</div>
+        {textSource && <span className="text-[10px] uppercase tracking-wide text-[#A3A3A3]">Text source: {textSource}</span>}
+      </div>
+      {textSource === 'ocr' && <p className="mb-3 text-[12px] text-[#FACC15]">OCR&apos;d text can be noisier than the original PDF text layer.</p>}
+      {chunks.length === 0 ? <p className="text-[12px] text-[#737373]">No persisted source chunks are available for this paper.</p> : (
+        <div className="space-y-2">
+          {chunks.slice(0, 12).map((chunk, index) => (
+            <div key={chunk.id ?? index} className="rounded bg-[#1A1A1A] px-3 py-2.5 text-[11px] text-[#A3A3A3]">
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-[#A78BFA]/10 px-2 py-0.5 text-[#C4B5FD]">{chunk.chunk_type || 'text'}</span>
+                {chunk.section && <span>{chunk.section}</span>}
+                {chunk.page != null && <span>Page {chunk.page}</span>}
+              </div>
+              {chunk.text && <p className="mt-1.5 leading-relaxed">{chunk.text}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type ImplData = {
   status: string;
@@ -195,6 +369,11 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [blueprintData, setBlueprintData] = useState<BlueprintData | null>(null);
   const [executableData, setExecutableData] = useState<ExecutableData | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceMap>({});
+  const [chunks, setChunks] = useState<PaperChunk[]>([]);
+  const [textSource, setTextSource] = useState<string | undefined>();
+  const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
+  const [codeSource, setCodeSource] = useState<string | undefined>();
   const [implData, setImplData] = useState<ImplData | null>(null);
   const [implCode, setImplCode] = useState('');
   const [generatedRunState, setGeneratedRunState] = useState<'idle' | 'running' | 'passed' | 'failed'>('idle');
@@ -229,6 +408,11 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
     setLoading(true);
     setError('');
     setMeta(null);
+    setEvidence({});
+    setChunks([]);
+    setTextSource(undefined);
+    setVerificationReport(null);
+    setCodeSource(undefined);
 
     if (FLAGSHIP_META[id]) {
       setMeta({ ...FLAGSHIP_META[id] });
@@ -247,6 +431,15 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       const data = await apiGet<unknown>(`/api/papers/${id}`);
       const normalizedMeta = normalizePaperMeta(data);
       setMeta(normalizedMeta);
+      if (isRecord(data)) {
+        setEvidence(normalizeEvidence(data.evidence));
+        setChunks(normalizeChunks(data.chunks));
+        setVerificationReport(normalizeVerificationReport(data.verification_report));
+        const ingestion = isRecord(data.ingestion) ? data.ingestion : {};
+        setTextSource(optionalString(ingestion.text_source));
+        const compiled = isRecord(data.generated_code_compiled) ? data.generated_code_compiled : {};
+        setCodeSource(optionalString(compiled.code_source));
+      }
 
       const parsedId = Number.parseInt(id, 10);
       setNumericId(Number.isFinite(parsedId) ? parsedId : null);
@@ -292,6 +485,8 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
     try {
       const data = await apiGet<ExecutableData>(`/api/papers/${id}/executable-graph`);
       setExecutableData(data);
+      setVerificationReport(data.verification_report ?? verificationReport);
+      setCodeSource(optionalString(data.compiled?.code_source) ?? codeSource);
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load executable code');
     } finally {
@@ -519,6 +714,9 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 </ul>
               </div>
             )}
+            <EvidencePanel evidence={evidence} />
+            <GenerationPanel report={verificationReport} codeSource={codeSource} />
+            <ChunkPanel chunks={chunks} textSource={textSource} />
           </div>
         )}
 
@@ -624,6 +822,12 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 {generatedRunOutput}
               </pre>
             )}
+          </div>
+        )}
+
+        {tab === 'graph' && Object.keys(evidence).length > 0 && (
+          <div className="mt-4 max-w-2xl">
+            <EvidencePanel evidence={evidence} title="Extraction evidence" legacyLabels />
           </div>
         )}
 

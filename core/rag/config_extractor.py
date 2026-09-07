@@ -11,17 +11,61 @@ Improvements:
 """
 
 import json
+import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from core.agents.types import ConfigDict
+from core.knowledge.operations import OPERATIONS, find_mentioned
 from core.rag.knowledge_graph import KnowledgeGraph
 from core.rag.normalizer import normalize_config
-from core.rag.retriever import retrieve_and_merge
+from core.rag.retriever import retrieve_and_merge, retrieve_top_chunks
 from core.rag.section_splitter import chunk_for_retrieval, get_architecture_text
 
+
+logger = logging.getLogger(__name__)
+
+# Natural-language stand-in for the architecture-focused BM25 query terms,
+# used when ranking real (page/section-aware) chunks via a chunk_retriever
+# callback -- dense retrieval scores natural language, not discrete terms.
+_ARCHITECTURE_QUERY = (
+    "convolution attention transformer residual connections layers "
+    "channels kernel stride architecture design encoder decoder block "
+    "64 128 256 512 768 1024 2048"
+)
+
+# Focused-context composition. Tables and captions carry the hyperparameters
+# but lose to prose on an architecture-vocabulary query, so a bounded number
+# of slots is reserved for them rather than left to ranking.
+def _bare_model_id(model: str | None) -> str:
+    """Strip a litellm routing prefix: 'groq/openai/gpt-oss-120b' -> 'gpt-oss-120b'."""
+    return str(model or "").rsplit("/", 1)[-1].strip().lower()
+
+
+_TOTAL_FOCUS_SLOTS = 6
+_RESERVED_STRUCTURED_SLOTS = 2
+_STRUCTURED_CHUNK_TYPES = ("table", "caption")
+_FOCUS_SEPARATOR = "\n\n---\n\n"
+_FORWARD_EXPANSION_DEPTH = 2
+_STRUCTURED_LABEL_PREFIX = re.compile(
+    r"^\s*(?:table|figure|fig\.?)\s*\d+\s*[:.)]?\s*", re.IGNORECASE
+)
+_ARCHITECTURAL_STRUCTURED_TERMS = re.compile(
+    r"\b(?:conv(?:\d+(?:x|×)\d+)?|mbconv\d*|channels?|kernel|stride|layers?|"
+    r"hidden|heads?|block|encoder|decoder|transformer|pooling|patch|embedding|"
+    r"resolution|feature)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_architectural_structured_content(text: str) -> bool:
+    """Whether a table/caption contains numeric architectural information."""
+    content = _STRUCTURED_LABEL_PREFIX.sub("", text, count=1)
+    return bool(re.search(r"\d", content) and _ARCHITECTURAL_STRUCTURED_TERMS.search(content))
+
 try:
-    from core.llm_client import llm_complete
+    from core.llm_client import PRIMARY_MODEL, get_last_completion_model, llm_complete
 
     _HAS_LLM = True
 except (ImportError, RuntimeError):
@@ -33,6 +77,24 @@ except (ImportError, RuntimeError):
 # ---------------------------------------------------------------------------
 
 _LAYER_PATTERNS: list[tuple[str, str]] = [
+    (r"\bdepthwise(?:[_\s-]+separable)?[_\s-]+conv(?:olution)?\b", "depthwise_conv2d"),
+    (
+        r"\b(?:(?:transposed|transpose|de)[_\s-]*convolutions?|"
+        r"fractional(?:ly)?[_\s-]*strided[_\s-]*convolutions?)\b",
+        "convtranspose2d",
+    ),
+    (r"\bconcaten(?:ate|ation)\b", "concat"),
+    (r"\bpositional[_\s]?embed(?:ding)?\b", "positionalembedding"),
+    (r"\bglobal[_\s]?(?:average|avg)[_\s]?pool(?:ing)?\b", "globalavgpool2d"),
+    (r"\bfeed[_\s-]?forward\b", "feedforward"),
+    (r"\bgroup[_\s]?norm(?:alization)?\b", "groupnorm"),
+    (r"\bleaky[_\s]?relu\b", "leakyrelu"),
+    (r"\b(?:silu|swish)\b", "silu"),
+    (r"\bcls[_\s-]?token\b", "clstoken"),
+    (r"\bsequence[_\s-]?pool(?:ing)?\b", "sequence_pooling"),
+    (r"\bflatten(?:ing)?\b", "flatten"),
+    (r"\bgelu\b", "gelu"),
+    (r"\b(?:residual[_\s-]?add|element[_\s-]?wise[_\s-]?add)\b", "residual_add"),
     (r"\bmulti[_\s]?head[_\s]?(?:self[_\s]?)?attention\b", "multiheadattention"),
     (r"\bself[_\s]?attention\b", "multiheadattention"),
     (r"\btransformer[_\s]?encoder\b", "multiheadattention"),
@@ -90,6 +152,7 @@ _PARAM_PATTERNS: list[tuple[str, list[str]]] = [
         [
             r"strides?\s*[:\=]\s*(\d+)",
             r"stride\s+of\s+(\d+)",
+            r"\bstride\s+(\d+)\b",
         ],
     ),
     (
@@ -120,6 +183,14 @@ _PARAM_PATTERNS: list[tuple[str, list[str]]] = [
             r"(\d+)\s+(?:transformer\s+)?(?:encoder\s+)?(?:decoder\s+)?layers?",
             r"num_layers\s*[:\=]\s*(\d+)",
             r"depth\s*[:\=]\s*(\d+)",
+        ],
+    ),
+    (
+        "num_classes",
+        [
+            r"\b(\d+)\s*[-–]?\s*way\s+classification\b",
+            r"\b(\d+)\s+classes\b",
+            r"\bnum_classes\s*[:\=]\s*(\d+)\b",
         ],
     ),
 ]
@@ -170,7 +241,7 @@ Output:
 }
 
 ### Example 2 — U-Net with skip connections:
-Text: "U-Net has an encoder that downsamples with conv+pool blocks, and a decoder that upsamples and concatenates encoder features via skip connections."
+Text: "U-Net has an encoder with 3×3 convolutions producing 64 channels, followed by max pooling. Its decoder upsamples and concatenates encoder features via skip connections."
 Output:
 {
   "name": "U-Net",
@@ -220,16 +291,22 @@ You are an expert at reading deep learning research papers and extracting neural
 
 {graph_rules}
 
+{operation_context}
+
 ### Now extract from this text:
 Text: \"\"\"{text}\"\"\"
 
 Return ONLY valid JSON — no explanation, no markdown fences.
 
 Rules:
-- "type" must be one of: conv2d, conv1d, linear, maxpool2d, avgpool2d,
-  multiheadattention, transformerblock, batchnorm2d, layernorm, relu,
-  dropout, upsample, residualblock, patchembedding
-- "params": ONLY extract values EXPLICITLY stated in the text. Do NOT guess.
+- "type" must be one of:
+  conv2d, conv1d, convtranspose2d, depthwise_conv2d, linear,
+  maxpool2d, avgpool2d, globalavgpool2d, upsample, flatten,
+  batchnorm2d, layernorm, groupnorm, relu, leakyrelu, gelu, silu, dropout,
+  multiheadattention, transformerblock, feedforward, patchembedding,
+  positionalembedding, clstoken, sequence_pooling,
+  residualblock, residual_add, concat
+- "params": ONLY extract values EXPLICITLY stated in the text. Do NOT guess. Use these parameter names where the paper states them: channels, kernel_size, stride, padding, hidden_size, num_heads, num_layers, num_classes.
 - "connections": list of [source_id, target_id] pairs using layer indices.
 - "connection_types": dict mapping "src_id->tgt_id" or layer_id to
   connection type: "skip", "residual", "concat", "branch", "add".
@@ -260,6 +337,48 @@ Return ONLY corrected valid JSON. If no corrections are needed, return the origi
 # ---------------------------------------------------------------------------
 
 
+def _repair_json(text: str) -> str:
+    """Strip `//` and `/* */` comments and trailing commas, outside strings.
+
+    Deliberately conservative: it tracks string state and escapes, so a `//`
+    inside a quoted value (a URL, say) survives untouched.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "/":
+            newline = text.find("\n", index)
+            index = len(text) if newline == -1 else newline
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "*":
+            close = text.find("*/", index + 2)
+            index = len(text) if close == -1 else close + 2
+            continue
+        out.append(char)
+        index += 1
+
+    # Trailing commas: {"a": 1,} and [1, 2,]
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
 class ConfigExtractor:
     """
     Extract architecture config from raw text using a multi-step pipeline.
@@ -280,6 +399,7 @@ class ConfigExtractor:
         use_retriever: bool = True,
         verify: bool = True,
         max_context_chars: int = 10_000,
+        chunk_retriever: Callable[[str, list[str], int], list[str]] | None = None,
     ):
         self.use_llm = use_llm and _HAS_LLM
         self.use_section_splitter = use_section_splitter
@@ -287,28 +407,54 @@ class ConfigExtractor:
         self.verify = verify and use_llm and _HAS_LLM
         self.max_context_chars = max_context_chars
         self.ontology = KnowledgeGraph()
+        # Optional (query, texts, top_k) -> ranked texts callback. Lets a
+        # caller plug in dense/hybrid retrieval over real page/section-aware
+        # chunks without this module depending on any backend/network code.
+        # Falls back to the pure BM25 path below when not supplied.
+        self.chunk_retriever = chunk_retriever
+        self.provider_models: list[str] = []
+        self.provider_fallback = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def extract_from_text(self, text: str) -> ConfigDict:
+    def extract_from_text(self, text: str, source_chunks: list[dict[str, Any]] | None = None) -> ConfigDict:
         """
         Full pipeline: raw text -> focused context -> extract -> verify -> normalize.
-        """
-        focused = self._focus_text(text)
 
+        `source_chunks` (optional) are the real page/section-aware chunks
+        already computed upstream (core.utils.chunk_pages_with_provenance).
+        When given, they're used for retrieval instead of re-chunking `text`
+        from scratch with fixed-size windows.
+        """
+        focused = self._focus_text(text, source_chunks=source_chunks)
+
+        extraction_method = "rule_based"
+        extraction_reason = None
         try:
             if self.use_llm:
                 raw = self._extract_with_llm(focused)
+                extraction_method = "llm"
                 if self.verify:
                     raw = self._verify_extraction(focused, raw)
+                    extraction_method = "llm_verified"
             else:
                 raw = self._extract_rule_based(focused)
-        except Exception:
+        except Exception as exc:
+            extraction_reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("LLM extraction failed; using rule-based fallback (%s)", extraction_reason)
             raw = self._extract_rule_based(focused)
+            extraction_method = "rule_based_fallback"
 
-        return normalize_config(raw)
+        normalized = normalize_config(raw)
+        normalized["extraction_method"] = extraction_method
+        if self.provider_models:
+            normalized["provider_models"] = self.provider_models
+            normalized["provider_fallback"] = self.provider_fallback
+        if extraction_reason is not None:
+            normalized["extraction_reason"] = extraction_reason
+        return normalized
 
     def extract_from_full_pdf(self, pdf_text: str) -> ConfigDict:
         """
@@ -321,10 +467,130 @@ class ConfigExtractor:
     # Step 1: Text focusing
     # ------------------------------------------------------------------
 
-    def _focus_text(self, text: str) -> str:
-        """Apply section splitting and BM25 retrieval to narrow the context."""
+    def _rank_chunks(self, texts: list[str], top_k: int) -> list[str]:
+        """Rank via the injected retriever, falling back to plain BM25."""
+        if not texts or top_k <= 0:
+            return []
+        if self.chunk_retriever is not None:
+            try:
+                ranked = self.chunk_retriever(_ARCHITECTURE_QUERY, texts, top_k)
+                if ranked:
+                    return ranked
+            except Exception:
+                pass  # fall through to BM25, not to the whole legacy pipeline
+        return retrieve_top_chunks(texts, top_k=top_k)
+
+    def _select_focus_chunks(
+        self,
+        source_chunks: list[dict[str, Any]],
+        total: int = _TOTAL_FOCUS_SLOTS,
+        reserved: int = _RESERVED_STRUCTURED_SLOTS,
+        expand_neighbors: bool = False,
+        max_context_chars: int | None = None,
+    ) -> list[str]:
+        """Pick the chunks to focus on, reserving slots for tables and captions.
+
+        Architecture hyperparameters live overwhelmingly in tables and figure
+        captions, which score poorly against a prose architecture query and
+        are exactly what MMR's diversity term evicts. Measured: EfficientNet
+        parameterizes 18 of 18 convolutions *because* its architecture table
+        was retrieved, while ViT's dimension table and U-Net's 64->128->256->512
+        progression never reached the model at all.
+
+        Ranking prose and structured chunks separately, with a bounded
+        reservation, guarantees the tables get a hearing without letting them
+        crowd out the prose that carries the layer order.
+        """
+        entries = [
+            (index, chunk)
+            for index, chunk in enumerate(source_chunks or [])
+            if str(chunk.get("text") or "").strip()
+        ]
+        if not entries:
+            return []
+
+        structured = [
+            (i, c) for i, c in entries
+            if (
+                str(c.get("chunk_type") or "") in _STRUCTURED_CHUNK_TYPES
+                and _has_architectural_structured_content(str(c.get("text") or ""))
+            )
+        ]
+        prose = [
+            (i, c) for i, c in entries
+            if str(c.get("chunk_type") or "") not in _STRUCTURED_CHUNK_TYPES
+        ]
+
+        def _take(pool: list[tuple[int, dict]], k: int) -> list[int]:
+            if not pool or k <= 0:
+                return []
+            by_text: dict[str, list[int]] = {}
+            for i, c in pool:
+                by_text.setdefault(str(c.get("text") or ""), []).append(i)
+            chosen: list[int] = []
+            for ranked_text in self._rank_chunks([str(c.get("text") or "") for _, c in pool], k):
+                bucket = by_text.get(ranked_text)
+                if bucket:
+                    chosen.append(bucket.pop(0))
+            return chosen
+
+        structured_picks = _take(structured, min(reserved, total))
+        prose_picks = _take(prose, total - len(structured_picks))
+
+        # Reading order: the focused text is read by the model as a narrative,
+        # matching retrieve_top_chunks' existing convention.
+        lookup = dict(entries)
+        ranked_order = structured_picks + prose_picks
+        ranked_indices = set(ranked_order)
+        if not expand_neighbors or max_context_chars is None:
+            return [
+                str(lookup[i].get("text") or "")
+                for i in sorted(ranked_indices)
+            ]
+
+        selected_indices = set(ranked_indices)
+
+        def _merged_length(indices: set[int]) -> int:
+            ordered = sorted(indices)
+            return sum(len(str(lookup[i].get("text") or "")) for i in ordered) + (
+                len(_FOCUS_SEPARATOR) * max(0, len(ordered) - 1)
+            )
+
+        def _add_if_within_budget(index: int) -> bool:
+            if index not in lookup or index in selected_indices:
+                return index in selected_indices
+            candidate_indices = selected_indices | {index}
+            if _merged_length(candidate_indices) > max_context_chars:
+                return False
+            selected_indices.add(index)
+            return True
+
+        for origin in ranked_order:
+            for depth in range(1, _FORWARD_EXPANSION_DEPTH + 1):
+                if not _add_if_within_budget(origin + depth):
+                    break
+            _add_if_within_budget(origin - 1)
+
+        return [
+            str(lookup[i].get("text") or "")
+            for i in sorted(selected_indices)
+        ]
+
+    def _focus_text(self, text: str, source_chunks: list[dict[str, Any]] | None = None) -> str:
+        """Apply section splitting and BM25/hybrid retrieval to narrow the context."""
         if len(text) <= self.max_context_chars:
             return text
+
+        if self.use_retriever:
+            selected = self._select_focus_chunks(
+                source_chunks or [],
+                expand_neighbors=True,
+                max_context_chars=self.max_context_chars,
+            )
+            if selected:
+                merged = _FOCUS_SEPARATOR.join(selected)[: self.max_context_chars]
+                if merged.strip():
+                    return merged
 
         if self.use_section_splitter:
             text = get_architecture_text(text, max_chars=self.max_context_chars)
@@ -348,9 +614,11 @@ class ConfigExtractor:
         prompt = _LLM_EXTRACTION_PROMPT.format(
             few_shot=_FEW_SHOT_EXAMPLES,
             graph_rules=graph_rules,
+            operation_context=_operation_context(text),
             text=text,
         )
         response = llm_complete(prompt)
+        self._record_provider()
         return self._parse_json_response(response)
 
     # ------------------------------------------------------------------
@@ -368,6 +636,7 @@ class ConfigExtractor:
                 extracted=json.dumps(extracted, indent=2),
             )
             response = llm_complete(prompt)
+            self._record_provider()
             corrected = self._parse_json_response(response)
             # Only accept correction if it has more or equal layers (no regression)
             corrected_layers = (corrected or {}).get("layers") or []
@@ -378,6 +647,19 @@ class ConfigExtractor:
         except Exception:
             pass
         return extracted
+
+    def _record_provider(self) -> None:
+        """Retain completion provenance without changing llm_complete's return type."""
+        provider = get_last_completion_model()
+        if provider is not None:
+            self.provider_models.append(provider)
+            # litellm strips the routing prefix from resp.model: a call to
+            # "groq/openai/gpt-oss-120b" reports back "openai/gpt-oss-120b".
+            # A bare != comparison therefore flagged every single call as a
+            # cross-provider fallback, which would have made the alarm
+            # meaningless within one run. Compare the bare model id instead.
+            if _bare_model_id(provider) != _bare_model_id(PRIMARY_MODEL):
+                self.provider_fallback = True
 
     # ------------------------------------------------------------------
     # Step 4: Rule-based fallback (enhanced R4)
@@ -408,20 +690,65 @@ class ConfigExtractor:
 
     @staticmethod
     def _parse_json_response(response: str) -> dict[str, Any]:
-        """Parse JSON from LLM response, stripping markdown if needed."""
+        """Parse JSON from an LLM response, tolerating common model quirks.
+
+        Beyond raw JSON and markdown fences, this repairs two things models
+        emit constantly and strict JSON rejects: `//` line comments (observed
+        in production as `"params": {...},   // bottleneck 1x1`) and trailing
+        commas. Both previously raised, and the caller's broad `except` turned
+        that into a silent rule-based fallback -- a wrong spec reported as a
+        result. Repair is attempted last, so well-formed output is untouched.
+        """
         try:
             return json.loads(response)
         except json.JSONDecodeError:
             pass
+
+        candidates: list[str] = []
         match = re.search(r"```(?:json)?\s*(.*?)\s*```", response, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            candidates.append(match.group(1))
+        # An unterminated fence (truncated output) still leaves usable JSON.
+        opening = re.search(r"```(?:json)?\s*", response)
+        if opening:
+            candidates.append(response[opening.end() :])
+        start, end = response.find("{"), response.rfind("}")
+        if start != -1 and end > start:
+            candidates.append(response[start : end + 1])
+
+        for candidate in candidates:
+            for attempt in (candidate, _repair_json(candidate)):
+                try:
+                    return json.loads(attempt)
+                except json.JSONDecodeError:
+                    continue
+
         raise ValueError("LLM did not return valid JSON")
 
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _operation_context(text: str, limit: int = 8) -> str:
+    """Return deterministic grounding for operations explicitly in ``text``."""
+    try:
+        canonical_names = find_mentioned(text)[:limit]
+        if not canonical_names:
+            return ""
+        lines = [
+            "KNOWN OPERATION DEFINITIONS (use these exact definitions; do not redefine them):"
+        ]
+        for canonical_name in canonical_names:
+            operation = OPERATIONS[canonical_name]
+            syntax = operation["syntax"] or operation["functional"] or "no module form"
+            lines.append(
+                f"- {canonical_name}: {operation['formula']}  |  PyTorch: {syntax}"
+            )
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def preprocess_text(text: str) -> str:
@@ -502,7 +829,7 @@ def _extract_layers(text: str) -> list[dict[str, Any]]:
         layers.append({"type": layer_type, "params": params})
 
     if not layers:
-        layers = [{"type": "conv2d", "params": {}}]
+        layers = [{"type": "conv2d", "params": _extract_params_near(text, 0)}]
     return layers
 
 

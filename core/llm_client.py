@@ -1,5 +1,6 @@
 import logging
 import os
+from contextvars import ContextVar
 
 from dotenv import load_dotenv
 
@@ -40,8 +41,20 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 _circuit_open = False
 _circuit_open_until = 0
 _failure_count = 0
+_last_completion_model: ContextVar[str | None] = ContextVar("last_completion_model", default=None)
 FAILURE_THRESHOLD = 5
 CIRCUIT_OPEN_DURATION = 60  # seconds
+# Architecture specs for deep models (U-Net, DenseNet) run to a few thousand
+# tokens of layer list. The provider default truncated them mid-JSON.
+# 4096 was not enough: reasoning models spend much of the budget before
+# emitting output, and U-Net truncated mid-connections at 3219 chars. At
+# 16384 it completes (recall 1.00, was a rule-based fallback).
+MAX_COMPLETION_TOKENS = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "16384"))
+
+
+def get_last_completion_model() -> str | None:
+    """Return the model that served this context's most recent completion."""
+    return _last_completion_model.get()
 
 
 def llm_complete(
@@ -93,10 +106,37 @@ def llm_complete(
                 model=target,
                 messages=messages,
                 temperature=0,
+                # Without an explicit ceiling the provider default applied, and
+                # architecture specs for deep models overran it: unet's response
+                # was cut mid-token at 1084 chars ('"kernel_size": ') leaving
+                # unparseable JSON, which then silently became a rule-based
+                # fallback. Deep nets (U-Net, DenseNet) legitimately need a few
+                # thousand tokens of layer list.
+                max_tokens=MAX_COMPLETION_TOKENS,
                 fallbacks=[FALLBACK_MODEL] if (use_fallback and target != FALLBACK_MODEL) else [],
             )
             text = resp.choices[0].message.content or ""
+            # An empty completion is a failure, not a success. Returning ""
+            # here used to surface downstream as "LLM did not return valid
+            # JSON", which ConfigExtractor's broad except then turned into a
+            # silent rule-based fallback -- a wrong spec reported as a result.
+            # Observed on densenet121 and unet: focused text was fine (~6.8k
+            # chars), the model simply returned nothing. Retry like a rate
+            # limit rather than propagating the empty string.
+            if not text.strip():
+                if not use_fallback:
+                    logger.warning(
+                        "Empty completion from %s (attempt %d/%d) -- retrying in %ds",
+                        target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                    )
+                    time.sleep(rate_limit_backoff_seconds)
+                    continue
+                raise RuntimeError(
+                    f"LLM returned an empty completion for {target} after "
+                    f"{max_rate_limit_retries + 1} attempts"
+                )
             _failure_count = 0  # success resets counter
+            _last_completion_model.set(getattr(resp, "model", target))
             break
         except litellm_exc.RateLimitError as e:
             if not use_fallback:

@@ -18,21 +18,39 @@ to avoid a schema migration while keeping the data durable.
 from __future__ import annotations
 
 import io
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.models import Paper, PaperModule
+from backend.models import Paper, PaperChunk, PaperModule
 from backend.services.architecture_graph_compiler import compile_blueprint
 from backend.services.architecture_reconstruction_service import reconstruct_architecture
 from backend.services.knowledge_extraction_service import build_knowledge_graph
 from core.classification import classify_architecture
+from core.evidence_tracking import build_evidence_map
+from core.llm_client import GROQ_API_KEY, llm_complete
 from core.module_generator import generate_modules
 from core.paper_to_code_generator import PaperToCodeGenerator
+from core.utils import (
+    chunk_pages_with_provenance,
+    extract_caption_chunks,
+    extract_table_chunks,
+)
 
-_GENERATOR = PaperToCodeGenerator()
+def _chunk_retriever(query: str, texts: list[str], top_k: int) -> list[str]:
+    from backend.services.vector_service import hybrid_rank_texts
+
+    return hybrid_rank_texts(query, texts, top_k=top_k)
+
+
+_GENERATOR = PaperToCodeGenerator(chunk_retriever=_chunk_retriever)
+log = logging.getLogger(__name__)
+
+OCR_MIN_CHARS_PER_PAGE = 50
+_OCR_UNAVAILABLE_LOGGED = False
 
 
 def _normalize_title(paper_name: str) -> str:
@@ -51,8 +69,44 @@ def _resolve_unique_title(db: Session, base_title: str) -> str:
     return candidate
 
 
+def _needs_ocr(page_texts: list[str]) -> bool:
+    """Return True when the PDF text layer is too sparse to be usable."""
+    if not page_texts:
+        return True
+    total_chars = sum(len((page_text or "").strip()) for page_text in page_texts)
+    return total_chars / len(page_texts) < OCR_MIN_CHARS_PER_PAGE
+
+
+def _get_ocr_engine():
+    """Reserved adapter hook for a future optional OCR engine."""
+    raise ImportError("No OCR engine is installed or configured")
+
+
+def ocr_pdf_pages(pdf_bytes: bytes, max_pages: int = 30) -> list[tuple[int, str]]:
+    """Rasterize + OCR PDF pages when an optional engine is configured.
+
+    PyMuPDF can provide rasterization because it is already installed. No OCR
+    engine is enabled in this deployment, so this returns [] without raising.
+    """
+    global _OCR_UNAVAILABLE_LOGGED
+    try:
+        _get_ocr_engine()
+    except ImportError:
+        if not _OCR_UNAVAILABLE_LOGGED:
+            log.warning("OCR requested for a sparse PDF, but no OCR engine is enabled")
+            _OCR_UNAVAILABLE_LOGGED = True
+        return []
+    except Exception as exc:
+        log.warning("OCR initialization failed: %s", exc)
+        return []
+
+    log.warning("OCR engine adapter is not configured; skipping OCR")
+    return []
+
+
 def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
     """Extract page-level text from a PDF byte stream."""
+    pdfplumber_pages: list[str] = []
     try:
         import pdfplumber
 
@@ -62,7 +116,8 @@ def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
                 text = page.extract_text() or ""
                 pages.append(text)
 
-        if any(page.strip() for page in pages):
+        pdfplumber_pages = pages
+        if not _needs_ocr(pages):
             return pages, "pdfplumber"
     except Exception:
         pass
@@ -73,8 +128,18 @@ def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
             page_count = min(len(document), 30)
             pages = [document[index].get_text("text") or "" for index in range(page_count)]
+        if not _needs_ocr(pages):
             return pages, "pymupdf"
+
+        ocr_pages = ocr_pdf_pages(pdf_bytes, max_pages=30)
+        if ocr_pages:
+            return [text for _, text in ocr_pages], "ocr"
+        return pages or pdfplumber_pages, "pymupdf"
     except Exception as exc:
+        if _needs_ocr(pdfplumber_pages):
+            ocr_pages = ocr_pdf_pages(pdf_bytes, max_pages=30)
+            if ocr_pages:
+                return [text for _, text in ocr_pages], "ocr"
         raise ValueError(f"Failed to extract text from PDF: {exc}") from exc
 
 
@@ -82,6 +147,11 @@ def extract_raw_text(pdf_bytes: bytes) -> tuple[str, list[str], str]:
     pages, method = extract_pdf_pages(pdf_bytes)
     raw_text = "\n\n".join(page for page in pages if page is not None)
     if not raw_text.strip():
+        if _needs_ocr(pages):
+            raise ValueError(
+                "This PDF appears to be scanned or image-only. OCR is not enabled, "
+                "so please upload a PDF with a selectable text layer."
+            )
         raise ValueError("Could not extract any text from the PDF. It might be scanned or empty.")
     return raw_text, pages, method
 
@@ -238,11 +308,54 @@ def build_ingestion_payload(pdf_bytes: bytes, source_filename: str, title: str) 
     equations = extract_equations(page_texts)
     sections = extract_sections(page_texts)
 
+    page_chunks = [(index, text) for index, text in enumerate(page_texts, start=1) if text]
+    source_chunks = chunk_pages_with_provenance(page_chunks)
+    source_chunks.extend(extract_table_chunks(page_chunks))
+    source_chunks.extend(extract_caption_chunks(page_chunks))
+
+    page_offsets: dict[int, int] = {}
+    global_offset = 0
+    for page_index, page_text in enumerate(page_texts, start=1):
+        page_offsets[page_index] = global_offset
+        global_offset += len(page_text or "") + 2
+    for equation in equations:
+        page = equation.get("page")
+        text = str(equation.get("text") or "").strip()
+        page_text = ""
+        if isinstance(page, int) and page is not None and 1 <= page <= len(page_texts):
+            page_text = page_texts[page - 1] or ""
+        start = page_text.find(text) if text and page_text else -1
+        source_chunks.append(
+            {
+                "section": "other",
+                "page": page if isinstance(page, int) else None,
+                "chunk_type": "equation",
+                "text": text,
+                "source_offset_start": page_offsets.get(page) + start
+                if start >= 0 and page is not None and page in page_offsets
+                else None,
+                "source_offset_end": page_offsets.get(page) + start + len(text)
+                if start >= 0 and page is not None and page in page_offsets
+                else None,
+            }
+        )
+
+    seen_chunks: set[tuple[str, int | None, str]] = set()
+    source_chunks = [
+        chunk
+        for chunk in source_chunks
+        if not (
+            (key := (chunk["chunk_type"], chunk["page"], chunk["text"])) in seen_chunks
+            or seen_chunks.add(key)
+        )
+    ]
+
     return {
         "source_filename": source_filename,
         "title": title,
         "page_count": len(page_texts),
         "text_extraction_method": text_method,
+        "text_source": text_method,
         "sections": sections,
         "section_count": len(sections),
         "figures": figures,
@@ -250,6 +363,7 @@ def build_ingestion_payload(pdf_bytes: bytes, source_filename: str, title: str) 
         "equations": equations,
         "equation_count": len(equations),
         "raw_text_excerpt": raw_text[:4000],
+        "source_chunks": source_chunks,
     }
 
 
@@ -414,8 +528,9 @@ def ingest_pdf_paper(
 
     paper_meta["architecture_graph"]["classification"] = classification
     paper_meta["architecture_graph"]["status"] = "Draft"
+    ingestion_for_json = {key: value for key, value in ingestion.items() if key != "source_chunks"}
     paper_meta["architecture_graph"]["ingestion"] = {
-        **ingestion,
+        **ingestion_for_json,
         "detected_components": sorted({node.type for node in graph.nodes}),
         "module_count": len(learning_modules),
         "knowledge_graph": knowledge_graph,
@@ -446,6 +561,63 @@ def ingest_pdf_paper(
     db.add(paper)
     db.commit()
     db.refresh(paper)
+
+    source_chunks = list(result_dict.get("source_chunks") or ingestion.get("source_chunks") or [])
+    structured_chunks = [
+        chunk for chunk in ingestion.get("source_chunks") or [] if chunk.get("chunk_type") != "text"
+    ]
+    source_chunks.extend(structured_chunks)
+    seen_chunk_keys: set[tuple[str, int | None, str]] = set()
+    source_chunks = [
+        chunk
+        for chunk in source_chunks
+        if not (
+            (key := (
+                str(chunk.get("chunk_type") or "text"),
+                chunk.get("page") if isinstance(chunk.get("page"), int) else None,
+                str(chunk.get("text") or "").strip(),
+            )) in seen_chunk_keys
+            or seen_chunk_keys.add(key)
+        )
+    ]
+    persisted_chunks: list[PaperChunk] = []
+    for chunk in source_chunks:
+        text = str(chunk.get("text") or "").strip()
+        if not text:
+            continue
+        persisted_chunks.append(
+            PaperChunk(
+                paper_id=paper.id,
+                section=str(chunk.get("section") or "other"),
+                page=chunk.get("page") if isinstance(chunk.get("page"), int) else None,
+                chunk_type=str(chunk.get("chunk_type") or "text"),
+                text=text,
+                source_offset_start=chunk.get("source_offset_start")
+                if isinstance(chunk.get("source_offset_start"), int)
+                else None,
+                source_offset_end=chunk.get("source_offset_end")
+                if isinstance(chunk.get("source_offset_end"), int)
+                else None,
+            )
+        )
+    if persisted_chunks:
+        db.add_all(persisted_chunks)
+        db.flush()
+
+        # Only durable row IDs can appear in a citation. Candidate LLM quotes
+        # are checked against the stored source text before becoming "cited".
+        report = dict(paper.verification_report or {})
+        report["evidence"] = build_evidence_map(
+            result_dict.get("spec") or {},
+            [
+                {"id": chunk.id, "text": chunk.text, "page": chunk.page}
+                for chunk in persisted_chunks
+            ],
+            complete=llm_complete if GROQ_API_KEY else None,
+        )
+        paper.verification_report = report
+        paper_meta["architecture_graph"]["ingestion"]["chunk_count"] = len(persisted_chunks)
+        paper.architecture_graph = paper_meta["architecture_graph"]
 
     for module in learning_modules:
         db.add(

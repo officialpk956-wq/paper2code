@@ -13,6 +13,7 @@ Complete pipeline:
 import importlib
 import inspect
 import json
+import logging
 import pprint
 import re
 from copy import deepcopy
@@ -24,10 +25,13 @@ from core.architecture_extractor import extract_architecture
 from core.architecture_graph import ArchitectureGraph
 from core.classification import classify_architecture, infer_family_from_name
 from core.codegen import _generate_skeleton
+from core.evidence_tracking import build_evidence_map
+from core.fidelity import score_fidelity
 from core.llm_client import GROQ_API_KEY, llm_complete
 from core.orchestrator.pipeline import Paper2CodePipeline
 from core.rag.config_extractor import ConfigExtractor
 from core.section_splitter import process_text
+from core.utils import chunk_pages_with_provenance
 
 
 class PaperToCodeGenerator:
@@ -35,9 +39,16 @@ class PaperToCodeGenerator:
     Complete pipeline: Research paper → Runnable PyTorch code + architecture graph.
     """
 
-    def __init__(self):
+    def __init__(self, chunk_retriever=None):
+        """
+        chunk_retriever: optional (query, texts, top_k) -> ranked texts
+        callback, forwarded to ConfigExtractor so it can rank real
+        page/section-aware chunks with dense/hybrid retrieval instead of
+        plain BM25. See backend.services.vector_service.hybrid_rank_texts
+        for the concrete implementation used in production.
+        """
         self.pipeline = Paper2CodePipeline()
-        self.config_extractor = ConfigExtractor()
+        self.config_extractor = ConfigExtractor(chunk_retriever=chunk_retriever)
         self.groq_available = bool(GROQ_API_KEY)
 
     def from_pdf(self, file_obj, paper_name: str = "paper") -> dict[str, Any]:
@@ -67,13 +78,16 @@ class PaperToCodeGenerator:
 
         try:
             with pdfplumber.open(file_obj) as pdf:
-                text_pages = []
-                for page in pdf.pages[:30]:  # Cap at 30 pages
+                text_pages: list[tuple[int, str]] = []
+                for page_number, page in enumerate(pdf.pages[:30], start=1):  # Cap at 30 pages
                     text = page.extract_text()
                     if text:
-                        text_pages.append(text)
+                        text_pages.append((page_number, text))
 
-            raw_text = "\n\n".join(text_pages)
+            # Keep page boundaries in a parallel provenance structure.  The
+            # established extractor still receives its flat text unchanged.
+            source_chunks = chunk_pages_with_provenance(text_pages)
+            raw_text = "\n\n".join(text for _, text in text_pages)
             if not raw_text.strip():
                 raise ValueError(
                     "Could not extract any text from the PDF. It might be corrupted, empty, or image-only."
@@ -83,7 +97,7 @@ class PaperToCodeGenerator:
                 raise
             raise ValueError(f"Failed to parse PDF: {str(e)}")
 
-        return self._run_pipeline(raw_text, paper_name)
+        return self._run_pipeline(raw_text, paper_name, source_chunks=source_chunks)
 
     def from_arxiv(self, url: str) -> dict[str, Any]:
         """
@@ -112,7 +126,12 @@ class PaperToCodeGenerator:
 
         return self.from_pdf(io.BytesIO(response.content), paper_name)
 
-    def _run_pipeline(self, text: str, paper_name: str) -> dict[str, Any]:
+    def _run_pipeline(
+        self,
+        text: str,
+        paper_name: str,
+        source_chunks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """
         Run the full extraction, code generation, validation, and repair pipeline.
 
@@ -127,7 +146,7 @@ class PaperToCodeGenerator:
         config_dict = None
         legacy_spec: dict[str, Any] | None = None
         try:
-            config_dict = self.config_extractor.extract_from_text(text)
+            config_dict = self.config_extractor.extract_from_text(text, source_chunks=source_chunks)
         except Exception as e:
             print(f"ConfigExtractor encountered an error: {e}")
 
@@ -211,6 +230,24 @@ class PaperToCodeGenerator:
         verification_report["total_attempts"] = len(attempts)
         verification_report["final_attempt"] = len(attempts)
 
+        # Citation collection is intentionally a post-extraction sidecar.  It
+        # cannot change the hard-won ConfigExtractor prompt/flow, and an LLM or
+        # matching failure simply leaves each field honestly inferred/default.
+        verification_report["evidence"] = build_evidence_map(
+            spec,
+            source_chunks or [],
+            # PaperChunk IDs are assigned by the ingestion service after this
+            # pure generator returns.  It performs the optional quote pass
+            # against those durable rows; here we intentionally emit the
+            # honest inferred/default baseline only.
+            complete=None,
+        )
+        try:
+            verification_report["fidelity"] = score_fidelity(spec, code, graph)
+        except Exception:
+            logging.getLogger(__name__).warning("Could not score architecture fidelity", exc_info=True)
+            verification_report["fidelity"] = None
+
         return {
             "paper_name": paper_name,
             "spec": spec,
@@ -223,6 +260,7 @@ class PaperToCodeGenerator:
             "generation_status": (
                 "success" if verification_report.get("passed") else "needs_review"
             ),
+            "source_chunks": source_chunks or [],
         }
 
     @staticmethod

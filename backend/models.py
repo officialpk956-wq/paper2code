@@ -137,6 +137,12 @@ class Paper(Base):
         cascade="all, delete-orphan",
         order_by="PaperModule.order_index",
     )
+    chunks: list["PaperChunk"] = relationship(
+        "PaperChunk",
+        back_populates="paper",
+        cascade="all, delete-orphan",
+        order_by="PaperChunk.id",
+    )
 
     def __repr__(self) -> str:
         return f"<Paper id={self.id} title={self.title!r}>"
@@ -166,6 +172,37 @@ class PaperModule(Base):
 
     def __repr__(self) -> str:
         return f"<PaperModule id={self.id} paper_id={self.paper_id} layer_name={self.layer_name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# PaperChunk — durable, page-level source evidence for paper-to-code
+# ---------------------------------------------------------------------------
+
+
+class PaperChunk(Base):
+    __tablename__ = "paper_chunks"
+    __table_args__ = (
+        Index("ix_paper_chunks_paper_section", "paper_id", "section"),
+        Index("ix_paper_chunks_paper_page", "paper_id", "page"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    paper_id = Column(
+        Integer, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    section = Column(String(32), nullable=False, default="other", server_default="other")
+    page = Column(Integer, nullable=True)
+    chunk_type = Column(String(16), nullable=False, default="text", server_default="text")
+    text = Column(Text, nullable=False)
+    source_offset_start = Column(Integer, nullable=True)
+    source_offset_end = Column(Integer, nullable=True)
+    embedding_id = Column(String(128), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    paper: "Paper" = relationship("Paper", back_populates="chunks")
+
+    def __repr__(self) -> str:
+        return f"<PaperChunk id={self.id} paper_id={self.paper_id} page={self.page}>"
 
 
 # ---------------------------------------------------------------------------
