@@ -7,6 +7,20 @@ from benchmarks import harness
 from benchmarks import diagnose
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cache_dir(tmp_path, monkeypatch):
+    """Keep synthetic fixtures out of the real benchmarks/.cache.
+
+    Several tests run the benchmark without patching CACHE_DIR themselves and
+    were writing synthetic.*.json into the live cache, where a later --check or
+    offline run would happily read them as real extractions. Redirecting here
+    covers every test in the module, including ones added later; tests that
+    patch CACHE_DIR explicitly still override this.
+    """
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path / "_cache")
+    harness.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def _label(tmp_path: Path, expected=None) -> Path:
     path = tmp_path / "synthetic.json"
     path.write_text(
@@ -128,6 +142,11 @@ def test_offline_mode_uses_cache_and_never_calls_llm(tmp_path, monkeypatch):
     assert result["per_paper"][0]["cached"] is True
 
 
+# Records the kwargs the harness passes to pdfplumber's extract_text, so the
+# x_tolerance=1 fix cannot be dropped without a test noticing.
+seen_pdf_kwargs: dict = {}
+
+
 def test_live_adapter_follows_arxiv_pdf_redirects(monkeypatch):
     class Response:
         content = b"pdf bytes"
@@ -136,10 +155,11 @@ def test_live_adapter_follows_arxiv_pdf_redirects(monkeypatch):
             return None
 
     seen = {}
+    seen_pdf_kwargs.clear()
     monkeypatch.setattr(harness.httpx, "get", lambda url, **kwargs: seen.update(url=url, **kwargs) or Response())
 
     class Pdf:
-        pages = [type("Page", (), {"extract_text": lambda self: "A residual architecture."})()]
+        pages = [type("Page", (), {"extract_text": lambda self, **kw: seen_pdf_kwargs.update(kw) or "A residual architecture."})()]
 
         def __enter__(self):
             return self
@@ -167,6 +187,7 @@ def test_live_adapter_follows_arxiv_pdf_redirects(monkeypatch):
     result = harness._live_extractor({"source": "arxiv:1512.03385", "paper_id": "resnet50"})
     assert result["family"] == "resnet"
     assert seen["follow_redirects"] is True
+    assert seen_pdf_kwargs["x_tolerance"] == 1
 
 
 def test_production_live_adapter_invokes_the_chunk_retriever(monkeypatch):
@@ -195,7 +216,7 @@ def test_production_live_adapter_invokes_the_chunk_retriever(monkeypatch):
             return None
 
     class Pdf:
-        pages = [type("Page", (), {"extract_text": lambda self: "architecture " * 20})()]
+        pages = [type("Page", (), {"extract_text": lambda self, **kw: seen_pdf_kwargs.update(kw) or "architecture " * 20})()]
 
         def __enter__(self):
             return self
@@ -245,7 +266,7 @@ def test_legacy_live_adapter_does_not_invoke_the_chunk_retriever(monkeypatch):
             return None
 
     class Pdf:
-        pages = [type("Page", (), {"extract_text": lambda self: "architecture " * 20})()]
+        pages = [type("Page", (), {"extract_text": lambda self, **kw: seen_pdf_kwargs.update(kw) or "architecture " * 20})()]
 
         def __enter__(self):
             return self
@@ -268,8 +289,13 @@ def test_cache_entries_are_distinct_per_retrieval_mode(tmp_path, monkeypatch):
     label = _label(tmp_path)
     monkeypatch.setattr(harness, "CACHE_DIR", tmp_path / ".cache")
 
+    # A live run now STAGES rather than publishing: the cache is only written
+    # once the run is accepted, so a --strict rejection cannot overwrite good
+    # extractions with degraded ones. Mode-distinctness still holds either way.
     harness.run_benchmark([label], extractor=_correct_extraction, retrieval="legacy")
+    harness.promote_staged_cache("legacy")
     harness.run_benchmark([label], extractor=_correct_extraction, retrieval="production")
+    harness.promote_staged_cache("production")
 
     assert (harness.CACHE_DIR / "synthetic.legacy.json").exists()
     assert (harness.CACHE_DIR / "synthetic.production.json").exists()
@@ -283,7 +309,7 @@ def test_live_adapter_writes_a_companion_diagnostic_without_changing_cache(tmp_p
             return None
 
     class Pdf:
-        pages = [type("Page", (), {"extract_text": lambda self: "A residual architecture."})()]
+        pages = [type("Page", (), {"extract_text": lambda self, **kw: seen_pdf_kwargs.update(kw) or "A residual architecture."})()]
 
         def __enter__(self):
             return self
@@ -458,3 +484,160 @@ def test_load_baseline_rejects_a_malformed_file(tmp_path):
     bad.write_text("{not json", encoding="utf-8")
     with pytest.raises(ValueError, match="Invalid baseline"):
         load_baseline(bad)
+
+
+# ── Cache integrity: a rejected run must not poison the scoring cache ─────────
+# Observed 2026-09-07: --strict refused to write the results file for a run
+# containing rule-based fallbacks, but the cache had already been written
+# inline, so bert_base/dcgan/ddpm were silently replaced with degraded specs
+# and every later offline --check scored those instead.
+
+def test_live_extraction_stages_and_does_not_touch_the_cache(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    good = {"spec": {"name": "good", "layers": []}, "family": "resnet"}
+    harness._cache_path("p1", "production").write_text(
+        json.dumps(good), encoding="utf-8"
+    )
+
+    label = {"paper_id": "p1", "source": "arxiv:1", "expected": {}}
+    harness._load_or_extract(
+        label, lambda _l: {"spec": {"name": "fresh", "layers": []}, "family": "vit"}, "production"
+    )
+
+    # cache untouched, staged file created
+    assert json.loads(harness._cache_path("p1", "production").read_text())["spec"]["name"] == "good"
+    assert harness._staged_path("p1", "production").exists()
+
+
+def test_promote_publishes_staged_and_clears_it(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    harness._staged_path("p1", "production").write_text(
+        json.dumps({"spec": {"name": "fresh", "layers": []}}), encoding="utf-8"
+    )
+
+    assert harness.promote_staged_cache("production") == ["p1"]
+    assert json.loads(harness._cache_path("p1", "production").read_text())["spec"]["name"] == "fresh"
+    assert not harness._staged_path("p1", "production").exists()
+
+
+def test_discard_leaves_the_previous_cache_intact(tmp_path, monkeypatch):
+    """The whole point: a --strict rejection must not cost us good data."""
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    harness._cache_path("p1", "production").write_text(
+        json.dumps({"spec": {"name": "good", "layers": []}}), encoding="utf-8"
+    )
+    harness._staged_path("p1", "production").write_text(
+        json.dumps({"spec": {"name": "degraded", "layers": []}}), encoding="utf-8"
+    )
+
+    assert harness.discard_staged_cache("production") == ["p1"]
+    assert json.loads(harness._cache_path("p1", "production").read_text())["spec"]["name"] == "good"
+    assert not harness._staged_path("p1", "production").exists()
+
+
+def test_staging_is_keyed_per_retrieval_mode(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    harness._staged_path("p1", "production").write_text("{}", encoding="utf-8")
+    harness._staged_path("p1", "legacy").write_text("{}", encoding="utf-8")
+
+    assert harness.promote_staged_cache("production") == ["p1"]
+    assert harness._staged_path("p1", "legacy").exists(), "legacy staging was clobbered"
+
+
+# ── Provider purity ──────────────────────────────────────────────────────────
+# Enforced 2026-09-07: the cache had accumulated 8 of 10 papers extracted by
+# the Gemini fallback while baseline.json was Groq-only, so every offline
+# --check compared one model's output against another's. Flagging did not stop
+# it; rejection does.
+
+def _run(rule_based=0, provider=0, n=3):
+    per = []
+    for i in range(n):
+        per.append({
+            "paper_id": f"p{i}",
+            "extraction_method": "rule_based_fallback" if i < rule_based else "llm_verified",
+            "provider_fallback": i < provider,
+            "layer_type_recall": 0.7, "layer_type_precision": 0.7,
+            "hyperparam_accuracy": 0.5, "family_correct": True, "fidelity_score": None,
+        })
+    return {"retrieval": "production", "per_paper": per, "aggregate": {
+        "layer_type_recall": 0.7, "layer_type_precision": 0.7,
+        "hyperparam_accuracy": 0.5, "family_correct": 1.0, "fidelity_score": None,
+        "rule_based_fallback_count": rule_based, "provider_fallback_count": provider,
+        "hard_failures": 0, "papers": n}}
+
+
+def test_strict_rejects_cross_provider_fallbacks():
+    from benchmarks.harness import strict_rejections
+    reasons = strict_rejections(_run(provider=2))
+    assert "cross-provider fallbacks" in reasons
+    assert reasons["cross-provider fallbacks"] == ["p0", "p1"]
+
+
+def test_strict_reports_both_reasons_independently():
+    from benchmarks.harness import strict_rejections
+    reasons = strict_rejections(_run(rule_based=1, provider=2))
+    assert set(reasons) == {"rule-based fallbacks", "cross-provider fallbacks"}
+
+
+def test_strict_accepts_a_pure_run():
+    from benchmarks.harness import strict_rejections
+    assert strict_rejections(_run()) == {}
+
+
+def test_baseline_refuses_provider_mixed_runs():
+    from benchmarks.harness import build_baseline
+    with pytest.raises(ValueError, match="cross-provider"):
+        build_baseline(_run(provider=1), "x.json")
+
+
+def test_baseline_records_the_primary_model():
+    from benchmarks.harness import build_baseline
+    baseline = build_baseline(_run(), "x.json")
+    assert baseline["primary_model"], "baseline must record which model produced it"
+
+
+def _baseline_run(model="openai/gpt-oss-120b"):
+    """Minimal (results, baseline) pair that passes every non-model guard."""
+    metrics = {name: 0.5 for name in harness._CHECKED_METRICS}
+    results = {"retrieval": "production", "aggregate": {"papers": 10, **metrics}}
+    baseline = {
+        "schema_version": harness.LABEL_SCHEMA_VERSION,
+        "retrieval": "production",
+        "primary_model": model,
+        "papers": 10,
+        "metrics": metrics,
+    }
+    return results, baseline
+
+
+def test_check_rejects_a_baseline_built_on_a_different_model(monkeypatch):
+    monkeypatch.setattr(harness, "_bare_primary_model", lambda: "openai/gpt-oss-120b")
+    results, baseline = _baseline_run(model="anthropic/claude-3")
+    ok, problems = harness.check_against_baseline(results, baseline)
+    assert not ok
+    assert any("primary model mismatch" in p for p in problems)
+
+
+def test_check_rejects_a_baseline_with_no_recorded_model(monkeypatch):
+    monkeypatch.setattr(harness, "_bare_primary_model", lambda: "openai/gpt-oss-120b")
+    results, baseline = _baseline_run()
+    del baseline["primary_model"]
+    ok, problems = harness.check_against_baseline(results, baseline)
+    assert not ok
+    assert any("--write-baseline" in p for p in problems)
+
+
+def test_check_passes_when_the_model_matches(monkeypatch):
+    monkeypatch.setattr(harness, "_bare_primary_model", lambda: "openai/gpt-oss-120b")
+    results, baseline = _baseline_run()
+    ok, problems = harness.check_against_baseline(results, baseline)
+    assert ok, problems

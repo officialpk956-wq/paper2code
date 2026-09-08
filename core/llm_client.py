@@ -52,6 +52,20 @@ CIRCUIT_OPEN_DURATION = 60  # seconds
 MAX_COMPLETION_TOKENS = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "16384"))
 
 
+def _fallback_list(use_fallback: bool, target: str) -> list[str]:
+    """Cross-provider fallback targets for one attempt.
+
+    Empty when LLM_FALLBACK_MODEL is unset: a rate limit then raises instead
+    of silently switching providers. Benchmark runs want that -- a run whose
+    papers were served by different models is not one measurement, and
+    passing [""] here would have handed litellm a bogus model id rather than
+    disabling fallback.
+    """
+    if not use_fallback or not FALLBACK_MODEL or target == FALLBACK_MODEL:
+        return []
+    return [FALLBACK_MODEL]
+
+
 def get_last_completion_model() -> str | None:
     """Return the model that served this context's most recent completion."""
     return _last_completion_model.get()
@@ -113,7 +127,7 @@ def llm_complete(
                 # fallback. Deep nets (U-Net, DenseNet) legitimately need a few
                 # thousand tokens of layer list.
                 max_tokens=MAX_COMPLETION_TOKENS,
-                fallbacks=[FALLBACK_MODEL] if (use_fallback and target != FALLBACK_MODEL) else [],
+                fallbacks=_fallback_list(use_fallback, target),
             )
             text = resp.choices[0].message.content or ""
             # An empty completion is a failure, not a success. Returning ""
@@ -209,7 +223,7 @@ async def llm_complete_async(
                 model=target,
                 messages=messages,
                 temperature=0,
-                fallbacks=[FALLBACK_MODEL] if (use_fallback and target != FALLBACK_MODEL) else [],
+                fallbacks=_fallback_list(use_fallback, target),
             )
             text = resp.choices[0].message.content or ""
             _failure_count = 0

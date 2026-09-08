@@ -113,7 +113,14 @@ def extract_pdf_pages(pdf_bytes: bytes) -> tuple[list[str], str]:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             pages = []
             for page in pdf.pages[:30]:
-                text = page.extract_text() or ""
+                # x_tolerance=1: pdfplumber's default (3) merges adjacent words on these
+                # PDFs -- measured across all 10 benchmark papers, spaces ran 3.3-11.1%
+                # of characters against ~16% for normal prose, and transformer_base came
+                # out at an average letter-run length of 12.4 chars ('Weuseself-
+                # attentionat'). That breaks regex word boundaries, BM25 tokenisation
+                # and embeddings alike. At x_tolerance=1 the same papers land at
+                # 13.4-15.3% spaces and 4.7-5.4 char runs, which is normal English.
+                text = page.extract_text(x_tolerance=1) or ""
                 pages.append(text)
 
         pdfplumber_pages = pages

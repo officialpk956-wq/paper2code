@@ -1739,3 +1739,84 @@ recall 0.75->1.00.
   slots; the reservation filter guards only reserved slots.
 - **ViT's recovery unverified** (Gemini-served in the best run).
 - One clean ten-paper run on a fresh daily budget, then refresh the baseline.
+
+## 2026-09-08 — The bug underneath Phases 5 and 6: PDF text extraction
+
+`pdfplumber`'s `extract_text()` defaults to `x_tolerance=3`, which merges
+adjacent words. Every one of the ten benchmark papers was affected, and no
+component reported anything wrong — the text arrived, it was simply wrong.
+`transformer_base` was the extreme: 3.3% of characters were spaces, and
+letter runs averaged 12.4 chars (`Weuseself-attentionat`).
+
+Ordinary English prose runs ~16% spaces. Corpus before: 3.3-11.1%. After
+`x_tolerance=1`: 13.4-15.3%, letter runs 4.7-5.4. All 10 papers healthy.
+Method: `[A-Za-z]+` runs over the first 30 pages.
+
+### Why one bug looked like five
+
+Run-together text breaks regex word boundaries, BM25 tokenisation, and
+embedding quality **at the same time**. So the layer-pattern matcher, the
+lexical half of hybrid retrieval, and the dense half all degraded together
+for one shared reason — while each looked like an independent tuning
+problem. Phases 5 and 6 spent their effort downstream of this.
+
+ddpm, the only paper under the Phase 6 floor, in its focused text:
+
+| expected type | before | after |
+|---|---|---|
+| `multiheadattention` | absent | `self-attention` |
+| `groupnorm` | `groupnorm` | `group normalization`, `group norm` |
+| `positionalembedding` | `sinusoidal` only | `position embedding`, `sinusoidal` |
+
+`groupnorm` "matched" before only because the words had been fused into a
+token that resembled the canonical name. That is an accidental hit, and it
+is worse than a miss: it makes a broken pipeline look partly working.
+
+### What is and is not established
+
+Spearman rho between pre-fix space% and Phase 6 recall is **0.75 on n = 6**;
+the critical value at n = 6 is ~0.83, so it does **not** clear significance,
+and `transformer_base` is an outlier. Suggestive, not proven. The fix is
+verified at the *retrieval* level and by 1946 passing tests; no test asserts
+on extraction quality, so the score-level effect is still unmeasured.
+
+### Method errors made and caught
+
+- **A re-check that could not fail.** The first verification called
+  `page.extract_text()` directly instead of the patched code path, so it
+  measured the old behaviour and printed byte-identical before/after output.
+  Caught only because identical output was implausible. Same class of error
+  this project keeps finding in completion reports: a check that doesn't
+  exercise what it claims to.
+- **A figure that could not be reproduced.** An earlier note cited 14.4-char
+  words for `transformer_base`; neither letter-run (12.4) nor whitespace
+  (16.5) tokenisation yields it. Corrected in all three code comments.
+- **Four test failures that were not regressions.** The harness's PDF
+  doubles declared `extract_text(self)` with no kwargs, so `x_tolerance=1`
+  raised `TypeError`. The other two sites passed only because `MagicMock`
+  swallows kwargs — meaning they would *not* catch a silent removal. The
+  harness fakes now record kwargs and one test asserts `x_tolerance == 1`;
+  that assertion was confirmed to fail when the fix is reverted.
+
+### Also landed
+
+- **`check_against_baseline` now compares `primary_model`.** It was written
+  by `build_baseline` and never read, so a run from one model would validate
+  against a baseline built on another. A baseline missing the field reports
+  a problem rather than passing, since it cannot be verified at all.
+  Consequence: the current baseline now fails `--check`. `phase5-clean.json`
+  predates provider tracking and records no model, so the field cannot be
+  honestly backfilled — a fresh baseline is required.
+- **Benchmark cache isolation.** Eight tests ran the benchmark without
+  patching `CACHE_DIR` and were writing `synthetic.*.json` into the live
+  `benchmarks/.cache`, where an offline run or `--check` would read them as
+  real extractions. Fixed with one autouse fixture covering the module
+  rather than eight individual patches, so later tests cannot re-leak.
+
+### Open
+
+- Score-level effect of the PDF fix — needs the clean ten-paper run.
+- Precision 0.654 vs 0.727: the PDF fix may resolve it (degraded text could
+  inflate spurious matches). Measure before changing anything else.
+- `paper_to_code_generator` and `paper_ingestion_service` have no assertion
+  that `x_tolerance=1` is passed; only the harness does.

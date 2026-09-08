@@ -18,11 +18,13 @@
 
 ---
 
-## §0 Status — 2026-09-07
+## §0 Status — 2026-09-08
 
 **Delivered:** original Phases 1–4 complete; Phases 5 and 6 (as re-scoped in
-§8) executed, each meeting most but not all of its gate.
-**Gate:** **1931** backend tests passing (2 skipped, 0 failed) + 38 frontend.
+§8) executed, each meeting most but not all of its gate. A post-Phase-6
+finding — **silently degraded PDF text extraction across all ten papers** —
+is fixed but not yet scored (§8 → Post-Phase 6).
+**Gate:** **1946** backend tests passing (10 skipped, 0 failed) + 38 frontend.
 **Uncommitted:** everything from Phase 3 onward is in the working tree.
 **Current quality** (best clean-ish measurement, see §8 → Phase 6 — RESULT):
 recall 0.702 | precision 0.654 | hyperparam 0.533 | family 0.900.
@@ -577,6 +579,70 @@ including plurals (it previously matched only `deconvolution`, and only in
 the singular); and provider provenance is recorded per paper, with the
 litellm routing-prefix false positive fixed.
 
+### Post-Phase 6: PDF text extraction was silently degraded (2026-09-08)
+
+This sits **upstream of every fix in Phases 5 and 6**. `pdfplumber`'s
+`extract_text()` defaults to `x_tolerance=3`, which merges adjacent words.
+All ten benchmark papers were affected, and nothing anywhere in the pipeline
+reported a problem — the text arrived, it was simply wrong.
+
+| paper | space% before -> after | avg letter-run before -> after |
+|---|---|---|
+| transformer_base | 3.3% -> **13.4%** | 12.4 -> 5.1 |
+| efficientnet_b0 | 5.6% -> 14.3% | 8.3 -> 4.7 |
+| dcgan | 5.9% -> 13.6% | 10.2 -> 5.4 |
+| ddpm | 5.9% -> 15.1% | 10.1 -> 4.9 |
+| vit_base | 6.6% -> 14.0% | 8.7 -> 5.0 |
+| densenet121 | 7.9% -> 14.5% | 7.8 -> 5.0 |
+| mobilenet_v1 | 8.0% -> 15.0% | 7.9 -> 5.1 |
+| resnet50 | 8.3% -> 15.3% | 7.6 -> 4.8 |
+| bert_base | 10.1% -> 14.2% | 6.4 -> 4.8 |
+| unet | 11.1% -> 14.1% | 6.0 -> 4.9 |
+
+Ordinary English prose runs ~16% spaces. Before the fix the corpus ran
+3.3-11.1%; after, 13.4-15.3%, with letter runs falling from 6.0-12.4 chars
+to 4.7-5.4. Method: `[A-Za-z]+` runs over the first 30 pages. (An earlier
+note in this project cited 14.4 chars for `transformer_base`; that figure is
+not reproducible by either letter-run or whitespace tokenisation and has been
+corrected in the code comments to 12.4.)
+
+**Why it degraded everything at once.** Run-together text breaks regex word
+boundaries, BM25 tokenisation, and embedding quality simultaneously — so the
+layer-pattern matcher, the lexical half of hybrid retrieval, and the dense
+half all failed together, for one shared reason, while each looked like an
+independent tuning problem.
+
+**Evidence at the retrieval level** (ddpm, the only paper below the Phase 6
+floor). Its focused text before and after:
+
+| expected type | before | after |
+|---|---|---|
+| `multiheadattention` | **absent** | `self-attention` |
+| `groupnorm` | `groupnorm` | `group normalization`, `group norm` |
+| `positionalembedding` | `sinusoidal` only | `position embedding`, `sinusoidal` |
+
+The second row is the instructive one: `groupnorm` "matched" before only
+because the words had been *fused* into a token resembling the canonical
+name. An accidental hit, not working extraction.
+
+**Correlation with scores is suggestive, not established.** Spearman rho
+between pre-fix space% and Phase 6 recall is **0.75 on n = 6**, against a
+critical value of ~0.83 — it does not clear significance, and
+`transformer_base` is a visible outlier (worst spacing, middling recall).
+The two worst-spaced papers were the two lowest scorers (dcgan 0.25,
+ddpm 0.33) and the best-spaced scored 1.00 (unet), which is consistent with
+the theory without confirming it.
+
+**Fixed at all three extraction sites**, including the production ingestion
+path, so this improves real uploads and not only the benchmark:
+`benchmarks/harness.py`, `core/paper_to_code_generator.py`,
+`backend/services/paper_ingestion_service.py`.
+
+**Status: unproven at the score level.** This demonstrates better text
+reaching the model and no test regressions. It does *not* show recall or
+hyperparam accuracy moving — no test asserts on extraction quality. The
+clean live run remains the deciding measurement.
+
 ### Measurement constraint: daily token quota, not rate limiting
 
 Seven consecutive full-run attempts were blocked or contaminated. Slowing
@@ -593,14 +659,23 @@ five-step chain above was actually solved.
 ### Carried into Phase 7
 
 - **ddpm regressed 0.67 -> 0.33** and is the only paper below the floor.
-  Unlike dcgan it previously worked, so something in this phase broke it.
-  Diagnosable with `benchmarks/diagnose.py` at no quota cost.
+  Partly explained by the PDF finding above: two of its three expected layer
+  types had no readable evidence in the focused text at all. Re-measure
+  before pursuing other hypotheses.
 - **Precision is below its 0.727 baseline (0.654) and the cause is still
   unattributed.** It first dropped with Prompts 1+2 and never fully
-  recovered. Adding numeric query tokens may pull results tables into
-  *prose* slots — the reservation filter guards only the reserved slots.
+  recovered. Two live candidates: numeric query tokens pulling results
+  tables into *prose* slots (the reservation filter guards only the reserved
+  slots), and degraded text inflating spurious layer matches. The PDF fix
+  may resolve it without further work — measure before changing anything.
 - **ViT's recovery is unverified** — it was Gemini-served in the best run.
 - One clean ten-paper run, then refresh `benchmarks/baseline.json`.
+  **`--check` now fails until that rebuild happens**, by design:
+  `check_against_baseline` compares `primary_model`, and the current
+  baseline predates the field. Its source run (`phase5-clean.json`) recorded
+  no provider information, so the field cannot be honestly backfilled — the
+  baseline is genuinely unverifiable for provider purity, and now says so
+  instead of passing blind.
 
 ### Phase 7 — Corpus scale-out (10 -> 25 -> 200)
 

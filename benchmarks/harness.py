@@ -101,6 +101,70 @@ def _cache_path(paper_id: str, retrieval: str) -> Path:
     return CACHE_DIR / f"{paper_id}.{retrieval}.json"
 
 
+def _bare_primary_model() -> str:
+    """Model id the baseline was built against, for cross-provider detection."""
+    from core.llm_client import PRIMARY_MODEL
+    from core.rag.config_extractor import _bare_model_id
+
+    return _bare_model_id(PRIMARY_MODEL)
+
+
+def strict_rejections(results: dict) -> dict[str, list[str]]:
+    """Reasons a live run is not a valid measurement, keyed by reason.
+
+    Two disqualifiers, both of which silently corrupt comparability:
+
+    - **rule-based fallbacks**: the spec came from the keyword extractor, not
+      the LLM, so the run blends two different systems.
+    - **provider fallbacks**: the paper was served by the cross-provider
+      fallback model rather than the primary. Enforced from 2026-09-07 after
+      the cache was found to hold 8 of 10 papers extracted by Gemini while
+      `baseline.json` was Groq-only -- every offline --check had been
+      comparing one model's output against another's. Flagging alone did not
+      stop the cache accumulating mixed entries; only rejection does.
+    """
+    reasons: dict[str, list[str]] = {}
+    rule_based = [
+        item["paper_id"] for item in results["per_paper"]
+        if item.get("extraction_method") == "rule_based_fallback"
+    ]
+    if rule_based:
+        reasons["rule-based fallbacks"] = rule_based
+    provider = [
+        item["paper_id"] for item in results["per_paper"] if item.get("provider_fallback")
+    ]
+    if provider:
+        reasons["cross-provider fallbacks"] = provider
+    return reasons
+
+
+def _staged_path(paper_id: str, retrieval: str) -> Path:
+    """Where a live extraction lands before the run is accepted."""
+    return CACHE_DIR / f"{paper_id}.{retrieval}.staged.json"
+
+
+def promote_staged_cache(retrieval: str) -> list[str]:
+    """Publish staged extractions into the scoring cache. Returns paper ids."""
+    promoted: list[str] = []
+    for staged in sorted(CACHE_DIR.glob(f"*.{retrieval}.staged.json")):
+        paper_id = staged.name[: -len(f".{retrieval}.staged.json")]
+        _cache_path(paper_id, retrieval).write_text(
+            staged.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        staged.unlink()
+        promoted.append(paper_id)
+    return promoted
+
+
+def discard_staged_cache(retrieval: str) -> list[str]:
+    """Drop staged extractions from a rejected run, leaving the cache untouched."""
+    discarded: list[str] = []
+    for staged in sorted(CACHE_DIR.glob(f"*.{retrieval}.staged.json")):
+        discarded.append(staged.name[: -len(f".{retrieval}.staged.json")])
+        staged.unlink()
+    return discarded
+
+
 def diagnostic_path(paper_id: str, retrieval: str) -> Path:
     """Companion diagnostic artifact; never part of the scoring cache."""
     return CACHE_DIR / f"{paper_id}.{retrieval}.diag.json"
@@ -198,7 +262,17 @@ def _load_or_extract(
 
     result = _normalise_extraction(extractor(label))
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    # Stage, do not publish. --strict refuses to write the *results* file for a
+    # run containing rule-based fallbacks, but the cache used to be written
+    # inline and so was overwritten anyway: a rejected run silently replaced
+    # good cached extractions with degraded ones, and every later offline
+    # --check then scored those. Observed 2026-09-07 -- bert_base, dcgan and
+    # ddpm were rejected by --strict yet their cache entries had already been
+    # replaced by rule_based_fallback specs. Staged entries are promoted only
+    # once the run is accepted; a rejected run leaves the prior cache intact.
+    _staged_path(label["paper_id"], retrieval).write_text(
+        json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return result, False
 
 
@@ -404,9 +478,17 @@ def build_baseline(results: dict, source_results: str) -> dict:
             f"{aggregate['rule_based_fallback_count']} rule-based fallback(s): "
             "the aggregate blends LLM output with rate-limit-degraded output"
         )
+    if aggregate.get("provider_fallback_count"):
+        raise ValueError(
+            "refusing to build a baseline from a run containing "
+            f"{aggregate['provider_fallback_count']} cross-provider fallback(s): "
+            "papers served by the fallback model are not comparable to "
+            "primary-model output"
+        )
     return {
         "schema_version": LABEL_SCHEMA_VERSION,
         "retrieval": results["retrieval"],
+        "primary_model": _bare_primary_model(),
         "papers": aggregate["papers"],
         "source_results": source_results,
         "created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -445,6 +527,23 @@ def check_against_baseline(
         problems.append(
             f"retrieval mode mismatch: baseline={baseline.get('retrieval')!r} "
             f"run={results.get('retrieval')!r}"
+        )
+    # build_baseline records primary_model; without comparing it here a run from
+    # one model silently validates against a baseline built on another, which is
+    # the same class of unverifiable comparison the schema/retrieval guards exist
+    # to prevent. A baseline predating the field cannot be checked at all, so it
+    # reports as a problem rather than passing by default.
+    baseline_model = baseline.get("primary_model")
+    current_model = _bare_primary_model()
+    if baseline_model is None:
+        problems.append(
+            "baseline records no primary_model, so provider purity cannot be "
+            f"verified against the current model ({current_model!r}); "
+            "rebuild it with --write-baseline"
+        )
+    elif baseline_model != current_model:
+        problems.append(
+            f"primary model mismatch: baseline={baseline_model!r} current={current_model!r}"
         )
 
     aggregate = results["aggregate"]
@@ -488,7 +587,14 @@ def _live_extractor(label: dict[str, Any], retrieval: str = "production") -> dic
         page_texts = [
             (page_number, text)
             for page_number, page in enumerate(pdf.pages[:30], start=1)
-            if (text := page.extract_text())
+            # x_tolerance=1: pdfplumber's default (3) merges adjacent words on these
+            # PDFs -- measured across all 10 benchmark papers, spaces ran 3.3-11.1%
+            # of characters against ~16% for normal prose, and transformer_base came
+            # out at an average letter-run length of 12.4 chars ('Weuseself-
+            # attentionat'). That breaks regex word boundaries, BM25 tokenisation
+            # and embeddings alike. At x_tolerance=1 the same papers land at
+            # 13.4-15.3% spaces and 4.7-5.4 char runs, which is normal English.
+            if (text := page.extract_text(x_tolerance=1))
         ]
     text = "\n\n".join(page_text for _, page_text in page_texts)
     if not text.strip():
@@ -585,10 +691,17 @@ def main(argv: list[str] | None = None) -> int:
     results = run_benchmark(paths, extractor=extractor, retrieval=args.retrieval, pace_seconds=args.pace_seconds if args.live else 0.0)
     print_table(results)
     strict = args.live if args.strict is None else args.strict
-    fallback_papers = [item["paper_id"] for item in results["per_paper"] if item.get("extraction_method") == "rule_based_fallback"]
-    if strict and fallback_papers:
-        print(f"strict live benchmark rejected rule-based fallbacks: {', '.join(fallback_papers)}")
+    rejections = strict_rejections(results)
+    if strict and rejections:
+        for reason, papers in rejections.items():
+            print(f"strict live benchmark rejected {reason}: {', '.join(papers)}")
+        discarded = discard_staged_cache(args.retrieval)
+        if discarded:
+            print(f"discarded staged cache for {len(discarded)} paper(s); prior cache left intact")
         return 1
+    promoted = promote_staged_cache(args.retrieval)
+    if promoted:
+        print(f"promoted staged cache for {len(promoted)} paper(s)")
     results_path = write_results(results, timestamp)
     print(f"wrote {results_path}")
     if args.write_baseline:

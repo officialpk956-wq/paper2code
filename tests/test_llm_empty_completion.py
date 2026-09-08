@@ -22,3 +22,18 @@ def test_normal_completion_unaffected():
     lc._circuit_open = False; lc._failure_count = 0
     with patch("litellm.completion", return_value=_resp("hello")):
         assert lc.llm_complete("hi") == "hello"
+
+
+# ── Fallback disable ─────────────────────────────────────────────────────────
+
+def test_fallback_list_is_empty_when_no_fallback_model_configured(monkeypatch):
+    """Unset LLM_FALLBACK_MODEL must disable fallback, not pass [''] to litellm."""
+    monkeypatch.setattr(lc, "FALLBACK_MODEL", "")
+    assert lc._fallback_list(True, "groq/model") == []
+
+
+def test_fallback_list_used_on_final_attempt_when_configured(monkeypatch):
+    monkeypatch.setattr(lc, "FALLBACK_MODEL", "gemini/flash")
+    assert lc._fallback_list(True, "groq/model") == ["gemini/flash"]
+    assert lc._fallback_list(False, "groq/model") == []
+    assert lc._fallback_list(True, "gemini/flash") == []
