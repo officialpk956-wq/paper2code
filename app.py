@@ -32,7 +32,7 @@ def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         pages_text = []
         for page in pdf.pages[:30]:  # Cap at 30 pages
-            text = page.extract_text()
+            text = page.extract_text(x_tolerance=1)
             if text:
                 pages_text.append(text)
     return "\n\n".join(pages_text)

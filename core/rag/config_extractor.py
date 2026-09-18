@@ -12,6 +12,7 @@ Improvements:
 
 import json
 import logging
+import os
 import re
 from collections.abc import Callable
 from typing import Any
@@ -32,6 +33,13 @@ logger = logging.getLogger(__name__)
 _ARCHITECTURE_QUERY = (
     "convolution attention transformer residual connections layers "
     "channels kernel stride architecture design encoder decoder block "
+    # Activation, normalisation and pooling vocabulary. Their absence was the
+    # same failure as the missing numerics found in Phase 6: EfficientNet
+    # states "We also use SiLU (Swish-1) activation" in prose that the query
+    # gave the retriever no reason to rank, so the paper's only evidence for
+    # an expected layer type never reached the model.
+    "activation relu gelu silu swish sigmoid "
+    "normalization batchnorm layernorm pooling dropout embedding "
     "64 128 256 512 768 1024 2048"
 )
 
@@ -42,6 +50,13 @@ def _bare_model_id(model: str | None) -> str:
     """Strip a litellm routing prefix: 'groq/openai/gpt-oss-120b' -> 'gpt-oss-120b'."""
     return str(model or "").rsplit("/", 1)[-1].strip().lower()
 
+
+# Reasoning effort for the extraction and verification calls. gpt-oss-120b's
+# reasoning trace diverges between identical calls at temperature=0, and the
+# extracted layer list diverges with it (3 vs 14 layers for one prompt).
+# "low" was the only setting that returned identical completions for
+# identical input, which is what makes the benchmark measurable at all.
+_EXTRACTION_REASONING_EFFORT = os.getenv("EXTRACTION_REASONING_EFFORT", "low").strip() or None
 
 _TOTAL_FOCUS_SLOTS = 6
 _RESERVED_STRUCTURED_SLOTS = 2
@@ -292,7 +307,7 @@ You are an expert at reading deep learning research papers and extracting neural
 {graph_rules}
 
 {operation_context}
-
+{variant_rule}
 ### Now extract from this text:
 Text: \"\"\"{text}\"\"\"
 
@@ -335,6 +350,15 @@ Return ONLY corrected valid JSON. If no corrections are needed, return the origi
 # ---------------------------------------------------------------------------
 # ConfigExtractor
 # ---------------------------------------------------------------------------
+
+
+def _value_in_evidence(value: Any, evidence: str) -> bool:
+    """True when a numeric replacement actually occurs in the evidence text."""
+    if isinstance(value, bool) or value is None:
+        return True
+    if isinstance(value, (int, float)):
+        return re.search(r"\b" + re.escape(str(value)) + r"\b", evidence) is not None
+    return True  # non-numeric values are not checkable this way
 
 
 def _repair_json(text: str) -> str:
@@ -400,6 +424,8 @@ class ConfigExtractor:
         verify: bool = True,
         max_context_chars: int = 10_000,
         chunk_retriever: Callable[[str, list[str], int], list[str]] | None = None,
+        variant: str | None = None,
+        samples: int = 1,
     ):
         self.use_llm = use_llm and _HAS_LLM
         self.use_section_splitter = use_section_splitter
@@ -412,8 +438,23 @@ class ConfigExtractor:
         # chunks without this module depending on any backend/network code.
         # Falls back to the pure BM25 path below when not supplied.
         self.chunk_retriever = chunk_retriever
+        # Which model configuration to report when a paper describes several.
+        # ViT states Base/Large/Huge in one table and runs ablations at other
+        # sizes; without this the retriever had no reason to prefer the Base
+        # row, and an ablation's "8 layers, D = 1024" was what reached the
+        # model. This names the wanted variant; it never supplies its values.
+        self.variant = (variant or "").strip() or None
+        # Independent extraction samples to draw; the medoid is kept. Groq's
+        # gpt-oss-120b is not deterministic at temperature=0 even with a seed
+        # and low reasoning effort (same prompt: 3 vs 14 layers). Consensus
+        # filters those outliers without merging specs from different draws.
+        self.samples = max(1, int(samples))
+        self.consensus: dict[str, Any] | None = None
         self.provider_models: list[str] = []
         self.provider_fallback = False
+        # Verification provenance: what it said, and what it tried to overwrite.
+        self.verification_response: str | None = None
+        self.verification_reverted: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -434,7 +475,7 @@ class ConfigExtractor:
         extraction_reason = None
         try:
             if self.use_llm:
-                raw = self._extract_with_llm(focused)
+                raw = self._extract_with_llm_consensus(focused)
                 extraction_method = "llm"
                 if self.verify:
                     raw = self._verify_extraction(focused, raw)
@@ -467,13 +508,34 @@ class ConfigExtractor:
     # Step 1: Text focusing
     # ------------------------------------------------------------------
 
+    def _variant_rule(self) -> str:
+        """Instruct the model which configuration to report, when it matters."""
+        if not self.variant:
+            return ""
+        return (
+            "\n### Model variant\n"
+            "This paper describes several model configurations. Report ONLY the "
+            f"values for {self.variant}. Do not merge values across variants, and "
+            "do not take values from ablation studies or scaling experiments.\n"
+        )
+
+    def _retrieval_query(self) -> str:
+        """The architecture query, plus the requested variant when there is one.
+
+        A paper's variants table only ranks if the query mentions the variant;
+        the same class of gap as the missing numeric tokens found in Phase 6.
+        """
+        if not self.variant:
+            return _ARCHITECTURE_QUERY
+        return f"{_ARCHITECTURE_QUERY} {self.variant}"
+
     def _rank_chunks(self, texts: list[str], top_k: int) -> list[str]:
         """Rank via the injected retriever, falling back to plain BM25."""
         if not texts or top_k <= 0:
             return []
         if self.chunk_retriever is not None:
             try:
-                ranked = self.chunk_retriever(_ARCHITECTURE_QUERY, texts, top_k)
+                ranked = self.chunk_retriever(self._retrieval_query(), texts, top_k)
                 if ranked:
                     return ranked
             except Exception:
@@ -534,13 +596,33 @@ class ConfigExtractor:
                     chosen.append(bucket.pop(0))
             return chosen
 
-        structured_picks = _take(structured, min(reserved, total))
-        prose_picks = _take(prose, total - len(structured_picks))
+        # A requested variant gets one guaranteed slot. Adding the variant to
+        # the retrieval query is not enough on its own: broadening the query
+        # with activation/normalisation vocabulary diluted "ViT-Base" enough
+        # that the variants table dropped out again and the model went back to
+        # reading an ablation's dimensions. Ranking cannot be trusted to surface
+        # this row, for the same reason tables already get a reservation.
+        variant_picks: list[int] = []
+        if self.variant:
+            needle = self.variant.lower()
+            variant_pool = [
+                (i, c) for i, c in entries
+                if needle in str(c.get("text") or "").lower()
+            ]
+            variant_picks = _take(variant_pool, 1)
+
+        claimed = set(variant_picks)
+        structured = [(i, c) for i, c in structured if i not in claimed]
+        prose = [(i, c) for i, c in prose if i not in claimed]
+
+        remaining = max(0, total - len(variant_picks))
+        structured_picks = _take(structured, min(reserved, remaining))
+        prose_picks = _take(prose, remaining - len(structured_picks))
 
         # Reading order: the focused text is read by the model as a narrative,
         # matching retrieve_top_chunks' existing convention.
         lookup = dict(entries)
-        ranked_order = structured_picks + prose_picks
+        ranked_order = variant_picks + structured_picks + prose_picks
         ranked_indices = set(ranked_order)
         if not expand_neighbors or max_context_chars is None:
             return [
@@ -549,6 +631,21 @@ class ConfigExtractor:
             ]
 
         selected_indices = set(ranked_indices)
+
+        # Expand along the paper's reading order, not list order. source_chunks
+        # is prose, then every table, then every caption, so index+1 from a
+        # table lands on an unrelated table from another page -- which is how
+        # results tables were entering the context through pure list adjacency.
+        # page/offset provenance is already on every chunk; use it.
+        doc_sorted = sorted(
+            entries,
+            key=lambda item: (
+                item[1].get("page") or 0,
+                item[1].get("source_offset_start") or 0,
+            ),
+        )
+        doc_pos = {index: pos for pos, (index, _) in enumerate(doc_sorted)}
+        pos_index = {pos: index for pos, (index, _) in enumerate(doc_sorted)}
 
         def _merged_length(indices: set[int]) -> int:
             ordered = sorted(indices)
@@ -566,10 +663,16 @@ class ConfigExtractor:
             return True
 
         for origin in ranked_order:
+            origin_pos = doc_pos.get(origin)
+            if origin_pos is None:
+                continue
             for depth in range(1, _FORWARD_EXPANSION_DEPTH + 1):
-                if not _add_if_within_budget(origin + depth):
+                neighbour = pos_index.get(origin_pos + depth)
+                if neighbour is None or not _add_if_within_budget(neighbour):
                     break
-            _add_if_within_budget(origin - 1)
+            previous = pos_index.get(origin_pos - 1)
+            if previous is not None:
+                _add_if_within_budget(previous)
 
         return [
             str(lookup[i].get("text") or "")
@@ -605,6 +708,61 @@ class ConfigExtractor:
     # Step 2: LLM extraction with few-shot prompt (R1)
     # ------------------------------------------------------------------
 
+    def _extract_with_llm_consensus(self, text: str) -> dict[str, Any]:
+        """Draw ``self.samples`` extractions; keep the one most like the others.
+
+        Similarity is Jaccard over layer-type sets. The medoid is a real
+        coherent spec from one draw, never a merge across draws. Ties go to
+        the earliest sample so the choice is itself deterministic.
+        """
+        if self.samples <= 1:
+            return self._extract_with_llm(text)
+        # One malformed draw must not sink the paper. DenseNet's third draw
+        # unrolled 540 layers and broke the JSON mid-string; the other two
+        # parsed fine and the paper still fell to rule-based extraction.
+        specs: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for _ in range(self.samples):
+            try:
+                specs.append(self._extract_with_llm(text))
+            except Exception as exc:  # noqa: BLE001 -- recorded, not hidden
+                failures.append(f"{type(exc).__name__}: {exc}")
+        if not specs:
+            raise ValueError(f"all {self.samples} extraction draws failed: {failures[-1]}")
+        if len(specs) == 1:
+            self.consensus = {"samples": self.samples, "parsed": 1, "failed_draws": failures,
+                              "layer_counts": [len(specs[0].get("layers") or [])],
+                              "agreement": [1.0], "chosen": 0}
+            return specs[0]
+
+        def types(spec: dict[str, Any]) -> set[str]:
+            return {
+                str(layer.get("type") or "").lower()
+                for layer in (spec.get("layers") or [])
+                if isinstance(layer, dict)
+            }
+
+        sets = [types(spec) for spec in specs]
+
+        def jaccard(a: set[str], b: set[str]) -> float:
+            union = a | b
+            return len(a & b) / len(union) if union else 1.0
+
+        agreement = [
+            sum(jaccard(sets[i], sets[j]) for j in range(len(specs)) if j != i) / (len(specs) - 1)
+            for i in range(len(specs))
+        ]
+        chosen = max(range(len(specs)), key=lambda i: (agreement[i], -i))
+        self.consensus = {
+            "samples": self.samples,
+            "parsed": len(specs),
+            "failed_draws": failures,
+            "layer_counts": [len(spec.get("layers") or []) for spec in specs],
+            "agreement": [round(a, 3) for a in agreement],
+            "chosen": chosen,
+        }
+        return specs[chosen]
+
     def _extract_with_llm(self, text: str) -> dict[str, Any]:
         """Call LLM with few-shot prompt, KAG instructions, and connection instructions."""
         # KAG Entity Linking & Rule Extraction
@@ -615,9 +773,10 @@ class ConfigExtractor:
             few_shot=_FEW_SHOT_EXAMPLES,
             graph_rules=graph_rules,
             operation_context=_operation_context(text),
+            variant_rule=self._variant_rule(),
             text=text,
         )
-        response = llm_complete(prompt)
+        response = llm_complete(prompt, reasoning_effort=_EXTRACTION_REASONING_EFFORT)
         self._record_provider()
         return self._parse_json_response(response)
 
@@ -629,24 +788,64 @@ class ConfigExtractor:
         """
         Ask the LLM to review its own extraction against the source text.
         Returns corrected dict, or original if correction fails.
+
+        The prompt used to pass ``original_text[:4_000]``. ``original_text`` is
+        already the focused context, bounded by ``max_context_chars``, so that
+        second truncation only hid evidence: EfficientNet's supporting table row
+        ("Conv1x1 & Pooling & FC ... 1280") sits at char 8379 of a 9906-char
+        focus, while an unrelated "512" sits at char 1277. Verification saw the
+        512 and not the row, and replaced a correct value with a wrong one.
         """
         try:
             prompt = _VERIFICATION_PROMPT.format(
-                text=original_text[:4_000],  # keep verification prompt compact
+                text=original_text,
                 extracted=json.dumps(extracted, indent=2),
             )
-            response = llm_complete(prompt)
+            response = llm_complete(prompt, reasoning_effort=_EXTRACTION_REASONING_EFFORT)
             self._record_provider()
+            self.verification_response = response
             corrected = self._parse_json_response(response)
             # Only accept correction if it has more or equal layers (no regression)
             corrected_layers = (corrected or {}).get("layers") or []
             extracted_layers = (extracted or {}).get("layers") or []
             if isinstance(corrected_layers, list) and isinstance(extracted_layers, list):
                 if len(corrected_layers) >= len(extracted_layers):
-                    return corrected
+                    return self._revert_unsupported_values(extracted, corrected, original_text)
         except Exception:
             pass
         return extracted
+
+    def _revert_unsupported_values(
+        self, extracted: dict[str, Any], corrected: dict[str, Any], evidence: str
+    ) -> dict[str, Any]:
+        """Keep verification's additions; refuse value swaps the evidence does not contain.
+
+        The layer-count rule ("accept if layers did not decrease") cannot see a
+        parameter being rewritten, so a correct dimension could be silently
+        replaced by an invented one. A numeric replacement must appear in the
+        evidence text to be accepted; otherwise the original value stands.
+        """
+        old_layers = (extracted or {}).get("layers") or []
+        new_layers = (corrected or {}).get("layers") or []
+        for index, new_layer in enumerate(new_layers):
+            if index >= len(old_layers):
+                break  # genuinely added layer; nothing to protect
+            if not isinstance(new_layer, dict) or not isinstance(old_layers[index], dict):
+                continue
+            old_params = old_layers[index].get("params") or {}
+            new_params = new_layer.get("params") or {}
+            if not isinstance(old_params, dict) or not isinstance(new_params, dict):
+                continue
+            for key, old_value in old_params.items():
+                if key not in new_params or new_params[key] == old_value:
+                    continue
+                if not _value_in_evidence(new_params[key], evidence):
+                    rejected = new_params[key]
+                    new_params[key] = old_value
+                    self.verification_reverted.append(
+                        {"layer": index, "param": key, "rejected": rejected, "kept": old_value}
+                    )
+        return corrected
 
     def _record_provider(self) -> None:
         """Retain completion provenance without changing llm_complete's return type."""

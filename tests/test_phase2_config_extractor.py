@@ -137,6 +137,7 @@ def test_extraction_prompt_has_a_format_safe_operation_context_slot():
         few_shot="few shot",
         graph_rules="graph rules",
         operation_context="operation context",
+        variant_rule="",
         text="paper text",
     )
     assert "operation context" in rendered
@@ -692,3 +693,173 @@ def test_provider_fallback_ignores_litellm_routing_prefix():
     assert _bare_model_id("groq/openai/gpt-oss-120b") == _bare_model_id("openai/gpt-oss-120b")
     assert _bare_model_id("gemini/gemini-3.6-flash") != _bare_model_id("groq/openai/gpt-oss-120b")
     assert _bare_model_id(None) == ""
+
+
+def test_verification_cannot_replace_a_supported_value_with_an_invented_one(monkeypatch):
+    """EfficientNet regression: verification rewrote a table-backed 1280 to 512.
+
+    The evidence for 1280 sat at char 8379 of the focused text while an
+    unrelated 512 sat at char 1277, and verification only ever saw the first
+    4000 characters. The layer-count acceptance rule could not see a parameter
+    being swapped, so the wrong value was accepted silently.
+    """
+    from core.rag import config_extractor as ce
+
+    evidence = ("filler " * 700) + "Conv1x1 & Pooling & FC 7x7 1280 1"
+    assert evidence.index("1280") > 4000, "guard must exercise the truncation case"
+
+    extracted = {"name": "EfficientNet-B0",
+                 "layers": [{"type": "conv2d", "params": {"kernel_size": 1, "channels": 1280}}]}
+    # Verification "corrects" 1280 -> 512; 512 appears nowhere in the evidence.
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: json.dumps(
+        {"name": "EfficientNet-B0",
+         "layers": [{"type": "conv2d", "params": {"kernel_size": 1, "channels": 512}}]}))
+
+    ex = ce.ConfigExtractor(use_llm=True, verify=True)
+    result = ex._verify_extraction(evidence, extracted)
+
+    assert result["layers"][0]["params"]["channels"] == 1280, "unsupported swap must be reverted"
+    assert ex.verification_reverted, "the reverted change must be recorded, not silent"
+
+
+def test_verification_accepts_a_value_the_evidence_supports(monkeypatch):
+    """The guard must not freeze genuine corrections: 1280 is in the evidence."""
+    from core.rag import config_extractor as ce
+
+    evidence = "the final layer uses 1280 channels"
+    extracted = {"layers": [{"type": "conv2d", "params": {"channels": 320}}]}
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: json.dumps(
+        {"layers": [{"type": "conv2d", "params": {"channels": 1280}}]}))
+
+    ex = ce.ConfigExtractor(use_llm=True, verify=True)
+    result = ex._verify_extraction(evidence, extracted)
+    assert result["layers"][0]["params"]["channels"] == 1280
+    assert not ex.verification_reverted
+
+
+def _variant_chunks():
+    def chunk(page, start, text, kind="text"):
+        return {"page": page, "source_offset_start": start,
+                "source_offset_end": start + len(text),
+                "chunk_type": kind, "section": "other", "text": text}
+    return [
+        chunk(1, 0, "We train the model on ImageNet with standard augmentation."),
+        chunk(2, 500, "An ablation uses a ViT model with 8 layers, D = 1024."),
+        # The variants table ranks last for the retriever stub below.
+        chunk(5, 2000, "Model Layers Hidden size D Heads ViT-Base 12 768 3072 12"),
+    ]
+
+
+def test_requested_variant_is_reserved_a_slot_even_when_it_ranks_last():
+    """ViT regression: the Base row lost its slot once the query was broadened.
+
+    Adding the variant to the retrieval query is not sufficient on its own, so
+    a requested variant gets a guaranteed slot the way tables already do.
+    """
+    from core.rag.config_extractor import ConfigExtractor
+
+    chunks = _variant_chunks()
+    table = chunks[-1]["text"]
+    ex = ConfigExtractor(use_llm=False, verify=False, variant="ViT-Base",
+                         chunk_retriever=lambda q, texts, k: texts[:k])
+    selected = ex._select_focus_chunks(chunks, total=2, reserved=0)
+    assert table in selected, "the requested variant's row must be guaranteed a slot"
+
+
+def test_without_a_requested_variant_nothing_is_reserved():
+    """The reservation must not fire for papers that describe one model."""
+    from core.rag.config_extractor import ConfigExtractor
+
+    chunks = _variant_chunks()
+    table = chunks[-1]["text"]
+    ex = ConfigExtractor(use_llm=False, verify=False,
+                         chunk_retriever=lambda q, texts, k: texts[:k])
+    selected = ex._select_focus_chunks(chunks, total=2, reserved=0)
+    assert table not in selected, "no variant requested means no reserved slot"
+
+
+def test_variant_reaches_both_the_query_and_the_prompt():
+    from core.rag.config_extractor import ConfigExtractor
+
+    ex = ConfigExtractor(use_llm=False, verify=False, variant="ViT-Base")
+    assert "ViT-Base" in ex._retrieval_query()
+    assert "ViT-Base" in ex._variant_rule()
+    assert "ablation" in ex._variant_rule().lower(), "must warn off ablation values"
+    plain = ConfigExtractor(use_llm=False, verify=False)
+    assert plain._variant_rule() == ""
+
+
+def test_extraction_and_verification_pin_low_reasoning_effort(monkeypatch):
+    """Determinism lever. gpt-oss-120b returned 3 vs 14 layers for one prompt
+    at temperature=0; only reasoning_effort="low" gave identical completions.
+    Both LLM calls on the extraction path must carry it.
+    """
+    from core.rag import config_extractor as ce
+
+    seen = []
+
+    def recorder(prompt, **kwargs):
+        seen.append(kwargs.get("reasoning_effort"))
+        return json.dumps({"name": "X", "layers": [{"type": "conv2d", "params": {}}]})
+
+    monkeypatch.setattr(ce, "llm_complete", recorder)
+    ex = ce.ConfigExtractor(use_llm=True, verify=True)
+    raw = ex._extract_with_llm("a convolutional network")
+    ex._verify_extraction("a convolutional network", raw)
+    assert seen == ["low", "low"], seen
+
+
+def test_consensus_keeps_the_medoid_and_never_merges(monkeypatch):
+    """gpt-oss-120b returned 3 vs 14 layers for one prompt. With k draws the
+    kept spec must be one real draw -- the one most like the others -- not a
+    union, and the choice must be deterministic on ties."""
+    from core.rag import config_extractor as ce
+
+    draws = iter([
+        {"layers": [{"type": "conv2d"}, {"type": "relu"}, {"type": "linear"}]},          # typical
+        {"layers": [{"type": "conv2d"}]},                                                  # outlier: too few
+        {"layers": [{"type": "conv2d"}, {"type": "relu"}, {"type": "linear"}, {"type": "tanh"}]},  # typical+1
+    ])
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: json.dumps(next(draws)))
+    ex = ce.ConfigExtractor(use_llm=True, verify=False, samples=3)
+    chosen = ex._extract_with_llm_consensus("text")
+
+    types = [l["type"] for l in chosen["layers"]]
+    assert types == ["conv2d", "relu", "linear"], "medoid must be the typical draw, unmerged"
+    assert ex.consensus["samples"] == 3 and ex.consensus["chosen"] == 0
+    assert ex.consensus["layer_counts"] == [3, 1, 4]
+
+
+def test_single_sample_is_the_plain_path(monkeypatch):
+    from core.rag import config_extractor as ce
+
+    calls = []
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: calls.append(1) or json.dumps({"layers": []}))
+    ce.ConfigExtractor(use_llm=True, verify=False, samples=1)._extract_with_llm_consensus("t")
+    assert len(calls) == 1
+
+
+def test_consensus_survives_one_malformed_draw(monkeypatch):
+    """DenseNet: one of three draws returned broken JSON and the whole paper
+    fell to rule-based. The medoid must be taken over the draws that parsed."""
+    from core.rag import config_extractor as ce
+
+    draws = iter([
+        json.dumps({"layers": [{"type": "conv2d"}, {"type": "relu"}]}),
+        '{"layers": [{"type": "conv2d"}, {"type": "relu"}, {"type": "batchnorm2d"}], "connections": [["a","',
+        json.dumps({"layers": [{"type": "conv2d"}, {"type": "relu"}]}),
+    ])
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: next(draws))
+    ex = ce.ConfigExtractor(use_llm=True, verify=False, samples=3)
+    chosen = ex._extract_with_llm_consensus("text")
+    assert [l["type"] for l in chosen["layers"]] == ["conv2d", "relu"]
+    assert ex.consensus["parsed"] == 2 and len(ex.consensus["failed_draws"]) == 1
+
+
+def test_consensus_raises_only_when_every_draw_fails(monkeypatch):
+    from core.rag import config_extractor as ce
+
+    monkeypatch.setattr(ce, "llm_complete", lambda prompt, **kw: "not json at all {{{")
+    ex = ce.ConfigExtractor(use_llm=True, verify=False, samples=3)
+    with pytest.raises(ValueError, match="all 3 extraction draws failed"):
+        ex._extract_with_llm_consensus("text")

@@ -11,7 +11,7 @@ def extract_with_pdfplumber(path):
         text = []
         with pdfplumber.open(path) as pdf:
             for p in pdf.pages:
-                t = p.extract_text()
+                t = p.extract_text(x_tolerance=1)
                 if t:
                     text.append(t)
         return "\n".join(text)

@@ -33,8 +33,14 @@ def check_user_token_budget(get_usage_callback, user_id: int | None) -> None:
 # ---------------------------------------------------------------------------
 # Model config — override via env vars
 # ---------------------------------------------------------------------------
-PRIMARY_MODEL = os.getenv("LLM_PRIMARY_MODEL", "groq/llama-3.3-70b-versatile")
-FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini/gemini-2.0-flash")
+# The previous default, groq/llama-3.3-70b-versatile, no longer exists on
+# Groq ("model_not_found"); only .env was keeping the system working.
+PRIMARY_MODEL = os.getenv("LLM_PRIMARY_MODEL", "groq/openai/gpt-oss-120b")
+# No fallback unless explicitly configured. The old default was a Gemini
+# model, so *unsetting* the variable did not disable cross-provider fallback;
+# it silently selected a different Gemini -- which is how a benchmark run
+# meant to be Groq-pure came back provider-mixed and non-comparable.
+FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "").strip()
 # Backward-compat alias (some callers do `if GROQ_API_KEY:`)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Simple circuit breaker state
@@ -50,6 +56,43 @@ CIRCUIT_OPEN_DURATION = 60  # seconds
 # emitting output, and U-Net truncated mid-connections at 3219 chars. At
 # 16384 it completes (recall 1.00, was a rule-based fallback).
 MAX_COMPLETION_TOKENS = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "16384"))
+
+# A flat 8s backoff retried twice (~16s of waiting) could not ride out a Groq
+# per-minute token window. One transient 429 then dropped a single paper to
+# rule-based extraction, which under --strict rejects an entire 10-paper
+# benchmark run and costs a day of quota. Back off exponentially instead.
+# temperature=0 alone did not make Groq's gpt-oss-120b deterministic: two
+# benchmark runs with byte-identical prompts changed 5 of 6 papers' scores.
+# A fixed seed is the provider's best-effort determinism lever. Set
+# LLM_SEED="" to disable it.
+# gpt-oss-120b is a reasoning model; its reasoning trace diverges between
+# identical calls and drags the final answer with it. Optional knob to pin
+# the effort level while measuring whether that narrows the variance.
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "").strip() or None
+
+
+def _reasoning_kwargs(reasoning_effort: str | None = None) -> dict:
+    effort = reasoning_effort or LLM_REASONING_EFFORT
+    return {"reasoning_effort": effort} if effort else {}
+
+
+_seed_env = os.getenv("LLM_SEED", "42")
+LLM_SEED: int | None = int(_seed_env) if _seed_env.strip() else None
+
+# Optional: after the backoff retries are exhausted on a 429, wait this long
+# and start the attempts over, up to this many rounds. Off by default. For a
+# --strict benchmark a rule-based fallback is worth nothing, so on a daily
+# token budget waiting hours for quota beats giving up in two minutes.
+QUOTA_WAIT_SECONDS = int(os.getenv("LLM_QUOTA_WAIT_SECONDS", "0"))
+QUOTA_WAIT_ROUNDS = int(os.getenv("LLM_QUOTA_WAIT_ROUNDS", "0"))
+
+RATE_LIMIT_RETRIES = int(os.getenv("LLM_RATE_LIMIT_RETRIES", "4"))
+RATE_LIMIT_BACKOFF_SECONDS = int(os.getenv("LLM_RATE_LIMIT_BACKOFF", "8"))
+
+
+def _backoff_seconds(base: int, attempt: int) -> int:
+    """Exponential backoff for retry `attempt` (0-based): base, 2x, 4x, 8x..."""
+    return base * (2 ** attempt)
 
 
 def _fallback_list(use_fallback: bool, target: str) -> list[str]:
@@ -78,8 +121,15 @@ def llm_complete(
     check_budget_callback=None,
     db_write_callback=None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
-    """Synchronous LLM completion with automatic provider fallback."""
+    """Synchronous LLM completion with automatic provider fallback.
+
+    ``reasoning_effort`` pins a reasoning model's effort for this call. It is
+    the determinism lever for gpt-oss-120b on Groq: with temperature=0 and a
+    fixed seed, "low" returned byte-identical completions for identical
+    prompts where "medium" and unset did not (4 vs 11 layers, 3 vs 14).
+    """
     import time
 
     from litellm import completion
@@ -109,17 +159,34 @@ def llm_complete(
     # times with backoff first; only allow the cross-provider fallback on
     # the final attempt, once retrying the preferred model has been given a
     # real chance to succeed.
-    max_rate_limit_retries = 2
-    rate_limit_backoff_seconds = 8
+    max_rate_limit_retries = RATE_LIMIT_RETRIES
+    rate_limit_backoff_seconds = RATE_LIMIT_BACKOFF_SECONDS
 
     resp = None
-    for attempt in range(max_rate_limit_retries + 1):
+    quota_rounds_left = QUOTA_WAIT_ROUNDS if QUOTA_WAIT_SECONDS > 0 else 0
+    _last_rate_limit: RuntimeError | None = None
+    attempt = -1
+    while True:
+        attempt += 1
+        if attempt > max_rate_limit_retries:
+            # Backoff exhausted. Wait for quota if configured, else give up.
+            if quota_rounds_left <= 0:
+                raise _last_rate_limit or RuntimeError(f"rate limited on {target}")
+            quota_rounds_left -= 1
+            logger.warning(
+                "Quota exhausted on %s; waiting %ds for it to return (%d round(s) left)",
+                target, QUOTA_WAIT_SECONDS, quota_rounds_left,
+            )
+            time.sleep(QUOTA_WAIT_SECONDS)
+            attempt = 0
         use_fallback = attempt == max_rate_limit_retries
         try:
             resp = completion(
                 model=target,
                 messages=messages,
                 temperature=0,
+                seed=LLM_SEED,
+                **_reasoning_kwargs(reasoning_effort),
                 # Without an explicit ceiling the provider default applied, and
                 # architecture specs for deep models overran it: unet's response
                 # was cut mid-token at 1084 chars ('"kernel_size": ') leaving
@@ -139,11 +206,12 @@ def llm_complete(
             # limit rather than propagating the empty string.
             if not text.strip():
                 if not use_fallback:
+                    delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                     logger.warning(
                         "Empty completion from %s (attempt %d/%d) -- retrying in %ds",
-                        target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                        target, attempt + 1, max_rate_limit_retries, delay,
                     )
-                    time.sleep(rate_limit_backoff_seconds)
+                    time.sleep(delay)
                     continue
                 raise RuntimeError(
                     f"LLM returned an empty completion for {target} after "
@@ -154,18 +222,37 @@ def llm_complete(
             break
         except litellm_exc.RateLimitError as e:
             if not use_fallback:
+                delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                 logger.warning(
                     "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
-                    target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                    target, attempt + 1, max_rate_limit_retries, delay,
                 )
-                time.sleep(rate_limit_backoff_seconds)
+                time.sleep(delay)
                 continue
-            _failure_count += 1
-            if _failure_count >= FAILURE_THRESHOLD:
-                _circuit_open = True
-                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
-            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
-        except (litellm_exc.APIConnectionError, litellm_exc.APIError) as e:
+            # A 429 is "slow down", not "the provider is down". It used to
+            # count toward the breaker, so a burst of rate limits on one paper
+            # opened the circuit and every following paper then failed
+            # instantly without a single request -- backoff turned into a
+            # cascade. It also said "circuit breaker tripped" whether or not
+            # the breaker had actually opened. Rate limits now exhaust their
+            # retries and raise; only genuine API failures feed the breaker.
+            _last_rate_limit = RuntimeError(
+                f"rate limited on {target} after {max_rate_limit_retries + 1} attempts: {e}"
+            )
+            _last_rate_limit.__cause__ = e
+            continue  # loop head decides: wait for quota, or raise
+        except (litellm_exc.APIConnectionError, litellm_exc.APIError, litellm_exc.InternalServerError) as e:
+            # Transient transport failures (DNS: "getaddrinfo failed",
+            # connection resets, 5xx) get a short retry before they count
+            # as a real failure. One DNS blip took out a paper on 2026-09-17.
+            if not use_fallback:
+                delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
+                logger.warning(
+                    "Transport error on %s (attempt %d/%d) -- retrying in %ds: %s",
+                    target, attempt + 1, max_rate_limit_retries, delay, type(e).__name__,
+                )
+                time.sleep(delay)
+                continue
             _failure_count += 1
             if _failure_count >= FAILURE_THRESHOLD:
                 _circuit_open = True
@@ -212,8 +299,8 @@ async def llm_complete_async(
     # See llm_complete's matching comment: retry the primary on a rate limit
     # before allowing litellm's cross-provider fallback, so a transient 429
     # doesn't silently swap models mid-pipeline.
-    max_rate_limit_retries = 2
-    rate_limit_backoff_seconds = 8
+    max_rate_limit_retries = RATE_LIMIT_RETRIES
+    rate_limit_backoff_seconds = RATE_LIMIT_BACKOFF_SECONDS
 
     resp = None
     for attempt in range(max_rate_limit_retries + 1):
@@ -223,6 +310,8 @@ async def llm_complete_async(
                 model=target,
                 messages=messages,
                 temperature=0,
+                seed=LLM_SEED,
+                **_reasoning_kwargs(),
                 fallbacks=_fallback_list(use_fallback, target),
             )
             text = resp.choices[0].message.content or ""
@@ -230,19 +319,25 @@ async def llm_complete_async(
             break
         except litellm_exc.RateLimitError as e:
             if not use_fallback:
+                delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                 logger.warning(
                     "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
-                    target, attempt + 1, max_rate_limit_retries, rate_limit_backoff_seconds,
+                    target, attempt + 1, max_rate_limit_retries, delay,
                 )
                 import asyncio
 
-                await asyncio.sleep(rate_limit_backoff_seconds)
+                await asyncio.sleep(delay)
                 continue
-            _failure_count += 1
-            if _failure_count >= FAILURE_THRESHOLD:
-                _circuit_open = True
-                _circuit_open_until = now + CIRCUIT_OPEN_DURATION
-            raise RuntimeError(f"LLM circuit breaker tripped for {target}: {e}") from e
+            # A 429 is "slow down", not "the provider is down". It used to
+            # count toward the breaker, so a burst of rate limits on one paper
+            # opened the circuit and every following paper then failed
+            # instantly without a single request -- backoff turned into a
+            # cascade. It also said "circuit breaker tripped" whether or not
+            # the breaker had actually opened. Rate limits now exhaust their
+            # retries and raise; only genuine API failures feed the breaker.
+            raise RuntimeError(
+                f"rate limited on {target} after {max_rate_limit_retries + 1} attempts: {e}"
+            ) from e
         except (litellm_exc.APIConnectionError, litellm_exc.APIError) as e:
             _failure_count += 1
             if _failure_count >= FAILURE_THRESHOLD:

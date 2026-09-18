@@ -168,8 +168,9 @@ def test_live_adapter_follows_arxiv_pdf_redirects(monkeypatch):
             return None
 
     class Extractor:
-        def __init__(self, chunk_retriever=None):
+        def __init__(self, chunk_retriever=None, variant=None, samples=1):
             self.chunk_retriever = chunk_retriever
+            self.variant = variant
             self.diagnostic = {
                 "focused_text": "A residual architecture.",
                 "raw_llm_response": None,
@@ -194,7 +195,7 @@ def test_production_live_adapter_invokes_the_chunk_retriever(monkeypatch):
     from core.rag.config_extractor import ConfigExtractor as RealConfigExtractor
 
     class DiagnosticExtractor(RealConfigExtractor):
-        def __init__(self, chunk_retriever=None):
+        def __init__(self, chunk_retriever=None, variant=None, samples=1):
             super().__init__(use_llm=False, verify=False, max_context_chars=10, chunk_retriever=chunk_retriever)
             self.diagnostic = {}
 
@@ -244,7 +245,7 @@ def test_legacy_live_adapter_does_not_invoke_the_chunk_retriever(monkeypatch):
     from core.rag.config_extractor import ConfigExtractor as RealConfigExtractor
 
     class DiagnosticExtractor(RealConfigExtractor):
-        def __init__(self, chunk_retriever=None):
+        def __init__(self, chunk_retriever=None, variant=None, samples=1):
             super().__init__(use_llm=False, verify=False, max_context_chars=10, chunk_retriever=chunk_retriever)
             self.diagnostic = {}
 
@@ -318,7 +319,8 @@ def test_live_adapter_writes_a_companion_diagnostic_without_changing_cache(tmp_p
             return None
 
     class Extractor:
-        def __init__(self, chunk_retriever=None):
+        def __init__(self, chunk_retriever=None, variant=None, samples=1):
+            self.variant = variant
             self.diagnostic = {
                 "focused_text": "A residual architecture.",
                 "raw_llm_response": '{"name": "ResNet", "layers": []}',
@@ -641,3 +643,226 @@ def test_check_passes_when_the_model_matches(monkeypatch):
     results, baseline = _baseline_run()
     ok, problems = harness.check_against_baseline(results, baseline)
     assert ok, problems
+
+
+def test_live_adapter_passes_the_label_variant_to_the_extractor(monkeypatch):
+    """A label naming a variant must reach the extractor.
+
+    ViT states Base/Large/Huge in one table and runs ablations at other sizes.
+    Without the variant reaching the extractor, an ablation's "8 layers,
+    D = 1024" is what the model reads.
+    """
+    class Response:
+        content = b"pdf bytes"
+
+        def raise_for_status(self):
+            return None
+
+    seen_pdf_kwargs.clear()
+    monkeypatch.setattr(harness.httpx, "get", lambda url, **kwargs: Response())
+
+    class Pdf:
+        pages = [type("Page", (), {"extract_text": lambda self, **kw: seen_pdf_kwargs.update(kw) or "A residual architecture."})()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    captured = {}
+
+    class Extractor:
+        def __init__(self, chunk_retriever=None, variant=None, samples=1):
+            captured["variant"] = variant
+            self.diagnostic = {
+                "focused_text": "A residual architecture.",
+                "raw_llm_response": '{"name": "ResNet", "layers": []}',
+                "raw_llm_error": None,
+                "parsed_spec_pre_normalization": {"name": "ResNet", "layers": []},
+                "spec_post_normalization": {"name": "ResNet", "layers": []},
+            }
+
+        def extract_from_text(self, text, source_chunks=None):
+            return {"name": "ResNet", "layers": []}
+
+    monkeypatch.setitem(__import__("sys").modules, "pdfplumber", type("PdfPlumber", (), {"open": lambda stream: Pdf()}))
+    monkeypatch.setattr(harness, "_DiagnosticExtractor", Extractor)
+
+    harness._live_extractor({"source": "arxiv:1512.03385", "paper_id": "resnet50",
+                             "variant": "ViT-Base"})
+    assert captured["variant"] == "ViT-Base", "label variant must reach the extractor"
+
+    harness._live_extractor({"source": "arxiv:1512.03385", "paper_id": "resnet50"})
+    assert captured["variant"] is None, "a label without a variant must pass None"
+
+
+# ---------------------------------------------------------------------------
+# Resumable staging: one transient 429 must cost one paper, not a whole run.
+# ---------------------------------------------------------------------------
+
+
+def _resume_label(pid="p1"):
+    return {"paper_id": pid, "source": f"arxiv:{pid}", "expected": {}}
+
+
+def _resume_stage(harness, pid, extraction, fingerprint=None, retrieval="production"):
+    harness._staged_path(pid, retrieval).write_text(json.dumps(extraction), encoding="utf-8")
+    fp = fingerprint if fingerprint is not None else harness.extraction_fingerprint(_resume_label(pid), retrieval)
+    harness._staged_fingerprint_path(pid, retrieval).write_text(json.dumps(fp), encoding="utf-8")
+
+
+def test_live_run_resumes_a_clean_staged_extraction_with_matching_fingerprint(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    staged = {"spec": {"name": "staged", "layers": []}, "family": "resnet",
+              "extraction_method": "llm_verified", "provider_fallback": False}
+    _resume_stage(harness, "p1", staged)
+
+    calls = []
+    result, _ = harness._load_or_extract(
+        _resume_label("p1"), lambda label: calls.append(label) or {"spec": {"name": "fresh", "layers": []}},
+        "production",
+    )
+    assert calls == [], "a matching clean staged extraction must not hit the LLM again"
+    assert result["spec"]["name"] == "staged"
+
+
+def test_live_run_does_not_resume_when_the_fingerprint_is_stale(tmp_path, monkeypatch):
+    """Any change to model, prompts, retrieval code or seed invalidates staging."""
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    stale = harness.extraction_fingerprint(_resume_label("p1"), "production")
+    stale["code_sha256"] = "0" * 64
+    _resume_stage(harness, "p1", {"spec": {"name": "staged", "layers": []},
+                           "extraction_method": "llm_verified"}, fingerprint=stale)
+
+    calls = []
+    result, _ = harness._load_or_extract(
+        _resume_label("p1"), lambda label: calls.append(label) or {"spec": {"name": "fresh", "layers": []}},
+        "production",
+    )
+    assert len(calls) == 1, "stale fingerprint must force a fresh extraction"
+    assert result["spec"]["name"] == "fresh"
+
+
+def test_live_run_does_not_resume_a_rejected_extraction(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    _resume_stage(harness, "p1", {"spec": {"name": "staged", "layers": []},
+                           "extraction_method": "rule_based_fallback"})
+
+    calls = []
+    harness._load_or_extract(
+        _resume_label("p1"), lambda label: calls.append(label) or {"spec": {"name": "fresh", "layers": []}},
+        "production",
+    )
+    assert len(calls) == 1, "a rule-based staged entry is exactly what must be re-run"
+
+
+def test_staging_writes_a_fingerprint_sidecar(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    harness._load_or_extract(_resume_label("p1"), lambda _l: {"spec": {"name": "x", "layers": []}}, "production")
+    fp_path = harness._staged_fingerprint_path("p1", "production")
+    assert fp_path.exists()
+    assert json.loads(fp_path.read_text()) == harness.extraction_fingerprint(_resume_label("p1"), "production")
+
+
+def test_selective_discard_keeps_clean_papers_staged(tmp_path, monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    for pid in ("p1", "p2", "p3"):
+        _resume_stage(harness, pid, {"spec": {"name": pid, "layers": []}, "extraction_method": "llm_verified"})
+
+    dropped = harness.discard_staged_cache("production", only=["p2"])
+    assert dropped == ["p2"]
+    assert harness._staged_path("p1", "production").exists()
+    assert not harness._staged_path("p2", "production").exists()
+    assert not harness._staged_fingerprint_path("p2", "production").exists()
+    assert harness._staged_path("p3", "production").exists()
+
+    # promotion clears sidecars too
+    promoted = harness.promote_staged_cache("production")
+    assert promoted == ["p1", "p3"]
+    assert not list(tmp_path.glob("*.staged.fp.json"))
+
+
+def test_check_refuses_a_baseline_built_with_different_sampling(monkeypatch):
+    """A 1-sample baseline vs a 3-sample run would report sampling variance
+    as a regression, or hide one. --check must refuse the comparison."""
+    from benchmarks import harness
+
+    baseline = {
+        "schema_version": harness.LABEL_SCHEMA_VERSION,
+        "retrieval": "production",
+        "primary_model": harness._bare_primary_model(),
+        "samples": 1,
+        "metrics": {"layer_type_recall": 0.5},
+    }
+    results = {"retrieval": "production", "aggregate": {"layer_type_recall": 0.5, "papers": 1}}
+    monkeypatch.setitem(harness._SAMPLES, "n", 3)
+    ok, problems = harness.check_against_baseline(results, baseline, tolerance=0.05)
+    assert not ok
+    assert any("sampling mismatch" in p for p in problems), problems
+
+    monkeypatch.setitem(harness._SAMPLES, "n", 1)
+    ok, problems = harness.check_against_baseline(results, baseline, tolerance=0.05)
+    assert not any("sampling mismatch" in p for p in problems), problems
+
+
+def test_strict_rejects_hard_failures():
+    """A paper that never produced a spec must not be averaged away. A DNS
+    blip dropped three papers on 2026-09-17 and the run would otherwise have
+    been accepted, promoted and baselined with seven."""
+    from benchmarks import harness
+
+    results = {"per_paper": [
+        {"paper_id": "ok", "extraction_method": "llm_verified", "layer_type_recall": 0.9},
+        {"paper_id": "gone", "extraction_method": None, "layer_type_recall": None},
+    ]}
+    reasons = harness.strict_rejections(results)
+    assert reasons.get("hard failures") == ["gone"]
+
+
+def test_live_extraction_waits_out_a_transport_outage(monkeypatch):
+    """Two network outages each took six papers as hard failures in minutes.
+    A transport error must wait and retry the paper, not skip it."""
+    from benchmarks import harness
+
+    monkeypatch.setitem(harness._OUTAGE_WAIT, "seconds", 0.0)
+    monkeypatch.setitem(harness._OUTAGE_WAIT, "rounds", 3)
+    calls = []
+
+    def flaky(label, retrieval="production", samples=1):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("GroqException - [Errno 11001] getaddrinfo failed")
+        return {"spec": {"name": "ok", "layers": []}, "family": "resnet",
+                "extraction_method": "llm_verified"}
+
+    monkeypatch.setattr(harness, "_live_extractor", flaky)
+    monkeypatch.setattr(harness.time, "sleep", lambda s: None)
+    result = harness._live_extractor_with_retry({"paper_id": "p", "source": "arxiv:1"})
+    assert result["family"] == "resnet" and len(calls) == 3
+
+
+def test_non_transport_errors_are_not_retried(monkeypatch):
+    from benchmarks import harness
+
+    monkeypatch.setitem(harness._OUTAGE_WAIT, "seconds", 0.0)
+    calls = []
+
+    def broken(label, retrieval="production", samples=1):
+        calls.append(1)
+        raise ValueError("label schema mismatch")
+
+    monkeypatch.setattr(harness, "_live_extractor", broken)
+    with pytest.raises(ValueError):
+        harness._live_extractor_with_retry({"paper_id": "p", "source": "arxiv:1"})
+    assert len(calls) == 1, "a genuine error must surface immediately"

@@ -9,15 +9,13 @@ never calls an LLM. ``--live`` performs one extraction and refreshes only the
 """
 
 import argparse
-import io
 import json
 from pathlib import Path
 
-import httpx
 
-from benchmarks.harness import LABELS_DIR, _chunk_retriever, _live_extractor, diagnostic_path, load_label
+from benchmarks.harness import (LABELS_DIR, _chunk_retriever, _live_extractor,
+                                diagnostic_path, fetch_paper_chunks, load_label)
 from core.rag.config_extractor import ConfigExtractor
-from core.utils import chunk_pages_with_provenance, extract_caption_chunks, extract_table_chunks
 
 
 _REQUIRED_STAGES = {
@@ -39,29 +37,7 @@ def _label_path(label_id: str) -> Path:
 
 def focus_only(label: dict) -> dict:
     """Rebuild production chunks and focus context without calling an LLM."""
-    source = str(label["source"])
-    if not source.startswith("arxiv:"):
-        raise ValueError(f"focus-only diagnostics support arXiv labels, got {source}")
-    response = httpx.get(
-        f"https://arxiv.org/pdf/{source.removeprefix('arxiv:')}.pdf",
-        follow_redirects=True,
-        timeout=60.0,
-    )
-    response.raise_for_status()
-    try:
-        import pdfplumber
-    except ImportError as exc:
-        raise RuntimeError("focus-only diagnostics require pdfplumber") from exc
-    with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-        page_texts = [
-            (page_number, text)
-            for page_number, page in enumerate(pdf.pages[:30], start=1)
-            if (text := page.extract_text())
-        ]
-    text = "\n\n".join(page_text for _, page_text in page_texts)
-    source_chunks = chunk_pages_with_provenance(page_texts)
-    source_chunks.extend(extract_table_chunks(page_texts))
-    source_chunks.extend(extract_caption_chunks(page_texts))
+    text, _page_texts, source_chunks = fetch_paper_chunks(str(label["source"]))
     extractor = ConfigExtractor(
         use_llm=False,
         verify=False,

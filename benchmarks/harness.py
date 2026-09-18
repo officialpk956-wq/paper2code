@@ -135,12 +135,91 @@ def strict_rejections(results: dict) -> dict[str, list[str]]:
     ]
     if provider:
         reasons["cross-provider fallbacks"] = provider
+    # A paper that never produced a spec at all (network outage on the PDF
+    # fetch, extractor exception) was scored as None and silently averaged
+    # out. Observed 2026-09-17: a DNS blip dropped three papers and the run
+    # would have been accepted, promoted and baselined with seven.
+    hard = [
+        item["paper_id"] for item in results["per_paper"]
+        if item.get("layer_type_recall") is None and item.get("extraction_method") is None
+    ]
+    if hard:
+        reasons["hard failures"] = hard
     return reasons
 
 
 def _staged_path(paper_id: str, retrieval: str) -> Path:
     """Where a live extraction lands before the run is accepted."""
     return CACHE_DIR / f"{paper_id}.{retrieval}.staged.json"
+
+
+def _staged_fingerprint_path(paper_id: str, retrieval: str) -> Path:
+    return CACHE_DIR / f"{paper_id}.{retrieval}.staged.fp.json"
+
+
+_REPO = Path(__file__).resolve().parent.parent
+_FINGERPRINT_SOURCES = (
+    _REPO / "core" / "rag" / "config_extractor.py",
+    _REPO / "core" / "rag" / "normalizer.py",
+    _REPO / "core" / "utils.py",
+    _REPO / "backend" / "services" / "vector_service.py",
+)
+
+
+_SAMPLES = {"n": 1}  # set by main(); part of the staging fingerprint
+_CALL_PACE = {"seconds": 0.0}  # set by main(); delay between LLM calls within one paper
+
+
+def extraction_fingerprint(label: dict[str, Any], retrieval: str) -> dict[str, Any]:
+    """Everything that, if changed, makes a staged extraction stale.
+
+    A staged extraction may be reused by a later run ONLY when this matches
+    exactly: same paper and variant, same model, same prompts and retrieval
+    code, same reasoning effort, seed and token ceiling. With extraction now
+    deterministic (reasoning_effort=low, fixed seed) a matching fingerprint
+    means the same function of the same inputs -- the only thing that differs
+    is wall-clock, so resuming is not blending two runs.
+    """
+    import hashlib
+
+    from core import llm_client
+    from core.rag import config_extractor as ce
+
+    code = hashlib.sha256()
+    for src in _FINGERPRINT_SOURCES:
+        code.update(src.read_bytes())
+    return {
+        "schema": 1,
+        "paper_id": label["paper_id"],
+        "source": label.get("source"),
+        "variant": label.get("variant"),
+        "retrieval": retrieval,
+        "model": _bare_primary_model(),
+        "reasoning_effort": ce._EXTRACTION_REASONING_EFFORT,
+        "seed": llm_client.LLM_SEED,
+        "max_tokens": llm_client.MAX_COMPLETION_TOKENS,
+        "samples": _SAMPLES["n"],
+        "code_sha256": code.hexdigest(),
+    }
+
+
+def _reusable_staged(label: dict[str, Any], retrieval: str) -> dict[str, Any] | None:
+    """A clean staged extraction from a prior run whose fingerprint matches."""
+    staged = _staged_path(label["paper_id"], retrieval)
+    fp_path = _staged_fingerprint_path(label["paper_id"], retrieval)
+    if not (staged.exists() and fp_path.exists()):
+        return None
+    try:
+        recorded = json.loads(fp_path.read_text(encoding="utf-8"))
+        result = json.loads(staged.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if recorded != extraction_fingerprint(label, retrieval):
+        return None
+    # Only a clean extraction is worth resuming; a rejected one is re-run.
+    if result.get("extraction_method") == "rule_based_fallback" or result.get("provider_fallback"):
+        return None
+    return result
 
 
 def promote_staged_cache(retrieval: str) -> list[str]:
@@ -152,16 +231,26 @@ def promote_staged_cache(retrieval: str) -> list[str]:
             staged.read_text(encoding="utf-8"), encoding="utf-8"
         )
         staged.unlink()
+        _staged_fingerprint_path(paper_id, retrieval).unlink(missing_ok=True)
         promoted.append(paper_id)
     return promoted
 
 
-def discard_staged_cache(retrieval: str) -> list[str]:
-    """Drop staged extractions from a rejected run, leaving the cache untouched."""
+def discard_staged_cache(retrieval: str, only: Iterable[str] | None = None) -> list[str]:
+    """Drop staged extractions from a rejected run, leaving the cache untouched.
+
+    With ``only``, drop just those papers and keep the rest staged for resume:
+    one transient 429 then costs one paper's re-extraction, not a whole run.
+    """
+    wanted = set(only) if only is not None else None
     discarded: list[str] = []
     for staged in sorted(CACHE_DIR.glob(f"*.{retrieval}.staged.json")):
-        discarded.append(staged.name[: -len(f".{retrieval}.staged.json")])
+        paper_id = staged.name[: -len(f".{retrieval}.staged.json")]
+        if wanted is not None and paper_id not in wanted:
+            continue
+        discarded.append(paper_id)
         staged.unlink()
+        _staged_fingerprint_path(paper_id, retrieval).unlink(missing_ok=True)
     return discarded
 
 
@@ -175,11 +264,16 @@ class _DiagnosticExtractor(ConfigExtractor):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._llm_calls = 0
         self.diagnostic: dict[str, Any] = {
             "focused_text": None,
             "raw_llm_response": None,
             "raw_llm_error": None,
+            "parsed_spec_pre_verification": None,
             "parsed_spec_pre_normalization": None,
+            "verification_response": None,
+            "verification_reverted": [],
+            "consensus": None,
             "spec_post_normalization": None,
         }
 
@@ -191,15 +285,20 @@ class _DiagnosticExtractor(ConfigExtractor):
     def _extract_with_llm(self, text):
         original_complete = config_extractor_module.llm_complete
 
-        def capture_response(prompt):
-            response = original_complete(prompt)
+        def capture_response(prompt, **kwargs):
+            # Consensus fires several calls per paper back to back; on a
+            # tokens-per-minute limit that burst is what 429s. Pace them.
+            if self._llm_calls and _CALL_PACE["seconds"] > 0:
+                time.sleep(_CALL_PACE["seconds"])
+            self._llm_calls += 1
+            response = original_complete(prompt, **kwargs)
             self.diagnostic["raw_llm_response"] = response
             return response
 
         config_extractor_module.llm_complete = capture_response
         try:
             raw = super()._extract_with_llm(text)
-            self.diagnostic["parsed_spec_pre_normalization"] = raw
+            self.diagnostic["parsed_spec_pre_verification"] = raw
             return raw
         except Exception as exc:
             self.diagnostic["raw_llm_error"] = str(exc)
@@ -207,9 +306,17 @@ class _DiagnosticExtractor(ConfigExtractor):
         finally:
             config_extractor_module.llm_complete = original_complete
 
+    def _extract_with_llm_consensus(self, text):
+        chosen = super()._extract_with_llm_consensus(text)
+        self.diagnostic["consensus"] = self.consensus
+        self.diagnostic["parsed_spec_pre_verification"] = chosen
+        return chosen
+
     def _verify_extraction(self, original_text, extracted):
         verified = super()._verify_extraction(original_text, extracted)
         self.diagnostic["parsed_spec_pre_normalization"] = verified
+        self.diagnostic["verification_response"] = self.verification_response
+        self.diagnostic["verification_reverted"] = list(self.verification_reverted)
         return verified
 
     def _extract_rule_based(self, text):
@@ -260,6 +367,10 @@ def _load_or_extract(
             )
         return _normalise_extraction(json.loads(cache_path.read_text(encoding="utf-8"))), True
 
+    reusable = _reusable_staged(label, retrieval)
+    if reusable is not None:
+        return reusable, False
+
     result = _normalise_extraction(extractor(label))
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     # Stage, do not publish. --strict refuses to write the *results* file for a
@@ -273,13 +384,27 @@ def _load_or_extract(
     _staged_path(label["paper_id"], retrieval).write_text(
         json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
     )
+    _staged_fingerprint_path(label["paper_id"], retrieval).write_text(
+        json.dumps(extraction_fingerprint(label, retrieval), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return result, False
 
 
 def _layer_types(spec: dict[str, Any]) -> set[str]:
+    """Predicted layer types, mapped through the system's own synonym table.
+
+    Scoring raw strings measured the model's *spelling*: "add_norm" for the
+    Transformer's Add & Norm sublayer counted as one false positive and one
+    missed layernorm. The synonym map is the system's declared vocabulary;
+    applying it here means a synonym added later scores cached specs without
+    re-extraction, and the benchmark measures identification, not naming.
+    """
+    from core.rag.normalizer import _normalize_type
+
     layers = spec.get("layers", [])
     return {
-        layer["type"].lower()
+        _normalize_type(layer["type"])
         for layer in layers
         if isinstance(layer, dict) and isinstance(layer.get("type"), str)
     }
@@ -489,6 +614,10 @@ def build_baseline(results: dict, source_results: str) -> dict:
         "schema_version": LABEL_SCHEMA_VERSION,
         "retrieval": results["retrieval"],
         "primary_model": _bare_primary_model(),
+        # A 1-sample run and a 3-sample consensus run are different
+        # measurements of the same system; comparing one against the other
+        # would report sampling variance as a regression (or hide one).
+        "samples": _SAMPLES["n"],
         "papers": aggregate["papers"],
         "source_results": source_results,
         "created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -546,6 +675,13 @@ def check_against_baseline(
             f"primary model mismatch: baseline={baseline_model!r} current={current_model!r}"
         )
 
+    baseline_samples = baseline.get("samples")
+    if baseline_samples is not None and baseline_samples != _SAMPLES["n"]:
+        problems.append(
+            f"sampling mismatch: baseline was built with samples={baseline_samples}, "
+            f"this run uses samples={_SAMPLES['n']}; the two are not comparable"
+        )
+
     aggregate = results["aggregate"]
     for name, reference in baseline["metrics"].items():
         if reference is None:
@@ -567,17 +703,33 @@ def _chunk_retriever(query: str, texts: list[str], top_k: int) -> list[str]:
     return hybrid_rank_texts(query, texts, top_k=top_k)
 
 
-def _live_extractor(label: dict[str, Any], retrieval: str = "production") -> dict:
-    source = str(label["source"])
+def fetch_paper_chunks(source: str) -> tuple[str, list[tuple[int, str]], list[dict[str, Any]]]:
+    """Fetch an arXiv PDF and build the production chunk set.
+
+    Single source of truth for PDF -> text -> chunks. The live benchmark and
+    benchmarks/diagnose.py both call this, so a diagnostic can never measure a
+    different extraction than production. That is not theoretical: diagnose.py
+    kept its own copy of this logic and silently missed the x_tolerance fix,
+    so every --focus-only diagnosis read degraded text while the harness read
+    clean text.
+    """
     if not source.startswith("arxiv:"):
         raise ValueError(f"live benchmark only supports arXiv labels, got {source}")
     paper_id = source.removeprefix("arxiv:")
     # arXiv redirects the conventional .pdf URL. Keep this compatibility
     # detail inside the benchmark-only live adapter; production behavior is
     # deliberately outside this prompt's scope.
-    response = httpx.get(
-        f"https://arxiv.org/pdf/{paper_id}.pdf", follow_redirects=True, timeout=60.0
-    )
+    url = f"https://arxiv.org/pdf/{paper_id}.pdf"
+    # DNS and connection blips are transient; one cost three papers on
+    # 2026-09-17. Retry briefly before giving up on the paper.
+    for attempt in range(4):
+        try:
+            response = httpx.get(url, follow_redirects=True, timeout=60.0)
+            break
+        except httpx.TransportError:
+            if attempt == 3:
+                raise
+            time.sleep(5 * (2 ** attempt))
     response.raise_for_status()
     try:
         import pdfplumber
@@ -604,10 +756,18 @@ def _live_extractor(label: dict[str, Any], retrieval: str = "production") -> dic
     source_chunks.extend(extract_table_chunks(page_texts))
     source_chunks.extend(extract_caption_chunks(page_texts))
 
+    return text, page_texts, source_chunks
+
+
+def _live_extractor(label: dict[str, Any], retrieval: str = "production", samples: int = 1) -> dict:
+    text, _page_texts, source_chunks = fetch_paper_chunks(str(label["source"]))
+
     # This baseline measures extraction. It intentionally does not generate
     # code or contact E2B, which would measure a separate downstream stage.
     if retrieval == "production":
-        extractor = _DiagnosticExtractor(chunk_retriever=_chunk_retriever)
+        extractor = _DiagnosticExtractor(
+            chunk_retriever=_chunk_retriever, variant=label.get("variant"), samples=samples
+        )
         spec = extractor.extract_from_text(text, source_chunks=source_chunks)
     elif retrieval == "legacy":
         extractor = _DiagnosticExtractor()
@@ -640,16 +800,55 @@ def _live_extractor(label: dict[str, Any], retrieval: str = "production") -> dic
     }
 
 
-def _live_extractor_with_retry(label: dict[str, Any], retrieval: str = "production", attempts: int = 3) -> dict:
-    """Retry a whole paper only when the recorded result proves a rate-limit fallback."""
-    result = _live_extractor(label, retrieval=retrieval)
+def _live_extractor_with_retry(
+    label: dict[str, Any], retrieval: str = "production", attempts: int = 3, samples: int = 1
+) -> dict:
+    """Retry a whole paper only when the recorded result proves a rate-limit fallback.
+
+    A paper that *raises* on a transport failure is retried after a long wait
+    rather than counted as a hard failure and skipped. Two network outages in
+    two days each outlasted the per-call retries (~2 min) and took out six
+    papers in a few minutes at 20s pacing; the outage, not the paper, was the
+    problem, and the run should wait it out.
+    """
+    result = _live_extractor_waiting_out_outages(label, retrieval=retrieval, samples=samples)
     for attempt in range(1, attempts):
         reason = str(result.get("extraction_reason") or "").lower()
         if result.get("extraction_method") != "rule_based_fallback" or "rate" not in reason:
             break
         time.sleep(8 * attempt)
-        result = _live_extractor(label, retrieval=retrieval)
+        result = _live_extractor_waiting_out_outages(label, retrieval=retrieval, samples=samples)
     return result
+
+
+_OUTAGE_WAIT = {"seconds": 180.0, "rounds": 40}  # up to 2 hours per paper; a 25-minute outage beat 20
+
+
+def _is_transport_failure(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return isinstance(exc, httpx.TransportError) or any(
+        marker in text for marker in (
+            "getaddrinfo", "internalservererror", "apiconnectionerror",
+            "circuit breaker", "connection", "timed out", "timeout",
+        )
+    )
+
+
+def _live_extractor_waiting_out_outages(label, retrieval="production", samples=1):
+    for attempt in range(_OUTAGE_WAIT["rounds"] + 1):
+        try:
+            return _live_extractor(label, retrieval=retrieval, samples=samples)
+        except Exception as exc:  # noqa: BLE001 -- only transport failures are retried
+            if not _is_transport_failure(exc) or attempt == _OUTAGE_WAIT["rounds"]:
+                raise
+            print(
+                f"network outage while extracting {label['paper_id']} "
+                f"({type(exc).__name__}); waiting {_OUTAGE_WAIT['seconds']:.0f}s "
+                f"({_OUTAGE_WAIT['rounds'] - attempt} round(s) left)",
+                flush=True,
+            )
+            time.sleep(_OUTAGE_WAIT["seconds"])
+    raise AssertionError("unreachable")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -665,6 +864,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", default=str(BASELINE_PATH), help="baseline file path")
     parser.add_argument("--tolerance", type=float, default=CHECK_TOLERANCE, help="allowed absolute metric drop")
     parser.add_argument("--timestamp", help="UTC timestamp used in the result filename")
+    parser.add_argument("--fresh", action="store_true", help="live: ignore staged extractions from a prior rejected run")
+    parser.add_argument("--samples", type=int, default=1, help="live: independent extraction draws per paper; the medoid is kept")
+    parser.add_argument("--call-pace-seconds", type=float, default=0.0, help="live: delay between LLM calls within one paper (consensus bursts)")
     parser.add_argument("labels", nargs="*", help="label JSON files (default: all bundled labels)")
     args = parser.parse_args(argv)
     paths = [Path(path) for path in args.labels] or sorted(LABELS_DIR.glob("*.json"))
@@ -687,7 +889,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"check failed: {problem}")
         return 1
 
-    extractor = (lambda label: _live_extractor_with_retry(label, retrieval=args.retrieval)) if args.live else None
+    if args.live and args.fresh:
+        dropped = discard_staged_cache(args.retrieval)
+        if dropped:
+            print(f"--fresh: dropped {len(dropped)} staged extraction(s)")
+    _SAMPLES["n"] = args.samples
+    _CALL_PACE["seconds"] = args.call_pace_seconds
+    extractor = (
+        lambda label: _live_extractor_with_retry(label, retrieval=args.retrieval, samples=args.samples)
+    ) if args.live else None
     results = run_benchmark(paths, extractor=extractor, retrieval=args.retrieval, pace_seconds=args.pace_seconds if args.live else 0.0)
     print_table(results)
     strict = args.live if args.strict is None else args.strict
@@ -695,9 +905,20 @@ def main(argv: list[str] | None = None) -> int:
     if strict and rejections:
         for reason, papers in rejections.items():
             print(f"strict live benchmark rejected {reason}: {', '.join(papers)}")
-        discarded = discard_staged_cache(args.retrieval)
+        rejected = sorted({paper for papers in rejections.values() for paper in papers})
+        discarded = discard_staged_cache(args.retrieval, only=rejected)
+        # Count what is actually on disk: a hard-failed paper has a result
+        # row but no staged file, and was being reported as "kept".
+        kept = [
+            item["paper_id"] for item in results["per_paper"]
+            if item["paper_id"] not in rejected
+            and _staged_path(item["paper_id"], args.retrieval).exists()
+        ]
         if discarded:
             print(f"discarded staged cache for {len(discarded)} paper(s); prior cache left intact")
+        if kept:
+            print(f"kept {len(kept)} clean staged extraction(s) for resume; "
+                  f"re-run --live to extract only the rejected paper(s), or --fresh to start over")
         return 1
     promoted = promote_staged_cache(args.retrieval)
     if promoted:

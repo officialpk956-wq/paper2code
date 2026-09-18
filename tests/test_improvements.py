@@ -47,7 +47,12 @@ def test_llm_complete_includes_fallback_once_retries_are_exhausted():
 
     def fake_completion(**kwargs):
         call_kwargs_seen.append(kwargs)
-        if len(call_kwargs_seen) < 3:
+        # Exhaust exactly the configured retries so the final attempt is the
+        # one under test; a fixed 2 failures stopped reaching it once the
+        # rate-limit window was widened.
+        from core.llm_client import RATE_LIMIT_RETRIES
+
+        if len(call_kwargs_seen) <= RATE_LIMIT_RETRIES:
             raise litellm_exc.RateLimitError(
                 message="rate limited", llm_provider="groq", model=kwargs["model"]
             )
@@ -64,13 +69,13 @@ def test_llm_complete_includes_fallback_once_retries_are_exhausted():
 
         llm_complete("test")
 
-    # The two retries on the primary must NOT carry fallbacks (that's the
+    # Every retry on the primary must NOT carry fallbacks (that's the
     # whole point -- give the preferred model a real chance first).
-    assert call_kwargs_seen[0]["fallbacks"] == []
-    assert call_kwargs_seen[1]["fallbacks"] == []
+    for seen in call_kwargs_seen[:-1]:
+        assert seen["fallbacks"] == []
     # Fallback protection genuinely exists once retries are exhausted.
-    assert call_kwargs_seen[2]["fallbacks"] == (
-        [FALLBACK_MODEL] if PRIMARY_MODEL != FALLBACK_MODEL else []
+    assert call_kwargs_seen[-1]["fallbacks"] == (
+        [FALLBACK_MODEL] if FALLBACK_MODEL and PRIMARY_MODEL != FALLBACK_MODEL else []
     )
 
 

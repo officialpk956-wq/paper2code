@@ -134,3 +134,41 @@ def test_ingestion_persists_non_text_chunks_from_a_real_pdf():
         assert "equation" in chunk_types
     finally:
         session.close()
+
+
+def test_expansion_cannot_pull_an_unrelated_table_through_list_adjacency():
+    """source_chunks is prose + every table + every caption, so a table's
+    list neighbour is another table from a different page. Expansion must
+    follow the paper's reading order (page/offset), not list position, or
+    unrelated results tables enter the context and cost precision.
+    """
+    from core.rag.config_extractor import ConfigExtractor
+
+    def chunk(page, start, text, kind="text"):
+        return {"page": page, "source_offset_start": start,
+                "source_offset_end": start + len(text),
+                "chunk_type": kind, "section": "other", "text": text}
+
+    near = chunk(1, 300, "Table 1: layer widths conv 64 128 256 512 stride 2", "table")
+    far = chunk(9, 9100, "Table 7: ImageNet accuracy 76.5 77.1 78.3 top-1 layers 50", "table")
+    prose = [
+        chunk(1, 0, "We describe the architecture below with residual blocks."),
+        chunk(1, 380, "Each stage doubles the channels and halves resolution."),
+        chunk(2, 1000, "Training used SGD with momentum and weight decay."),
+        chunk(2, 1400, "We evaluate on the standard validation split."),
+        chunk(9, 9000, "Unrelated evaluation discussion about benchmarks."),
+    ]
+    # Tables are appended after all prose, exactly as the harness builds them.
+    source_chunks = prose + [near, far]
+    assert source_chunks.index(far) == source_chunks.index(near) + 1
+
+    # Budget smaller than the corpus, so `far` can only arrive via expansion.
+    ex = ConfigExtractor(use_llm=False, verify=False,
+                         chunk_retriever=lambda q, texts, k: texts[:k])
+    selected = ex._select_focus_chunks(source_chunks, total=3, reserved=1,
+                                       expand_neighbors=True,
+                                       max_context_chars=10_000)
+
+    assert near["text"] in selected, "the ranked table itself must be kept"
+    assert far["text"] not in selected, (
+        "an unrelated table nine pages away must not enter via list adjacency")

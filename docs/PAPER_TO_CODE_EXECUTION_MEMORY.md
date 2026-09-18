@@ -1820,3 +1820,108 @@ on extraction quality, so the score-level effect is still unmeasured.
   inflate spurious matches). Measure before changing anything else.
 - `paper_to_code_generator` and `paper_ingestion_service` have no assertion
   that `x_tolerance=1` is passed; only the harness does.
+
+## 2026-09-16 — The benchmark was measuring sampling noise, and now it isn't
+
+### What broke the premise
+
+Two strict live runs on 2026-09-09 with byte-identical extraction code
+disagreed on 5 of 6 commonly-served papers (precision 0.640 -> 0.503 on the
+same six). The project had recorded "temperature=0 pinned -> noise floor
+~zero, so differences are signal". False. Most Phase 5/6 deltas were smaller
+than this noise.
+
+Direct probe, same prompt twice: no seed 5 vs 9 layers; seed=42 **14 vs 3**;
+seed + effort=medium 4 vs 11; seed + **effort=low 4 vs 4, identical hash**.
+gpt-oss-120b is a reasoning model and its trace diverges; `seed` alone does
+nothing. `reasoning_effort="low"` is pinned on the extraction and
+verification calls only. Two matching samples is the first pair that ever
+matched, not a proof.
+
+### Astra's plan, verified then executed
+
+An external review (astra) produced a six-item plan. Every checkable claim
+verified against code and the saved diagnostics before anything was changed;
+two claims were *understated* (astra found one unpatched `x_tolerance` site,
+there were three; astra said `scratchpad/pdfs/` was absent -- it was absent
+in astra's checkout, not this one).
+
+1. **Diagnostics match production.** `benchmarks/diagnose.py` kept its own
+   copy of the PDF->chunks logic and silently missed the `x_tolerance` fix, so
+   every `--focus-only` diagnosis had read degraded text. Both now call one
+   `fetch_paper_chunks`. Six sites total were patched; I had reported three.
+2. **Expansion follows reading order.** `source_chunks` is prose + every
+   table + every caption, so `index+1` from a table was an unrelated table on
+   another page. Now page/offset adjacency. Test verified to fail on the old
+   code.
+3. **Variant-aware retrieval.** `variant: "ViT-Base"` on the label names
+   which configuration to report and supplies none of its numbers. It enters
+   the query, gets a reserved slot, and adds a prompt rule against merging
+   variants or reading ablations. ViT `hidden_size=768` reaches focus.
+4. **Verification repaired.** It saw `original_text[:4000]`; EfficientNet's
+   `Conv1x1 & Pooling & FC ... 1280` sat at char 8379 and an unrelated 512 at
+   char 1277, so it replaced a table-backed value with an invented one and the
+   layer-count-only acceptance rule could not see it. Truncation removed;
+   numeric replacements must appear in the evidence; verification response and
+   reverted changes recorded separately. `parsed_spec_pre_normalization` had
+   been overwritten with the *post*-verification spec -- the field was lying.
+5. Completeness checks: not built. The full-text verification may cover the
+   compound-cell case; measure before adding machinery.
+6. **Resumable evaluation.** Fingerprinted staging; rejection keeps clean
+   papers; `--live` resumes on exact match; `--fresh` starts over.
+
+Also: `LLM_FALLBACK_MODEL` defaults to empty (unsetting it used to select a
+*different* Gemini); rate-limit retries 4x exponential.
+
+### Deterministic result (zero quota, reproducible)
+
+Focus-evidence sweep across all 10 papers: **44/45 -> 45/45** layer types,
+all labelled hyperparameters present. The one remaining "miss"
+(`densenet:num_classes=1000`) is a label problem -- the paper's only 1000 is
+"> 1000 layers".
+
+### Bugs made and caught in the loop
+
+- Broadening the query fixed EfficientNet's `silu` and **broke ViT** -- the
+  variants table lost rank. Caught only by measuring after each step. Fixed
+  with a reserved slot, not a heavier query weight.
+- Heredoc collapsed `\b` into a backspace byte and `\n` into a newline;
+  twice. The backspace made the evidence guard revert *everything*, and the
+  "must revert" test passed anyway -- only its paired "must accept" test
+  caught it. Guards need both directions.
+- A test helper named `_label` shadowed an existing one and broke 8 tests.
+- Five tests hardcoded the old retry count; all now derive from
+  `RATE_LIMIT_RETRIES`. A literal that duplicates config goes stale silently
+  -- the same shape as the `diagnose.py` copy.
+- Three times a change passed its targeted tests and the full suite caught
+  a break. Targeted runs are for iteration; the suite gates anything
+  expensive.
+
+## 2026-09-17 — Closing Phase 6: what it took, what it cost
+
+- **Consensus extraction** (`--samples 3`, medoid by layer-type Jaccard, no
+  merging, deterministic tie-break). Provider determinism is not available:
+  `seed` does nothing, `reasoning_effort=low` only matched within one process
+  (a same-replica artifact -- separate processes diverged), the prompt hashes
+  identically across processes, and the non-reasoning fallback model no
+  longer exists on Groq. So: reduce variance, don't pretend it away.
+- **Circuit-breaker cascade.** With 3x calls, bursts hit the per-minute limit;
+  exhausted 429s counted as failures, five opened the breaker, and every
+  following paper failed instantly with no request sent. Rate limits no
+  longer feed the breaker; calls within a paper are paced.
+- **Quota wait.** A --strict benchmark on a daily budget should wait hours
+  for quota rather than give up in two minutes and fall back to rule-based,
+  which under --strict is worth exactly nothing. `LLM_QUOTA_WAIT_SECONDS` /
+  `LLM_QUOTA_WAIT_ROUNDS`, off by default.
+- **Label curation, twice.** First pass was model-informed (checked only
+  predicted types); precision 0.611 -> 0.835. Neutral pass scanned every
+  canonical type with model output not consulted; recall 0.830 -> 0.714.
+  Both passes cite the paper's sentence in the label. Reading the hits
+  mattered: "eliminating fully connected layers", "we do not use dropout",
+  "rather than the standard relu" are all regex hits that mean *no*.
+- **Baseline** written from the first strict-accepted run, scored on neutral
+  labels, with `primary_model` and `samples` recorded; `--check` refuses a
+  sampling mismatch. `--check` passes for the first time in the project.
+- **Cost of a tidy-up:** clearing staged files to remove rule-based entries
+  also deleted two clean 3-sample extractions. ~8 calls of quota.
+- Also fixed: default `PRIMARY_MODEL` pointed at a model Groq removed.

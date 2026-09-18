@@ -18,16 +18,25 @@
 
 ---
 
-## §0 Status — 2026-09-08
+## §0 Status — 2026-09-17
 
-**Delivered:** original Phases 1–4 complete; Phases 5 and 6 (as re-scoped in
-§8) executed, each meeting most but not all of its gate. A post-Phase-6
-finding — **silently degraded PDF text extraction across all ten papers** —
-is fixed but not yet scored (§8 → Post-Phase 6).
-**Gate:** **1946** backend tests passing (10 skipped, 0 failed) + 38 frontend.
+**Delivered:** original Phases 1–4 complete; Phase 5 met 3 of 5. **Phase 6:
+all four criteria met on the first strict-accepted run in the project's
+history** (2026-09-16, 0 rule-based / 0 provider fallbacks, Groq-pure), and
+`benchmarks/baseline.json` is written from it -- `--check` passes for the
+first time. **Phase 6 is not closed**, for one reason: that run is a single
+draw from an extractor that is provably nondeterministic (§8 →
+*Nondeterminism*), so its margins are not yet trustworthy. Consensus
+extraction (`--samples 3`, medoid) is implemented and tested but its live
+run was cut short by the daily token budget; closing Phase 6 means one clean
+3-sample run and one re-extraction to *measure* that consensus narrowed the
+variance.
+**Gate:** **1965** backend tests passing (10 skipped, 0 failed) + 38 frontend.
 **Uncommitted:** everything from Phase 3 onward is in the working tree.
-**Current quality** (best clean-ish measurement, see §8 → Phase 6 — RESULT):
-recall 0.702 | precision 0.654 | hyperparam 0.533 | family 0.900.
+**Current quality** (run 20260916T182252Z rescored against the 2026-09-17
+*neutral-pass* labels; see §8 → *Nondeterminism* for why this is one draw):
+recall 0.714 | precision 0.835 | hyperparam 0.667 | family 0.900.
+Recall sits 0.014 above its 0.70 threshold -- inside the noise.
 **Blocking constraint:** Groq **daily token budget**, not rate limiting.
 
 ### Phase mapping (planned → as executed)
@@ -498,8 +507,10 @@ output. Three separate defects were causing that, all found and fixed:
    chars, still truncated). At 16384 U-Net completes: **recall 1.00**,
    up from a rule-based 0.75 with a garbage spec.
 
-Also settled during the phase: the noise floor is **zero** (`temperature=0`
-is pinned, and three live re-extractions were bit-identical), and
+Also settled during the phase: the noise floor was believed to be **zero**
+(`temperature=0` pinned, three re-extractions bit-identical) -- **this was
+wrong**; see §8 → *Nondeterminism* for the measurement that overturned it
+and the fix. And
 **production retrieval beats legacy** — controlled comparison gave recall
 0.583 vs 0.417 and family 0.75 vs 0.50, with the production focused text
 containing far more architecture vocabulary (EfficientNet: `conv` x25 vs
@@ -537,6 +548,45 @@ Verified on Groq-served papers (valid against `phase5-clean`):
 
 `benchmarks/baseline.json` was **not** refreshed. A provider-mixed run must
 never become the reference.
+
+### Phase 6 — RESULT, second measurement (2026-09-16, strict-accepted)
+
+First run ever accepted by `--strict`: `benchmarks/results/20260916T182252Z.json`,
+0 rule-based, 0 provider fallbacks, deterministic-retrieval settings
+(`reasoning_effort=low`, seed 42, 1 sample). Rescored on 2026-09-17 against
+labels curated from explicit paper statements (each addition cites its
+sentence in the label's `notes`; see the execution memory for what was
+*rejected* on reading, e.g. DCGAN's "eliminating fully connected layers").
+
+| Exit criterion | Target | model-informed labels | **neutral labels** | |
+|---|---|---|---|---|
+| hyperparam_accuracy | >= 0.50 | 0.667 | **0.667** | MET |
+| layer_type_recall | >= 0.70 | 0.830 | **0.714** | met, by 0.014 |
+| precision | >= 0.65 | 0.835 | **0.835** | MET |
+| no single paper below 0.40 | — | 0.62 | lowest **0.50** | MET |
+
+The first curation pass checked only the types the model had predicted --
+legitimate additions, biased selection. The **neutral pass** scanned every
+canonical type against every paper with model output not consulted and
+added 11 more types the papers state about their own models (bert: softmax,
+feedforward, [CLS]; vit: GELU, MLP/feedforward, MSA, tanh head, dropout;
+ddpm, densenet, efficientnet one each). The extractor misses most of them,
+so recall fell from 0.830 to 0.714. That is the honest number and the
+baseline is built on it. Rejected on reading, among others: ResNet
+"We do not use dropout", U-Net "does not have any fully connected layers",
+BERT "rather than the standard relu", DCGAN "replaces ... maxpooling with
+strided convolutions".
+
+What keeps this from closing the phase: **one draw**. Re-extracting
+bert_base under identical settings gave a different spec (precision
+0.67 -> 0.40), and recall's margin over its threshold is 0.014.
+
+Also fixed on the way: the default `PRIMARY_MODEL` pointed at
+`llama-3.3-70b-versatile`, which no longer exists on Groq -- only `.env`
+was keeping the system alive; and exhausted-retry 429s were feeding the
+circuit breaker, so one paper's rate limit opened the circuit and every
+following paper failed instantly without a request (a cascade, observed
+with 3-sample consensus). Rate limits no longer count toward the breaker.
 
 ### The root cause took five attempts to find
 
@@ -642,6 +692,107 @@ path, so this improves real uploads and not only the benchmark:
 reaching the model and no test regressions. It does *not* show recall or
 hyperparam accuracy moving — no test asserts on extraction quality. The
 clean live run remains the deciding measurement.
+
+### Nondeterminism: temperature=0 was not deterministic (2026-09-09, fixed 2026-09-16)
+
+Two strict live runs with **byte-identical extraction code** -- only the
+retry policy in `core/llm_client.py` differed -- disagreed on 5 of the 6
+papers both had served via the LLM:
+
+| paper | recall r1 -> r2 | precision r1 -> r2 |
+|---|---|---|
+| bert_base | 0.50 -> 0.25 | 0.33 -> 0.33 |
+| dcgan | 0.75 -> 1.00 | 0.75 -> 0.44 |
+| ddpm | 1.00 -> 1.00 | 0.75 -> 0.33 |
+| densenet121 | 0.67 -> 0.67 | 0.67 -> 0.67 |
+| efficientnet_b0 | 0.67 -> 0.67 | 0.67 -> 0.50 |
+| vit_base | 0.80 -> 0.60 | 0.67 -> 0.75 |
+
+Aggregate precision on the same six papers moved 0.640 -> 0.503. The noise
+was larger than most deltas Phases 5 and 6 had attributed to code changes,
+which means single-run comparisons from those phases are weaker than they
+were recorded as. The deterministic zero-quota measurements (focused-text
+evidence sweeps, the char-8379 verification trace) are unaffected -- they
+involve no sampling.
+
+**Isolated with a direct probe** (same prompt sent twice, bert_base):
+
+| setting | call 1 | call 2 | identical |
+|---|---|---|---|
+| temperature=0, no seed | 5 layers | 9 layers | no |
+| temperature=0, seed=42 | 14 layers | 3 layers | no |
+| seed=42, reasoning_effort=medium | 4 layers | 11 layers | no |
+| seed=42, **reasoning_effort=low** | 4 layers | 4 layers | **yes (same hash)** |
+
+`gpt-oss-120b` is a reasoning model. Its reasoning trace diverges between
+identical calls and the extracted layer list diverges with it; `seed` alone
+does nothing. Pinning `reasoning_effort="low"` is the only setting that
+returned identical completions, and it is now applied to the extraction
+and verification calls only (`EXTRACTION_REASONING_EFFORT`, default `low`),
+leaving other `llm_complete` callers untouched. Two identical samples is
+not a proof of determinism; it is the first pair that ever matched, and the
+mechanism is understood.
+
+**Trade-off, stated up front:** low effort may extract less. That is now
+*measurable*, which it was not before. A deterministic 0.70 beats an
+unmeasurable number that lands anywhere between 0.50 and 0.79.
+
+Landed with it:
+
+- **Resumable evaluation.** Each staged extraction now carries a
+  fingerprint (paper, variant, model, retrieval, reasoning effort, seed,
+  token ceiling, sha256 of the extraction/retrieval sources). A strict
+  rejection discards only the rejected papers and keeps the clean ones; the
+  next `--live` re-extracts only what is missing and resumes the rest when
+  the fingerprint matches exactly. `--fresh` starts over. One transient 429
+  now costs one paper, not a day of quota. With deterministic extraction a
+  matching fingerprint is the same function of the same inputs, so this is
+  not blending runs.
+- **Fallback is opt-in.** `LLM_FALLBACK_MODEL` defaulted to a Gemini model,
+  so *unsetting* it silently selected a different Gemini rather than
+  disabling fallback -- which is how a run meant to be Groq-pure came back
+  provider-mixed. Default is now empty.
+- **Rate-limit retries widened**: 4 retries with exponential backoff
+  (8/16/32/64s, ~120s window) instead of 2 at a flat 8s. In the probe every
+  call hit 429s and every call recovered.
+
+### Consensus, measured (2026-09-17)
+
+Three independent draws per paper, medoid kept (Jaccard over layer-type
+sets). First six papers through:
+
+| paper | layers per draw | agreement per draw | kept |
+|---|---|---|---|
+| resnet50 | 9 / 9 / 9 | 1.00 / 1.00 / 1.00 | identical |
+| mobilenet_v1 | 88 / 60 / 84 | 0.88 / 0.94 / 0.94 | #1 |
+| bert_base | 7 / 7 / 5 | 0.92 / 0.92 / 0.83 | #0, outlier rejected |
+| vit_base | 6 / 5 / 4 | 0.75 / 0.82 / 0.73 | #1, outlier rejected |
+| unet | 52 / 49 / 49 | 0.73 / 0.73 / 0.80 | #2 |
+| transformer_base | 16 / 16 / 12 | 0.75 / 0.75 / 0.50 | #0, outlier rejected |
+
+Median agreement of the kept draw **0.87**. The medoid rejected a visible
+outlier in four of six papers -- transformer's 12-layer draw agreed 0.50
+with the others, which is the 3-vs-14-layer failure mode being filtered.
+**Consensus narrows the variance measurably and does not eliminate it**:
+~13% type-set disagreement remains, so a re-draw can still move a paper by
+a few points. Treat live aggregates as carrying roughly +/-0.05-0.10.
+`hyperparam_accuracy` rose 0.667 -> 0.917 on these papers; medoid selection
+favours the draw that read the dimensions correctly.
+
+**Cost, in the provider's own units.** Groq free tier (`on_demand`):
+200,000 tokens per day, rolling 24h window. One extraction call is ~5,100
+tokens; a 3-sample run is ~40 calls, ~210K -- *more than the daily limit by
+construction*. A single-sample run (~75K) fits; consensus cannot, without
+Dev Tier. The harness now waits for quota (`LLM_QUOTA_WAIT_SECONDS`) rather
+than falling back, so a run straddles the window instead of dying.
+
+**Two integrity holes found by a DNS outage during the run.** (1) `--strict`
+never checked for *hard failures* -- a paper whose PDF fetch or extractor
+raised was scored None, averaged away, and the run would have been
+accepted, promoted and baselined with seven papers. Now rejected. (2)
+Transient transport errors (`getaddrinfo failed`) had no retry on either
+network path and went straight to the breaker; one blip cost a paper and
+skipped three. Both paths now retry briefly.
 
 ### Measurement constraint: daily token quota, not rate limiting
 

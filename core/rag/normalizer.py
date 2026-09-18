@@ -54,6 +54,18 @@ CANONICAL_TYPES = {
     "causal_attention",
     "cross_attention",
     "sequence_pooling",
+    # Output activations and U-Net's crop are real layers (nn.Tanh, nn.Sigmoid,
+    # nn.Softmax; centre-crop before concat). They were being kept as
+    # non-canonical strings with a warning, which is harmless for codegen but
+    # meant the benchmark could never label them.
+    "tanh",
+    "sigmoid",
+    "softmax",
+    "crop",
+    # Token/word embeddings (transformer input layer). Distinct from
+    # positionalembedding and patchembedding, which already exist.
+    "embedding",
+    "mbconv",
 }
 
 # Comprehensive type synonym map: any variant → canonical type
@@ -164,11 +176,26 @@ _SYNONYM_MAP = {
     # Dropout
     "dropout": "dropout",
     "dropoutlayer": "dropout",
-    # Upsample variants
+    # Upsample variants. U-Net's "up-convolution" is upsampling followed by a
+    # 2x2 convolution; the model reports it as upconv2d and the benchmark
+    # label uses upsample, so the same operation scored as both a false
+    # positive and a miss.
     "upsample": "upsample",
     "upsampling": "upsample",
     "upsamplelayer": "upsample",
     "upsamplayer": "upsample",
+    "upconv": "upsample",
+    "upconv2d": "upsample",
+    "up-conv": "upsample",
+    "up_conv": "upsample",
+    "upconvolution": "upsample",
+    "up-convolution": "upsample",
+    "tanh": "tanh",
+    "sigmoid": "sigmoid",
+    "softmax": "softmax",
+    "crop": "crop",
+    "cropping": "crop",
+    "centercrop": "crop",
     # Residual variants
     "residual": "residualblock",
     "residualblock": "residualblock",
@@ -185,6 +212,46 @@ _SYNONYM_MAP = {
     "positionalembedding": "positionalembedding",
     "positional_embedding": "positionalembedding",
     "pos_embed": "positionalembedding",
+    # The Transformer paper's own term. Note _normalize_type strips _ - and
+    # whitespace before lookup, so keys here are the stripped forms.
+    "positionalencoding": "positionalembedding",
+    "positionencoding": "positionalembedding",
+    "sinusoidalencoding": "positionalembedding",
+    "sinusoidalembedding": "positionalembedding",
+    # Input embeddings
+    "embedding": "embedding",
+    "embeddings": "embedding",
+    "tokenembedding": "embedding",
+    "wordembedding": "embedding",
+    "inputembedding": "embedding",
+    "learnedembedding": "embedding",
+    "segmentembedding": "embedding",
+    "embeddinglayer": "embedding",
+    "wordpieceembedding": "embedding",
+    "tokentypeembedding": "embedding",
+    "typeembedding": "embedding",
+    # EfficientNet's block, stated seven times in its architecture table.
+    "mbconv": "mbconv",
+    "mbconvblock": "mbconv",
+    "mobileinvertedbottleneck": "mbconv",
+    "invertedresidual": "mbconv",
+    "invertedresidualblock": "mbconv",
+    # "Add & Norm" is the Transformer's residual-add-plus-LayerNorm sublayer;
+    # models name it as one unit. For type-set scoring it is the LayerNorm.
+    "addnorm": "layernorm",
+    "addandnorm": "layernorm",
+    "addlayernorm": "layernorm",
+    "residualnorm": "layernorm",
+    # Output heads are linear classifiers / projections.
+    "classificationhead": "linear",
+    "predictionhead": "linear",
+    "maskedlmhead": "linear",
+    "mlmhead": "linear",
+    "nextsentencepredictionhead": "linear",
+    "nsphead": "linear",
+    "outputprojection": "linear",
+    "outputlayer": "linear",
+    "classifier": "linear",
     "flatten": "flatten",
     "query_projection": "query_projection",
     "key_projection": "key_projection",
@@ -396,7 +463,7 @@ def _normalize_type(layer_type: Any) -> str:
 
     type_str = str(layer_type).strip().lower()
     # Normalize whitespace and punctuation for better matching
-    type_normalized = re.sub(r"[\s\-_]+", "", type_str)
+    type_normalized = re.sub(r"[\s\-_&+/]+", "", type_str)  # "Add & Norm" -> "addnorm"
     canonical = _SYNONYM_MAP.get(type_normalized, type_str)
 
     if canonical not in CANONICAL_TYPES:
