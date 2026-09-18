@@ -866,3 +866,70 @@ def test_non_transport_errors_are_not_retried(monkeypatch):
     with pytest.raises(ValueError):
         harness._live_extractor_with_retry({"paper_id": "p", "source": "arxiv:1"})
     assert len(calls) == 1, "a genuine error must surface immediately"
+
+
+def test_fingerprint_ignores_vocabulary_but_not_param_logic(tmp_path, monkeypatch):
+    """Adding a synonym must not invalidate staged extractions (scoring
+    re-applies the synonym table); changing parameter normalisation must."""
+    from benchmarks import harness
+
+    original = (harness._REPO / "core" / "rag" / "normalizer.py").read_text(encoding="utf-8")
+    fake = tmp_path / "normalizer.py"
+    fake.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(harness, "_FINGERPRINT_SOURCES", (fake,))
+    label = {"paper_id": "p", "source": "arxiv:1"}
+    before = harness.extraction_fingerprint(label, "production")["code_sha256"]
+
+    # 1. a new synonym inside _SYNONYM_MAP -> same fingerprint
+    fake.write_text(original.replace('    "addnorm": "layernorm",',
+                                     '    "addnorm": "layernorm",\n    "brandnewalias": "layernorm",'),
+                    encoding="utf-8")
+    assert harness.extraction_fingerprint(label, "production")["code_sha256"] == before
+
+    # 2. a change to parameter normalisation -> different fingerprint
+    fake.write_text(original.replace("def _normalize_params(", "def _normalize_params(  # changed\n    "),
+                    encoding="utf-8")
+    assert harness.extraction_fingerprint(label, "production")["code_sha256"] != before
+
+
+def test_check_annotates_a_drop_relative_to_the_noise_band():
+    from benchmarks import harness
+
+    base = {"schema_version": harness.LABEL_SCHEMA_VERSION, "retrieval": "production",
+            "primary_model": harness._bare_primary_model(), "samples": 1, "noise_band": 0.10,
+            "metrics": {"layer_type_recall": 0.80}}
+    inside = {"retrieval": "production", "aggregate": {"layer_type_recall": 0.72, "papers": 1}}
+    outside = {"retrieval": "production", "aggregate": {"layer_type_recall": 0.60, "papers": 1}}
+
+    ok, problems = harness.check_against_baseline(inside, base, tolerance=0.05)
+    assert not ok and any("inside" in p and "re-run" in p for p in problems), problems
+    ok, problems = harness.check_against_baseline(outside, base, tolerance=0.05)
+    assert not ok and any("OUTSIDE" in p and "regression" in p for p in problems), problems
+
+
+def test_baseline_records_the_noise_band_for_its_sampling():
+    from benchmarks import harness
+
+    results = {"retrieval": "production", "per_paper": [{"paper_id": "p", "extraction_method": "llm_verified"}],
+               "aggregate": {"papers": 1, **{m: 0.9 for m in harness._CHECKED_METRICS}}}
+    b = harness.build_baseline(results, "r.json")
+    assert b["noise_band"] == harness.NOISE_BAND[b["samples"]]
+
+
+def test_pdf_cache_follows_the_patched_cache_dir(tmp_path, monkeypatch):
+    """The PDF cache must live under CACHE_DIR *as patched by tests*; as an
+    import-time constant it wrote a 9-byte fake paper into the real cache."""
+    from benchmarks import harness
+
+    class Response:
+        content = b"pdf bytes"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(harness.httpx, "get", lambda url, **kw: Response())
+    assert harness.fetch_pdf_bytes("arxiv:9999.00001") == b"pdf bytes"
+    assert (tmp_path / "pdfs" / "9999.00001.pdf").exists()
+    real = Path(harness.__file__).resolve().parent / ".cache" / "pdfs" / "9999.00001.pdf"
+    assert not real.exists(), "test must never write into the real cache"

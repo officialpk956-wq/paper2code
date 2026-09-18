@@ -828,6 +828,42 @@ five-step chain above was actually solved.
   baseline is genuinely unverifiable for provider purity, and now says so
   instead of passing blind.
 
+### Gate rule for noisy metrics (2026-09-19)
+
+The extractor is nondeterministic and consensus narrows but does not remove
+the noise (kept-draw agreement 0.87 median; aggregate recall differed 0.13
+between two 3-sample runs before vocabulary fixes). Point thresholds need a
+rule for what "met" means. This is it:
+
+1. **A phase criterion is met** when a `--strict`-accepted consensus run
+   (`--samples 3`) clears the threshold. The margin is always reported next
+   to the noise band; a margin inside the band is written as
+   "met, within noise", never rounded up to "met".
+2. **The baseline records its sampling setup and noise band**
+   (`samples`, `noise_band`); `--check` refuses a sampling mismatch.
+3. **A `--check` failure inside the band is a flag, not a regression.**
+   Re-run before acting. Two consecutive failing checks are a regression.
+   `--check` prints which case each drop is. A drop outside the band is a
+   regression on the first occurrence.
+4. **Noise bands, measured:** 3-sample consensus +/-0.10; 1-sample +/-0.15.
+   Re-measure when the model, prompt or sampling changes.
+
+### Pre-Phase-7 checklist (2026-09-19)
+
+| # | item | state |
+|---|---|---|
+| 1 | closing consensus run accepted; baseline rebased at samples=3 | in progress |
+| 2 | everything committed | `bb402db` |
+| 3 | gate rule for noisy metrics | above |
+| 4 | Dev Tier active on the key's org (25 papers = 2.6 free-tier days/run) | **still on_demand** |
+| 5 | `--papers N` sampling for the dev loop (200 papers = 7h/run) | not built |
+| 6 | labeling procedure documented and executable | `labels/LABELING.md`, `label_scan.py` |
+| 7 | fingerprint ignores vocabulary-only changes | done, tested |
+| 8 | labels expecting unstated facts (`densenet:num_classes`) | 1 known |
+| 9 | stable network for long runs (two outages in two days here) | open |
+| 10 | completeness checks (astra #5) -- check EfficientNet's compound cell first | unverified |
+| 11 | async `allm_complete` parity with sync (quota wait, transport retry) | sync only |
+
 ### Phase 7 — Corpus scale-out (10 -> 25 -> 200)
 
 Was Phase 6; deferred again, behind extraction correctness. Unchanged in

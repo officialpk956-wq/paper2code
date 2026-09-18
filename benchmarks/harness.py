@@ -42,6 +42,12 @@ _CHECKED_METRICS = (
     "family_correct",
 )
 CHECK_TOLERANCE = 0.05
+# Run-to-run noise measured for each sampling setup (see the master plan,
+# "Nondeterminism" and "Consensus, measured"). A drop inside the band is a
+# flag, not a regression: re-run before acting on it. Two consecutive
+# failing checks are a regression.
+NOISE_BAND = {1: 0.15, 3: 0.10}
+NOISE_BAND_DEFAULT = 0.15
 
 LABEL_SCHEMA_VERSION = 1
 _REQUIRED_LABEL_KEYS = {"schema_version", "paper_id", "source", "family", "expected", "notes"}
@@ -166,6 +172,34 @@ _FINGERPRINT_SOURCES = (
 )
 
 
+_VOCABULARY_BLOCKS = ("CANONICAL_TYPES = {", "_SYNONYM_MAP = {")
+
+
+def _fingerprint_bytes(src: Path) -> bytes:
+    """Source bytes that affect extraction OUTPUT, for the staging fingerprint.
+
+    normalizer.py has two roles: parameter normalisation at extraction time
+    (changes the cached spec, must invalidate staging) and the type synonym
+    table (re-applied at scoring time, so the cached spec's spelling no longer
+    matters). Hashing the whole file meant every new synonym forced a full
+    re-extraction -- a day of free-tier quota to teach the system that
+    "add_norm" means layernorm. The two top-level vocabulary dicts are
+    excised before hashing; everything else in the file still counts.
+    """
+    text = src.read_text(encoding="utf-8")
+    if src.name != "normalizer.py":
+        return text.encode("utf-8")
+    for marker in _VOCABULARY_BLOCKS:
+        start = text.find(marker)
+        if start == -1:
+            continue
+        end = text.find("\n}\n", start)  # top-level dict closes at column 0
+        if end == -1:
+            continue
+        text = text[:start] + marker + "<vocabulary excluded>" + text[end:]
+    return text.encode("utf-8")
+
+
 _SAMPLES = {"n": 1}  # set by main(); part of the staging fingerprint
 _CALL_PACE = {"seconds": 0.0}  # set by main(); delay between LLM calls within one paper
 
@@ -187,7 +221,7 @@ def extraction_fingerprint(label: dict[str, Any], retrieval: str) -> dict[str, A
 
     code = hashlib.sha256()
     for src in _FINGERPRINT_SOURCES:
-        code.update(src.read_bytes())
+        code.update(_fingerprint_bytes(src))
     return {
         "schema": 1,
         "paper_id": label["paper_id"],
@@ -618,6 +652,11 @@ def build_baseline(results: dict, source_results: str) -> dict:
         # measurements of the same system; comparing one against the other
         # would report sampling variance as a regression (or hide one).
         "samples": _SAMPLES["n"],
+        # Measured run-to-run noise for this sampling setup, so --check can say
+        # whether a drop is inside it. 3-sample consensus: kept-draw agreement
+        # median 0.87, aggregate recall differed 0.13 between two runs before
+        # vocabulary fixes; +/-0.10 is the honest band. 1-sample: wider.
+        "noise_band": NOISE_BAND.get(_SAMPLES["n"], NOISE_BAND_DEFAULT),
         "papers": aggregate["papers"],
         "source_results": source_results,
         "created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -692,7 +731,17 @@ def check_against_baseline(
             continue
         drop = reference - actual
         if drop > tolerance:
-            problems.append(f"{name}: {reference:.3f} -> {actual:.3f} (dropped {drop:.3f}, tolerance {tolerance})")
+            band = baseline.get("noise_band")
+            verdict = ""
+            if band is not None:
+                verdict = (
+                    f"; inside the +/-{band} noise band -- re-run before treating as a regression"
+                    if drop <= band else
+                    f"; OUTSIDE the +/-{band} noise band -- a regression, not a draw"
+                )
+            problems.append(
+                f"{name}: {reference:.3f} -> {actual:.3f} (dropped {drop:.3f}, tolerance {tolerance}){verdict}"
+            )
 
     return (not problems), problems
 
@@ -701,6 +750,38 @@ def _chunk_retriever(query: str, texts: list[str], top_k: int) -> list[str]:
     from backend.services.vector_service import hybrid_rank_texts
 
     return hybrid_rank_texts(query, texts, top_k=top_k)
+
+
+def _pdf_cache_dir() -> Path:
+    # Resolved at call time, not import time, so a test that patches
+    # CACHE_DIR also redirects PDFs. As a module constant it did not, and the
+    # first suite run wrote a 9-byte fake resnet50 into the real cache.
+    return CACHE_DIR / "pdfs"
+
+
+def fetch_pdf_bytes(source: str) -> bytes:
+    """arXiv PDF bytes, cached on disk. Live runs stop re-downloading every
+    paper every run, and the label scan cannot lose its inputs the way the
+    scratchpad copy of transformer_base.pdf was lost."""
+    if not source.startswith("arxiv:"):
+        raise ValueError(f"live benchmark only supports arXiv labels, got {source}")
+    paper_id = source.removeprefix("arxiv:")
+    cached = _pdf_cache_dir() / f"{paper_id.replace('/', '_')}.pdf"
+    if cached.exists():
+        return cached.read_bytes()
+    url = f"https://arxiv.org/pdf/{paper_id}.pdf"
+    for attempt in range(4):
+        try:
+            response = httpx.get(url, follow_redirects=True, timeout=60.0)
+            break
+        except httpx.TransportError:
+            if attempt == 3:
+                raise
+            time.sleep(5 * (2 ** attempt))
+    response.raise_for_status()
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(response.content)
+    return response.content
 
 
 def fetch_paper_chunks(source: str) -> tuple[str, list[tuple[int, str]], list[dict[str, Any]]]:
@@ -713,29 +794,12 @@ def fetch_paper_chunks(source: str) -> tuple[str, list[tuple[int, str]], list[di
     so every --focus-only diagnosis read degraded text while the harness read
     clean text.
     """
-    if not source.startswith("arxiv:"):
-        raise ValueError(f"live benchmark only supports arXiv labels, got {source}")
-    paper_id = source.removeprefix("arxiv:")
-    # arXiv redirects the conventional .pdf URL. Keep this compatibility
-    # detail inside the benchmark-only live adapter; production behavior is
-    # deliberately outside this prompt's scope.
-    url = f"https://arxiv.org/pdf/{paper_id}.pdf"
-    # DNS and connection blips are transient; one cost three papers on
-    # 2026-09-17. Retry briefly before giving up on the paper.
-    for attempt in range(4):
-        try:
-            response = httpx.get(url, follow_redirects=True, timeout=60.0)
-            break
-        except httpx.TransportError:
-            if attempt == 3:
-                raise
-            time.sleep(5 * (2 ** attempt))
-    response.raise_for_status()
+    pdf_bytes = fetch_pdf_bytes(source)
     try:
         import pdfplumber
     except ImportError as exc:
         raise RuntimeError("live benchmark requires pdfplumber") from exc
-    with pdfplumber.open(io.BytesIO(response.content)) as pdf:
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         page_texts = [
             (page_number, text)
             for page_number, page in enumerate(pdf.pages[:30], start=1)
