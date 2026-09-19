@@ -12,44 +12,35 @@ export default defineConfig({
     exclude: ['node_modules', '.next'],
     coverage: {
       provider: 'v8',
+      // The tree was rebuilt in July 2026; the previous list named 21 paths
+      // that no longer existed, so coverage silently measured nothing while
+      // a committed three-month-old report kept reporting the old numbers.
       include: [
-        'src/components/labs/**',
-        'src/components/block-viz/**',
-        'src/components/dojo/**',
-        'src/components/learn/LearnHero.tsx',
-        'src/components/learn/ContinueLearningCard.tsx',
-        'src/components/learn/LearningPaths.tsx',
-        'src/components/learn/DomainGrid.tsx',
-        'src/components/learn/TrendingTopics.tsx',
-        'src/components/learn/Recommendations.tsx',
-        'src/components/learn/RecentlyAdded.tsx',
-        'src/components/learn/KnowledgeGraphPreview.tsx',
-        'src/app/api/labs/**',
-        'src/app/api/papers/**/block-hierarchy/**',
-        'src/app/api/papers/**/forward-pass/**',
-        'src/app/api/dojo/**',
-        'src/app/api/learn/**',
-        'src/components/domain/**',
-        'src/app/api/learn/domain/**',
-        'src/components/topic/**',
-        'src/app/api/learn/topic/**',
+        'src/lib/**/*.{ts,tsx}',
+        'src/components/**/*.{ts,tsx}',
+        'src/app/**/*.{ts,tsx}',
+        // src/data is static content (prerequisites.ts alone is ~9,900 lines
+        // of arrays); counting it as coverable code hides the real number.
       ],
       exclude: [
         'node_modules',
         '.next',
         'src/__tests__/**',
-        // Page-level components not unit-tested (covered by E2E)
-        'src/components/block-viz/BlockVizPage.tsx',
-        'src/components/dojo/DojoProblemList.tsx',
-        'src/components/dojo/SubmissionHistory.tsx',
-        'src/components/dojo/TheoryPanel.tsx',
+        'src/**/*.test.{ts,tsx}',
+        'src/**/*.d.ts',
       ],
       reporter: ['text', 'json', 'html', 'lcov'],
+      // Ratchet, not aspiration. The old 70% "passed" because the include
+      // list matched no files. Measured on 2026-09-19 against the real tree,
+      // code only (static data excluded -- it inflated lines to 33% because
+      // array literals execute on import): 16.3% lines, 34.3% functions,
+      // 53.9% branches. These floors fail on any regression from that; raise
+      // them as tests land, never lower them.
       thresholds: {
-        statements: 70,
-        branches: 70,
-        functions: 70,
-        lines: 70,
+        statements: 16,
+        branches: 53,
+        functions: 34,
+        lines: 16,
       },
     },
   },
