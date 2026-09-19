@@ -282,8 +282,13 @@ export default function UploadZone({ onParsed }: Props) {
               <span style={{ color: '#737373' }}># Option A — ONNX (recommended)</span><br />
               torch.onnx.export(model, dummy, &quot;model.onnx&quot;, opset_version=17)<br />
               <br />
-              <span style={{ color: '#737373' }}># Option B — PyTorch native (.pt)</span><br />
-              torch.save(model, &quot;model.pt&quot;){'  '}<span style={{ color: '#737373' }}># save full model, not state_dict</span>
+              <span style={{ color: '#737373' }}># Option B — TorchScript (.pt), self-contained</span><br />
+              torch.jit.trace(model, dummy).save(&quot;model.pt&quot;)<br />
+              <br />
+              <span style={{ color: '#737373' }}>
+                # torch.save(model, ...) and state_dicts cannot be visualised: the first needs your
+                model&apos;s class at load time, the second has no architecture.
+              </span>
             </code>
           </div>
         </>

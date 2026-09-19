@@ -54,7 +54,7 @@ export type GraphMeta = {
   graph_outputs: Record<string, number[]>;
   ir_version: number;
   opset_version: number;
-  method?: string;   // "symbolic_trace" | "named_modules" — pytorch only
+  method?: string;   // "symbolic_trace" | "named_modules" | "torchscript_onnx" — pytorch only
 };
 
 export type ParsedGraph = {

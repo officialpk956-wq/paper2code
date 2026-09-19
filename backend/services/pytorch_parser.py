@@ -57,24 +57,55 @@ except ImportError:
     )
     import torch
     import torch.nn as nn
+try:
+    import onnx  # noqa: F401 -- torch.onnx.export needs it for TorchScript uploads
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "onnx", "--quiet"], check=True)
 
 INPUT_SHAPE = __INPUT_SHAPE__   # replaced by pytorch_parser.py
 
 # ── load model ────────────────────────────────────────────────────────────────
+# TorchScript first: it is the only PyTorch format that is self-contained.
+# A pickled nn.Module (torch.save(model, ...)) needs the model's class to be
+# importable at load time, and inside this sandbox it never is -- so that
+# format, which is what most people produce, used to fail every time with
+# "Can't get attribute 'X' on <module '__main__'>", while the state_dict
+# error told them to switch to exactly that format.
+_EXPORT_HELP = (
+    "Export the model in a self-contained format and upload that instead:\n"
+    "  TorchScript:  torch.jit.trace(model, example_input).save('model.pt')\n"
+    "  ONNX:         torch.onnx.export(model, example_input, 'model.onnx')"
+)
+
+obj = None
+is_scripted = False
 try:
-    obj = torch.load("/home/user/model.pt", map_location="cpu", weights_only=False)
-except Exception as exc:
-    print(json.dumps({"error": "load_failed", "message": str(exc)}))
-    sys.exit(1)
+    obj = torch.jit.load("/home/user/model.pt", map_location="cpu")
+    is_scripted = True
+except Exception:
+    try:
+        obj = torch.load("/home/user/model.pt", map_location="cpu", weights_only=False)
+    except AttributeError as exc:
+        # The pickle references a class that only exists in the author's code.
+        print(json.dumps({
+            "error": "class_unavailable",
+            "message": (
+                "This file is a pickled nn.Module and its class definition is not "
+                f"available here ({exc}). " + _EXPORT_HELP
+            ),
+        }))
+        sys.exit(1)
+    except Exception as exc:
+        print(json.dumps({"error": "load_failed", "message": f"Could not load file: {exc}. " + _EXPORT_HELP}))
+        sys.exit(1)
 
 # state_dict only — no architecture information
 if isinstance(obj, dict):
     print(json.dumps({
         "error": "state_dict_only",
         "message": (
-            "This file contains only weights (state_dict), not a full model. "
-            "Save the whole model with torch.save(model, 'model.pt') rather "
-            "than torch.save(model.state_dict(), 'weights.pt')."
+            "This file contains only weights (state_dict), not a model. "
+            "There is no architecture to visualise in a state_dict. " + _EXPORT_HELP
         ),
     }))
     sys.exit(1)
@@ -89,6 +120,32 @@ if not isinstance(obj, nn.Module):
 model = obj
 model.eval()
 total_params = sum(p.numel() for p in model.parameters())
+
+if is_scripted:
+    # ScriptModules support neither torch.fx nor forward hooks, and a saved
+    # TorchScript graph carries no shapes. They do export to ONNX, and the
+    # ONNX parser already produces the graph format the page renders. Ship
+    # the bytes back and let the server parse them.
+    import base64, io
+    try:
+        buf = io.BytesIO()
+        torch.onnx.export(
+            model, torch.zeros([1] + INPUT_SHAPE), buf,
+            input_names=["input"], output_names=["output"],
+            opset_version=17, dynamo=False,
+        )
+    except Exception as exc:
+        print(json.dumps({
+            "error": "onnx_export_failed",
+            "message": f"Loaded the TorchScript model but could not export it to ONNX: {exc}",
+        }))
+        sys.exit(1)
+    print(json.dumps({
+        "onnx_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "total_params": total_params,
+        "method": "torchscript_onnx",
+    }))
+    sys.exit(0)
 
 # ── helper: shape-inference hooks ─────────────────────────────────────────────
 def _run_forward_hooks(model, input_shape):
@@ -364,5 +421,17 @@ def parse_pytorch(file_bytes: bytes, input_shape: list[int]) -> dict:
     # Surface user-facing errors from inside the sandbox
     if "error" in data:
         raise RuntimeError(data.get("message", data["error"]))
+
+    # TorchScript uploads come back as ONNX bytes; parse them here so both
+    # upload formats render through one well-tested graph builder.
+    if "onnx_b64" in data:
+        import base64
+
+        from backend.services.onnx_parser import parse_onnx
+
+        graph = parse_onnx(base64.b64decode(data["onnx_b64"]))
+        graph.setdefault("meta", {})["method"] = data.get("method", "torchscript_onnx")
+        graph["meta"]["source_format"] = "torchscript"
+        return graph
 
     return data

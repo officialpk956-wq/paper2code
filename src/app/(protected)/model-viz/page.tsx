@@ -189,7 +189,11 @@ function ModelVizContent() {
           }}
         >
           {modelFormat === 'pytorch'
-            ? (graph.meta.method === 'named_modules' ? 'PyTorch (tree)' : 'PyTorch (fx)')
+            ? graph.meta.method === 'named_modules'
+              ? 'PyTorch (tree)'
+              : graph.meta.method === 'torchscript_onnx'
+                ? 'PyTorch (TorchScript)'
+                : 'PyTorch (fx)'
             : 'ONNX'}
         </span>
 
