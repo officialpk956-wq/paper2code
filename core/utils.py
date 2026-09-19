@@ -1,6 +1,5 @@
 import re
 
-
 SECTION_VOCABULARY = {
     "abstract",
     "introduction",
@@ -66,9 +65,7 @@ def chunk_text(text, max_chars=1200):
     return chunks
 
 
-def chunk_pages_with_provenance(
-    pages: list[tuple[int, str]], max_chars: int = 1200
-) -> list[dict]:
+def chunk_pages_with_provenance(pages: list[tuple[int, str]], max_chars: int = 1200) -> list[dict]:
     """Create conservative text chunks without losing PDF page provenance.
 
     The existing :func:`chunk_text` algorithm is intentionally line-oriented
@@ -86,7 +83,10 @@ def chunk_pages_with_provenance(
         current_start: int | None = None
         current_end: int | None = None
 
-        def flush() -> None:
+        # Defined per page and only called within that page's iteration, so
+        # binding the loop variables as defaults is behaviour-preserving; it
+        # just makes the capture explicit (ruff B023).
+        def flush(text=text, page_index=page_index, global_offset=global_offset) -> None:
             nonlocal current_start, current_end, section
             if current_start is None or current_end is None:
                 return
@@ -104,7 +104,8 @@ def chunk_pages_with_provenance(
                         "chunk_type": "text",
                         "text": trimmed,
                         "source_offset_start": global_offset + current_start + leading,
-                        "source_offset_end": global_offset + current_end
+                        "source_offset_end": global_offset
+                        + current_end
                         - (len(raw_chunk) - len(raw_chunk.rstrip())),
                     }
                 )
@@ -200,7 +201,15 @@ def _append_capped_region(
             continue
         if current_end > current_start and line_end - current_start > max_chars:
             _append_capped_region(
-                chunks, text, section, page, chunk_type, current_start, current_end, page_offset, max_chars
+                chunks,
+                text,
+                section,
+                page,
+                chunk_type,
+                current_start,
+                current_end,
+                page_offset,
+                max_chars,
             )
             current_start = line_start
         if line_end - current_start > max_chars:
@@ -220,7 +229,15 @@ def _append_capped_region(
         current_end = line_end
     if current_end > current_start:
         _append_capped_region(
-            chunks, text, section, page, chunk_type, current_start, current_end, page_offset, max_chars
+            chunks,
+            text,
+            section,
+            page,
+            chunk_type,
+            current_start,
+            current_end,
+            page_offset,
+            max_chars,
         )
 
 

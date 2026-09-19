@@ -24,7 +24,6 @@ from core.rag.normalizer import normalize_config
 from core.rag.retriever import retrieve_and_merge, retrieve_top_chunks
 from core.rag.section_splitter import chunk_for_retrieval, get_architecture_text
 
-
 logger = logging.getLogger(__name__)
 
 # Natural-language stand-in for the architecture-focused BM25 query terms,
@@ -42,6 +41,7 @@ _ARCHITECTURE_QUERY = (
     "normalization batchnorm layernorm pooling dropout embedding "
     "64 128 256 512 768 1024 2048"
 )
+
 
 # Focused-context composition. Tables and captions carry the hyperparameters
 # but lose to prose on an architecture-vocabulary query, so a bounded number
@@ -78,6 +78,7 @@ def _has_architectural_structured_content(text: str) -> bool:
     """Whether a table/caption contains numeric architectural information."""
     content = _STRUCTURED_LABEL_PREFIX.sub("", text, count=1)
     return bool(re.search(r"\d", content) and _ARCHITECTURAL_STRUCTURED_TERMS.search(content))
+
 
 try:
     from core.llm_client import PRIMARY_MODEL, get_last_completion_model, llm_complete
@@ -460,7 +461,9 @@ class ConfigExtractor:
     # Public API
     # ------------------------------------------------------------------
 
-    def extract_from_text(self, text: str, source_chunks: list[dict[str, Any]] | None = None) -> ConfigDict:
+    def extract_from_text(
+        self, text: str, source_chunks: list[dict[str, Any]] | None = None
+    ) -> ConfigDict:
         """
         Full pipeline: raw text -> focused context -> extract -> verify -> normalize.
 
@@ -484,7 +487,9 @@ class ConfigExtractor:
                 raw = self._extract_rule_based(focused)
         except Exception as exc:
             extraction_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("LLM extraction failed; using rule-based fallback (%s)", extraction_reason)
+            logger.warning(
+                "LLM extraction failed; using rule-based fallback (%s)", extraction_reason
+            )
             raw = self._extract_rule_based(focused)
             extraction_method = "rule_based_fallback"
 
@@ -572,14 +577,16 @@ class ConfigExtractor:
             return []
 
         structured = [
-            (i, c) for i, c in entries
+            (i, c)
+            for i, c in entries
             if (
                 str(c.get("chunk_type") or "") in _STRUCTURED_CHUNK_TYPES
                 and _has_architectural_structured_content(str(c.get("text") or ""))
             )
         ]
         prose = [
-            (i, c) for i, c in entries
+            (i, c)
+            for i, c in entries
             if str(c.get("chunk_type") or "") not in _STRUCTURED_CHUNK_TYPES
         ]
 
@@ -606,8 +613,7 @@ class ConfigExtractor:
         if self.variant:
             needle = self.variant.lower()
             variant_pool = [
-                (i, c) for i, c in entries
-                if needle in str(c.get("text") or "").lower()
+                (i, c) for i, c in entries if needle in str(c.get("text") or "").lower()
             ]
             variant_picks = _take(variant_pool, 1)
 
@@ -625,10 +631,7 @@ class ConfigExtractor:
         ranked_order = variant_picks + structured_picks + prose_picks
         ranked_indices = set(ranked_order)
         if not expand_neighbors or max_context_chars is None:
-            return [
-                str(lookup[i].get("text") or "")
-                for i in sorted(ranked_indices)
-            ]
+            return [str(lookup[i].get("text") or "") for i in sorted(ranked_indices)]
 
         selected_indices = set(ranked_indices)
 
@@ -674,10 +677,7 @@ class ConfigExtractor:
             if previous is not None:
                 _add_if_within_budget(previous)
 
-        return [
-            str(lookup[i].get("text") or "")
-            for i in sorted(selected_indices)
-        ]
+        return [str(lookup[i].get("text") or "") for i in sorted(selected_indices)]
 
     def _focus_text(self, text: str, source_chunks: list[dict[str, Any]] | None = None) -> str:
         """Apply section splitting and BM25/hybrid retrieval to narrow the context."""
@@ -730,9 +730,14 @@ class ConfigExtractor:
         if not specs:
             raise ValueError(f"all {self.samples} extraction draws failed: {failures[-1]}")
         if len(specs) == 1:
-            self.consensus = {"samples": self.samples, "parsed": 1, "failed_draws": failures,
-                              "layer_counts": [len(specs[0].get("layers") or [])],
-                              "agreement": [1.0], "chosen": 0}
+            self.consensus = {
+                "samples": self.samples,
+                "parsed": 1,
+                "failed_draws": failures,
+                "layer_counts": [len(specs[0].get("layers") or [])],
+                "agreement": [1.0],
+                "chosen": 0,
+            }
             return specs[0]
 
         def types(spec: dict[str, Any]) -> set[str]:
@@ -936,15 +941,11 @@ def _operation_context(text: str, limit: int = 8) -> str:
         canonical_names = find_mentioned(text)[:limit]
         if not canonical_names:
             return ""
-        lines = [
-            "KNOWN OPERATION DEFINITIONS (use these exact definitions; do not redefine them):"
-        ]
+        lines = ["KNOWN OPERATION DEFINITIONS (use these exact definitions; do not redefine them):"]
         for canonical_name in canonical_names:
             operation = OPERATIONS[canonical_name]
             syntax = operation["syntax"] or operation["functional"] or "no module form"
-            lines.append(
-                f"- {canonical_name}: {operation['formula']}  |  PyTorch: {syntax}"
-            )
+            lines.append(f"- {canonical_name}: {operation['formula']}  |  PyTorch: {syntax}")
         return "\n".join(lines)
     except Exception:
         return ""

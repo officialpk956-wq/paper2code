@@ -13,7 +13,6 @@ from core.architecture_graph import GraphNode
 from core.codegen import _node_to_layer
 from core.knowledge.operations import OPERATIONS
 
-
 _HYPERPARAMETERS = (
     "num_heads",
     "hidden_size",
@@ -109,7 +108,9 @@ def _literal_call_arguments(tree: ast.AST) -> list[Any]:
     return values
 
 
-def _specified_hyperparameters(value: Any, found: dict[str, list[Any]] | None = None) -> dict[str, list[Any]]:
+def _specified_hyperparameters(
+    value: Any, found: dict[str, list[Any]] | None = None
+) -> dict[str, list[Any]]:
     """Collect explicitly stated supported hyperparameters from nested spec data."""
     found = found if found is not None else {}
     if isinstance(value, dict):
@@ -148,18 +149,34 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
     are excluded. This function never executes generated code and never raises.
     """
     try:
-        if not isinstance(spec, dict) or not isinstance(spec.get("layers"), list) or not spec["layers"]:
+        if (
+            not isinstance(spec, dict)
+            or not isinstance(spec.get("layers"), list)
+            or not spec["layers"]
+        ):
             detail = "spec.layers must be a non-empty list for fidelity scoring"
-            return {"score": 0.0, "checks": [{"name": "input", "passed": False, "detail": detail}], "mismatches": [detail]}
+            return {
+                "score": 0.0,
+                "checks": [{"name": "input", "passed": False, "detail": detail}],
+                "mismatches": [detail],
+            }
         if not isinstance(code, str) or not code.strip():
             detail = "generated code is empty"
-            return {"score": 0.0, "checks": [{"name": "input", "passed": False, "detail": detail}], "mismatches": [detail]}
+            return {
+                "score": 0.0,
+                "checks": [{"name": "input", "passed": False, "detail": detail}],
+                "mismatches": [detail],
+            }
 
         try:
             tree = ast.parse(code)
         except SyntaxError as exc:
             detail = f"code could not be parsed: {exc.msg} (line {exc.lineno})"
-            return {"score": 0.0, "checks": [{"name": "syntax", "passed": False, "detail": detail}], "mismatches": [detail]}
+            return {
+                "score": 0.0,
+                "checks": [{"name": "syntax", "passed": False, "detail": detail}],
+                "mismatches": [detail],
+            }
 
         checks: list[dict] = []
         applicable: list[bool] = []
@@ -188,7 +205,9 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             if not isinstance(layer, dict) or not isinstance(layer.get("type"), str):
                 continue
             layer_type = layer["type"]
-            expected_types.setdefault(layer_type, _expected_constructor(layer_type, layer.get("params") or {}))
+            expected_types.setdefault(
+                layer_type, _expected_constructor(layer_type, layer.get("params") or {})
+            )
         missing_types = [
             layer_type
             for layer_type, constructor in expected_types.items()
@@ -219,9 +238,13 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             unused = sorted(declared - used)
             unassigned = sorted(used - declared)
             if unused:
-                declaration_problems.append(f"{class_node.name} declared but unused: {', '.join(unused)}")
+                declaration_problems.append(
+                    f"{class_node.name} declared but unused: {', '.join(unused)}"
+                )
             if unassigned:
-                declaration_problems.append(f"{class_node.name} used but unassigned: {', '.join(unassigned)}")
+                declaration_problems.append(
+                    f"{class_node.name} used but unassigned: {', '.join(unassigned)}"
+                )
         declared_passed = not declaration_problems
         add_check(
             "declared_vs_used",
@@ -267,4 +290,8 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
         return {"score": score, "checks": checks, "mismatches": mismatches}
     except Exception as exc:  # Fidelity must never destabilize generation.
         detail = f"fidelity analysis failed: {type(exc).__name__}: {exc}"
-        return {"score": 0.0, "checks": [{"name": "analysis", "passed": False, "detail": detail}], "mismatches": [detail]}
+        return {
+            "score": 0.0,
+            "checks": [{"name": "analysis", "passed": False, "detail": detail}],
+            "mismatches": [detail],
+        }

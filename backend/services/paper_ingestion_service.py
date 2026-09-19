@@ -40,6 +40,7 @@ from core.utils import (
     extract_table_chunks,
 )
 
+
 def _chunk_retriever(query: str, texts: list[str], top_k: int) -> list[str]:
     from backend.services.vector_service import hybrid_rank_texts
 
@@ -420,24 +421,14 @@ def _architecture_spec_payload(
             {
                 "type": str(getattr(node, "type", None) or "identity"),
                 "name": str(
-                    getattr(node, "label", None)
-                    or getattr(node, "id", None)
-                    or f"layer_{index}"
+                    getattr(node, "label", None) or getattr(node, "id", None) or f"layer_{index}"
                 ),
-                "channels": _positive_int(
-                    params.get("channels") or params.get("out_channels")
-                ),
-                "kernel_size": _positive_int(
-                    params.get("kernel_size") or params.get("kernel")
-                ),
+                "channels": _positive_int(params.get("channels") or params.get("out_channels")),
+                "kernel_size": _positive_int(params.get("kernel_size") or params.get("kernel")),
                 "stride": _positive_int(params.get("stride")),
-                "heads": _positive_int(
-                    params.get("num_heads") or params.get("heads")
-                ),
+                "heads": _positive_int(params.get("num_heads") or params.get("heads")),
                 "hidden_size": _positive_int(
-                    params.get("hidden_size")
-                    or params.get("embed_dim")
-                    or params.get("d_model")
+                    params.get("hidden_size") or params.get("embed_dim") or params.get("d_model")
                 ),
             }
         )
@@ -451,16 +442,10 @@ def _architecture_spec_payload(
                 {
                     "type": str(layer.get("type") or "identity"),
                     "name": str(layer.get("name") or layer.get("id") or f"layer_{index}"),
-                    "channels": _positive_int(
-                        params.get("channels") or params.get("out_channels")
-                    ),
-                    "kernel_size": _positive_int(
-                        params.get("kernel_size") or params.get("kernel")
-                    ),
+                    "channels": _positive_int(params.get("channels") or params.get("out_channels")),
+                    "kernel_size": _positive_int(params.get("kernel_size") or params.get("kernel")),
                     "stride": _positive_int(params.get("stride")),
-                    "heads": _positive_int(
-                        params.get("num_heads") or params.get("heads")
-                    ),
+                    "heads": _positive_int(params.get("num_heads") or params.get("heads")),
                     "hidden_size": _positive_int(
                         params.get("hidden_size")
                         or params.get("embed_dim")
@@ -498,9 +483,7 @@ def ingest_pdf_paper(
 
     logger = logging.getLogger(__name__)
     try:
-        validated_spec = ArchitectureSpec(
-            **_architecture_spec_payload(spec, result_dict)
-        )
+        validated_spec = ArchitectureSpec(**_architecture_spec_payload(spec, result_dict))
         spec = validated_spec.model_dump()
     except ValidationError as e:
         logger.warning("Architecture spec validation failed: %s — using partial spec", e)
@@ -579,11 +562,14 @@ def ingest_pdf_paper(
         chunk
         for chunk in source_chunks
         if not (
-            (key := (
-                str(chunk.get("chunk_type") or "text"),
-                chunk.get("page") if isinstance(chunk.get("page"), int) else None,
-                str(chunk.get("text") or "").strip(),
-            )) in seen_chunk_keys
+            (
+                key := (
+                    str(chunk.get("chunk_type") or "text"),
+                    chunk.get("page") if isinstance(chunk.get("page"), int) else None,
+                    str(chunk.get("text") or "").strip(),
+                )
+            )
+            in seen_chunk_keys
             or seen_chunk_keys.add(key)
         )
     ]

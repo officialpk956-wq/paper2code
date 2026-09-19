@@ -102,15 +102,15 @@ def compare_architectures(
     # Say which side failed. "One or both papers not found" left the user
     # guessing which of two selections to change.
     missing = [
-        label for label, paper in (
-            (a_slug or f"paper {paper_a}", pa), (b_slug or f"paper {paper_b}", pb)
-        ) if paper is None
+        label
+        for label, paper in ((a_slug or f"paper {paper_a}", pa), (b_slug or f"paper {paper_b}", pb))
+        if paper is None
     ]
     if missing:
         raise HTTPException(
             status_code=404,
             detail=f"No analysed paper backs {', '.join(repr(m) for m in missing)} yet; "
-                   "pick an architecture that has been processed.",
+            "pick an architecture that has been processed.",
         )
 
     lacking = [p.title for p in (pa, pb) if not p.architecture_graph]

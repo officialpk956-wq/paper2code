@@ -92,7 +92,7 @@ RATE_LIMIT_BACKOFF_SECONDS = int(os.getenv("LLM_RATE_LIMIT_BACKOFF", "8"))
 
 def _backoff_seconds(base: int, attempt: int) -> int:
     """Exponential backoff for retry `attempt` (0-based): base, 2x, 4x, 8x..."""
-    return base * (2 ** attempt)
+    return base * (2**attempt)
 
 
 def _fallback_list(use_fallback: bool, target: str) -> list[str]:
@@ -175,7 +175,9 @@ def llm_complete(
             quota_rounds_left -= 1
             logger.warning(
                 "Quota exhausted on %s; waiting %ds for it to return (%d round(s) left)",
-                target, QUOTA_WAIT_SECONDS, quota_rounds_left,
+                target,
+                QUOTA_WAIT_SECONDS,
+                quota_rounds_left,
             )
             time.sleep(QUOTA_WAIT_SECONDS)
             attempt = 0
@@ -209,7 +211,10 @@ def llm_complete(
                     delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                     logger.warning(
                         "Empty completion from %s (attempt %d/%d) -- retrying in %ds",
-                        target, attempt + 1, max_rate_limit_retries, delay,
+                        target,
+                        attempt + 1,
+                        max_rate_limit_retries,
+                        delay,
                     )
                     time.sleep(delay)
                     continue
@@ -225,7 +230,10 @@ def llm_complete(
                 delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                 logger.warning(
                     "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
-                    target, attempt + 1, max_rate_limit_retries, delay,
+                    target,
+                    attempt + 1,
+                    max_rate_limit_retries,
+                    delay,
                 )
                 time.sleep(delay)
                 continue
@@ -241,7 +249,11 @@ def llm_complete(
             )
             _last_rate_limit.__cause__ = e
             continue  # loop head decides: wait for quota, or raise
-        except (litellm_exc.APIConnectionError, litellm_exc.APIError, litellm_exc.InternalServerError) as e:
+        except (
+            litellm_exc.APIConnectionError,
+            litellm_exc.APIError,
+            litellm_exc.InternalServerError,
+        ) as e:
             # Transient transport failures (DNS: "getaddrinfo failed",
             # connection resets, 5xx) get a short retry before they count
             # as a real failure. One DNS blip took out a paper on 2026-09-17.
@@ -249,7 +261,11 @@ def llm_complete(
                 delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                 logger.warning(
                     "Transport error on %s (attempt %d/%d) -- retrying in %ds: %s",
-                    target, attempt + 1, max_rate_limit_retries, delay, type(e).__name__,
+                    target,
+                    attempt + 1,
+                    max_rate_limit_retries,
+                    delay,
+                    type(e).__name__,
                 )
                 time.sleep(delay)
                 continue
@@ -322,7 +338,10 @@ async def llm_complete_async(
                 delay = _backoff_seconds(rate_limit_backoff_seconds, attempt)
                 logger.warning(
                     "Rate limited on %s (attempt %d/%d) -- retrying same model in %ds",
-                    target, attempt + 1, max_rate_limit_retries, delay,
+                    target,
+                    attempt + 1,
+                    max_rate_limit_retries,
+                    delay,
                 )
                 import asyncio
 

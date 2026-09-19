@@ -31,11 +31,7 @@ def classify_architecture(graph: ArchitectureGraph) -> str:
         return "diffusion"
     elif "masking" in all_str or "random_mask" in all_str or "mask_ratio" in all_str:
         return "mae"
-    elif (
-        "patchembedding" in all_str
-        or "patch_embed" in all_str
-        or "patch_embedding" in all_str
-    ):
+    elif "patchembedding" in all_str or "patch_embed" in all_str or "patch_embedding" in all_str:
         return "vit"
     elif "window_attention" in all_str or "patch_merging" in all_str:
         return "swin"

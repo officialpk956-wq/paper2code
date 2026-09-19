@@ -31,6 +31,9 @@ def test_llm_complete_retries_primary_before_falling_back(monkeypatch):
 
     monkeypatch.setattr(llm_client, "_circuit_open", False)
     monkeypatch.setattr(llm_client, "_failure_count", 0)
+    # FALLBACK_MODEL defaults to "" (opt-in). Locally .env sets it; CI has no
+    # .env, so the final-attempt assertion compared [] to [""]. Pin it.
+    monkeypatch.setattr(llm_client, "FALLBACK_MODEL", "gemini/test-fallback")
 
     calls = []
 

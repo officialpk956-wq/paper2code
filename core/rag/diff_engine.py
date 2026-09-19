@@ -13,7 +13,9 @@ def _natural_key(text: str) -> list:
     """'Stage 2 Block 10' sorts after 'Stage 2 Block 9'."""
     import re
 
-    return [int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", str(text or ""))]
+    return [
+        int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", str(text or ""))
+    ]
 
 
 class GraphDiffEngine:
@@ -71,7 +73,9 @@ class GraphDiffEngine:
             # Set differences arrive in hash order ("Block 7, Block 9, Block 5");
             # sort naturally so Block 2 precedes Block 10 and output is stable.
             "added_nodes": sorted((nodes_b[nid].label for nid in added_nodes), key=_natural_key),
-            "removed_nodes": sorted((nodes_a[nid].label for nid in removed_nodes), key=_natural_key),
+            "removed_nodes": sorted(
+                (nodes_a[nid].label for nid in removed_nodes), key=_natural_key
+            ),
             "changed_params": changed_params,
             "summary": summary,
         }

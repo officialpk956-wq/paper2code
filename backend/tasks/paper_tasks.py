@@ -68,9 +68,8 @@ def generate_code_from_pdf_task(
         paper.generated_code_source = ingest_result.get("code") or paper.generated_code_source
         verification_report = ingest_result.get("verification_report") or paper.verification_report
         paper.verification_report = verification_report
-        paper.generation_status = (
-            ingest_result.get("generation_status")
-            or ("success" if (verification_report or {}).get("passed") else "needs_review")
+        paper.generation_status = ingest_result.get("generation_status") or (
+            "success" if (verification_report or {}).get("passed") else "needs_review"
         )
         paper.generated_code_compiled = paper.generated_code_compiled or {
             "language": "python",

@@ -180,9 +180,9 @@ class PaperToCodeGenerator:
             if str(legacy_family or "").strip().lower() in ("", "unknown", "none"):
                 legacy_family = None
             elif legacy_family:
-                legacy_family = infer_family_from_name(str(legacy_family)) or str(
-                    legacy_family
-                ).strip().lower()
+                legacy_family = (
+                    infer_family_from_name(str(legacy_family)) or str(legacy_family).strip().lower()
+                )
 
         family = (
             legacy_family
@@ -192,9 +192,7 @@ class PaperToCodeGenerator:
             or "unknown"
         )
         family = infer_family_from_name(str(family)) or str(family).strip().lower()
-        spec = legacy_spec or self._config_dict_to_builder_spec(
-            config_dict, family, paper_name
-        )
+        spec = legacy_spec or self._config_dict_to_builder_spec(config_dict, family, paper_name)
         spec["model_family"] = family
         spec["family"] = family
 
@@ -252,7 +250,9 @@ class PaperToCodeGenerator:
         try:
             verification_report["fidelity"] = score_fidelity(spec, code, graph)
         except Exception:
-            logging.getLogger(__name__).warning("Could not score architecture fidelity", exc_info=True)
+            logging.getLogger(__name__).warning(
+                "Could not score architecture fidelity", exc_info=True
+            )
             verification_report["fidelity"] = None
 
         return {
@@ -340,9 +340,7 @@ class PaperToCodeGenerator:
                 if "num_heads" in params and params["num_heads"] is not None:
                     block_params["num_heads"] = params["num_heads"]
                 d_model = (
-                    params.get("d_model")
-                    or params.get("embed_dim")
-                    or params.get("hidden_size")
+                    params.get("d_model") or params.get("embed_dim") or params.get("hidden_size")
                 )
                 if d_model:
                     block_params["d_model"] = d_model
@@ -357,9 +355,7 @@ class PaperToCodeGenerator:
 
             elif l_type == "linear":
                 num_classes = (
-                    params.get("num_classes")
-                    or params.get("channels")
-                    or params.get("hidden_size")
+                    params.get("num_classes") or params.get("channels") or params.get("hidden_size")
                 )
                 if num_classes:
                     output_params["num_classes"] = num_classes
@@ -738,9 +734,7 @@ class PaperToCodeGenerator:
         """
         import ast
 
-        family = str(
-            spec.get("model_family") or spec.get("family") or "unknown"
-        ).strip().lower()
+        family = str(spec.get("model_family") or spec.get("family") or "unknown").strip().lower()
         report: dict[str, Any] = {
             "phase": 2,
             "passed": False,
@@ -791,9 +785,7 @@ class PaperToCodeGenerator:
                     output = model(test_input)
                 output_shape = list(output.shape)
 
-                expected_classes = int(
-                    (schema.get("output") or {}).get("num_classes") or 1000
-                )
+                expected_classes = int((schema.get("output") or {}).get("num_classes") or 1000)
                 if family in ("resnet", "vit", "transformer") and output_shape != [
                     1,
                     expected_classes,
@@ -948,9 +940,7 @@ class PaperToCodeGenerator:
                     or "Sandbox execution failed"
                 )
                 report["error"] = sandbox_error
-                report["sandbox"]["failure_kind"] = self._sandbox_failure_kind(
-                    sandbox_error
-                )
+                report["sandbox"]["failure_kind"] = self._sandbox_failure_kind(sandbox_error)
         except Exception as exc:
             report["status"] = "needs_review"
             report["error"] = f"E2BError: {exc}"
@@ -970,7 +960,10 @@ class PaperToCodeGenerator:
             return "timeout"
         if "not configured" in lowered or "api key" in lowered:
             return "configuration"
-        if any(token in lowered for token in ("out of memory", "memory limit", "killed", "resource limit")):
+        if any(
+            token in lowered
+            for token in ("out of memory", "memory limit", "killed", "resource limit")
+        ):
             return "resource_limit"
         if any(token in lowered for token in ("network", "connection", "dns", "name resolution")):
             return "network"
@@ -1035,12 +1028,8 @@ class PaperToCodeGenerator:
         """
         error = verification_report.get("error", "Code verification failed.")
         stage = verification_report.get("stage", "verification")
-        expected_shape = (
-            verification_report.get("output_shape") or (spec.get("output") or {})
-        )
-        input_shape = (
-            verification_report.get("input_shape") or (spec.get("input") or {})
-        )
+        expected_shape = verification_report.get("output_shape") or (spec.get("output") or {})
+        input_shape = verification_report.get("input_shape") or (spec.get("input") or {})
 
         prompt = f"""You are an expert PyTorch developer repairing broken neural network code.
 The following PyTorch code was generated for architecture {spec.get("name", "Model")} ({spec.get("model_family", "unknown")}), but failed execution verification.
@@ -1081,9 +1070,7 @@ Return ONLY the corrected valid Python code. No explanation, no markdown backtic
         Provides structured prompt with layers, connections, and schema.
         Returns complete, runnable nn.Module code.
         """
-        layers_desc = "\n".join(
-            [f"  - {n.label} ({n.type}): {n.params}" for n in graph.nodes]
-        )
+        layers_desc = "\n".join([f"  - {n.label} ({n.type}): {n.params}" for n in graph.nodes])
         connections_desc = "\n".join(
             [f"  - {e.source} → {e.target} ({e.edge_type})" for e in graph.edges]
         )

@@ -134,6 +134,7 @@ def test_server_decodes_onnx_bytes_returned_by_the_sandbox(monkeypatch, files):
     import e2b_code_interpreter
 
     monkeypatch.setattr(e2b_code_interpreter, "Sandbox", _Sandbox)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")  # checked before the (mocked) sandbox is created
     graph = pp.parse_pytorch(b"irrelevant", [3, 8, 8])
     assert graph["meta"]["method"] == "torchscript_onnx"
     assert graph["meta"]["source_format"] == "torchscript"

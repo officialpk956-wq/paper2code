@@ -18,9 +18,7 @@ from backend.services import vector_service
 log = logging.getLogger(__name__)
 
 
-def backfill(
-    db, batch_size: int = 100, paper_id: int | None = None, dry_run: bool = False
-) -> dict:
+def backfill(db, batch_size: int = 100, paper_id: int | None = None, dry_run: bool = False) -> dict:
     """Embed PaperChunk rows that have no embedding_id yet.
 
     Returns {"scanned": int, "indexed": int, "failed": int, "skipped": int}.

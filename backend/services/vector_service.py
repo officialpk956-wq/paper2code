@@ -203,8 +203,7 @@ def search_chunks(
             score_threshold=0.3,
         )
         return [
-            {"chunk_id": int(p.id), "score": p.score, **(p.payload or {})}
-            for p in response.points
+            {"chunk_id": int(p.id), "score": p.score, **(p.payload or {})} for p in response.points
         ]
     except Exception as e:
         logger.exception("search_chunks failed: %s", e)
@@ -251,7 +250,9 @@ def _expand_query_terms(query: str) -> list[str]:
         return []
 
 
-def _bm25_and_family_scores(query: str, texts: list[str], family: str | None) -> tuple[list[float], list[float]]:
+def _bm25_and_family_scores(
+    query: str, texts: list[str], family: str | None
+) -> tuple[list[float], list[float]]:
     """Shared scoring core for hybrid_search_chunks and hybrid_rank_texts."""
     from core.rag.retriever import BM25, _tokenize
 
@@ -259,15 +260,15 @@ def _bm25_and_family_scores(query: str, texts: list[str], family: str | None) ->
     query_terms = _tokenize(query)
     expanded_terms = _tokenize(" ".join(_expand_query_terms(query)))
     raw_bm25 = [
-        bm25.score(query_terms, i) + 0.5 * bm25.score(expanded_terms, i)
-        for i in range(len(texts))
+        bm25.score(query_terms, i) + 0.5 * bm25.score(expanded_terms, i) for i in range(len(texts))
     ]
     max_bm25 = max(raw_bm25) or 1.0
     bm25_norm = [s / max_bm25 for s in raw_bm25]
 
     family_terms = _FAMILY_TERMS.get((family or "").lower(), [])
     family_bonus = [
-        0.1 if family_terms and any(t in text.lower() for t in family_terms) else 0.0 for text in texts
+        0.1 if family_terms and any(t in text.lower() for t in family_terms) else 0.0
+        for text in texts
     ]
     return bm25_norm, family_bonus
 
@@ -287,6 +288,7 @@ def _mmr_select(
     remaining = set(indices)
     try:
         while remaining and len(selected) < k:
+
             def mmr_score(candidate: int) -> tuple[float, float, int]:
                 max_similarity = max(
                     (float(vectors[candidate] @ vectors[chosen]) for chosen in selected),
@@ -328,7 +330,10 @@ def hybrid_search_chunks(
     resolves to the "resnet" family without the caller needing to know that.
     """
     family = _resolve_family(query, family)
-    dense_scores = {r["chunk_id"]: r["score"] for r in search_chunks(query, limit=max(limit * 3, limit), paper_id=paper_id)}
+    dense_scores = {
+        r["chunk_id"]: r["score"]
+        for r in search_chunks(query, limit=max(limit * 3, limit), paper_id=paper_id)
+    }
 
     if not chunks:
         ranked = sorted(dense_scores.items(), key=lambda x: -x[1])[:limit]

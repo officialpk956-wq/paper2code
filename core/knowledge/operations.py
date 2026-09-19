@@ -6,7 +6,6 @@ existing extraction and generation paths rather than receiving guessed facts.
 
 import re
 
-
 OPERATIONS: dict[str, dict] = {
     "sigmoid": {
         "formula": "sigma(x) = 1 / (1 + exp(-x))",
@@ -42,7 +41,7 @@ OPERATIONS: dict[str, dict] = {
         "functional": "F.gelu(x, approximate='tanh')",
         "aliases": ["gelu", "gaussian error linear unit"],
         "output_range": "(-infinity, infinity)",
-        "notes": "Formula is the tanh approximation. nn.GELU() defaults to the exact erf form; use nn.GELU(approximate=\"tanh\") for this approximation.",
+        "notes": 'Formula is the tanh approximation. nn.GELU() defaults to the exact erf form; use nn.GELU(approximate="tanh") for this approximation.',
     },
     "silu": {
         "formula": "SiLU(x) = x * sigmoid(x)",

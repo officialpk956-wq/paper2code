@@ -51,8 +51,7 @@ def normalize_model_spec(raw: dict) -> dict:
             {
                 "name": stage.get("name"),
                 "repeats": stage.get("repeats") or 1,
-                "out_channels": stage.get("out_channels")
-                or stage_params.get("num_filters"),
+                "out_channels": stage.get("out_channels") or stage_params.get("num_filters"),
             }
         )
 

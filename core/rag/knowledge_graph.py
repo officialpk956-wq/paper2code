@@ -237,8 +237,7 @@ class KnowledgeGraph:
                 matched_nodes.append(node)
         for node, forms in self._SURFACE_FORMS.items():
             if (
-                node.replace("_", " ") in query_lower
-                or any(form in query_lower for form in forms)
+                node.replace("_", " ") in query_lower or any(form in query_lower for form in forms)
             ) and node not in matched_nodes:
                 matched_nodes.append(node)
 

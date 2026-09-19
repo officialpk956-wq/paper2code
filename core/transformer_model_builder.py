@@ -5,6 +5,7 @@ Provides a self-contained, executable PyTorch nn.Module for Transformer models.
 """
 
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,9 +34,7 @@ class TransformerModelBuilder(nn.Module):
         )
         self.num_heads = int(block_params.get("num_heads") or 8)
         self.ffn_dim = int(
-            block_params.get("ffn_dim")
-            or block_params.get("hidden_size")
-            or (self.d_model * 4)
+            block_params.get("ffn_dim") or block_params.get("hidden_size") or (self.d_model * 4)
         )
         self.dropout = float(block_params.get("dropout") or 0.1)
 
