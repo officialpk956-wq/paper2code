@@ -259,41 +259,27 @@ export function dataPath(edges: { source: string; target: string }[], nodeId: st
   return path;
 }
 
-// ── HTTP helpers ──────────────────────────────────────────────────────────────
+// ── HTTP calls ────────────────────────────────────────────────────────────────
+// All calls go through src/lib/api.ts, which refreshes an expired access token
+// on 401 and retries. Access tokens live 15 minutes; this module used raw
+// fetch with a hand-built Authorization header, so fifteen minutes after
+// login every upload here failed with "Could not validate credentials" while
+// the rest of the app quietly refreshed and kept working.
+//
+// Timeouts are explicit: the shared default is 15s, which would abort the
+// PyTorch parse -- ~30s in a warm E2B sandbox, up to 300s cold (the server
+// side gives it _PYTORCH_SANDBOX_TIMEOUT = 300).
 
-const BASE =
-  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
-  'http://127.0.0.1:8000';
+import { apiGet, apiPost, apiPostForm } from '@/lib/api';
 
-function getAuthHeader(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-async function throwOnError(res: Response): Promise<void> {
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    const detail = Array.isArray(err.detail)
-      ? err.detail.map((e: { msg?: string }) => e?.msg ?? JSON.stringify(e)).join('; ')
-      : err.detail;
-    throw new Error(detail ?? 'Request failed');
-  }
-}
-
-// ── API calls ─────────────────────────────────────────────────────────────────
+const ONNX_PARSE_TIMEOUT_MS = 120_000;      // 50 MB upload + parse
+const PYTORCH_PARSE_TIMEOUT_MS = 330_000;   // sandbox limit (300s) + margin
 
 /** Parse an .onnx file. */
 export async function parseModel(file: File): Promise<ParsedGraph> {
   const form = new FormData();
   form.append('file', file);
-
-  const res = await fetch(`${BASE}/api/model/parse`, {
-    method: 'POST',
-    headers: getAuthHeader(),
-    body: form,
-  });
-  await throwOnError(res);
-  return res.json() as Promise<ParsedGraph>;
+  return apiPostForm<ParsedGraph>('/api/model/parse', form, undefined, ONNX_PARSE_TIMEOUT_MS);
 }
 
 /** Parse a .pt / .pth file via the E2B sandbox. */
@@ -304,14 +290,7 @@ export async function parsePytorchModel(
   const form = new FormData();
   form.append('file', file);
   form.append('input_shape', JSON.stringify(inputShape));
-
-  const res = await fetch(`${BASE}/api/model/parse-pytorch`, {
-    method: 'POST',
-    headers: getAuthHeader(),
-    body: form,
-  });
-  await throwOnError(res);
-  return res.json() as Promise<ParsedGraph>;
+  return apiPostForm<ParsedGraph>('/api/model/parse-pytorch', form, undefined, PYTORCH_PARSE_TIMEOUT_MS);
 }
 
 /** Save a parsed graph to the DB and return { id }. */
@@ -320,20 +299,12 @@ export async function saveGraph(
   name: string,
   format: 'onnx' | 'pytorch',
 ): Promise<{ id: number }> {
-  const res = await fetch(`${BASE}/api/model/save`, {
-    method: 'POST',
-    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, format, graph_data: graph }),
-  });
-  await throwOnError(res);
-  return res.json() as Promise<{ id: number }>;
+  return apiPost<{ id: number }>('/api/model/save', { name, format, graph_data: graph });
 }
 
 /** Fetch a previously saved graph by ID (public — no auth needed). */
 export async function fetchGraph(id: number): Promise<SavedGraph> {
-  const res = await fetch(`${BASE}/api/model/${id}`);
-  await throwOnError(res);
-  return res.json() as Promise<SavedGraph>;
+  return apiGet<SavedGraph>(`/api/model/${id}`);
 }
 
 // ── Param formatter ────────────────────────────────────────────────────────────
