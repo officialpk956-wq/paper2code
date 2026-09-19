@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import PapersPage from '@/app/(protected)/papers/page';
+import PapersPage from '@/app/(protected)/papers/PapersListClient';
 import { apiGet, apiPostForm, isLoggedIn } from '@/lib/api';
 
 const push = vi.fn();

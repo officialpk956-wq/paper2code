@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, Clock, Key, ArrowRight } from 'lucide-react';
 import { CURRICULUM } from '@/data/content/curriculum';
@@ -7,6 +8,23 @@ import { FadeIn } from '@/components/FadeIn';
 import AnimatedCard from '@/components/AnimatedCard';
 import { getMdxContent } from '@/lib/mdx';
 import MdxRenderer from '@/components/MdxRenderer';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ domain: string; topic: string }>;
+}): Promise<Metadata> {
+  const { domain: domainSlug, topic: topicSlug } = await params;
+  const domain = CURRICULUM.find(d => d.slug === domainSlug);
+  const topic = domain?.topics.find(t => t.slug === topicSlug);
+  if (!domain || !topic) return { title: 'Topic Not Found | paper2code' };
+  return {
+    title: `${topic.title} — ${domain.name} | paper2code`,
+    description: (topic.why || `Learn ${topic.title} in the ${domain.name} curriculum.`).slice(0, 155),
+  };
+}
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -85,6 +103,13 @@ export default async function TopicPage({
   const prereqEdgesFrom = PREREQ_EDGES.filter(e => e.from.toLowerCase() === topic.title.trim().toLowerCase());
 
   return (
+    <>
+    <PageSummary
+      eyebrow={`${domain.name} · ${topic.level}`}
+      title={topic.title}
+      description={topic.why || `Learn ${topic.title} in the ${domain.name} curriculum.`}
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-transparent text-white">
       {/* Top Nav */}
       <div className="border-b border-[#262626] px-8 py-4 bg-[#0A0A0A] flex items-center gap-2 sticky top-0 z-10 text-[13px] font-medium">
@@ -295,5 +320,7 @@ export default async function TopicPage({
         </div>
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }

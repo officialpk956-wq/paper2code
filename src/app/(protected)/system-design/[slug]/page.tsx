@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
@@ -8,6 +9,20 @@ import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { systemToFlowSlug } from '@/components/arch/archFlows';
 import { Reveal } from '@/components/anim';
 import { SYSTEM_DESIGN_ROUTE_ALIASES } from '@/data/content/routeAliases';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const canonicalSlug = SYSTEM_DESIGN_ROUTE_ALIASES[slug] ?? slug;
+  const sys = SD_SYSTEMS.find(s => s.slug === canonicalSlug);
+  if (!sys) return { title: 'System Not Found | paper2code' };
+  const projectCount = sys.modules.reduce((acc, mod) => acc + mod.handsOnProjects.length, 0);
+  return {
+    title: `${sys.name} — System Design | paper2code`,
+    description: `Design ${sys.name} from first principles: ${sys.modules.length} levels from Beginner to Research, with ${projectCount} hands-on projects.`,
+  };
+}
 
 export default async function SystemDesignSlugPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -28,8 +43,16 @@ export default async function SystemDesignSlugPage({ params }: { params: Promise
   }
 
   const mdxContent = getMdxContent('system-design', slug);
+  const projectCount = sys.modules.reduce((acc, mod) => acc + mod.handsOnProjects.length, 0);
 
   return (
+    <>
+    <PageSummary
+      eyebrow={`System ${sys.number}`}
+      title={sys.name}
+      description={`Design ${sys.name} from first principles: ${sys.modules.length} levels from Beginner to Research, with ${projectCount} hands-on projects.`}
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-transparent text-white flex flex-col">
       {/* HEADER */}
       <div className="border-b border-[#262626] bg-[#0A0A0A]">
@@ -83,5 +106,7 @@ export default async function SystemDesignSlugPage({ params }: { params: Promise
         </div>
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }

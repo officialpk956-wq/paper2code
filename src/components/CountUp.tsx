@@ -20,21 +20,20 @@ function prefersReducedMotion(): boolean {
 
 export function CountUp({ value, className }: CountUpProps) {
   const end = parseNumeric(value);
-  const [displayed, setDisplayed] = useState(prefersReducedMotion() ? end : 0);
+  // Always render the real value by default — the count-up is a progressive
+  // enhancement, never the thing that has to succeed for the number to be correct.
+  const [displayed, setDisplayed] = useState(end);
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true });
   const hasAnimated = useRef(false);
 
   useEffect(() => {
-    if (!inView || hasAnimated.current) return;
-    if (prefersReducedMotion()) {
-      setDisplayed(end);
-      return;
-    }
+    if (!inView || hasAnimated.current || prefersReducedMotion()) return;
 
     hasAnimated.current = true;
     const duration = 1200;
     const startTime = performance.now();
+    setDisplayed(0);
 
     const tick = (now: number) => {
       const elapsed = Math.min(now - startTime, duration);

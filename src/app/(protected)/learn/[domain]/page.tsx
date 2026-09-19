@@ -1,17 +1,12 @@
-'use client';
-
-import { useParams } from 'next/navigation';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
 import { ChevronLeft, ArrowRight, Clock } from 'lucide-react';
 import { CURRICULUM, CurriculumTopic } from '@/data/content/curriculum';
 import { FadeIn } from '@/components/FadeIn';
 import TiltCard from '@/components/TiltCard';
-
-const LearnField = dynamic(
-  () => import('@/components/learn/LearnField').then(m => m.LearnField),
-  { ssr: false },
-);
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+import { LearnField } from '@/components/learn/LearnField';
 
 const getDifficultyColor = (diff: string) => {
   switch(diff) {
@@ -23,10 +18,19 @@ const getDifficultyColor = (diff: string) => {
   }
 };
 
-export default function DomainPage() {
-  const params = useParams();
-  const domainSlug = params.domain as string;
-  
+export async function generateMetadata({ params }: { params: Promise<{ domain: string }> }): Promise<Metadata> {
+  const { domain: domainSlug } = await params;
+  const domain = CURRICULUM.find(d => d.slug === domainSlug);
+  if (!domain) return { title: 'Domain Not Found | paper2code' };
+  return {
+    title: `${domain.name} — Learning Domain | paper2code`,
+    description: `Study ${domain.topics.length} topics in ${domain.name}, from beginner to expert level.`,
+  };
+}
+
+export default async function DomainPage({ params }: { params: Promise<{ domain: string }> }) {
+  const { domain: domainSlug } = await params;
+
   const domain = CURRICULUM.find(d => d.slug === domainSlug);
 
   if (!domain) {
@@ -56,6 +60,13 @@ export default function DomainPage() {
   const expertCount      = groupedTopics.Expert.length;
 
   return (
+    <>
+    <PageSummary
+      eyebrow={`Domain ${domain.number}`}
+      title={domain.name}
+      description={`Study ${domain.topics.length} topics in ${domain.name}, from beginner to expert level.`}
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-transparent text-white">
       {/* Top Nav */}
       <FadeIn>
@@ -150,5 +161,7 @@ export default function DomainPage() {
         })}
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }

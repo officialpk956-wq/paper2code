@@ -1,14 +1,26 @@
-'use client';
-
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { CURRICULUM } from '@/data/content/curriculum';
 import StaggerList from '@/components/StaggerList';
 import TiltCard from '@/components/TiltCard';
 import { motion } from 'framer-motion';
 import { Reveal } from '@/components/anim';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export const metadata: Metadata = {
+  title: `Curriculum — ${CURRICULUM.length} ML Learning Domains | paper2code`,
+  description: `A structured path from basics to advanced ML research, across ${CURRICULUM.length} domains from mathematics to production deployment.`,
+};
 
 export default function LearnPage() {
   return (
+    <>
+    <PageSummary
+      title="Curriculum"
+      description={`A structured path from basics to advanced research, across ${CURRICULUM.length} domains.`}
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-transparent text-white p-8">
       <div className="max-w-6xl mx-auto">
         <Reveal className="mb-8">
@@ -17,7 +29,7 @@ export default function LearnPage() {
             A structured path from basics to advanced research.
           </p>
         </Reveal>
-        
+
         <StaggerList className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {CURRICULUM.map((domain) => {
             const topicCount = domain.topics.length;
@@ -74,5 +86,7 @@ export default function LearnPage() {
         )}
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }

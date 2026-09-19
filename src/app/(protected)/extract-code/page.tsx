@@ -1,8 +1,14 @@
-'use client';
-
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Upload, CheckCircle2, ArrowRight, Zap, Code2, Cpu } from 'lucide-react';
 import { FadeIn } from '@/components/FadeIn';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export const metadata: Metadata = {
+  title: 'Extract Code from Papers | paper2code',
+  description: 'Upload any ML paper and get a complete, runnable PyTorch implementation — architectures, hyperparameters, and pseudocode extracted automatically.',
+};
 
 const STEPS = [
   {
@@ -33,6 +39,13 @@ const FEATURES = [
 
 export default function ExtractCodePage() {
   return (
+    <>
+    <PageSummary
+      eyebrow="Extract Code"
+      title="Turn Research Papers Into Ready-To-Use Code"
+      description="Upload any ML or AI paper in PDF format. We instantly parse the architecture, math, and concepts to generate complete, runnable PyTorch implementations."
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-[#0A0A0A] text-white">
       {/* HERO SECTION — no animation, above the fold */}
       <div className="relative pt-32 pb-20 overflow-hidden">
@@ -136,5 +149,7 @@ export default function ExtractCodePage() {
         </div>
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }

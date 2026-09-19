@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowRight, ArrowLeft } from 'lucide-react';
@@ -11,6 +12,19 @@ import { toDiagramSlug } from '@/components/arch/archFlows';
 import SectionGrid from '@/components/arch/SectionGrid';
 import ArchHeroBackground from '@/components/arch/ArchHeroBackground';
 import { ARCHITECTURE_ROUTE_ALIASES } from '@/data/content/routeAliases';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const canonicalSlug = ARCHITECTURE_ROUTE_ALIASES[slug] ?? slug;
+  const arch = ARCHITECTURES.find(a => a.slug === canonicalSlug);
+  if (!arch) return { title: 'Architecture Not Found | paper2code' };
+  return {
+    title: `${arch.name} (${arch.year}) — Architecture Deep Dive | paper2code`,
+    description: (arch.keyInnovation || `A deep dive into ${arch.name}, its lineage, and how it's used in production.`).slice(0, 155),
+  };
+}
 
 const ARCH_SECTIONS = [
   "Motivation",
@@ -120,7 +134,14 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
   const diagramSlug = toDiagramSlug(arch.slug) ?? toDiagramSlug(arch.name);
 
   return (
-    <div className="flex h-[calc(100vh-56px)] bg-transparent text-white overflow-hidden">
+    <>
+      <PageSummary
+        eyebrow={`${arch.category} · ${arch.year}`}
+        title={arch.name}
+        description={arch.keyInnovation || `By ${arch.authors}.`}
+      />
+      <AuthGuard>
+      <div className="flex h-[calc(100vh-56px)] bg-transparent text-white overflow-hidden">
       {/* LEFT SIDEBAR (Nav) */}
       <ArchSidebar sections={headings} slug={arch.slug} />
 
@@ -271,6 +292,8 @@ export default async function ArchitectureSlugPage({ params }: { params: Promise
           </div>
         )}
       </div>
-    </div>
+      </div>
+      </AuthGuard>
+    </>
   );
 }

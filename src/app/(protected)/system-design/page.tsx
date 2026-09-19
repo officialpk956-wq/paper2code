@@ -1,14 +1,26 @@
-'use client';
-
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { SD_SYSTEMS } from '@/data/content/systemDesign';
 
 import { motion } from 'framer-motion';
 import { Reveal } from '@/components/anim';
+import { AuthGuard } from '@/components/AuthGuard';
+import { PageSummary } from '@/components/PageSummary';
+
+export const metadata: Metadata = {
+  title: `AI System Design — ${SD_SYSTEMS.length} Production Systems | paper2code`,
+  description: 'Master the architecture of production AI systems: vector search, LLM serving, RAG, and agentic workflows.',
+};
 
 export default function SystemDesignPage() {
   return (
+    <>
+    <PageSummary
+      title="AI System Design"
+      description="Master the architecture of production AI systems. Learn how to design scalable, robust infrastructure for vector search, LLM serving, RAG, and agentic workflows."
+    />
+    <AuthGuard>
     <div className="min-h-screen bg-transparent text-white">
       {/* HEADER */}
       <div className="border-b border-[#262626] bg-[#0A0A0A] px-8 py-10 text-center">
@@ -62,5 +74,7 @@ export default function SystemDesignPage() {
         </div>
       </div>
     </div>
+    </AuthGuard>
+    </>
   );
 }
