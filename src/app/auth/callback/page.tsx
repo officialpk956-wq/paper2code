@@ -28,9 +28,13 @@ function OAuthCallbackContent() {
           state,
           redirect_uri: window.location.origin + '/auth/callback'
         };
-        const res = await apiPost<any>(`/api/auth/oauth/${storedProvider}/exchange`, payload);
+        const res = await apiPost<{
+          access_token: string;
+          refresh_token?: string;
+          user: { id: number; email: string; name: string };
+        }>(`/api/auth/oauth/${storedProvider}/exchange`, payload);
         
-        setTokens({ access_token: res.access_token, refresh_token: res.refresh_token });
+        setTokens(res);
         if (typeof window !== 'undefined') {
           localStorage.setItem('user_profile', JSON.stringify(res.user));
           localStorage.removeItem('oauth_provider'); // cleanup
@@ -38,8 +42,8 @@ function OAuthCallbackContent() {
         
         // Go back home or dashboard
         window.location.href = '/'; 
-      } catch (err: any) {
-        setError(err.message || 'OAuth exchange failed');
+      } catch (err) {
+        setError(err instanceof Error && err.message ? err.message : 'OAuth exchange failed');
       }
     };
 

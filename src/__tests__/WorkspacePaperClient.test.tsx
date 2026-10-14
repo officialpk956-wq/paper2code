@@ -6,7 +6,7 @@ import { vi, describe, beforeEach, test, expect } from 'vitest';
 vi.mock('@/lib/api');
 vi.mock('next/dynamic', () => ({
   default: () => {
-    const DynamicComponent = (props: any) => {
+    const DynamicComponent = (props: { value: string; onChange: (value: string) => void }) => {
       return <textarea 
         data-testid="monaco-editor-stub"
         value={props.value}
@@ -22,8 +22,8 @@ vi.mock('@monaco-editor/react', () => ({
   loader: { config: vi.fn() }
 }));
 
-const mockApiGet = apiGet as any;
-const mockApiPost = apiPost as any;
+const mockApiGet = vi.mocked(apiGet);
+const mockApiPost = vi.mocked(apiPost);
 
 describe('WorkspacePaperClient - Implement Tab', () => {
   beforeEach(() => {

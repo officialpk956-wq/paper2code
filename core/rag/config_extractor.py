@@ -256,6 +256,31 @@ Output:
   "connection_types": {"layer_2": "residual", "layer_3": "residual"}
 }
 
+### Example 3 — Transformer encoder, listing every stated component:
+Text: "Tokens pass through a learned embedding and a sinusoidal positional encoding, then 6 identical encoder layers. Each layer has multi-head self-attention with 8 heads and a position-wise feed-forward network with GELU, each sub-layer wrapped in a residual connection followed by layer normalization. We apply dropout of 0.1 to each sub-layer output. A final linear layer and softmax produce the output distribution."
+Output:
+{
+  "name": "Transformer encoder",
+  "layers": [
+    {"type": "embedding",          "params": {}},
+    {"type": "positionalembedding","params": {}},
+    {"type": "transformerblock",   "params": {"num_layers": 6}},
+    {"type": "multiheadattention", "params": {"num_heads": 8}},
+    {"type": "feedforward",        "params": {}},
+    {"type": "gelu",               "params": {}},
+    {"type": "layernorm",          "params": {}},
+    {"type": "dropout",            "params": {}},
+    {"type": "linear",             "params": {}},
+    {"type": "softmax",            "params": {}}
+  ],
+  "connections": [
+    ["layer_0","layer_1"],["layer_1","layer_2"],["layer_2","layer_3"],
+    ["layer_3","layer_4"],["layer_4","layer_5"],["layer_5","layer_6"],
+    ["layer_6","layer_7"],["layer_7","layer_8"],["layer_8","layer_9"]
+  ],
+  "connection_types": {"layer_3": "residual", "layer_4": "residual"}
+}
+
 ### Example 2 — U-Net with skip connections:
 Text: "U-Net has an encoder with 3×3 convolutions producing 64 channels, followed by max pooling. Its decoder upsamples and concatenates encoder features via skip connections."
 Output:
@@ -316,17 +341,27 @@ Return ONLY valid JSON — no explanation, no markdown fences.
 
 Rules:
 - "type" must be one of:
-  conv2d, conv1d, convtranspose2d, depthwise_conv2d, linear,
-  maxpool2d, avgpool2d, globalavgpool2d, upsample, flatten,
-  batchnorm2d, layernorm, groupnorm, relu, leakyrelu, gelu, silu, dropout,
-  multiheadattention, transformerblock, feedforward, patchembedding,
-  positionalembedding, clstoken, sequence_pooling,
+  conv2d, conv1d, convtranspose2d, depthwise_conv2d, mbconv, linear,
+  maxpool2d, avgpool2d, globalavgpool2d, upsample, flatten, crop,
+  batchnorm2d, layernorm, groupnorm,
+  relu, leakyrelu, gelu, silu, tanh, sigmoid, softmax, dropout,
+  embedding, patchembedding, positionalembedding, clstoken,
+  multiheadattention, transformerblock, feedforward, sequence_pooling,
   residualblock, residual_add, concat
 - "params": ONLY extract values EXPLICITLY stated in the text. Do NOT guess. Use these parameter names where the paper states them: channels, kernel_size, stride, padding, hidden_size, num_heads, num_layers, num_classes.
 - "connections": list of [source_id, target_id] pairs using layer indices.
 - "connection_types": dict mapping "src_id->tgt_id" or layer_id to
   connection type: "skip", "residual", "concat", "branch", "add".
 - If you see skip connections, concatenation, or branches, include them.
+- COMPLETENESS: emit one entry for EVERY component type the text explicitly
+  states as part of this model -- activations (relu, gelu, silu, tanh),
+  normalisation (batchnorm2d, layernorm, groupnorm), dropout, embeddings,
+  special tokens (clstoken), and the output layer (linear, softmax). A named
+  block AND its stated sub-layers are both listed: a transformer block with
+  multi-head attention and a feed-forward network is transformerblock,
+  multiheadattention, feedforward. Do not summarise a block into one entry
+  when the text names what is inside it. Do not add components the text does
+  not state.
 """
 
 _VERIFICATION_PROMPT = """\

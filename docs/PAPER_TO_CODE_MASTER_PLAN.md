@@ -18,19 +18,17 @@
 
 ---
 
-## §0 Status — 2026-09-17
+## §0 Status — 2026-09-21
 
-**Delivered:** original Phases 1–4 complete; Phase 5 met 3 of 5. **Phase 6:
-all four criteria met on the first strict-accepted run in the project's
-history** (2026-09-16, 0 rule-based / 0 provider fallbacks, Groq-pure), and
-`benchmarks/baseline.json` is written from it -- `--check` passes for the
-first time. **Phase 6 is not closed**, for one reason: that run is a single
-draw from an extractor that is provably nondeterministic (§8 →
-*Nondeterminism*), so its margins are not yet trustworthy. Consensus
-extraction (`--samples 3`, medoid) is implemented and tested but its live
-run was cut short by the daily token budget; closing Phase 6 means one clean
-3-sample run and one re-extraction to *measure* that consensus narrowed the
-variance.
+**Delivered:** original Phases 1–4 complete; Phase 5 met 3 of 5. **Phase 6
+closed 2026-09-21** on `benchmarks/results/20260920T093519Z.json`: 3-sample
+consensus, strict-accepted, all ten papers, 0 rule-based / 0 provider
+fallbacks. Recall **0.901**, precision 0.840, hyperparam 0.600, lowest
+paper 0.64 -- every criterion cleared by more than the +/-0.10 noise band
+except hyperparam, which sits at the band's edge and is carried into Phase
+7 with its cause diagnosed. `baseline.json` is rebuilt from it at
+`samples=3`; `--check` passes. Median draw agreement **1.00**, seven of ten
+papers identical across all draws.
 **Gate:** **1965** backend tests passing (10 skipped, 0 failed) + 38 frontend.
 **Uncommitted:** everything from Phase 3 onward is in the working tree.
 **Current quality** (run 20260916T182252Z rescored against the 2026-09-17
@@ -793,6 +791,136 @@ accepted, promoted and baselined with seven papers. Now rejected. (2)
 Transient transport errors (`getaddrinfo failed`) had no retry on either
 network path and went straight to the breaker; one blip cost a paper and
 skipped three. Both paths now retry briefly.
+
+### Closing run: 20 of 26 misses are extraction misses (2026-09-20)
+
+`benchmarks/results/20260918T190328Z.json` -- 3-sample consensus, strict-
+accepted, all ten papers, 124 quota waits over two days. Per paper against
+the neutral labels:
+
+| paper | recall | precision | draws (layers) | agreement |
+|---|---|---|---|---|
+| dcgan | 1.00 | 0.89 | 25 / 25 / 25 | 1.00 / 1.00 / 1.00 |
+| mobilenet_v1 | 1.00 | 1.00 | 60 / 60 / 59 | 0.93 / 0.93 / 0.86 |
+| ddpm | 0.83 | 0.56 | 12 / 27 / 36 | 0.81 / 0.73 / 0.74 |
+| resnet50 | 0.75 | 1.00 | 9 / 8 / 20 | 0.92 / 0.83 / 0.92 |
+| unet | 0.67 | 0.80 | 49 / 53 / 49 | 0.83 / 0.67 / 0.83 |
+| densenet121 | 0.56 | 1.00 | 53 / 18 / 18 | 1.00 / 1.00 / 1.00 |
+| vit_base | 0.55 | 1.00 | 6 / 5 / **99** | 0.73 / 0.67 / 0.56 |
+| transformer_base | 0.50 | 1.00 | 12 / 11 / 20 | 0.75 / 0.75 / 0.50 |
+| efficientnet_b0 | 0.40 | 0.67 | 11 / 11 / 11 | 0.75 / 0.88 / 0.88 |
+| bert_base | **0.38** | 0.50 | 7 / 6 / 6 | 0.69 / 0.38 / 0.69 |
+
+Aggregate: recall **0.663** (target 0.70), precision 0.841, hyperparam
+0.600, family 0.90.
+
+**Every miss classified** by whether its evidence was in the focused text
+(`scratchpad/miss_diag.py`): **20 extraction misses, 6 retrieval misses.**
+Retrieval is done; the model is reading past explicit statements. Three
+patterns account for nearly all of it:
+
+1. Activations, normalisation, dropout and output layers treated as
+   not-layers: relu x2, softmax x2, dropout x2, silu, batchnorm2d.
+2. Sub-layers dropped once the enclosing block is named: vit emits
+   `transformerblock` but not `multiheadattention` / `feedforward`;
+   densenet emits its blocks but not `concat` / `batchnorm2d`.
+3. The paper's own block name never emitted: `mbconv`, stated seven times.
+
+And the draw shapes explain why consensus did not help: vit 6 / 5 / 99,
+densenet 53 / 18 / 18, resnet 9 / 8 / 20. The model has two modes -- a
+block-level summary and a full unroll -- and the summary mode wins the
+medoid by outnumbering. Selection was choosing the low-recall mode every
+time. That is not a selection bug to patch around; the output mode has to
+be made consistent at the source.
+
+**Root cause in the prompt, three parts:** (a) the `"type" must be one of`
+list never gained `softmax`, `tanh`, `sigmoid`, `embedding`, `mbconv`,
+`crop` when they became canonical -- the model cannot emit a type the
+prompt forbids; (b) zero few-shot examples contained an activation,
+dropout, softmax, embedding, feed-forward, batchnorm or concat -- every
+example was a block summary, and the model imitated it; (c) no
+completeness instruction. All three fixed; two guard tests ensure the
+allowed list covers every label type and the examples demonstrate
+enumeration.
+
+**Validated on the three worst papers** (`20260919T202552Z.json`, 3-sample,
+strict-accepted) before spending a full run:
+
+| paper | recall | precision | draw agreement |
+|---|---|---|---|
+| bert_base | 0.38 -> **0.88** | 0.50 -> 0.70 | 0.69/0.38/0.69 -> **1.0/1.0/1.0** |
+| transformer_base | 0.50 -> **1.00** | 1.00 -> 0.89 | 0.75/0.75/0.50 -> **1.0/1.0/1.0** |
+| vit_base | 0.55 -> **0.73** | 1.00 -> 1.00 | 0.73/0.67/0.56 -> 0.9/0.9/0.8 |
+
+Two of three now return identical type sets across all three draws. Making
+the output mode explicit removed the variance at the source -- consensus
+had only been averaging over it. The full ten-paper run under this prompt
+is the next closing attempt.
+
+Also fixed: `--check` compared its sampling setup as the default 1 on the
+offline path and failed a 3-sample baseline against its own cache.
+
+### Phase 6 — CLOSED (2026-09-21)
+
+`benchmarks/results/20260920T093519Z.json`. Full ten-paper run under the
+fixed prompt: 3 samples per paper, strict-accepted, 0 rule-based, 0
+provider fallbacks, two network outages waited out, one draw that failed to
+parse absorbed by the tolerant consensus (unet).
+
+| Exit criterion | Target | Actual | Margin vs +/-0.10 noise |
+|---|---|---|---|
+| layer_type_recall | >= 0.70 | **0.901** | +0.20, outside the band |
+| layer_type_precision | >= 0.65 | **0.840** | +0.19 |
+| hyperparam_accuracy | >= 0.50 | **0.600** | +0.10, at the band edge |
+| no single paper below 0.40 | — | lowest **0.64** | +0.24 |
+
+Per paper against the neutral labels, previous closing run -> this one:
+
+| paper | recall | precision | draws | agreement |
+|---|---|---|---|---|
+| bert_base | 0.38 -> **0.88** | 0.50 -> 0.70 | 10/10/12 | 1.0/1.0/1.0 |
+| dcgan | 1.00 -> 1.00 | 0.89 -> 0.89 | 18/21/18 | 1.0/1.0/1.0 |
+| ddpm | 0.83 -> 0.83 | 0.56 -> 0.62 | 18/8/15 | 0.78/0.82/0.71 |
+| densenet121 | 0.56 -> **1.00** | 1.00 -> 1.00 | 36/34/35 | 1.0/1.0/1.0 |
+| efficientnet_b0 | 0.40 -> **1.00** | 0.67 -> 0.62 | 18/30/31 | 0.67/0.80/0.75 |
+| mobilenet_v1 | 1.00 -> 1.00 | 1.00 -> 1.00 | 60/72/72 | 1.0/1.0/1.0 |
+| resnet50 | 0.75 -> **1.00** | 1.00 -> 1.00 | 20/20/20 | 1.0/1.0/1.0 |
+| transformer_base | 0.50 -> **1.00** | 1.00 -> 0.89 | 15/15/15 | 1.0/1.0/1.0 |
+| unet | 0.67 -> 0.67 | 0.80 -> 0.80 | 49/49 (+1 unparsed) | 1.0/1.0 |
+| vit_base | 0.55 -> 0.64 | 1.00 -> 0.88 | 8/9/10 | 0.9/0.9/0.8 |
+
+Median agreement of the kept draw **1.00** (was 0.87); seven of ten papers
+return identical type sets across all three draws (was one of six). The
+prompt fix did not just raise recall -- it removed the output-mode
+variance that consensus had only been averaging over. Precision held at
+0.84: the completeness rule did not buy recall with false positives.
+
+**What closed it, in order:** deterministic PDF text (x_tolerance); query
+parity and vocabulary; variant-aware retrieval; verification that sees the
+whole focus and cannot overwrite a supported value; strict rejection of
+rule-based, provider-mixed and hard-failed runs; consensus over draws;
+labels curated neutrally with every addition cited; scoring through the
+synonym table; and finally a prompt that allows and asks for the component
+types the labels expect. Each was found by a measurement that refused to
+pass, not by inspection.
+
+### Carried into Phase 7
+
+- **ViT hyperparams 1.00 -> 0.33: a naming collision, not extraction.** The
+  model put `hidden_size: 3072` on the feed-forward layer, which is correct
+  (ViT-Base MLP width), but the label's `hidden_size: 768` means the model
+  width and the prompt offers no separate name for an FFN's inner
+  dimension. Fix: `mlp_size` in the parameter vocabulary, and scoring that
+  reads model-level width from the block, not the FFN. `num_layers` was
+  not emitted because this draw listed the block's internals without a
+  `transformerblock` entry. Any prompt change invalidates a closing run, so
+  this waits for Phase 7's first run.
+- Hyperparam accuracy at 0.600 is at the noise-band edge; treat it as
+  "met, within noise" per the gate rule until the above lands.
+- ddpm and efficientnet still show draw disagreement (0.7-0.8); ddpm's
+  family is still misclassified.
+- The 14-of-216 catalogue coverage and the labeling procedure are the Phase
+  7 work itself.
 
 ### Measurement constraint: daily token quota, not rate limiting
 

@@ -42,8 +42,47 @@ def _nn_constructor_calls(tree: ast.AST) -> list[str]:
     ]
 
 
+# Canonical types with a real nn.* form that neither OPERATIONS nor
+# _node_to_layer supplies. Without these, a spec naming any of them failed
+# layer_types_present no matter what the generated code contained.
+_DIRECT_CONSTRUCTORS = {
+    "conv3d": "nn.Conv3d",
+    "dense": "nn.Linear",
+    "embedding": "nn.Embedding",
+    "clstoken": "nn.Parameter",
+    "positionalembedding": "nn.Parameter",
+    "query_projection": "nn.Linear",
+    "key_projection": "nn.Linear",
+    "value_projection": "nn.Linear",
+    "attention_merge": "nn.Linear",
+    "causal_attention": "nn.MultiheadAttention",
+    "cross_attention": "nn.MultiheadAttention",
+}
+
+# Canonical types that are structural, not constructible: no single nn.* call
+# can represent them, so their absence from the constructor list says nothing
+# about fidelity. They are reported informationally and excluded from the
+# score rather than counted as failures. residualblock/residual_add are
+# already covered by the separate residual_present check; concat and crop are
+# forward()-level operations; mbconv and ssm are composite blocks.
+_STRUCTURAL_TYPES = frozenset(
+    {
+        "residualblock",
+        "residual_add",
+        "concat",
+        "crop",
+        "mbconv",
+        "ssm",
+        "sequence_pooling",
+    }
+)
+
+
 def _expected_constructor(layer_type: str, params: dict[str, Any]) -> str | None:
     """Resolve a canonical type through the existing codegen/operation tables."""
+    direct = _DIRECT_CONSTRUCTORS.get(layer_type)
+    if direct:
+        return direct
     operation = OPERATIONS.get(layer_type)
     syntax = operation.get("syntax") if operation else None
     if syntax:
@@ -80,7 +119,42 @@ def _self_attributes(function: ast.FunctionDef) -> set[str]:
     }
 
 
+def _assigned_attributes(function: ast.FunctionDef) -> set[str]:
+    """Every ``self.x = ...`` in the function, whatever the value.
+
+    Used for the "used but never assigned" direction. Restricting this to
+    ``nn.*`` calls reported every custom submodule and every plain attribute as
+    unassigned -- ``self.patch_embed = PatchEmbedding(...)`` and
+    ``self.d_model = int(...)`` are both perfectly ordinary.
+    """
+    assigned: set[str] = set()
+    for node in ast.walk(function):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            else:
+                targets = [node.target]
+        elif isinstance(node, ast.For):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            for item in target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]:
+                if (
+                    isinstance(item, ast.Attribute)
+                    and isinstance(item.value, ast.Name)
+                    and item.value.id == "self"
+                ):
+                    assigned.add(item.attr)
+    return assigned
+
+
 def _declared_modules(function: ast.FunctionDef) -> set[str]:
+    """Only ``self.x = nn.Something(...)``.
+
+    Used for the "declared but never used" direction, where the point is a
+    dead nn module. An unused plain attribute is not a fidelity problem.
+    """
     declared: set[str] = set()
     for node in ast.walk(function):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -99,12 +173,36 @@ def _declared_modules(function: ast.FunctionDef) -> set[str]:
     return declared
 
 
-def _literal_call_arguments(tree: ast.AST) -> list[Any]:
+def _bound_literals(tree: ast.AST) -> list[Any]:
+    """Every literal bound to a name, key, or argument position.
+
+    Four sources, all of them ways a generator parameterises a model:
+      nn.Linear(512, 1000)            -- call arguments, positional and keyword
+      {"d_model": 512}                -- dict literals (how builder schemas work)
+      self.d_model = 512              -- assignment right-hand sides
+      def __init__(self, dim=512)     -- parameter defaults
+
+    Only call arguments used to be collected, which missed the schema dicts
+    that carry the hyperparameters for every builder-path model.
+    """
     values: list[Any] = []
-    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
-        for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
-            if isinstance(argument, ast.Constant):
-                values.append(argument.value)
+
+    def take(node: ast.AST | None) -> None:
+        if isinstance(node, ast.Constant):
+            values.append(node.value)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for argument in [*node.args, *(kw.value for kw in node.keywords)]:
+                take(argument)
+        elif isinstance(node, ast.Dict):
+            for item in node.values:
+                take(item)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            take(node.value)
+        elif isinstance(node, ast.arguments):
+            for default in [*node.defaults, *(d for d in node.kw_defaults if d is not None)]:
+                take(default)
     return values
 
 
@@ -140,13 +238,29 @@ def _forward_has_residual(function: ast.FunctionDef) -> bool:
     return False
 
 
-def score_fidelity(spec: dict, code: str, graph=None) -> dict:
+def score_fidelity(spec: dict, code: str) -> dict:
     """Compare an extracted spec against generated code using static AST analysis.
 
-    Returns a score from 0.0 to 1.0, individual checks, and mismatch details.
-    Only applicable checks are counted in the score denominator; for example,
-    hyperparameters not stated by a paper and residual checks for a plain CNN
-    are excluded. This function never executes generated code and never raises.
+    Returns ``score`` (0.0-1.0), ``status``, ``checks`` and ``mismatches``.
+    Only applicable checks count toward the denominator; hyperparameters a
+    paper never stated, and residual checks for a plain CNN, are excluded.
+    Never executes generated code and never raises.
+
+    ``status`` is the part callers must branch on:
+
+      "scored"     -- the code was analysed; ``score`` is a measurement.
+      "unscorable" -- nothing could be analysed (no spec, no code, code does
+                      not parse). ``score`` is 0.0 but means "unknown".
+      "error"      -- the scorer itself failed. ``score`` is 0.0 and means
+                      "the instrument broke", which is not a fact about the
+                      code under test.
+
+    All three used to return a bare 0.0, indistinguishable from a genuine
+    zero, and the benchmark averaged them together -- a broken scorer and
+    broken code produced the same aggregate. Aggregate only over "scored".
+
+    A ``graph`` parameter used to be accepted here and never read; callers
+    passing it got a silent no-op. Removed rather than left as a lie.
     """
     try:
         if (
@@ -157,6 +271,7 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             detail = "spec.layers must be a non-empty list for fidelity scoring"
             return {
                 "score": 0.0,
+                "status": "unscorable",
                 "checks": [{"name": "input", "passed": False, "detail": detail}],
                 "mismatches": [detail],
             }
@@ -164,6 +279,7 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             detail = "generated code is empty"
             return {
                 "score": 0.0,
+                "status": "unscorable",
                 "checks": [{"name": "input", "passed": False, "detail": detail}],
                 "mismatches": [detail],
             }
@@ -174,6 +290,7 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             detail = f"code could not be parsed: {exc.msg} (line {exc.lineno})"
             return {
                 "score": 0.0,
+                "status": "unscorable",
                 "checks": [{"name": "syntax", "passed": False, "detail": detail}],
                 "mismatches": [detail],
             }
@@ -190,15 +307,6 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
                 mismatches.append(detail)
 
         constructors = _nn_constructor_calls(tree)
-        expected_count = len(spec["layers"])
-        actual_count = len(constructors)
-        tolerance = expected_count * 0.2
-        count_passed = abs(actual_count - expected_count) <= tolerance
-        add_check(
-            "layer_count",
-            count_passed,
-            f"layer_count: spec={expected_count}, code={actual_count}, tolerance=±{tolerance:g}",
-        )
 
         expected_types: dict[str, str | None] = {}
         for layer in spec["layers"]:
@@ -208,21 +316,63 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             expected_types.setdefault(
                 layer_type, _expected_constructor(layer_type, layer.get("params") or {})
             )
-        missing_types = [
-            layer_type
+        # A type with no constructor representation cannot be looked for in the
+        # constructor list; counting it as missing measured the completeness of
+        # this module's own mapping table, not the code under test. ViT scored
+        # 0.00 on a file that contained every constructor its spec named.
+        structural = sorted(t for t in expected_types if t in _STRUCTURAL_TYPES)
+        checkable = {
+            layer_type: constructor
             for layer_type, constructor in expected_types.items()
-            if constructor is None or constructor not in constructors
-        ]
-        type_passed = bool(expected_types) and not missing_types
+            if layer_type not in _STRUCTURAL_TYPES
+        }
+        unmapped = sorted(t for t, c in checkable.items() if c is None)
+        missing_types = sorted(
+            layer_type
+            for layer_type, constructor in checkable.items()
+            if constructor is not None and constructor not in constructors
+        )
+        # An unmapped type is this module's gap, not the code's: report it, do
+        # not fail the code for it.
+        type_passed = bool(checkable) and not missing_types
+        detail_parts = []
+        if missing_types:
+            detail_parts.append(f"missing constructors for: {', '.join(missing_types)}")
+        if unmapped:
+            detail_parts.append(f"no constructor mapping (not scored): {', '.join(unmapped)}")
+        if structural:
+            detail_parts.append(f"structural, not constructible: {', '.join(structural)}")
+        if not checkable:
+            detail_parts.append("no constructor-checkable layer types in spec")
         add_check(
             "layer_types_present",
             type_passed,
-            "all expected constructors are present"
-            if type_passed
-            else f"missing plausible constructors for: {', '.join(missing_types) or 'no typed layers'}",
+            "; ".join(detail_parts) if detail_parts else "all expected constructors are present",
+            counts=bool(checkable),
+        )
+
+        # Breadth, compared in matching units. The spec's LOGICAL layer count is
+        # not comparable to the number of nn.* CALL SITES in the source: a
+        # generator that builds 12 transformer blocks in a loop writes one call
+        # site, and a helper class hides several. U-Net scored spec=49 vs
+        # code=12 on correct code. Distinct expected constructors vs distinct
+        # constructors present are the same unit, and under-building still
+        # fails. Extra constructors are not a fidelity fault -- a helper class
+        # may legitimately add Dropout the spec never named.
+        expected_distinct = {c for c in checkable.values() if c is not None}
+        present_distinct = expected_distinct & set(constructors)
+        breadth_passed = len(present_distinct) >= len(expected_distinct)
+        add_check(
+            "layer_count",
+            breadth_passed,
+            f"distinct expected constructors: {len(expected_distinct)}, present: "
+            f"{len(present_distinct)} (spec lists {len(spec['layers'])} logical layers; "
+            f"code has {len(constructors)} constructor call sites -- not comparable directly)",
+            counts=bool(expected_distinct),
         )
 
         declaration_problems: list[str] = []
+        declaration_checked = False
         for class_node in (node for node in tree.body if isinstance(node, ast.ClassDef)):
             methods = {
                 method.name: method
@@ -234,9 +384,13 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
             if init_method is None and forward_method is None:
                 continue
             declared = _declared_modules(init_method) if init_method else set()
+            assigned = _assigned_attributes(init_method) if init_method else set()
             used = _self_attributes(forward_method) if forward_method else set()
+            if declared or used:
+                declaration_checked = True
             unused = sorted(declared - used)
-            unassigned = sorted(used - declared)
+            # Compare against EVERY assignment, not just nn.* ones.
+            unassigned = sorted(used - assigned)
             if unused:
                 declaration_problems.append(
                     f"{class_node.name} declared but unused: {', '.join(unused)}"
@@ -245,16 +399,24 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
                 declaration_problems.append(
                     f"{class_node.name} used but unassigned: {', '.join(unassigned)}"
                 )
+        # Vacuous truth is not a pass: a class with no modules at all trivially
+        # satisfies "everything declared is used", which scored empty code 0.25
+        # instead of 0.0. Only count this check when there was something to check.
         declared_passed = not declaration_problems
         add_check(
             "declared_vs_used",
             declared_passed,
-            "all self.nn modules declared in __init__ are used by forward"
-            if declared_passed
-            else "; ".join(declaration_problems),
+            (
+                "all self.nn modules declared in __init__ are used by forward"
+                if declared_passed
+                else "; ".join(declaration_problems)
+            )
+            if declaration_checked
+            else "no declared or used modules to compare",
+            counts=declaration_checked,
         )
 
-        literal_arguments = _literal_call_arguments(tree)
+        literal_arguments = _bound_literals(tree)
         for name in _HYPERPARAMETERS:
             values = _specified_hyperparameters(spec).get(name, [])
             if not values:
@@ -262,11 +424,20 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
                 continue
             missing_values = [value for value in values if value not in literal_arguments]
             passed = not missing_values
-            found = sorted({repr(value) for value in literal_arguments})
+            numeric = sorted(
+                (
+                    v
+                    for v in set(literal_arguments)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool)
+                ),
+                key=float,
+            )
             add_check(
                 f"key_hyperparams.{name}",
                 passed,
-                f"{name}: expected {values!r}, found literal arguments [{', '.join(found)}]",
+                f"{name}: expected {values!r}"
+                + ("" if passed else f", missing {missing_values!r}")
+                + f"; bound numeric literals in code: {numeric}",
             )
 
         if _requires_residual(spec):
@@ -286,12 +457,23 @@ def score_fidelity(spec: dict, code: str, graph=None) -> dict:
                 else "spec declares skip/residual connections, but forward has no addition or torch.cat",
             )
 
-        score = sum(applicable) / len(applicable) if applicable else 0.0
-        return {"score": score, "checks": checks, "mismatches": mismatches}
+        if not applicable:
+            # Every check was skipped as not-applicable, so there is nothing to
+            # report. That is "unknown", not "zero fidelity".
+            detail = "no applicable checks for this spec"
+            return {
+                "score": 0.0,
+                "status": "unscorable",
+                "checks": checks,
+                "mismatches": [detail],
+            }
+        score = sum(applicable) / len(applicable)
+        return {"score": score, "status": "scored", "checks": checks, "mismatches": mismatches}
     except Exception as exc:  # Fidelity must never destabilize generation.
         detail = f"fidelity analysis failed: {type(exc).__name__}: {exc}"
         return {
             "score": 0.0,
+            "status": "error",
             "checks": [{"name": "analysis", "passed": False, "detail": detail}],
             "mismatches": [detail],
         }

@@ -863,3 +863,31 @@ def test_consensus_raises_only_when_every_draw_fails(monkeypatch):
     ex = ce.ConfigExtractor(use_llm=True, verify=False, samples=3)
     with pytest.raises(ValueError, match="all 3 extraction draws failed"):
         ex._extract_with_llm_consensus("text")
+
+
+def test_extraction_prompt_allows_every_canonical_type_the_labels_use():
+    """The model cannot emit a type the prompt forbids. softmax, tanh, sigmoid,
+    embedding, mbconv and crop became canonical and label-expected without
+    being added to the prompt's allowed list; 20 of 26 recall misses on the
+    closing run were extraction misses with the evidence in front of the
+    model."""
+    import glob
+
+    from core.rag.config_extractor import _LLM_EXTRACTION_PROMPT
+
+    allowed = _LLM_EXTRACTION_PROMPT.split('"type" must be one of:')[1].split("- COMPLETENESS")[0]
+    allowed_types = set(re.findall(r"[a-z_0-9]+", allowed))
+    expected = set()
+    for path in glob.glob("benchmarks/labels/*.json"):
+        expected |= {t.lower() for t in json.load(open(path, encoding="utf-8"))["expected"].get("layer_types", [])}
+    missing = sorted(expected - allowed_types)
+    assert not missing, f"labels expect types the prompt forbids: {missing}"
+
+
+def test_few_shot_examples_demonstrate_full_enumeration():
+    """Examples that only show block summaries teach the summary mode."""
+    from core.rag.config_extractor import _FEW_SHOT_EXAMPLES
+
+    shown = set(re.findall(r'"type":\s*"([a-z_0-9]+)"', _FEW_SHOT_EXAMPLES))
+    for must in ("dropout", "gelu", "softmax", "embedding", "feedforward", "multiheadattention", "transformerblock"):
+        assert must in shown, f"few-shot never shows {must}"

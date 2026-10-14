@@ -933,3 +933,26 @@ def test_pdf_cache_follows_the_patched_cache_dir(tmp_path, monkeypatch):
     assert (tmp_path / "pdfs" / "9999.00001.pdf").exists()
     real = Path(harness.__file__).resolve().parent / ".cache" / "pdfs" / "9999.00001.pdf"
     assert not real.exists(), "test must never write into the real cache"
+
+
+def test_check_honours_the_samples_flag_on_the_offline_path(tmp_path, monkeypatch, capsys):
+    """--check compared its sampling setup as the default 1 regardless of
+    --samples, so a 3-sample baseline failed --check against its own cache."""
+    from benchmarks import harness
+
+    monkeypatch.setattr(harness, "CACHE_DIR", tmp_path)
+    label = tmp_path / "p1.json"
+    label.write_text(json.dumps({"schema_version": harness.LABEL_SCHEMA_VERSION, "paper_id": "p1",
+                                 "source": "arxiv:1", "family": "resnet", "notes": "",
+                                 "expected": {"layer_types": ["conv2d"]}}), encoding="utf-8")
+    harness._cache_path("p1", "production").write_text(json.dumps(
+        {"spec": {"name": "ResNet", "layers": [{"type": "conv2d", "params": {}}]}, "family": "resnet",
+         "extraction_method": "llm_verified"}), encoding="utf-8")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"schema_version": harness.LABEL_SCHEMA_VERSION, "retrieval": "production",
+                                    "primary_model": harness._bare_primary_model(), "samples": 3,
+                                    "noise_band": 0.1, "metrics": {"layer_type_recall": 0.5}}), encoding="utf-8")
+    rc = harness.main(["--check", "--samples", "3", "--baseline", str(baseline), "--retrieval", "production", str(label)])
+    out = capsys.readouterr().out
+    assert "sampling mismatch" not in out, out
+    assert rc == 0, out

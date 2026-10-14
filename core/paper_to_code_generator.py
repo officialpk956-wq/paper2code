@@ -248,7 +248,7 @@ class PaperToCodeGenerator:
             complete=None,
         )
         try:
-            verification_report["fidelity"] = score_fidelity(spec, code, graph)
+            verification_report["fidelity"] = score_fidelity(spec, code)
         except Exception:
             logging.getLogger(__name__).warning(
                 "Could not score architecture fidelity", exc_info=True
@@ -311,6 +311,7 @@ class PaperToCodeGenerator:
         stem_params: dict[str, Any] = {}
         block_params: dict[str, Any] = {}
         stages: list[dict[str, Any]] = []
+        decoder_stages: list[dict[str, Any]] = []
         input_params: dict[str, Any] = {}
         output_params: dict[str, Any] = {}
 
@@ -337,6 +338,10 @@ class PaperToCodeGenerator:
                 stem_params["num_patches"] = params.get("num_patches") or 196
 
             elif l_type in ("multiheadattention", "transformerblock"):
+                # The spec distinguishes encoder from decoder blocks by subtype;
+                # the decoder half used to be read and then discarded.
+                if str(params.get("subtype") or "").lower() == "decoder":
+                    decoder_stages.append({"repeats": int(params.get("num_layers") or 1)})
                 if "num_heads" in params and params["num_heads"] is not None:
                     block_params["num_heads"] = params["num_heads"]
                 d_model = (
@@ -366,6 +371,8 @@ class PaperToCodeGenerator:
             spec["block"] = {"params": block_params}
         if stages:
             spec["stages"] = stages
+        if decoder_stages:
+            spec["decoder_stages"] = decoder_stages
         if input_params:
             spec["input"] = input_params
         if output_params:
@@ -457,7 +464,7 @@ class PaperToCodeGenerator:
         family = str(spec.get("model_family") or spec.get("family") or "").strip().lower()
 
         # Strategy 1: Known families → Load self-contained builder source code
-        if family in ("resnet", "unet", "vit", "transformer"):
+        if family in ("resnet", "unet", "vit", "transformer", "diffusion"):
             try:
                 code = self._builder_code(family, spec)
                 return code, "builder"
@@ -489,13 +496,16 @@ class PaperToCodeGenerator:
             "vit": ("core.vit_builder", "ViTBuilder"),
             "transformer": ("core.transformer_model_builder", "TransformerModelBuilder"),
             "yolo": ("core.yolo_builder", "YOLOv3Builder"),
+            # classify_architecture returns "diffusion"; this map keyed the
+            # entry "ddpm", so the builder was unreachable by its own name.
+            "diffusion": ("core.ddpm_builder", "DDPMBuilder"),
             "ddpm": ("core.ddpm_builder", "DDPMBuilder"),
         }
 
         if family not in builder_map:
             raise ValueError(f"Unknown family: {family}")
 
-        if family in ("resnet", "unet", "vit", "transformer"):
+        if family in ("resnet", "unet", "vit", "transformer", "diffusion"):
             return self._self_contained_builder_code(family, spec or {})
 
         mod_path, cls_name = builder_map[family]
@@ -509,9 +519,10 @@ class PaperToCodeGenerator:
     def _self_contained_builder_code(self, family: str, spec: dict[str, Any]) -> str:
         """Return a standalone PyTorch module for a supported known family."""
         from core.blocks_resnet import Bottleneck
-        from core.blocks_transformer import TransformerEncoderBlock
+        from core.blocks_transformer import TransformerDecoderBlock, TransformerEncoderBlock
         from core.blocks_unet import DoubleConv
         from core.blocks_vit import PatchEmbedding
+        from core.ddpm_builder import DDPMBuilder, ResnetBlock, SinusoidalPositionEmbeddings
         from core.model_builder import ResNetBuilder
         from core.transformer_model_builder import TransformerModelBuilder
         from core.unet_builder import UNetBuilder
@@ -522,30 +533,47 @@ class PaperToCodeGenerator:
             "resnet": [Bottleneck, ResNetBuilder],
             "unet": [DoubleConv, UNetBuilder],
             "vit": [PatchEmbedding, TransformerEncoderBlock, ViTBuilder],
-            "transformer": [TransformerEncoderBlock, TransformerModelBuilder],
+            "transformer": [
+                TransformerEncoderBlock,
+                TransformerDecoderBlock,
+                TransformerModelBuilder,
+            ],
+            "diffusion": [SinusoidalPositionEmbeddings, ResnetBlock, DDPMBuilder],
         }
         entrypoints = {
             "resnet": "ResNetBuilder",
             "unet": "UNetBuilder",
             "vit": "ViTBuilder",
             "transformer": "TransformerModelBuilder",
+            "diffusion": "DDPMBuilder",
         }
 
         class_source = "\n\n".join(inspect.getsource(cls) for cls in dependencies[family])
         default_schema = pprint.pformat(prepared, width=100, sort_dicts=False)
         entrypoint = entrypoints[family]
 
-        if family in ("resnet", "unet", "vit"):
+        if family == "diffusion":
+            channels = int((prepared.get("input") or {}).get("channels") or 3)
+            spatial = (prepared.get("input") or {}).get("spatial_dims") or [32, 32]
+            height, width = int(spatial[0]), int(spatial[1])
+            dim = int(((prepared.get("block") or {}).get("params") or {}).get("channels") or 64)
+            construction = f"{entrypoint}(channels={channels}, dim={dim}).eval()"
+            test_input_expr = (
+                f"torch.randn(1, {channels}, {height}, {width}), torch.randint(0, 1000, (1,))"
+            )
+        elif family in ("resnet", "unet", "vit"):
             channels = int((prepared.get("input") or {}).get("channels") or 3)
             spatial = (prepared.get("input") or {}).get("spatial_dims") or (
                 [256, 256] if family == "unet" else [224, 224]
             )
             height, width = int(spatial[0]), int(spatial[1])
             test_input_expr = f"torch.randn(1, {channels}, {height}, {width})"
+            construction = f"{entrypoint}(DEFAULT_SCHEMA).eval()"
         else:
             seq_len = int((prepared.get("input") or {}).get("seq_len") or 64)
             vocab_size = int((prepared.get("input") or {}).get("vocab_size") or 10000)
             test_input_expr = f"torch.randint(0, {vocab_size}, (1, {seq_len}))"
+            construction = f"{entrypoint}(DEFAULT_SCHEMA).eval()"
 
         return (
             "# Auto-generated from a research paper\n"
@@ -557,7 +585,7 @@ class PaperToCodeGenerator:
             f"DEFAULT_SCHEMA = {default_schema}\n\n"
             f"{class_source}\n\n"
             "if __name__ == '__main__':\n"
-            f"    model = {entrypoint}(DEFAULT_SCHEMA).eval()\n"
+            f"    model = {construction}\n"
             "    with torch.no_grad():\n"
             f"        output = model({test_input_expr})\n"
             "    print(tuple(output.shape))\n"
@@ -632,6 +660,8 @@ class PaperToCodeGenerator:
                 },
                 "stages": [{"repeats": 6}],
             }
+            if spec.get("decoder_stages"):
+                default["decoder_stages"] = spec["decoder_stages"]
         else:
             default = {
                 "model_family": "vit",
@@ -655,6 +685,21 @@ class PaperToCodeGenerator:
                 },
                 "stages": [{"repeats": 2}],
             }
+
+        # A decoder stack, derived from the spec's own layers. The extractor
+        # marks decoder blocks with subtype="decoder"; that half of
+        # transformer_base was read correctly and then dropped on the floor,
+        # producing an encoder-only classifier from a seq2seq paper.
+        if family == "transformer" and not spec.get("decoder_stages"):
+            decoder_stages = [
+                {"repeats": int((layer.get("params") or {}).get("num_layers") or 1)}
+                for layer in (spec.get("layers") or [])
+                if isinstance(layer, dict)
+                and str(layer.get("type") or "").lower() == "transformerblock"
+                and str((layer.get("params") or {}).get("subtype") or "").lower() == "decoder"
+            ]
+            if decoder_stages:
+                default = {**default, "decoder_stages": decoder_stages}
 
         merged = dict(default)
         if spec:

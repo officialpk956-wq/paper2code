@@ -182,20 +182,19 @@ export function collapseGraph(
   expandedGroupIds: Set<string>,
 ): { nodes: DisplayNode[]; edges: DisplayEdge[] } {
   const collapsed = groups.filter((g) => !expandedGroupIds.has(g.id));
-  const groupById = new Map(collapsed.map((g) => [g.id, g]));
-  const nodeToGroup = new Map<string, string>();
-  for (const g of collapsed) for (const nid of g.node_ids) nodeToGroup.set(nid, g.id);
+  const nodeToGroup = new Map<string, MotifGroup>();
+  for (const g of collapsed) for (const nid of g.node_ids) nodeToGroup.set(nid, g);
 
-  const displayId = (nid: string) => nodeToGroup.get(nid) ?? nid;
+  const displayId = (nid: string) => nodeToGroup.get(nid)?.id ?? nid;
 
   const dNodes: DisplayNode[] = [];
   const emitted = new Set<string>();
   for (const n of nodes) {
-    const gid = nodeToGroup.get(n.id);
-    if (gid) {
-      if (!emitted.has(gid)) {
-        emitted.add(gid);
-        dNodes.push({ kind: 'group', id: gid, group: groupById.get(gid)! });
+    const group = nodeToGroup.get(n.id);
+    if (group) {
+      if (!emitted.has(group.id)) {
+        emitted.add(group.id);
+        dNodes.push({ kind: 'group', id: group.id, group });
       }
     } else {
       dNodes.push({ kind: 'node', id: n.id, node: n });

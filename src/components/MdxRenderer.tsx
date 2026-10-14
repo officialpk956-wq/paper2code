@@ -6,16 +6,18 @@ import Link from 'next/link';
 import React from 'react';
 import { FadeIn } from './FadeIn';
 
-function extractText(node: any): string {
+function extractText(node: React.ReactNode): string {
   if (!node) return '';
   if (typeof node === 'string') return node;
   if (typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(extractText).join('');
-  if (node.props && node.props.children) return extractText(node.props.children);
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) {
+    return extractText(node.props.children);
+  }
   return '';
 }
 
-function slugify(node: any): string {
+function slugify(node: React.ReactNode): string {
   const text = extractText(node);
   return text
     .toLowerCase()
@@ -26,7 +28,7 @@ function slugify(node: any): string {
 }
 
 const customComponents = {
-  h2: ({ children, ...props }: any) => (
+  h2: ({ children, ...props }: React.ComponentProps<'h2'>) => (
     <h2
       id={slugify(children)}
       className="text-[20px] font-bold text-white mt-10 mb-4 border-b border-[#262626] pb-2"
@@ -35,32 +37,32 @@ const customComponents = {
       {children}
     </h2>
   ),
-  h3: ({ children, ...props }: any) => (
+  h3: ({ children, ...props }: React.ComponentProps<'h3'>) => (
     <h3 className="text-[16px] font-semibold text-[#A3A3A3] mt-6 mb-2" {...props}>
       {children}
     </h3>
   ),
-  p: ({ children, ...props }: any) => (
+  p: ({ children, ...props }: React.ComponentProps<'p'>) => (
     <p className="text-[14px] leading-[1.9] text-[#A3A3A3] mb-4" {...props}>
       {children}
     </p>
   ),
-  ul: ({ children, ...props }: any) => (
+  ul: ({ children, ...props }: React.ComponentProps<'ul'>) => (
     <ul className="list-disc text-[14px] text-[#A3A3A3] leading-[1.8] space-y-1.5 pl-5 mb-4" {...props}>
       {children}
     </ul>
   ),
-  ol: ({ children, ...props }: any) => (
+  ol: ({ children, ...props }: React.ComponentProps<'ol'>) => (
     <ol className="list-decimal text-[14px] text-[#A3A3A3] leading-[1.8] space-y-1.5 pl-5 mb-4" {...props}>
       {children}
     </ol>
   ),
-  li: ({ children, ...props }: any) => (
+  li: ({ children, ...props }: React.ComponentProps<'li'>) => (
     <li className="text-[#A3A3A3]" {...props}>
       {children}
     </li>
   ),
-  code: ({ children, className, ...props }: any) => {
+  code: ({ children, className, ...props }: React.ComponentProps<'code'>) => {
     const isInline = !className;
     if (isInline) {
       return (
@@ -75,39 +77,39 @@ const customComponents = {
       </code>
     );
   },
-  pre: ({ children, ...props }: any) => (
+  pre: ({ children, ...props }: React.ComponentProps<'pre'>) => (
     <pre className="bg-[#0A0A0A] border border-[#262626] rounded-xl p-5 overflow-x-auto my-6 text-[13px] font-mono text-[#E2E8F0]" {...props}>
       {children}
     </pre>
   ),
-  table: ({ children, ...props }: any) => (
+  table: ({ children, ...props }: React.ComponentProps<'table'>) => (
     <div className="overflow-x-auto my-6 w-full">
       <table className="w-full border-collapse" {...props}>
         {children}
       </table>
     </div>
   ),
-  th: ({ children, ...props }: any) => (
+  th: ({ children, ...props }: React.ComponentProps<'th'>) => (
     <th className="bg-[#111111] text-white text-[12px] uppercase tracking-wider px-4 py-2 border-b border-[#262626] text-left" {...props}>
       {children}
     </th>
   ),
-  td: ({ children, ...props }: any) => (
+  td: ({ children, ...props }: React.ComponentProps<'td'>) => (
     <td className="px-4 py-2 text-[13px] text-[#A3A3A3] border-b border-[#262626]/50 text-left" {...props}>
       {children}
     </td>
   ),
-  blockquote: ({ children, ...props }: any) => (
+  blockquote: ({ children, ...props }: React.ComponentProps<'blockquote'>) => (
     <blockquote className="bg-[#A78BFA]/5 border-l-4 border-[#A78BFA] pl-4 py-2 rounded-r-lg my-4 text-[13px] text-[#C4B5FD]" {...props}>
       {children}
     </blockquote>
   ),
-  strong: ({ children, ...props }: any) => (
+  strong: ({ children, ...props }: React.ComponentProps<'strong'>) => (
     <strong className="text-white font-semibold" {...props}>
       {children}
     </strong>
   ),
-  a: ({ children, href, ...props }: any) => {
+  a: ({ children, href, ...props }: React.ComponentProps<'a'>) => {
     if (href && href.startsWith('/')) {
       return (
         <Link href={href} className="text-[#A78BFA] hover:underline" {...props}>

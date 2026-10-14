@@ -18,16 +18,26 @@ def classify_architecture(graph: ArchitectureGraph) -> str:
     has_conv = any("conv" in t for t in types)
     has_attention = any("attention" in t or "transformer" in t or "selfatt" in t for t in types)
     has_upsample = any("upsample" in t or "convtranspose" in t or "upconv" in t for t in types)
+    # A denoising diffusion model is a U-Net conditioned on a timestep. The raw
+    # paper words ("sinusoidal", "timestep") do not survive normalization --
+    # they become the canonical type `positionalembedding` -- so DDPM matched
+    # none of them and fell through to the plain conv+upsample U-Net rule.
+    has_time_conditioning = (
+        "positionalembedding" in all_str
+        or "positional_embedding" in all_str
+        or "timestep" in all_str
+        or "sinusoidal" in all_str
+        or "denoise" in all_str
+    )
+    # Its residual blocks are GroupNorm-based and it attends at low resolution;
+    # a segmentation U-Net has neither.
+    has_diffusion_blocks = "groupnorm" in all_str and has_attention
 
     if "generator" in all_str or "discriminator" in all_str or "adversarial" in all_str:
         return "gan"
     elif "noise_scheduler" in all_str and "latent" in all_str and has_conv:
         return "ldm"
-    elif (
-        ("sinusoidal" in all_str or "denoise" in all_str or "timestep" in all_str)
-        and has_upsample
-        and has_conv
-    ):
+    elif (has_time_conditioning or has_diffusion_blocks) and has_upsample and has_conv:
         return "diffusion"
     elif "masking" in all_str or "random_mask" in all_str or "mask_ratio" in all_str:
         return "mae"

@@ -60,8 +60,8 @@ export default function LabsClient() {
       try {
         const res = await apiGet<{ mutations: Record<string, MutationDef> }>('/api/lab/mutations');
         setMutationsDef(res.mutations || {});
-      } catch (err: any) {
-        setError(err.message || 'Failed to load mutations');
+      } catch (err) {
+        setError(err instanceof Error && err.message ? err.message : 'Failed to load mutations');
       }
     };
     fetchMutations();
@@ -85,8 +85,8 @@ export default function LabsClient() {
         config: {},
       });
       setLabResult(res);
-    } catch (err: any) {
-      setError(err.message || 'Failed to apply mutations');
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to apply mutations');
     } finally {
       setLabLoading(false);
     }
@@ -107,8 +107,8 @@ export default function LabsClient() {
         gradient_checkpointing: gradientCheckpointing,
       });
       setEstimateResult(res);
-    } catch (err: any) {
-      setError(err.message || 'Failed to run estimator');
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to run estimator');
     } finally {
       setEstimatorLoading(false);
     }

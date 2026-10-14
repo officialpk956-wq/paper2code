@@ -38,7 +38,7 @@ export function useAuthActions() {
         AUTH_TIMEOUT_MS
       )
     );
-    setTokens({ access_token: loginRes.access_token, refresh_token: loginRes.refresh_token });
+    setTokens(loginRes);
     
     // fetch canonical profile
     return fetchMe({ name: email.split('@')[0], email });

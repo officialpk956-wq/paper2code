@@ -10,12 +10,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.blocks_transformer import TransformerEncoderBlock
+from core.blocks_transformer import TransformerDecoderBlock, TransformerEncoderBlock
 
 
 class TransformerModelBuilder(nn.Module):
-    """
-    Standard Transformer Encoder architecture for classification / sequence processing.
+    """Transformer encoder, plus a decoder stack when the schema asks for one.
+
+    ``decoder_stages`` drives it. Without that key the model is exactly the
+    encoder-only classifier it has always been; with it, the model becomes
+    seq2seq and projects to the vocabulary instead of to class logits.
     """
 
     def __init__(self, schema: dict):
@@ -63,14 +66,60 @@ class TransformerModelBuilder(nn.Module):
                 )
         self.encoder = nn.Sequential(*layers)
 
-        # Final LayerNorm and Classification Head
-        self.norm = nn.LayerNorm(self.d_model)
-        self.fc = nn.Linear(self.d_model, self.num_classes)
+        # Decoder stack -- only when the spec actually describes one.
+        decoder_stages = schema.get("decoder_stages") or []
+        decoder_layers = []
+        for stage in decoder_stages:
+            repeats = int(stage.get("repeats") or stage.get("num_blocks") or 1)
+            for _ in range(max(1, repeats)):
+                decoder_layers.append(
+                    TransformerDecoderBlock(
+                        d_model=self.d_model,
+                        num_heads=self.num_heads,
+                        ffn_dim=self.ffn_dim,
+                        dropout=self.dropout,
+                    )
+                )
+        self.decoder = nn.ModuleList(decoder_layers) if decoder_layers else None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Final LayerNorm, then either a vocabulary projection (seq2seq) or a
+        # classification head (encoder-only).
+        self.norm = nn.LayerNorm(self.d_model)
+        if self.decoder is not None:
+            self.output_proj = nn.Linear(self.d_model, self.vocab_size)
+            self.fc = self.output_proj
+        else:
+            self.fc = nn.Linear(self.d_model, self.num_classes)
+
+    def _embed(self, x: torch.Tensor) -> torch.Tensor:
+        """Token indices (B, T) or pre-embedded (B, T, D) -> (B, T, d_model)."""
+        if x.dim() == 2:
+            B, T = x.shape
+            x = self.embedding(x) + self.pos_embedding[:, :T, :]
+            return self.drop(x)
+        B, T, D = x.shape
+        if D != self.d_model:
+            if not hasattr(self, "_in_proj"):
+                self._in_proj = nn.Linear(D, self.d_model).to(x.device)
+            x = self._in_proj(x)
+        x = x + self.pos_embedding[:, :T, :]
+        return self.drop(x)
+
+    def forward(self, x: torch.Tensor, tgt: torch.Tensor | None = None) -> torch.Tensor:
         """
         Forward pass. Accepts either 2D token indices (B, T) or 3D embedded tensors (B, T, D).
+
+        With a decoder, returns (B, T_tgt, vocab_size); ``tgt`` defaults to the
+        source so a single-argument smoke test still works. Without one, the
+        original encoder-only path is unchanged: pooled, then class logits.
         """
+        if self.decoder is not None:
+            memory = self.norm(self.encoder(self._embed(x)))
+            y = self._embed(x if tgt is None else tgt)
+            for block in self.decoder:
+                y = block(y, memory)
+            return self.output_proj(self.norm(y))
+
         if x.dim() == 2:
             # Token index input: (B, T)
             B, T = x.shape

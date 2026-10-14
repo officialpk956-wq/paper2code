@@ -1925,3 +1925,30 @@ all labelled hyperparameters present. The one remaining "miss"
 - **Cost of a tidy-up:** clearing staged files to remove rule-based entries
   also deleted two clean 3-sample extractions. ~8 calls of quota.
 - Also fixed: default `PRIMARY_MODEL` pointed at a model Groq removed.
+
+## 2026-09-21 — Phase 6 closed
+
+`20260920T093519Z.json`: recall 0.901, precision 0.840, hyperparam 0.600,
+lowest paper 0.64. Strict-accepted, all ten, 0 fallbacks. Median draw
+agreement 1.00, seven of ten papers identical across draws.
+
+The previous closing run scored 0.663 and failed. What separated the two was
+one afternoon of zero-quota diagnosis: classify every miss by whether its
+evidence reached the model. Twenty of twenty-six had. The model was reading
+past explicit statements because the prompt (a) forbade six types the labels
+expected, (b) showed only block-summary examples, and (c) never asked for
+completeness. Three edits. Validated on the three worst papers before
+spending a full run; the probe's *agreement* numbers (draws becoming
+identical) were the tell that the fix was at the source.
+
+Consensus was never the fix. It averaged over a bimodal model and, by
+majority, chose the worse mode every time. Fixing the prompt made the modes
+one. Consensus stays because it is cheap insurance and it caught unet's
+unparseable draw, but the variance it was built to absorb is mostly gone.
+
+The run was killed from outside after two papers (third disruption on this
+machine: two outages, one termination). Resumable staging meant the restart
+cost eight papers, not ten.
+
+Carried forward: ViT's hidden_size collision (FFN width vs model width);
+ddpm/efficientnet draw disagreement; ddpm family; Phase 7's own work.

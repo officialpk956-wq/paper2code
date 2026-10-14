@@ -15,7 +15,12 @@ type CompareData = {
   diff?: {
     added_nodes: string[];
     removed_nodes: string[];
-    changed_params: any[];
+    changed_params: {
+      label: string;
+      type_changed: boolean;
+      from: { type: string };
+      to: { type: string };
+    }[];
     deltas: Record<string, number | null>;
     summary?: string;
   };

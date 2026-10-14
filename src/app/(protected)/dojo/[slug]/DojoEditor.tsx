@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { PROBLEMS, getProblemBySlug, getProblemIndex } from '@/data/problems';
 import { apiGet, apiPost, isLoggedIn } from '@/lib/api';
-import { loader } from '@monaco-editor/react';
+import { loader, type OnMount } from '@monaco-editor/react';
 
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -279,7 +279,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
     }
   }
 
-  function handleEditorMount(editor: any, monaco: any) {
+  const handleEditorMount: OnMount = (editor, monaco) => {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       // Small timeout to avoid state issues if editor is typing
       setTimeout(() => {

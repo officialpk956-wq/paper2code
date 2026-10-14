@@ -518,9 +518,16 @@ def _score_label(label: dict[str, Any], extraction: dict[str, Any], fidelity: bo
     if "min_layers" in expected and len(spec.get("layers", [])) < expected["min_layers"]:
         misses.append(f"layer count: expected at least {expected['min_layers']}, got {len(spec.get('layers', []))}")
 
+    # Only a "scored" result is a measurement. An unscorable or errored run
+    # returns 0.0, and averaging that with real scores would report a broken
+    # scorer as perfect-zero fidelity.
     fidelity_score = None
+    fidelity_status = None
     if fidelity and isinstance(extraction.get("code"), str) and extraction["code"].strip():
-        fidelity_score = score_fidelity(spec, extraction["code"])["score"]
+        report = score_fidelity(spec, extraction["code"])
+        fidelity_status = report.get("status")
+        if fidelity_status == "scored":
+            fidelity_score = report["score"]
 
     return {
         "paper_id": label["paper_id"],
@@ -532,6 +539,7 @@ def _score_label(label: dict[str, Any], extraction: dict[str, Any], fidelity: bo
         "hyperparam_accuracy": hyperparam_accuracy,
         "family_correct": family_correct,
         "fidelity_score": fidelity_score,
+        "fidelity_status": fidelity_status,
         "extraction_method": extraction.get("extraction_method"),
         "extraction_reason": extraction.get("extraction_reason"),
         "provider_models": extraction.get("provider_models", []),
@@ -935,6 +943,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     paths = [Path(path) for path in args.labels] or sorted(LABELS_DIR.glob("*.json"))
     timestamp = args.timestamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    # Set before the --check branch: it compares its sampling setup against the
+    # baseline's, and was left at the default 1 on the offline path, so a
+    # 3-sample baseline failed --check against its own cache.
+    _SAMPLES["n"] = args.samples
     if args.check:
         # Offline by construction: extractor=None means cached specs only,
         # so --check never makes an LLM call.
@@ -957,7 +969,6 @@ def main(argv: list[str] | None = None) -> int:
         dropped = discard_staged_cache(args.retrieval)
         if dropped:
             print(f"--fresh: dropped {len(dropped)} staged extraction(s)")
-    _SAMPLES["n"] = args.samples
     _CALL_PACE["seconds"] = args.call_pace_seconds
     extractor = (
         lambda label: _live_extractor_with_retry(label, retrieval=args.retrieval, samples=args.samples)

@@ -268,7 +268,7 @@ export default async function TopicPage({
                   <span className="w-1.5 h-6 rounded-full bg-[#60A5FA]" /> Why This Exists
                 </h2>
                 <div className="text-[16px] leading-[1.8] text-[#D4D4D4] italic border-l-2 border-[#60A5FA] pl-4">
-                  "{topic.why}"
+                  &quot;{topic.why}&quot;
                 </div>
               </section>
             </FadeIn>
