@@ -4,6 +4,7 @@ import { useEffect, useState, FormEvent } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthModal } from './AuthModalContext';
 import { useAuthActions } from './useAuthActions';
+import { MfaChallenge } from './MfaChallenge';
 import { Loader2 } from 'lucide-react';
 
 const isGatedRoute = (p: string) => {
@@ -20,7 +21,7 @@ const inp ='w-full bg-[#111111] border border-[#262626] rounded-lg px-3 py-2.5 t
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, hydrated, signIn } = useAuthModal();
-  const { loginWithPassword, signupWithPassword, loginWithGoogle } = useAuthActions();
+  const { loginWithPassword, signupWithPassword, loginWithGoogle, mfaChallenge, verifyMfa, cancelMfa } = useAuthActions();
   const router = useRouter();
   const pathname = usePathname();
   const loggedIn = !!user;
@@ -55,12 +56,10 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     try {
       if (tab === 'signup') {
         const u = await signupWithPassword(username, email, password);
-        signIn(u);
-        redirectAfterAuth();
+        if (u) { signIn(u); redirectAfterAuth(); }
       } else {
         const u = await loginWithPassword(email, password);
-        signIn(u);
-        redirectAfterAuth();
+        if (u) { signIn(u); redirectAfterAuth(); }
       }
     } catch (err: unknown) {
       setError((err as Error).message || 'Authentication failed');
@@ -99,6 +98,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           <h2 className="text-xl font-bold text-white mb-2">Sign in to continue</h2>
           <p className="text-sm text-[#A3A3A3]">You need an account to access this section.</p>
         </div>
+        {mfaChallenge ? <MfaChallenge verify={async code => { signIn(await verifyMfa(code)); redirectAfterAuth(); }} cancel={cancelMfa} /> : <>
         <div className="mb-6 flex items-center gap-2">
           {(['signin', 'signup'] as const).map(t => (
             <button key={t} type="button" onClick={() => setTab(t)}
@@ -155,6 +155,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
             Continue with Google
           </button>
         </div>
+        </>}
       </div>
     );
   }

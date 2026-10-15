@@ -320,6 +320,8 @@ export default function ImplementClient({ id }: { id: string }) {
 
 
 
+      <p className="shrink-0 px-6 py-2 text-xs text-[#A3A3A3]">Saved only in this browser: step completion. It is not synced to your account; clearing browser data removes it, and others using this browser can see it.</p>
+
       {/* Body: 3 columns */}
 
       <div className="flex flex-1 overflow-hidden">

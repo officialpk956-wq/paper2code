@@ -97,9 +97,8 @@ describe('WorkspacePaperClient - Implement Tab', () => {
     expect(screen.getByText('(1, 3, 224, 224) → (1, 64, 112, 112)')).toBeInTheDocument();
     expect(screen.getByText('A simple layer')).toBeInTheDocument();
     
-    // Verify run button is disabled
-    const runBtn = screen.getByRole('button', { name: /Run in Sandbox/i });
-    expect(runBtn).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Run in Sandbox/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Start Guided Implementation/ })).toHaveAttribute('href', '/papers/5/implement');
   });
 
   test('Executable tab renders persisted generated code and runs it in the sandbox', async () => {

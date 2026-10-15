@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "Paper2Code <noreply@paper2code.com>")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -49,7 +49,7 @@ def _base_template(content: str) -> str:
 
 
 def send_verification_email_sync(to_email: str, token: str) -> bool:
-    link = f"{FRONTEND_URL}/verify-email?token={token}"
+    link = f"{FRONTEND_URL}/auth/verified?token={token}"
     html = _base_template(f"""
       <h2 style="margin:0 0 8px;color:#0F172A;font-size:22px">Verify your email</h2>
       <p style="color:#475569;margin:0 0 24px">

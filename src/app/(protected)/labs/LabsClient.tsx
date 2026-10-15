@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
 import { Loader2, Zap, Network, Database, Server, AlertCircle, TrendingDown, TrendingUp, Minus } from 'lucide-react';
 import { FadeIn } from '@/components/FadeIn';
+import { z } from 'zod';
 
 type MutationDef = {
   label: string;
@@ -25,12 +26,14 @@ type LabResponse = {
   diff: Record<string, string>;
 };
 
-type TrainingEstimate = {
-  total_flops: number;
-  training_time_hours: number;
-  cost_estimate_usd: number;
-  vram_required_gb: number;
-};
+// Keep the backend's units: wall-clock hours, USD, estimated total GB, and steps.
+const trainingEstimateSchema = z.object({
+  training_hours: z.number().finite().nonnegative(),
+  compute_cost_usd: z.number().finite().nonnegative(),
+  gpu_memory_gb: z.number().finite().nonnegative(),
+  steps_total: z.number().int().positive(),
+});
+type TrainingEstimate = z.infer<typeof trainingEstimateSchema>;
 
 const ARCHITECTURES = ['ResNet', 'Transformer', 'ViT', 'U-Net'];
 const GPU_TYPES = ['A100', 'H100', 'V100', 'T4', 'RTX4090'];
@@ -93,11 +96,16 @@ export default function LabsClient() {
   };
 
   const runEstimator = async () => {
+    setEstimateResult(null);
+    if (!Number.isSafeInteger(datasetSize) || datasetSize <= 0 ||
+        !Number.isSafeInteger(batchSize) || batchSize <= 0) {
+      setError('Dataset size and batch size must be positive whole numbers.');
+      return;
+    }
     setEstimatorLoading(true);
     setError('');
-    setEstimateResult(null);
     try {
-      const res = await apiPost<TrainingEstimate>('/api/training-estimator', {
+      const res = await apiPost<unknown>('/api/training-estimator', {
         architecture,
         dataset_size: datasetSize,
         batch_size: batchSize,
@@ -106,7 +114,9 @@ export default function LabsClient() {
         mixed_precision: mixedPrecision,
         gradient_checkpointing: gradientCheckpointing,
       });
-      setEstimateResult(res);
+      const parsed = trainingEstimateSchema.safeParse(res);
+      if (!parsed.success) throw new Error('The estimator returned an invalid response. Please try again.');
+      setEstimateResult(parsed.data);
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Failed to run estimator');
     } finally {
@@ -264,7 +274,7 @@ export default function LabsClient() {
         <section className="space-y-6 pt-12 border-t border-[#1A1A1A]">
           <div className="border-b border-[#1A1A1A] pb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Server className="text-[#A78BFA]" size={20}/> Training Cost Estimator</h2>
-            <p className="text-sm text-[#A3A3A3] mt-1">Estimate wall-clock time and cost for training {architecture}.</p>
+            <p className="text-sm text-[#A3A3A3] mt-1">Estimate wall-clock time and cost for training {architecture} for 10 epochs. Planning estimates, not measured performance; allow ±30–50% uncertainty. VRAM includes weights, Adam state, and activations.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -311,7 +321,7 @@ export default function LabsClient() {
                 <div className="rounded-xl border border-[#262626] bg-[#0A0A0A] p-5">
                   <div className="text-xs font-semibold uppercase tracking-wider text-[#A3A3A3]">Est. Time</div>
                   <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-2xl font-bold text-white">{estimateResult.training_time_hours.toFixed(1)}</span>
+                    <span className="text-2xl font-bold text-white">{estimateResult.training_hours.toFixed(1)}</span>
                     <span className="text-sm text-[#525252]">hours</span>
                   </div>
                 </div>
@@ -319,21 +329,21 @@ export default function LabsClient() {
                   <div className="absolute -right-4 -top-4 w-16 h-16 bg-[#A78BFA]/10 rounded-full blur-xl pointer-events-none" />
                   <div className="text-xs font-semibold uppercase tracking-wider text-[#A78BFA]">Est. Cost</div>
                   <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-2xl font-bold text-white">${estimateResult.cost_estimate_usd.toFixed(2)}</span>
+                    <span className="text-2xl font-bold text-white">${estimateResult.compute_cost_usd.toFixed(2)}</span>
                     <span className="text-sm text-[#A78BFA]/70">USD</span>
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#262626] bg-[#0A0A0A] p-5">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-[#A3A3A3]">Total Compute</div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-[#A3A3A3]">Training Steps</div>
                   <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-2xl font-bold text-white">{(estimateResult.total_flops / 1e15).toFixed(2)}</span>
-                    <span className="text-sm text-[#525252]">PFLOPs</span>
+                    <span className="text-2xl font-bold text-white">{estimateResult.steps_total}</span>
+                    <span className="text-sm text-[#525252]">steps</span>
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#262626] bg-[#0A0A0A] p-5">
                   <div className="text-xs font-semibold uppercase tracking-wider text-[#A3A3A3]">VRAM Required</div>
                   <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-2xl font-bold text-white">{estimateResult.vram_required_gb.toFixed(1)}</span>
+                    <span className="text-2xl font-bold text-white">{estimateResult.gpu_memory_gb.toFixed(1)}</span>
                     <span className="text-sm text-[#525252]">GB</span>
                   </div>
                 </div>

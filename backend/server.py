@@ -35,6 +35,7 @@ from backend.logging_config import JSONFormatter, RequestIDMiddleware
 from backend.middleware.alerting import SlackAlertingMiddleware
 from backend.middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from backend.middleware.sentry_context import SentryUserContextMiddleware
+from backend.modules.auth.api.v1 import router as new_auth_router
 from backend.routers import (
     achievements,
     admin,
@@ -178,8 +179,6 @@ from backend.middleware.security_headers import SecurityHeadersMiddleware
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Routers
-from backend.modules.auth.api.v1 import router as new_auth_router
-
 app.include_router(health.router)
 app.include_router(new_auth_router)
 app.include_router(papers_pipeline.router)

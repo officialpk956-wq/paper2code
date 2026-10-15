@@ -256,25 +256,17 @@ def verify_email(request: Request, body: VerifyEmailRequest, db: Session = Depen
 
 
 @router.get("/verify-email")
-async def verify_email_get(token: str, db: Session = Depends(get_db)):
-    from backend.repositories.token_repository import TokenRepository
-
-    repo = TokenRepository(db)
-    user_id = repo.verify_email_token(token)
-    if not user_id:
-        raise HTTPException(400, "Invalid or expired verification link")
-    user = db.query(User).filter_by(id=user_id).first()
-    if not user:
-        raise HTTPException(404, "User not found")
-    user.is_email_verified = True
-    user.email_verified_at = datetime.datetime.now(datetime.UTC)
-    db.commit()
+async def verify_email_get(token: str):
     import os
+    from urllib.parse import urlencode
 
     from fastapi.responses import RedirectResponse
 
+    # The page redeems through POST, so both old GET links and email links agree.
+    query = urlencode({"token": token})
     return RedirectResponse(
-        url=f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/auth/verified", status_code=302
+        url=f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/auth/verified?{query}",
+        status_code=302,
     )
 
 

@@ -67,23 +67,30 @@ def health_redis():
 
 @router.get("/api/health/celery")
 def health_celery():
-    import os
-
     from backend.celery_app import celery_app
 
+    broker_reachable = False
+    worker_responding = False
     try:
-        backend_url = celery_app.backend.url
-    except Exception as e:
-        backend_url = f"ERROR: {type(e).__name__}: {str(e)}"
-
-    return {
-        "celery_backend_url": backend_url,
-        "broker_use_ssl": getattr(celery_app.conf, "broker_use_ssl", None),
-        "redis_backend_use_ssl": getattr(celery_app.conf, "redis_backend_use_ssl", None),
-        "REDIS_URL": os.getenv("REDIS_URL"),
-        "CELERY_RESULT_BACKEND": os.getenv("CELERY_RESULT_BACKEND"),
-        "CELERY_BROKER_URL": os.getenv("CELERY_BROKER_URL"),
-    }
+        with celery_app.connection_for_read(connect_timeout=1) as connection:
+            connection.ensure_connection(max_retries=0)
+            broker_reachable = True
+            replies = celery_app.control.ping(timeout=1, connection=connection)
+            worker_responding = any(
+                reply.get("ok") == "pong" for worker in replies for reply in worker.values()
+            )
+    except Exception:
+        # Connection errors may contain credential-bearing URLs; keep them private.
+        pass
+    ready = broker_reachable and worker_responding
+    return JSONResponse(
+        {
+            "ready": ready,
+            "broker_reachable": broker_reachable,
+            "worker_responding": worker_responding,
+        },
+        status_code=200 if ready else 503,
+    )
 
 
 @router.get("/api/health/e2b")
@@ -113,6 +120,27 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+@router.get("/api/health/celery/details")
+def health_celery_details(current_user: User = Depends(get_current_admin)):
+    import os
+
+    from backend.celery_app import celery_app
+
+    try:
+        backend_url = celery_app.backend.url
+    except Exception as e:
+        backend_url = f"ERROR: {type(e).__name__}: {str(e)}"
+
+    return {
+        "celery_backend_url": backend_url,
+        "broker_use_ssl": getattr(celery_app.conf, "broker_use_ssl", None),
+        "redis_backend_use_ssl": getattr(celery_app.conf, "redis_backend_use_ssl", None),
+        "REDIS_URL": os.getenv("REDIS_URL"),
+        "CELERY_RESULT_BACKEND": os.getenv("CELERY_RESULT_BACKEND"),
+        "CELERY_BROKER_URL": os.getenv("CELERY_BROKER_URL"),
+    }
 
 
 @router.get("/api/metrics")

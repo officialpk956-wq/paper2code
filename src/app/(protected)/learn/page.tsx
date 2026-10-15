@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { CURRICULUM } from '@/data/content/curriculum';
 import StaggerList from '@/components/StaggerList';
 import TiltCard from '@/components/TiltCard';
-import { motion } from 'framer-motion';
+import { MotionDiv } from '@/components/anim/MotionDiv';
 import { Reveal } from '@/components/anim';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PageSummary } from '@/components/PageSummary';
@@ -57,10 +57,10 @@ export default function LearnPage() {
                     <div className="flex gap-1 h-1.5 w-full">
                       {topicCount > 0 ? (
                         <>
-                          <motion.div className="h-full bg-[#4ADE80] rounded-l-sm" initial={{ width: 0 }} whileInView={{ width: `${(beginnerCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 0 * 0.08 }} title={`Beginner: ${beginnerCount}`} />
-                          <motion.div className="h-full bg-[#FACC15]" initial={{ width: 0 }} whileInView={{ width: `${(intermediateCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 1 * 0.08 }} title={`Intermediate: ${intermediateCount}`} />
-                          <motion.div className="h-full bg-[#F87171]" initial={{ width: 0 }} whileInView={{ width: `${(advancedCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 2 * 0.08 }} title={`Advanced: ${advancedCount}`} />
-                          <motion.div className="h-full bg-[#A78BFA] rounded-r-sm" initial={{ width: 0 }} whileInView={{ width: `${(expertCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 3 * 0.08 }} title={`Expert: ${expertCount}`} />
+                          <MotionDiv className="h-full bg-[#4ADE80] rounded-l-sm" initial={{ width: 0 }} whileInView={{ width: `${(beginnerCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 0 * 0.08 }} title={`Beginner: ${beginnerCount}`} />
+                          <MotionDiv className="h-full bg-[#FACC15]" initial={{ width: 0 }} whileInView={{ width: `${(intermediateCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 1 * 0.08 }} title={`Intermediate: ${intermediateCount}`} />
+                          <MotionDiv className="h-full bg-[#F87171]" initial={{ width: 0 }} whileInView={{ width: `${(advancedCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 2 * 0.08 }} title={`Advanced: ${advancedCount}`} />
+                          <MotionDiv className="h-full bg-[#A78BFA] rounded-r-sm" initial={{ width: 0 }} whileInView={{ width: `${(expertCount / topicCount) * 100}%` }} viewport={{ once: true }} transition={{ duration: 0.6, ease: 'easeOut', delay: 3 * 0.08 }} title={`Expert: ${expertCount}`} />
                         </>
                       ) : (
                         <div className="h-full w-full bg-[#262626] rounded-sm" />

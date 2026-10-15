@@ -44,7 +44,7 @@ jobs:
       with:
         node-version: '20'
     - name: Install dependencies
-      run: npm install
+      run: npm ci
     - name: Build Next.js
       run: npm run build
       env:
@@ -54,9 +54,40 @@ jobs:
         NEXT_PUBLIC_FIREBASE_PROJECT_ID: ci-placeholder
         NEXT_PUBLIC_FIREBASE_APP_ID: 1:0:web:0
 
-  docker-test:
+    - name: Check TypeScript
+      run: npx tsc --noEmit -p tsconfig.json
+
+  frontend-tests:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Run sandbox test
-      run: echo "Sandbox execution simulation"
+    - uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    - run: npm ci
+    - name: Frontend unit tests
+      run: npx vitest run
+
+  browser-production:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      RUN_REAL_ASYNC_PAPER_E2E: '0'
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - run: pip install -r requirements.txt
+    - run: npm ci
+    - run: npx playwright install --with-deps chromium
+    - name: Build and test production browser artifact (live integration remains visibly skipped)
+      run: npm run test:e2e:production
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: browser-failure-evidence
+        path: test-results/

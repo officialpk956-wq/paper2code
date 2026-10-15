@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { SD_SYSTEMS } from '@/data/content/systemDesign';
 
-import { motion } from 'framer-motion';
+import { MotionDiv } from '@/components/anim/MotionDiv';
 import { Reveal } from '@/components/anim';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PageSummary } from '@/components/PageSummary';
@@ -42,7 +42,7 @@ export default function SystemDesignPage() {
             
             return (
               <Link key={sys.slug} href={`/system-design/${sys.slug}`} className="block">
-                <motion.div
+                <MotionDiv
                   className="group bg-[#111111] border border-[#262626] rounded-2xl p-6 hover:border-[#A78BFA]/50 transition-all flex flex-col h-full"
                   whileHover={{ scale: 1.015, y: -3 }}
                   whileTap={{ scale: 0.98 }}
@@ -67,7 +67,7 @@ export default function SystemDesignPage() {
                       <ArrowRight size={16} className="text-[#525252] group-hover:text-[#A78BFA] transition-colors" />
                     </div>
                   </div>
-                </motion.div>
+                </MotionDiv>
               </Link>
             );
           })}

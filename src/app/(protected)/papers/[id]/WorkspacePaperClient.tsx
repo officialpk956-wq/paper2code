@@ -921,13 +921,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 >
                   Start Guided Implementation →
                 </Link>
-                <button
-                  disabled
-                  title="Coming soon"
-                  className="text-[12px] px-4 py-2 rounded-lg bg-[#262626] text-[#A3A3A3] font-semibold cursor-not-allowed border border-[#1A1A1A]"
-                >
-                  Run in Sandbox
-                </button>
+
               </div>
             </div>
 

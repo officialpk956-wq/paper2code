@@ -135,9 +135,9 @@ export default function DojoListClient() {
   }), [problems, topic, search, status, difficulty]);
 
   return (
-    <div className="flex overflow-hidden bg-transparent text-white" style={{ height: 'calc(100dvh - 56px)' }}>
+    <div className="flex flex-col md:flex-row min-h-[calc(100dvh-56px)] md:h-[calc(100dvh-56px)] overflow-hidden bg-transparent text-white">
       {/* LEFT SIDEBAR */}
-      <aside className="flex w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1A1A1A] bg-[#0A0A0A] p-4">
+      <aside className="flex w-full md:w-[260px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1A1A1A] bg-[#0A0A0A] p-4">
         {/* POTD */}
         <Link href="/dojo/ml-attention" className="block">
           <motion.div 
@@ -186,7 +186,7 @@ export default function DojoListClient() {
       </aside>
 
       {/* MAIN */}
-      <main className="flex flex-1 flex-col overflow-hidden relative">
+      <main className="flex flex-1 min-w-0 min-h-[600px] md:min-h-0 flex-col overflow-hidden relative">
         {error && (
           <div className="bg-red-500/10 border-b border-red-500/20 px-8 py-2 text-xs text-red-500 flex justify-center">
             Could not load data — retrying… ({error})
@@ -195,7 +195,7 @@ export default function DojoListClient() {
         {tab === 'problems' ? (
           <>
             {/* Topic chips */}
-            <div className="flex flex-wrap gap-2 border-b border-[#1A1A1A] px-5 py-3">
+            <div className="flex flex-wrap shrink-0 gap-2 border-b border-[#1A1A1A] px-5 py-3">
               {TOPIC_CHIPS.map(t => (
                 <button key={t} type="button" onClick={() => setTopic(t)}
                   className={'rounded-full px-3 py-1 text-[11px] transition-colors ' +
@@ -208,7 +208,7 @@ export default function DojoListClient() {
             </div>
 
             {/* Filter bar */}
-            <div className="flex items-center gap-3 border-b border-[#1A1A1A] px-5 py-3">
+            <div className="flex flex-wrap shrink-0 items-center gap-3 border-b border-[#1A1A1A] px-5 py-3">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search problems..."
                 className="w-[220px] rounded-lg border border-[#262626] bg-[#111111] px-3 py-2 text-[13px] text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA]" />
               <select value={status} onChange={e => setStatus(e.target.value)}

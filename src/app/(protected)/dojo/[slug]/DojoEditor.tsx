@@ -305,6 +305,7 @@ export default function DojoEditor({ children }: { children?: React.ReactNode })
   /* ── Layout ───────────────────────────────────────────── */
   return (
     <div className="flex flex-col" style={{ height: 'calc(100dvh - 56px)', background: '#0A0A0A', color: '#fff' }}>
+      <p className="shrink-0 px-4 py-2 text-xs text-[#A3A3A3]">Saved only in this browser: code drafts and notes. They are not synced to your account; clearing browser data removes them, and others using this browser can see them.</p>
       {/* TOP BAR */}
       <div style={{
         height: 44, display: 'flex', alignItems: 'center', justifyContent: 'space-between',

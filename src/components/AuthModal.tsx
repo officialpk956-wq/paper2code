@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuthModal } from './AuthModalContext';
 import { useAuthActions } from './useAuthActions';
+import { MfaChallenge } from './MfaChallenge';
 import { warmUpBackend } from '@/lib/api';
 
 const inp ='w-full bg-[#111111] border border-[#262626] rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-[#525252] outline-none focus:border-[#A78BFA] transition-colors';
@@ -12,7 +13,7 @@ const COLD_BACKEND_MESSAGE = 'Waking up the server (it sleeps when idle) — thi
 
 export function AuthModal() {
   const { isOpen, tab, setTab, close, signIn } = useAuthModal();
-  const { loginWithPassword, signupWithPassword, loginWithGoogle } = useAuthActions();
+  const { loginWithPassword, signupWithPassword, loginWithGoogle, mfaChallenge, verifyMfa, cancelMfa } = useAuthActions();
   const shouldReduceMotion = useReducedMotion();
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
@@ -22,12 +23,12 @@ export function AuthModal() {
   const [showWakeStatus, setShowWakeStatus] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) { cancelMfa(); return; }
     warmUpBackend();
     const fn = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
-  }, [isOpen, close]);
+  }, [isOpen, close, cancelMfa]);
 
   useEffect(() => {
     if (!loading) {
@@ -53,10 +54,10 @@ export function AuthModal() {
     try {
       if (tab === 'signup') {
         const user = await signupWithPassword(username, email, password);
-        signIn(user);
+        if (user) signIn(user);
       } else {
         const user = await loginWithPassword(email, password);
-        signIn(user);
+        if (user) signIn(user);
       }
     } catch (err: unknown) {
       const authError = err as Error;
@@ -73,7 +74,7 @@ export function AuthModal() {
       setLoading(true);
       setError('');
       const user = await loginWithGoogle();
-      signIn(user);
+      if (user) signIn(user);
     } catch (err: unknown) {
       const msg = (err as { message?: string; code?: string }).message || 'Google sign-in failed';
       if ((err as { code?: string }).code !== 'auth/popup-closed-by-user') {
@@ -116,6 +117,7 @@ export function AuthModal() {
               <X size={18} />
             </button>
 
+            {mfaChallenge ? <MfaChallenge verify={async code => { signIn(await verifyMfa(code)); }} cancel={cancelMfa} /> : <>
             <div className="mb-6 flex items-center gap-2">
               {(['signin', 'signup'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setTab(t)}
@@ -180,6 +182,7 @@ export function AuthModal() {
                 Continue with Google
               </button>
             </div>
+            </>}
           </motion.div>
         </motion.div>
       )}
