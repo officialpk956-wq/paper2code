@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -27,6 +28,27 @@ from core.paper_to_code_generator import PaperToCodeGenerator
 from core.rag.config_extractor import ConfigExtractor
 
 logger = logging.getLogger(__name__)
+
+_QUEUE_UNAVAILABLE = "Paper processing is temporarily unavailable. Please try again when the processing service is back online."
+
+
+async def _enqueue_paper(db: Session, task: Task, *args) -> None:
+    """Publish off the event loop; application progress is stored in SQL, not Redis."""
+    try:
+        await run_in_threadpool(
+            generate_code_from_pdf_task.apply_async,
+            args=(task.id, *args),
+            task_id=task.id,
+            ignore_result=True,
+            retry=False,
+        )
+    except Exception:
+        logger.warning("Paper task %s could not be queued", task.id)
+        TaskRepository(db).set_failed(task.id, _QUEUE_UNAVAILABLE)
+        # Keep the input: a connection loss can occur after the broker accepted
+        # the message. Deleting it here would race a worker processing that message.
+        raise HTTPException(status_code=503, detail=_QUEUE_UNAVAILABLE) from None
+
 
 _PAPER_MONTHLY_LIMIT = int(os.getenv("PAPER_MONTHLY_LIMIT", "0"))  # 0 = unlimited
 _STORAGE_QUOTA_BYTES = int(os.getenv("STORAGE_QUOTA_MB", "500")) * 1024 * 1024  # default 500 MB
@@ -441,8 +463,9 @@ async def upload_paper(
         storage_ref = store_pdf(pdf_bytes, file.filename)
 
         task = TaskRepository(db).create("paper.codegen", current_user.id, paper_name)
-        generate_code_from_pdf_task.delay(
-            task.id,
+        await _enqueue_paper(
+            db,
+            task,
             storage_ref,
             paper_name,
             current_user.id,
@@ -580,8 +603,9 @@ async def confirm_upload(
 
     task = TaskRepository(db).create("paper.codegen", current_user.id, body.paper_name)
 
-    generate_code_from_pdf_task.delay(
-        task.id,
+    await _enqueue_paper(
+        db,
+        task,
         storage_ref,
         body.paper_name,
         current_user.id,

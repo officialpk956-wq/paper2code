@@ -68,7 +68,7 @@ def test_normal_confirm_uses_verified_size(db_session, fake_request):
             patch("backend.services.storage_service.get_object_size", return_value=real_size),
             patch("backend.redis_config.cache_redis", None),
             patch(
-                "backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"
+                "backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"
             ) as mock_delay,
         ):
             resp = await confirm_upload(
@@ -108,7 +108,7 @@ def test_quota_bypass_attempt_defeated(db_session, fake_request):
         with (
             patch("backend.services.storage_service.get_object_size", return_value=real_size),
             patch("backend.redis_config.cache_redis", None),
-            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"),
+            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"),
         ):
             await confirm_upload(
                 request=fake_request,
@@ -144,7 +144,7 @@ def test_non_existent_r2_object_rejected(db_session, fake_request):
             patch("backend.services.storage_service.get_object_size", return_value=0),
             patch("backend.redis_config.cache_redis", None),
             patch(
-                "backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"
+                "backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"
             ) as mock_delay,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -192,7 +192,7 @@ def test_quota_exceeded_based_on_verified_size(db_session, fake_request):
             patch("backend.redis_config.cache_redis", None),
             patch("backend.routers.papers_pipeline._STORAGE_QUOTA_BYTES", 500 * 1024 * 1024),
             patch(
-                "backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"
+                "backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"
             ) as mock_delay,
         ):
             with pytest.raises(HTTPException) as exc_info:

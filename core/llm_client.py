@@ -197,6 +197,9 @@ def llm_complete(
                 # thousand tokens of layer list.
                 max_tokens=MAX_COMPLETION_TOKENS,
                 fallbacks=_fallback_list(use_fallback, target),
+                # The cross-provider fallback (Gemini) rejects `seed`; without this
+                # it failed every time, so a primary-model outage had no fallback.
+                drop_params=True,
             )
             text = resp.choices[0].message.content or ""
             # An empty completion is a failure, not a success. Returning ""
@@ -329,6 +332,7 @@ async def llm_complete_async(
                 seed=LLM_SEED,
                 **_reasoning_kwargs(),
                 fallbacks=_fallback_list(use_fallback, target),
+                drop_params=True,  # see llm_complete: Gemini fallback rejects `seed`
             )
             text = resp.choices[0].message.content or ""
             _failure_count = 0

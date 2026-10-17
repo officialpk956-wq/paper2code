@@ -58,8 +58,8 @@ def test_e2e_paper_upload_to_workspace(
             patch("backend.tasks.paper_tasks._notify_paper_done"),
             patch.object(
                 generate_code_from_pdf_task,
-                "delay",
-                side_effect=lambda *args: generate_code_from_pdf_task(*args),
+                "apply_async",
+                side_effect=lambda args, **kwargs: generate_code_from_pdf_task(*args),
             ),
         ):
             upload = client.post(

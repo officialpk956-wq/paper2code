@@ -135,7 +135,7 @@ def test_accepted_upload_returns_async_contract(
 
     with (
         patch("backend.services.storage_service.store_pdf", return_value=str(stored)),
-        patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.delay") as delay,
+        patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async") as delay,
     ):
         response = client.post(
             "/api/papers/upload",

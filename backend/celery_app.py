@@ -97,6 +97,15 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.task_track_started = True
 celery_app.conf.worker_prefetch_multiplier = 1  # fair dispatch for long tasks
+# Bound Redis connection and socket operations in request-side publishing.
+# Uploads disable publish retries and Redis result subscriptions individually.
+celery_app.conf.broker_connection_timeout = 2
+celery_app.conf.broker_transport_options = {
+    "socket_connect_timeout": 2,
+    "socket_timeout": 2,
+    "retry_on_timeout": False,
+    "max_retries": 0,
+}
 
 if _redis_url.startswith("rediss://"):
     _ssl_opts = {"ssl_cert_reqs": ssl.CERT_NONE}

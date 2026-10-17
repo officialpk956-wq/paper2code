@@ -73,7 +73,7 @@ def test_normal_upload_intent_flow_and_replay_protection(db_session, fake_reques
             patch("backend.redis_config.cache_redis", mock_redis),
             patch("backend.services.storage_service.R2_AVAILABLE", True),
             patch("backend.services.storage_service._r2_client") as mock_r2,
-            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"),
+            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"),
         ):
             mock_r2.return_value.generate_presigned_url.return_value = (
                 "https://r2.example.com/put_url"
@@ -271,7 +271,7 @@ def test_redis_unavailable_degraded_fallback(db_session, fake_request, caplog):
         with (
             patch("backend.redis_config.cache_redis", None),
             patch("backend.services.storage_service.get_object_size", return_value=1024),
-            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.delay"),
+            patch("backend.routers.papers_pipeline.generate_code_from_pdf_task.apply_async"),
         ):
             # User B trying to confirm an existing paper owned by User A -> 403 via Paper row fallback
             body_existing = ConfirmUploadRequest(

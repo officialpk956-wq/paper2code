@@ -28,10 +28,18 @@ logger = logging.getLogger("TensorTracker")
 
 
 class TensorTracker:
+    _SEQUENCE_EMBEDDING_TYPES = (
+        "token_embedding",
+        "positionalembedding",
+        "segment_embedding",
+        "positional_embedding",
+    )
+
     def __init__(self):
         # Default starting shapes
         self.default_vision_shape = ("B", 3, 224, 224)
         self.default_sequence_shape = ("B", 196, 768)
+        self.default_token_shape = ("B", 128)  # (batch, seq_len) of token ids
         self.trace: list[str] = []
         # Structured cross-attention events for the visualizer
         self.cross_attention_events: list[dict[str, Any]] = []
@@ -140,7 +148,11 @@ class TensorTracker:
             return
 
         if not initial_shape:
-            if any(t in graph.nodes[0].type for t in ["attention", "transformer", "bert", "gpt"]):
+            first_type = graph.nodes[0].type
+            if first_type.lower() in self._SEQUENCE_EMBEDDING_TYPES:
+                # Graph starts at an embedding table, so its input is token ids.
+                initial_shape = self.default_token_shape
+            elif any(t in first_type for t in ["attention", "transformer", "bert", "gpt"]):
                 initial_shape = self.default_sequence_shape
             else:
                 initial_shape = self.default_vision_shape
@@ -273,12 +285,7 @@ class TensorTracker:
             return (in_shape[0], in_shape[1] + 1, in_shape[2])
 
         # Sequence Embeddings (B, N) -> (B, N, D) or (B, N, D) -> (B, N, D)
-        if node.type.lower() in [
-            "token_embedding",
-            "positionalembedding",
-            "segment_embedding",
-            "positional_embedding",
-        ]:
+        if node.type.lower() in self._SEQUENCE_EMBEDDING_TYPES:
             expected_dim = node.params.get("embed_dim") or node.params.get("embedding_dim", 768)
             if len(in_shape) == 2:
                 # E.g. (B, SeqLen) input -> (B, SeqLen, D)
