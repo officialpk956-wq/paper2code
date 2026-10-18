@@ -4,6 +4,10 @@ const BASE =
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+// Sandbox runs of PyTorch code install torch on a cold sandbox (~30s), which the
+// default 15s limit aborted client-side while the server was still working.
+export const SANDBOX_REQUEST_TIMEOUT_MS = 150000;
+
 const TIMEOUT_MESSAGE = 'Request timed out — check your connection and try again';
 
 export class ApiTimeoutError extends Error {
@@ -53,6 +57,25 @@ async function refreshAccessToken(): Promise<string | null> {
   })();
 
   return refreshPromise;
+}
+
+// Some endpoints (e.g. a private paper page) treat an expired token as "anonymous"
+// and answer 403 rather than 401, which skips the refresh-on-401 path below.
+// Refresh up front when the access token's own `exp` says it is (nearly) expired.
+function isExpired(token: string): boolean {
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const { exp } = JSON.parse(atob(payload));
+    return typeof exp === 'number' && exp * 1000 < Date.now() + 30000;
+  } catch {
+    return false; // not a decodable JWT: leave it to the server
+  }
+}
+
+async function refreshIfExpired(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const token = localStorage.getItem('access_token');
+  if (token && isExpired(token)) await refreshAccessToken();
 }
 
 function authHeaders(): Record<string, string> {
@@ -130,6 +153,7 @@ async function requestWithRetry<T>(
   buildRequest: () => { url: string; init: RequestInit },
   timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<T> {
+  await refreshIfExpired();
   const { url, init } = buildRequest();
   let res = await fetchWithTimeout(url, init, timeoutMs);
 

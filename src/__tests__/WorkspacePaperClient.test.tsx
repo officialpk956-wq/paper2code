@@ -114,10 +114,11 @@ describe('WorkspacePaperClient - Implement Tab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
     await waitFor(() => {
-      expect(mockApiPost).toHaveBeenCalledWith('/api/dojo/execute', {
-        code: "print('generated code ready')",
-        stdin: '',
-      });
+      expect(mockApiPost).toHaveBeenCalledWith(
+        '/api/dojo/execute',
+        { code: "print('generated code ready')", stdin: '' },
+        150000,
+      );
     });
     expect(await screen.findByText('generated code ready')).toBeInTheDocument();
   });

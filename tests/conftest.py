@@ -1,5 +1,14 @@
+import os
+
 import pytest
 from dotenv import load_dotenv
+
+# Hermetic: the suite assumes no Redis (in-memory fallbacks). A reachable local Redis
+# changes behavior (enforced upload-intent checks, shared rate-limit counters, caches),
+# so point every client at a closed port. Must run before load_dotenv(), which never
+# overrides variables that are already set, and before any backend import.
+for _name in ("REDIS_URL", "REDIS_CACHE_URL", "REDIS_SESSIONS_URL", "REDIS_RATE_LIMIT_URL"):
+    os.environ[_name] = "redis://127.0.0.1:1/0"
 load_dotenv()
 
 from sqlalchemy import create_engine

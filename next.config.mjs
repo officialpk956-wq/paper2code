@@ -56,7 +56,8 @@ const nextConfig = {
               "worker-src blob: 'self'",
               // Allow images from self, data URIs, CDNs (Lottie, diagrams)
               "img-src 'self' data: blob: https://assets.lottiefiles.com https://assets9.lottiefiles.com",
-              "font-src 'self' https://cdn.jsdelivr.net",
+              // data: is for the Monaco editor's inlined codicon icon font
+              "font-src 'self' data: https://cdn.jsdelivr.net",
               // API calls to backend + Observable + PostHog
               `connect-src ${Array.from(connectSrcOrigins).join(' ')}`,
               // YouTube and Observable iframe embeds

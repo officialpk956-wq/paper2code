@@ -8,7 +8,7 @@ import dynamic from 'next/dynamic';
 
 import Link from 'next/link';
 
-import { apiPost } from '@/lib/api';
+import { apiPost, SANDBOX_REQUEST_TIMEOUT_MS } from '@/lib/api';
 
 import { FLAGSHIP_META } from '@/data/flagship-papers';
 
@@ -170,7 +170,9 @@ export default function ImplementClient({ id }: { id: string }) {
 
         '/api/dojo/execute',
 
-        { code: fullCode, stdin: '' }
+        { code: fullCode, stdin: '' },
+
+        SANDBOX_REQUEST_TIMEOUT_MS
 
       );
 

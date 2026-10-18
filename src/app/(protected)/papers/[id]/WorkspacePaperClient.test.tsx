@@ -119,17 +119,17 @@ describe('WorkspacePaperClient AI Tutor', () => {
     });
   });
 
-  test('normalizes the current nested paper-details response', async () => {
+  test('normalizes the current nested paper-details response and strips bold markers', async () => {
     mockApiGet.mockResolvedValue({
       metadata: {
         id: 7,
         title: 'Nested Response Paper',
         authors: 'Ada Lovelace',
-        abstract: 'A paper returned using the current API contract.',
+        abstract: 'A **paper** returned using the current API contract.',
         status: 'Ready',
       },
       module_summary: [
-        { id: 1, layer_name: 'Attention', explanation: 'Introduces a sparse attention module.' },
+        { id: 1, layer_name: 'Attention', explanation: 'Introduces a **sparse** attention module. *(Context: Attention)* Cost is a * b.' },
       ],
       architecture_statistics: { depth: 1, node_count: 1, edge_count: 0 },
     } as never);
@@ -139,7 +139,7 @@ describe('WorkspacePaperClient AI Tutor', () => {
     await waitFor(() => {
       expect(screen.getByText('Nested Response Paper')).toBeInTheDocument();
       expect(screen.getByText('A paper returned using the current API contract.')).toBeInTheDocument();
-      expect(screen.getByText('Introduces a sparse attention module.')).toBeInTheDocument();
+      expect(screen.getByText('Introduces a sparse attention module. (Context: Attention) Cost is a * b.')).toBeInTheDocument();
     });
   });
 });

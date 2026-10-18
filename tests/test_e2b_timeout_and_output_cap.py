@@ -95,3 +95,27 @@ def test_normal_successful_execution_no_regression():
     assert result["stderr"] == ""
     assert result["exit_code"] == 0
     assert result["time_ms"] >= 0
+
+
+def test_torch_code_installs_torch_first_and_extends_timeouts():
+    """Default template lacks torch: install it before running, with room to do so."""
+    mock_cls, mock_sbx = _make_sandbox_mock(stdout="ok", exit_code=0)
+
+    with patch("e2b_code_interpreter.Sandbox", mock_cls):
+        result = e2b_mod.run_code_in_sandbox("import torch\nprint('ok')", run_timeout_ms=10_000)
+
+    assert result["passed"] is True
+    install_call, run_call = mock_sbx.commands.run.call_args_list
+    assert "pip install" in install_call.args[0] and "torch" in install_call.args[0]
+    assert run_call.kwargs["timeout"] == pytest.approx(30.0)  # raised from 10s for import torch
+    assert mock_cls.create.call_args.kwargs["timeout"] > 240  # sandbox outlives the install
+
+
+def test_non_torch_code_skips_install():
+    mock_cls, mock_sbx = _make_sandbox_mock(stdout="hi", exit_code=0)
+
+    with patch("e2b_code_interpreter.Sandbox", mock_cls):
+        e2b_mod.run_code_in_sandbox("import numpy as np\n# torch is great", run_timeout_ms=10_000)
+
+    mock_sbx.commands.run.assert_called_once()
+    assert mock_cls.create.call_args.kwargs["timeout"] == 15

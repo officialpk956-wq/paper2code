@@ -1,7 +1,19 @@
 import logging
 import os
+import re
 
 log = logging.getLogger(__name__)
+
+# The default E2B template has numpy/scipy but not torch, so generated PyTorch
+# code died with ModuleNotFoundError. Install the CPU wheel on demand (~25s cold).
+# A custom template with torch preinstalled (e2b.Dockerfile) makes this a no-op.
+_IMPORTS_TORCH = re.compile(r"^\s*(?:import|from)\s+torch\b", re.MULTILINE)
+_TORCH_INSTALL_CMD = (
+    "python3 -c 'import torch' 2>/dev/null || "
+    "pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu"
+)
+_TORCH_INSTALL_BUDGET_S = 240
+_TORCH_MIN_RUN_MS = 30_000  # cold `import torch` alone takes several seconds
 
 E2B_API_KEY = os.getenv("E2B_API_KEY", "")
 # No default template override — e2b_code_interpreter's own default template
@@ -35,6 +47,9 @@ def run_code_in_sandbox(
         }
 
     full_code = "\n\n".join(filter(None, [setup_code, user_code, test_code]))
+    needs_torch = bool(_IMPORTS_TORCH.search(full_code))
+    if needs_torch:
+        run_timeout_ms = max(run_timeout_ms, _TORCH_MIN_RUN_MS)
 
     try:
         import time
@@ -47,10 +62,14 @@ def run_code_in_sandbox(
         with Sandbox.create(
             template=SANDBOX_TEMPLATE,
             api_key=E2B_API_KEY,
-            timeout=max(5, int(run_timeout_ms / 1000) + 5),
+            # Sandbox lifetime must also cover the install, or it is killed mid-pip.
+            timeout=max(5, int(run_timeout_ms / 1000) + 5)
+            + (_TORCH_INSTALL_BUDGET_S if needs_torch else 0),
         ) as sandbox:
             sandbox.files.write("/home/user/solution.py", full_code)
             sandbox.files.write("/home/user/stdin.txt", stdin)
+            if needs_torch:
+                sandbox.commands.run(_TORCH_INSTALL_CMD, timeout=_TORCH_INSTALL_BUDGET_S)
 
             try:
                 result = sandbox.commands.run(

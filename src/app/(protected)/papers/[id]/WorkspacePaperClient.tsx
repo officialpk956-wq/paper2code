@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { apiGet, apiPost } from '@/lib/api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { apiGet, apiPost, SANDBOX_REQUEST_TIMEOUT_MS } from '@/lib/api';
 import { findArch } from '@/lib/crosslinks';
 import ArchDiagramView from '@/components/arch/ArchDiagramView';
 import { paperToArchSlug } from '@/components/arch/archFlows';
@@ -42,6 +44,10 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+// Generated summaries embed **bold** / *italic* markers; they render as literal asterisks
+// here. Only tight pairs are stripped, so `a * b` in real abstracts is left alone.
+const plain = (text: string) => text.replace(/\*{1,2}(?=\S)([^*\n]+?)(?<=\S)\*{1,2}/g, '$1');
+
 function normalizeAuthors(value: unknown): string {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (Array.isArray(value)) {
@@ -54,14 +60,16 @@ function normalizeAuthors(value: unknown): string {
 function normalizeContributions(root: UnknownRecord, metadata: UnknownRecord): string[] {
   const direct = root.contributions ?? metadata.contributions;
   if (Array.isArray(direct)) {
-    return direct.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()));
+    return direct
+      .filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()))
+      .map(plain);
   }
 
   if (!Array.isArray(root.module_summary)) return [];
   return root.module_summary.flatMap((module) => {
     if (!isRecord(module)) return [];
     const contribution = optionalString(module.explanation) ?? optionalString(module.layer_name);
-    return contribution ? [contribution] : [];
+    return contribution ? [plain(contribution)] : [];
   });
 }
 
@@ -86,7 +94,7 @@ function normalizePaperMeta(payload: unknown): PaperMeta | null {
     title,
     authors: normalizeAuthors(metadata.authors),
     year: year ?? null,
-    abstract: optionalString(metadata.abstract) ?? 'No abstract is available for this paper yet.',
+    abstract: plain(optionalString(metadata.abstract) ?? 'No abstract is available for this paper yet.'),
     color: optionalString(metadata.color) ?? '#A78BFA',
     archSlug: optionalString(metadata.archSlug) ?? optionalString(metadata.arch_slug),
     archName: optionalString(metadata.archName) ?? optionalString(metadata.arch_name),
@@ -101,7 +109,12 @@ type GraphNode = { id: string; label?: string; x?: number; y?: number; color?: s
 type GraphEdge = { source: string; target: string };
 type GraphData = { status?: string; nodes?: GraphNode[]; edges?: GraphEdge[] };
 
-type BlueprintComponent = { name: string; description: string };
+// Generated blueprints carry type/shape instead of a description; flagship ones have a description.
+type BlueprintComponent = { name: string; description?: string; type?: string; shape?: number[] };
+
+const describeComponent = (c: BlueprintComponent) =>
+  c.description ??
+  [c.type, Array.isArray(c.shape) ? `output (${c.shape.join(', ')})` : ''].filter(Boolean).join(' · ');
 type BlueprintData = { status?: string; components?: BlueprintComponent[]; confidence_score?: number };
 
 type VerificationReport = {
@@ -516,6 +529,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       const result = await apiPost<{ stdout?: string; stderr?: string; exit_code?: number }>(
         '/api/dojo/execute',
         { code: executableData.code, stdin: '' },
+        SANDBOX_REQUEST_TIMEOUT_MS,
       );
       const output = result.stdout || result.stderr || 'Execution finished without output.';
       setGeneratedRunOutput(output);
@@ -776,7 +790,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
             <div className="text-sm text-[#A3A3A3]">
               {blueprintData.components?.map((c: BlueprintComponent) => (
                 <div key={c.name} className="mb-2 p-2 bg-[#1A1A1A] rounded">
-                  <span className="font-semibold">{c.name}</span>: {c.description}
+                  <span className="font-semibold">{c.name}</span>: {describeComponent(c)}
                 </div>
               ))}
             </div>
@@ -860,7 +874,13 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                   <div className={'max-w-[80%] rounded-xl px-4 py-2.5 text-[13px] leading-relaxed ' +
                     (msg.role === 'user' ? 'bg-[#A78BFA] text-black font-medium' : 'bg-[#1A1A1A] text-[#A3A3A3]')}>
-                    {msg.text}
+                    {msg.role === 'user' ? (
+                      msg.text
+                    ) : (
+                      <div className="[&_p]:mb-2 [&_p:last-child]:mb-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:mb-1 [&_strong]:text-white [&_code]:text-[#A78BFA]">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

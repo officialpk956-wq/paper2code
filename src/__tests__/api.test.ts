@@ -149,6 +149,27 @@ describe('src/lib/api.ts — Request Timeouts & Silent Token Refresh', () => {
     expect(refreshCalls).toBe(1);
   });
 
+  it('Scenario 6: A JWT already past its exp is refreshed BEFORE the request (private pages answer 403, not 401, to expired tokens)', async () => {
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '');
+    const expiredJwt = `${b64({ alg: 'HS256' })}.${b64({ exp: Math.floor(Date.now() / 1000) - 60 })}.sig`;
+    localStorage.setItem('access_token', expiredJwt);
+    localStorage.setItem('refresh_token', 'valid_refresh');
+
+    const dataAuthHeaders: (string | undefined)[] = [];
+    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/auth/refresh')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: 'fresh', refresh_token: 'rotated' }), { status: 200 })
+        );
+      }
+      dataAuthHeaders.push((init?.headers as Record<string, string>)?.['Authorization']);
+      return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    });
+
+    await expect(apiGet('/api/papers/18')).resolves.toEqual({ ok: true });
+    expect(dataAuthHeaders).toEqual(['Bearer fresh']); // one data call, no 401 round trip
+  });
+
   it('Scenario 5: When no refresh token exists in localStorage, 401 immediately clears tokens and throws', async () => {
     localStorage.setItem('access_token', 'expired_token');
     // No refresh_token in storage
