@@ -16,6 +16,7 @@ from core.implementation.reproduction_cards import get_reproduction_card
 from core.implementation.training_config import get_hyperparameter_explanations, get_training_config
 from core.lab.diff_engine import compute_diff
 from core.lab.hypothesis_engine import hypothesis_engine
+from core.lab.lab_metrics import estimate_params_and_memory
 from core.lab.mutator import MUTATION_REGISTRY, apply_mutations
 from core.lab.tradeoff_analyzer import (
     get_efficiency_frontiers,
@@ -24,7 +25,7 @@ from core.lab.tradeoff_analyzer import (
 )
 from core.visualizer_resnet import build_resnet18_graph
 from core.visualizer_unet import build_unet_graph
-from core.visualizer_vit import build_vit_graph
+from core.visualizer_vit import build_transformer_graph, build_vit_graph
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +95,17 @@ def _build_base_graph(architecture: str, config: dict[str, Any] | None = None):
             stages=config.get("stages", 4),
             blocks_per_stage=config.get("blocks_per_stage", 2),
         )
-    elif architecture in ("Transformer", "ViT"):
+    elif architecture == "ViT":
         return build_vit_graph(
             hidden_size=config.get("hidden_size", 768),
             num_heads=config.get("num_heads", 12),
             depth=config.get("depth", 4),
+        )
+    elif architecture == "Transformer":
+        return build_transformer_graph(
+            hidden_size=config.get("hidden_size", 512),
+            num_heads=config.get("num_heads", 8),
+            depth=config.get("depth", 6),
         )
     elif architecture == "U-Net":
         return build_unet_graph(
@@ -108,7 +115,7 @@ def _build_base_graph(architecture: str, config: dict[str, Any] | None = None):
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported architecture: '{architecture}'. Valid: ResNet, Transformer, U-Net",
+            detail=f"Unsupported architecture: '{architecture}'. Valid: ResNet, Transformer, ViT, U-Net",
         )
 
 
@@ -133,14 +140,13 @@ def _graph_to_api_dict(graph) -> dict[str, Any]:
 
 
 def _graph_metrics(graph) -> dict[str, Any]:
-    from core.metrics_estimator import estimate_activation_memory, estimate_metrics_from_graph
+    from core.metrics_estimator import estimate_metrics_from_graph
 
-    m = estimate_metrics_from_graph(graph)
-    mem = estimate_activation_memory(graph, batch_size=1, input_spatial=224)
-    mem_mb = round(sum(r["mem_mb"] for r in mem), 2)
+    m = estimate_metrics_from_graph(graph)  # FLOPs score and depth stay on the generic scale
+    params, mem_mb = estimate_params_and_memory(graph, batch_size=1, input_spatial=224)
     return {
         "flops_score": m["total_flops_score"],
-        "params": m["total_params_estimate"],
+        "params": params,
         "depth": m["depth"],
         "memory_mb": mem_mb,
     }
@@ -266,7 +272,7 @@ def lab_mutate(request: LabMutateRequest):
         before_graph = _build_base_graph(request.architecture, request.config)
         after_graph = apply_mutations(before_graph, request.mutations)
 
-        diff = compute_diff(before_graph, after_graph)
+        diff = compute_diff(before_graph, after_graph, params_and_memory=estimate_params_and_memory)
 
         return {
             "architecture": request.architecture,
@@ -295,7 +301,7 @@ def lab_predict(request: LabPredictRequest):
     try:
         before_graph = _build_base_graph(request.architecture)
         after_graph = apply_mutations(before_graph, request.mutations)
-        diff = compute_diff(before_graph, after_graph)
+        diff = compute_diff(before_graph, after_graph, params_and_memory=estimate_params_and_memory)
 
         hyp = dict(request.hypothesis)
         if "mutation_type" not in hyp and request.mutations:
@@ -325,7 +331,7 @@ def lab_experiment(request: LabExperimentRequest):
     try:
         before_graph = _build_base_graph(request.architecture)
         after_graph = apply_mutations(before_graph, request.mutations)
-        diff = compute_diff(before_graph, after_graph)
+        diff = compute_diff(before_graph, after_graph, params_and_memory=estimate_params_and_memory)
 
         result = hypothesis_engine.build_experiment_result(
             hypothesis=request.hypothesis,

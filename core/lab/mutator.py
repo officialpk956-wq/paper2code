@@ -71,9 +71,13 @@ def increase_depth(graph: ArchitectureGraph, n: int = 1) -> ArchitectureGraph:
         "denseblock",
         "conv2d",
         "transformerblock",
+        "transformerencoder",
+        "encoderblock",
+        "decoderblock",
         "multiheadattention",
     ]
-    heavy = _find_nodes_by_types(g, heavy_types)
+    # Never clone the output head (e.g. U-Net's 1x1 output conv): it adds no depth.
+    heavy = [n for n in _find_nodes_by_types(g, heavy_types) if n.block != "Head"]
     if not heavy:
         # Fallback: append generic conv nodes
         insertion_after_idx = len(g.nodes) - 2 if len(g.nodes) >= 2 else len(g.nodes) - 1

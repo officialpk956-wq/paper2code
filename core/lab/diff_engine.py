@@ -14,6 +14,7 @@ Given two ArchitectureGraph objects (before and after a mutation), computes:
   - summary_text    : human-readable summary of changes
 """
 
+from collections.abc import Callable
 from typing import Any
 
 from core.architecture_graph import ArchitectureGraph
@@ -28,6 +29,7 @@ def compute_diff(
     after: ArchitectureGraph,
     batch_size: int = 1,
     input_spatial: int = 224,
+    params_and_memory: Callable[[ArchitectureGraph], tuple[int, float]] | None = None,
 ) -> dict[str, Any]:
     """
     Compute the structural and metric diff between two ArchitectureGraph objects.
@@ -90,6 +92,9 @@ def compute_diff(
 
     b_params = b_metrics["total_params_estimate"]
     a_params = a_metrics["total_params_estimate"]
+    if params_and_memory:  # caller knows the graph family; replaces the generic guess
+        b_params, b_mem_override = params_and_memory(before)
+        a_params, a_mem_override = params_and_memory(after)
     b_flops = b_metrics["total_flops_score"]
     a_flops = a_metrics["total_flops_score"]
     b_depth = b_metrics["depth"]
@@ -125,6 +130,8 @@ def compute_diff(
     a_mem_rows = estimate_activation_memory(after, batch_size, input_spatial)
     b_mem_mb = round(sum(r["mem_mb"] for r in b_mem_rows), 2)
     a_mem_mb = round(sum(r["mem_mb"] for r in a_mem_rows), 2)
+    if params_and_memory:
+        b_mem_mb, a_mem_mb = b_mem_override, a_mem_override
     memory_delta = {
         "before_mb": b_mem_mb,
         "after_mb": a_mem_mb,

@@ -64,3 +64,34 @@ def build_vit_graph(
     graph.add_edge(prev.id, "head", "flow")
 
     return graph
+
+
+def build_transformer_graph(
+    hidden_size: int = 512,
+    num_heads: int = 8,
+    depth: int = 6,
+    vocab_size: int = 32000,
+    seq_len: int = 128,
+) -> ArchitectureGraph:
+    """Encoder-stack Transformer over tokens: same blocks as the ViT, but a token embedding in
+    front and a vocabulary projection at the end instead of patches and an image classifier."""
+    graph = build_vit_graph(hidden_size=hidden_size, num_heads=num_heads, depth=depth)
+    graph.name = "Transformer"
+
+    graph.nodes[0] = GraphNode(
+        id="tok_embed",
+        type="Embedding",
+        label="Token Embedding",
+        params={"embed_dim": hidden_size, "vocab_size": vocab_size, "seq_len": seq_len},
+        block="Embedding",
+        description="Maps token ids to vectors and adds positional information",
+    )
+    for edge in graph.edges:
+        if edge.source == "patch":
+            edge.source = "tok_embed"
+
+    head = graph.nodes[-1]
+    head.label = "Output Projection"
+    head.params = {"classes": vocab_size, "in_features": hidden_size}
+    head.description = "Projects each token representation onto the vocabulary"
+    return graph
