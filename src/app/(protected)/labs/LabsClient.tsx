@@ -251,12 +251,15 @@ export default function LabsClient() {
                       <td className="px-6 py-4 text-white">{labResult.after.metrics.flops_score.toFixed(1)}</td>
                       <td className="px-6 py-4">{renderMetricDelta(labResult.before.metrics.flops_score, labResult.after.metrics.flops_score, true)}</td>
                     </tr>
-                    <tr className="hover:bg-[#111111]/50 transition-colors">
-                      <td className="px-6 py-4 text-white font-medium">Peak Memory</td>
-                      <td className="px-6 py-4 text-[#A3A3A3]">{labResult.before.metrics.memory_mb.toFixed(0)} MB</td>
-                      <td className="px-6 py-4 text-white">{labResult.after.metrics.memory_mb.toFixed(0)} MB</td>
-                      <td className="px-6 py-4">{renderMetricDelta(labResult.before.metrics.memory_mb, labResult.after.metrics.memory_mb, true)}</td>
-                    </tr>
+                    {/* The backend reports 0 when it has no activation-memory estimate for a graph; a "0 MB" row would be a made-up number. */}
+                    {(labResult.before.metrics.memory_mb > 0 || labResult.after.metrics.memory_mb > 0) && (
+                      <tr className="hover:bg-[#111111]/50 transition-colors">
+                        <td className="px-6 py-4 text-white font-medium">Peak Memory</td>
+                        <td className="px-6 py-4 text-[#A3A3A3]">{labResult.before.metrics.memory_mb.toFixed(0)} MB</td>
+                        <td className="px-6 py-4 text-white">{labResult.after.metrics.memory_mb.toFixed(0)} MB</td>
+                        <td className="px-6 py-4">{renderMetricDelta(labResult.before.metrics.memory_mb, labResult.after.metrics.memory_mb, true)}</td>
+                      </tr>
+                    )}
                     <tr className="hover:bg-[#111111]/50 transition-colors">
                       <td className="px-6 py-4 text-white font-medium">Network Depth</td>
                       <td className="px-6 py-4 text-[#A3A3A3]">{labResult.before.metrics.depth}</td>

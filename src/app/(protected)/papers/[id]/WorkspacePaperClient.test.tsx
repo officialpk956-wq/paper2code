@@ -143,3 +143,22 @@ describe('WorkspacePaperClient AI Tutor', () => {
     });
   });
 });
+
+describe('WorkspacePaperClient library papers', () => {
+  test('a paper with no generated blueprint shows an explanation, not an error banner', async () => {
+    mockApiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/papers/9') {
+        return { title: 'Library Paper', authors: 'A', year: 2015, abstract: 'x', color: '#000', contributions: [] };
+      }
+      throw new Error('Blueprint not generated yet');
+    });
+
+    render(<WorkspacePaperClient id="9" />);
+    await waitFor(() => expect(screen.getByText('Library Paper')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Blueprint'));
+
+    expect(await screen.findByText(/No blueprint has been generated for this library paper/)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load data/)).not.toBeInTheDocument();
+  });
+});

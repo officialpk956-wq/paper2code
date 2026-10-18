@@ -396,6 +396,13 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
   const [loading, setLoading] = useState(true);
   const [tabLoading, setTabLoading] = useState(false);
   const [error, setError] = useState('');
+  // Library papers were never given a blueprint/executable graph: an expected state, not an error.
+  const [notGenerated, setNotGenerated] = useState<Record<string, boolean>>({});
+  const markNotGenerated = (tabKey: string, err: unknown) => {
+    if (!/not generated yet/i.test((err as Error).message ?? '')) return false;
+    setNotGenerated(prev => ({ ...prev, [tabKey]: true }));
+    return true;
+  };
   
   // Tutor chat state
   const [numericId, setNumericId] = useState<number | null>(null);
@@ -485,7 +492,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       const data = await apiGet<BlueprintData>(`/api/papers/${id}/blueprint`);
       setBlueprintData(data);
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to load blueprint');
+      if (!markNotGenerated('blueprint', err)) setError((err as Error).message || 'Failed to load blueprint');
     } finally {
       setTabLoading(false);
     }
@@ -501,7 +508,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       setVerificationReport(data.verification_report ?? verificationReport);
       setCodeSource(optionalString(data.compiled?.code_source) ?? codeSource);
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to load executable code');
+      if (!markNotGenerated('executable', err)) setError((err as Error).message || 'Failed to load executable code');
     } finally {
       setTabLoading(false);
     }
@@ -639,7 +646,7 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
       <div className="border-b border-[#1A1A1A] bg-[#0A0A0A] px-6 py-4 flex-shrink-0">
         {error && (
           <div className="mb-4 bg-red-500/10 border border-red-500/20 px-4 py-2 text-xs text-red-500 rounded">
-            Could not load data — retrying… ({error})
+            Could not load data ({error})
           </div>
         )}
         <Link href="/papers" className="inline-flex items-center gap-1 text-[11px] text-[#525252] hover:text-white mb-3">← Research Hub</Link>
@@ -677,10 +684,6 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
                 </div>
               );
             })()}
-          </div>
-          <div className="flex gap-2">
-            <button className="text-[12px] px-3 py-1.5 rounded-lg border border-[#262626] text-[#A3A3A3] hover:text-white">Export</button>
-            <button className="text-[12px] px-3 py-1.5 rounded-lg bg-[#A78BFA] text-black font-semibold hover:brightness-110">Share</button>
           </div>
         </div>
 
@@ -770,6 +773,12 @@ export default function WorkspacePaperClient({ id }: { id: string }) {
           </div>
         )}
 
+        {(tab === 'blueprint' || tab === 'executable') && notGenerated[tab] && (
+          <div className="rounded-xl border border-[#262626] bg-[#111111] p-6 text-sm text-[#A3A3A3]">
+            No {tab === 'blueprint' ? 'blueprint' : 'executable code'} has been generated for this library paper.
+            Upload a PDF in the Research Hub to generate one.
+          </div>
+        )}
         {tab === 'blueprint' && blueprintData?.status === 'processing' && (
           <div className="flex flex-col items-center justify-center h-full text-[#A3A3A3] text-sm">
             <div className="animate-spin mb-4 border-2 border-t-[#A78BFA] border-r-transparent border-b-transparent border-l-transparent rounded-full w-8 h-8" />
